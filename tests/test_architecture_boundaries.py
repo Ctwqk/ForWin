@@ -1112,6 +1112,7 @@ def test_book_state_extraction_has_one_current_owner() -> None:
         "contract.py",
         "evidence.py",
         "graph_delta.py",
+        "translator.py",
     ]
     assert not (ROOT / "forwin/book_state/adapter.py").exists()
     assert not (ROOT / "forwin/protocol/world_v4.py").exists()

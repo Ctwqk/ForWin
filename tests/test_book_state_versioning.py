@@ -303,6 +303,111 @@ def test_deactivated_edge_is_active_for_earlier_chapters() -> None:
     engine.dispose()
 
 
+_EDGE_AB = {
+    "edge_id": "edge_ab",
+    "source_id": "char_a",
+    "target_id": "char_b",
+    "edge_type": "ally_of",
+    "edge_family": "social",
+}
+
+
+def _compile_reactivated_edge(Session) -> str:
+    """edge_ab is created in chapter 0, ended in chapter 2 and created again in chapter 4."""
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        _compile(
+            session,
+            project_id,
+            0,
+            node_patches=[_create_character(project_id, "char_a"), _create_character(project_id, "char_b")],
+            edge_patches=[EdgePatch(op="create", new_value={"project_id": project_id}, **_EDGE_AB)],
+        )
+    with Session.begin() as session:
+        _compile(
+            session,
+            project_id,
+            2,
+            edge_patches=[EdgePatch(op="deactivate", field_path="is_active", old_value=True, **_EDGE_AB)],
+        )
+    with Session.begin() as session:
+        _compile(
+            session,
+            project_id,
+            4,
+            edge_patches=[
+                EdgePatch(
+                    op="create",
+                    new_value={"project_id": project_id, "established_at_chapter": 4},
+                    **_EDGE_AB,
+                )
+            ],
+        )
+    return project_id
+
+
+def _edge_activity(session, project_id: str, chapter: int) -> tuple[bool, int | None]:
+    edge = _load(session, project_id, chapter).world.edges_by_id["edge_ab"]
+    return edge.is_active, edge.ended_at_chapter
+
+
+def test_create_on_an_ended_edge_reactivates_it_and_keeps_the_ended_span() -> None:
+    engine, Session = _session_factory()
+    project_id = _compile_reactivated_edge(Session)
+
+    with Session() as session:
+        activity = {chapter: _edge_activity(session, project_id, chapter) for chapter in range(5)}
+        row = BookStateRepository(session).get_world_edge("edge_ab")
+        snapshot_three = BookStateRepository(session).latest_world_snapshot(project_id, 3)
+        snapshot_four = BookStateRepository(session).latest_world_snapshot(project_id, 4)
+
+    assert activity == {0: (True, None), 1: (True, None), 2: (False, 2), 3: (False, 2), 4: (True, None)}
+    assert (row.is_active, row.ended_at_chapter, row.established_at_chapter) == (True, None, 0)
+    assert row.metadata["inactive_spans"] == [[2, 4]]
+    assert "edge_ab" not in snapshot_three.active_edge_ids
+    assert "edge_ab" in snapshot_four.active_edge_ids
+    engine.dispose()
+
+
+@pytest.mark.parametrize(("from_chapter", "expected"), [(4, (False, 2)), (2, (True, None))])
+def test_historical_invalidation_restores_a_reactivated_edge(from_chapter, expected) -> None:
+    engine, Session = _session_factory()
+    project_id = _compile_reactivated_edge(Session)
+
+    with Session.begin() as session:
+        repo = BookStateRepository(session)
+        repo.invalidate_project_range(project_id, from_chapter=from_chapter, through_chapter=4)
+        row = repo.get_world_edge("edge_ab")
+        rewound = _edge_activity(session, project_id, from_chapter - 1)
+
+    assert (row.is_active, row.ended_at_chapter) == expected
+    assert "inactive_spans" not in row.metadata
+    assert rewound == expected
+    engine.dispose()
+
+
+def test_past_chapter_compile_keeps_a_later_reactivation() -> None:
+    engine, Session = _session_factory()
+    project_id = _compile_reactivated_edge(Session)
+    with Session.begin() as session:
+        _compile(
+            session,
+            project_id,
+            2,
+            delta_id="delta_past_edit",
+            edge_patches=[EdgePatch(op="set", field_path="weight", old_value=1.0, new_value=0.5, **_EDGE_AB)],
+        )
+
+    with Session() as session:
+        row = BookStateRepository(session).get_world_edge("edge_ab")
+        activity = {chapter: _edge_activity(session, project_id, chapter) for chapter in (2, 3, 4)}
+
+    assert (row.is_active, row.ended_at_chapter, row.weight) == (True, None, 0.5)
+    assert row.metadata["inactive_spans"] == [[2, 4]]
+    assert activity == {2: (False, 2), 3: (False, 2), 4: (True, None)}
+    engine.dispose()
+
+
 def test_narrative_loads_from_snapshot_without_full_replay(monkeypatch) -> None:
     engine, Session = _session_factory()
     with Session.begin() as session:

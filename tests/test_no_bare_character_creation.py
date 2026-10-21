@@ -50,6 +50,7 @@ def test_character_world_nodes_are_constructed_only_by_current_admission_owners(
     allowed = {
         FORWIN / "characters" / "creation.py",
         FORWIN / "book_state" / "writer_contract.py",
+        FORWIN / "book_state" / "extraction" / "translator.py",
     }
     violations: list[str] = []
     for path in _python_files():

@@ -25,7 +25,9 @@ allowed_values = ["main", "fact_type", "fact_id", "thread_id", "world_line_id", 
   # prefix of generated ids such as f"fact_{new_id()}"
   "thread_beats", "thread_time", "fact_event", "fact_evidence", "fact_node", "fact_",
   # BookState v6 intent profile reference to its owning agenda.
-  "agenda_ref"]
+  "agenda_ref",
+  # ChapterDeltaExtraction field name used in translator issue paths.
+  "intent_interactions"]
 
 [canary]
 seed_terms = [

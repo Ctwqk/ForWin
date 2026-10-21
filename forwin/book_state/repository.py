@@ -13,7 +13,11 @@ from forwin.book_state.cognition import CognitionView
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.narrative import NarrativeControlGraph
 from forwin.book_state.path_patch import apply_path_patch
-from forwin.book_state.runtime import ObjectiveWorldGraph
+from forwin.book_state.runtime import (
+    INACTIVE_SPANS_KEY,
+    ObjectiveWorldGraph,
+    edge_inactive_spans,
+)
 from forwin.map.models import MapEdgeRow, MapNodeRow
 from forwin.models.book_state import (
     BookCognitionSnapshotRow,
@@ -905,6 +909,13 @@ class BookStateRepository:
         prior_deltas = self.list_graph_deltas(
             project_id, through_chapter=from_chapter - 1
         )
+        # A create on an edge that existed before the range reactivated it.
+        reactivated = {
+            (kind, target)
+            for kind, target in created
+            if kind == "edge" and f"edge:{target}" in prior_refs
+        }
+        created -= reactivated
         if collisions := sorted(
             f"{kind}:{target}"
             for kind, target in created
@@ -918,6 +929,9 @@ class BookStateRepository:
         missing_metadata: set[tuple[str, str]] = set()
         for kind, target, patch in reversed(patches):
             if (kind, target) in created:
+                continue
+            if (kind, target) in reactivated and patch.get("op") == "create":
+                self._restore_reactivated_edge(project_id, target, from_chapter=from_chapter)
                 continue
             field_path = str(patch.get("field_path") or "")
             if kind == "node" and (
@@ -973,6 +987,28 @@ class BookStateRepository:
             self._restore_verified_node_metadata(
                 project_id, from_chapter, missing_metadata, prior_world, prior_deltas
             )
+
+    def _restore_reactivated_edge(self, project_id: str, edge_id: str, *, from_chapter: int) -> None:
+        """Undo a reactivation: the edge ends again at its latest recorded inactive span."""
+        row = self.session.scalar(
+            select(WorldEdgeRow).where(
+                WorldEdgeRow.project_id == project_id,
+                WorldEdgeRow.id == edge_id,
+            )
+        )
+        edge = _world_edge_from_row(row) if row is not None else None
+        spans = edge_inactive_spans(edge) if edge is not None else []
+        if edge is None or not spans or spans[-1][1] < from_chapter:
+            raise ValueError(
+                f"cannot restore historical base: recreated identities ['edge:{edge_id}']"
+            )
+        ended, _reactivated_at = spans.pop()
+        metadata = {key: value for key, value in edge.metadata.items() if key != INACTIVE_SPANS_KEY}
+        if spans:
+            metadata[INACTIVE_SPANS_KEY] = spans
+        self.create_world_edge(
+            edge.model_copy(update={"is_active": False, "ended_at_chapter": ended, "metadata": metadata})
+        )
 
     def _restore_verified_node_metadata(
         self,
@@ -1515,9 +1551,13 @@ def _versioned_world_node(node: WorldNode, version: NodeVersion | None) -> World
 
 
 def _world_edge_as_of(edge: WorldEdge, as_of_chapter: int) -> WorldEdge:
-    """An edge deactivated after ``as_of_chapter`` was still active then."""
+    """An edge deactivated after ``as_of_chapter`` was still active then, unless a
+    recorded inactive span of a later reactivation covers that chapter."""
     if edge.ended_at_chapter is not None and edge.ended_at_chapter > as_of_chapter:
-        return edge.model_copy(update={"is_active": True, "ended_at_chapter": None})
+        edge = edge.model_copy(update={"is_active": True, "ended_at_chapter": None})
+    for ended, reactivated in edge_inactive_spans(edge):
+        if ended <= as_of_chapter < reactivated:
+            return edge.model_copy(update={"is_active": False, "ended_at_chapter": ended})
     return edge
 
 

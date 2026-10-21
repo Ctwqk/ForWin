@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.cognition import CognitionView
 from forwin.book_state.projection import BookStateProjection
-from forwin.book_state.repository import BookStateRepository, _as_jsonable
-from forwin.book_state.runtime import BookStateRuntime
+from forwin.book_state.repository import BookStateRepository, _as_jsonable, _world_edge_as_of
+from forwin.book_state.runtime import INACTIVE_SPANS_KEY, BookStateRuntime
 from forwin.book_state.schema import validate_graph_delta
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
@@ -19,6 +19,7 @@ from forwin.protocol.book_state import (
     GraphDeltaType,
     MapPatch,
     NodePatch,
+    WorldEdge,
     WorldNode,
 )
 
@@ -297,17 +298,20 @@ class BookStateCompiler:
             if edge is None:
                 continue
             stored = self.repo.get_world_edge(patch.edge_id)
-            if (
-                edge.ended_at_chapter is None
-                and stored is not None
-                and stored.ended_at_chapter is not None
-                and stored.ended_at_chapter > delta.chapter_number
+            stored_then = (
+                _world_edge_as_of(stored, delta.chapter_number) if stored is not None else None
+            )
+            if stored_then is not None and (edge.is_active, edge.ended_at_chapter) == (
+                stored_then.is_active,
+                stored_then.ended_at_chapter,
             ):
-                # The edge reads active as of this chapter but ends later; keep its end.
+                # This delta left the edge's activity alone; keep the row's later
+                # end or reactivation instead of writing back the as-of view.
                 edge = edge.model_copy(
                     update={
                         "is_active": stored.is_active,
                         "ended_at_chapter": stored.ended_at_chapter,
+                        "metadata": _with_inactive_spans(edge.metadata, stored),
                     }
                 )
             self.repo.create_world_edge(edge)
@@ -448,6 +452,13 @@ def _get_path(payload: dict[str, Any], field_path: str) -> Any:
             return None
         cursor = cursor[part]
     return cursor
+
+
+def _with_inactive_spans(metadata: dict[str, Any], stored: WorldEdge) -> dict[str, Any]:
+    result = {key: value for key, value in metadata.items() if key != INACTIVE_SPANS_KEY}
+    if INACTIVE_SPANS_KEY in stored.metadata:
+        result[INACTIVE_SPANS_KEY] = stored.metadata[INACTIVE_SPANS_KEY]
+    return result
 
 
 def _json_equal(left: Any, right: Any) -> bool:

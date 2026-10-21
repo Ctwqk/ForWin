@@ -21,6 +21,40 @@ from forwin.protocol.book_state import (
 )
 
 
+# An edge row holds one activity interval; each [ended_at, reactivated_at] chapter
+# span of a reactivated edge is kept here so as-of reads and rewinds can recover it.
+INACTIVE_SPANS_KEY = "inactive_spans"
+
+
+def edge_inactive_spans(edge: WorldEdge) -> list[list[int]]:
+    spans = edge.metadata.get(INACTIVE_SPANS_KEY)
+    return [list(span) for span in spans] if isinstance(spans, list) else []
+
+
+def _reactivates(edge: WorldEdge, chapter_number: int) -> bool:
+    """Whether a create on ``edge`` at ``chapter_number`` (re)applies a reactivation."""
+    if edge.is_active:
+        # A replayed reactivation meets the edge its row already reactivated.
+        return any(span[1] == chapter_number for span in edge_inactive_spans(edge))
+    return edge.ended_at_chapter is not None and edge.ended_at_chapter < chapter_number
+
+
+def _reactivated(edge: WorldEdge, chapter_number: int) -> WorldEdge:
+    if edge.is_active:
+        return edge
+    spans = edge_inactive_spans(edge)
+    span = [edge.ended_at_chapter, chapter_number]
+    if span not in spans:
+        spans.append(span)
+    return edge.model_copy(
+        update={
+            "is_active": True,
+            "ended_at_chapter": None,
+            "metadata": {**edge.metadata, INACTIVE_SPANS_KEY: spans},
+        }
+    )
+
+
 class ObjectiveWorldGraph:
     """Typed property graph for objective world truth."""
 
@@ -116,6 +150,10 @@ class ObjectiveWorldGraph:
 
     def apply_edge_patch(self, patch: EdgePatch, *, chapter_number: int) -> None:
         op = str(patch.op)
+        existing = self.edges_by_id.get(patch.edge_id)
+        if op == "create" and existing is not None and _reactivates(existing, chapter_number):
+            self.edges_by_id[patch.edge_id] = _reactivated(existing, chapter_number)
+            return
         if op == "create":
             payload = patch.new_value if isinstance(patch.new_value, dict) else {}
             edge = WorldEdge.model_validate(

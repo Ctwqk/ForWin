@@ -257,6 +257,61 @@ def test_proposal_rejects_unknown_promise_and_unknown_field() -> None:
 
 
 @pytest.mark.parametrize(
+    "operation",
+    [
+        {"op": "set_reader_promise_field", "field_path": "maximum_safe_delay", "new_value": "soon"},
+        {"op": "set_reader_promise_field", "field_path": "current_debt_level", "new_value": "high"},
+        {"op": "set_reader_promise_field", "field_path": "reward_tags", "new_value": "reveal"},
+        {"op": "set_reader_promise_field", "field_path": "status", "new_value": ["resolved"]},
+        {"op": "resolve_reader_promise", "current_debt_level": "none"},
+    ],
+)
+def test_proposal_rejects_mistyped_promise_values(operation: dict) -> None:
+    engine, Session = _session_factory()
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        _compile(session, project_id, 0, [_create_promise("promise_a", current_debt_level=2)])
+    proposal_id = _propose(Session, project_id, {"promise_id": "promise_a", **operation}, chapter=1)
+
+    with pytest.raises(HTTPException) as rejected:
+        with Session.begin() as session:
+            approve_world_edit_proposal(session, project_id=project_id, proposal_id=proposal_id)
+
+    assert rejected.value.status_code == 400
+    with Session() as session:
+        assert session.get(KnowledgeEditProposalRow, proposal_id).status == "pending"
+        promises = BookStateQuery(session).reader_promises(project_id)
+    assert [(promise.status, promise.current_debt_level) for promise in promises] == [("open", 2)]
+    engine.dispose()
+
+
+def test_proposal_stores_promise_values_in_their_validated_type() -> None:
+    engine, Session = _session_factory()
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        _compile(session, project_id, 0, [_create_promise("promise_a")])
+    proposal_id = _propose(
+        Session,
+        project_id,
+        {
+            "op": "set_reader_promise_field",
+            "promise_id": "promise_a",
+            "field_path": "maximum_safe_delay",
+            "new_value": "4",
+        },
+        chapter=1,
+    )
+
+    with Session.begin() as session:
+        approve_world_edit_proposal(session, project_id=project_id, proposal_id=proposal_id)
+
+    with Session() as session:
+        node = BookStateQuery(session).runtime(project_id, as_of_chapter=1).narrative.get_node("promise_a")
+    assert node.payload["maximum_safe_delay"] == 4
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
     ("field_path", "stale", "fresh"),
     [
         ("status", "paid_off", "open"),

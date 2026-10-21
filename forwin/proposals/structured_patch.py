@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from typing import Any
+
+from pydantic import ValidationError
 
 from forwin.book_state.narrative import (
     PROMISE_PAYLOAD_FIELDS,
     promise_node_payload,
     reader_promise_from_node,
 )
+from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
 from forwin.models.base import new_id
 from forwin.models.knowledge import KnowledgeEditProposalRow
@@ -668,42 +672,55 @@ def _promise_narrative_patches(
     if node is None or node.node_type != "promise":
         raise ValueError(f"unknown reader promise: {promise_id}")
     current = reader_promise_from_node(node).model_dump(mode="json")
-
-    def set_field(field: str, old_value: Any, new_value: Any) -> NarrativePatch:
-        field_path = _promise_field_path(field)
-        return NarrativePatch(
-            target_ref=target_ref,
-            op="set",
-            field_path=field_path,
-            old_value=old_value,
-            new_value=new_value,
-            reason=patch_reason,
-            evidence_refs=evidence_refs,
-        )
-
     if op == "resolve_reader_promise":
-        return [
-            set_field(
+        edits = [
+            (
                 "status",
                 operation.get("old_value", current["status"]),
                 operation.get("new_value", "resolved"),
             ),
-            set_field(
+            (
                 "current_debt_level",
                 current["current_debt_level"],
                 operation.get("current_debt_level", 0),
             ),
         ]
-    field_path = str(operation.get("field_path") or "")
-    if not field_path:
-        raise ValueError("set_reader_promise_field requires field_path")
-    return [
-        set_field(
-            field_path,
-            operation.get("old_value", _get_path(current, field_path)),
-            operation.get("new_value"),
+    else:
+        field_path = str(operation.get("field_path") or "")
+        if not field_path:
+            raise ValueError("set_reader_promise_field requires field_path")
+        edits = [
+            (
+                field_path,
+                operation.get("old_value", _get_path(current, field_path)),
+                operation.get("new_value"),
+            )
+        ]
+    node_paths = [_promise_field_path(field) for field, _, _ in edits]
+    # Nothing validates narrative patch values downstream, so a mistyped edit
+    # would enter canon and make every promise read fail; check it here.
+    edited = deepcopy(current)
+    for field, _, new_value in edits:
+        apply_path_patch(edited, field, new_value)
+    try:
+        validated = ReaderPromise.model_validate(edited).model_dump(mode="json")
+    except ValidationError as exc:
+        raise ValueError(f"invalid reader promise edit for {promise_id}: {exc}") from exc
+    patches: list[NarrativePatch] = []
+    for node_path, (field, old_value, new_value) in zip(node_paths, edits):
+        patches.append(
+            NarrativePatch(
+                target_ref=target_ref,
+                op="set",
+                field_path=node_path,
+                old_value=old_value,
+                # A top-level field is stored in its validated type ("4" -> 4).
+                new_value=new_value if "." in field else validated[field],
+                reason=patch_reason,
+                evidence_refs=evidence_refs,
+            )
         )
-    ]
+    return patches
 
 
 def _promise_field_path(field_path: str) -> str:

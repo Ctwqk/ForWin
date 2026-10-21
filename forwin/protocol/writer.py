@@ -1,5 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field
+from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction
 from .scene import SceneContinuation, SceneOutput
 from .state_change import (
     DeliveredPayoffCandidate,
@@ -50,6 +51,7 @@ class WriterOutput(BaseModel):
     delivered_payoffs: list[DeliveredPayoffCandidate] = Field(default_factory=list)
     thread_beats: list[ThreadBeatCandidate] = Field(default_factory=list)
     time_advance: TimeAdvance | None = None
+    chapter_delta: ChapterDeltaExtraction | None = None
     scene_continuation: list[SceneContinuation] = Field(default_factory=list)
     lore_candidates: list[LoreCandidate] = Field(default_factory=list)
     timeline_hints: list[TimelineHint] = Field(default_factory=list)

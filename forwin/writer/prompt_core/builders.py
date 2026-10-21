@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 
+from forwin.canon_names import CanonNameAnchor
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import SceneOutput, ScenePlan
 from .constraints import _canon_quality_context_section
@@ -102,7 +103,10 @@ def _scene_prompt_sections(
         _subworld_control_section(context),
         _map_runtime_section(context),
         _active_threads_section(context, limit=thread_limit),
-        _canon_name_anchor_section(context),
+        _canon_name_anchor_section(
+            context,
+            anchors=[CanonNameAnchor(a.role_label, a.canonical_name) for a in context.canon_name_anchors],
+        ),
         _experience_overlay_section(context),
         _world_intent_section(context),
         _arc_envelope_section(context, compact=envelope_compact),
@@ -141,7 +145,10 @@ def build_single_chapter_draft_prompt(
         _subworld_control_section(context),
         _map_runtime_section(context),
         _active_threads_section(context, limit=8),
-        _canon_name_anchor_section(context),
+        _canon_name_anchor_section(
+            context,
+            anchors=[CanonNameAnchor(a.role_label, a.canonical_name) for a in context.canon_name_anchors],
+        ),
         _experience_overlay_section(context),
         _world_intent_section(context),
         _arc_envelope_section(context, compact=False),
@@ -200,7 +207,10 @@ def build_preview_chapter_prompt(
         _personality_context_section(context),
         _map_runtime_section(context),
         _active_threads_section(context, limit=6),
-        _canon_name_anchor_section(context),
+        _canon_name_anchor_section(
+            context,
+            anchors=[CanonNameAnchor(a.role_label, a.canonical_name) for a in context.canon_name_anchors],
+        ),
         _experience_overlay_section(context),
         _world_intent_section(context),
         _arc_envelope_section(context, compact=True),

@@ -138,15 +138,10 @@ class RelationshipPersonalityEnricher:
         }
 
     def _skill_for_relation(self, relation: WorldEdge) -> str:
-        text = (
-            f"{relation.edge_type}\n{relation.metadata.get('description', '')}"
-        ).lower()
-        if any(keyword in text for keyword in ("rival", "对手", "竞争")):
-            return "rel-rival-respect"
-        if any(
-            keyword in text for keyword in ("mentor", "导师", "师父", "扶持", "保护")
-        ):
+        if relation.edge_type in {"mentor_of", "master_of"}:
             return "rel-mentor-protector"
+        if relation.edge_type in {"rival_of"}:
+            return "rel-rival-respect"
         return ""
 
     def _save_event(

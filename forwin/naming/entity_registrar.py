@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from forwin.book_state.query import BookStateQuery
+from forwin.book_state.book_frame_repository import BookLexiconRepository
 from forwin.checker.reference_classifier import (
     classify_reference,
     looks_like_generic_character_reference,
@@ -94,6 +95,7 @@ class LLMEntityAdmissionClassifier:
         names: list[str],
         writer_output: WriterOutput,
         existing_entities: list[EntitySnapshot],
+        extra_generic_refs: frozenset[str] = frozenset(),
     ) -> list[dict[str, Any]]:
         if self.llm_client is None:
             raise RuntimeError("entity registrar has no LLM client")
@@ -146,7 +148,9 @@ class LLMEntityAdmissionClassifier:
                             }
                             for name in names
                             if (
-                                classification := classify_reference(name)
+                                classification := classify_reference(
+                                    name, extra_generic_refs=extra_generic_refs
+                                )
                             ).scope
                             == "genre_candidate"
                         ],
@@ -698,6 +702,9 @@ class EntityRegistrar:
         names: list[str],
         writer_output: WriterOutput,
     ) -> list[dict[str, Any]]:
+        extra_generic_refs = frozenset(
+            BookLexiconRepository(self.session).get(project_id).generic_character_refs
+        )
         prose_evidence = "\n".join(
             (
                 str(writer_output.body or ""),
@@ -707,7 +714,9 @@ class EntityRegistrar:
         deterministic: list[dict[str, Any]] = []
         for name in names:
             reason = ""
-            if looks_like_generic_character_reference(name) or looks_like_non_character_reference(name):
+            if looks_like_generic_character_reference(
+                name, extra_generic_refs=extra_generic_refs
+            ) or looks_like_non_character_reference(name):
                 reason = "deterministic reference classifier"
             elif not _has_prose_evidence(prose_evidence, name):
                 reason = "named mention has no exact prose evidence"
@@ -747,6 +756,7 @@ class EntityRegistrar:
                 names=unresolved_names,
                 writer_output=writer_output,
                 existing_entities=existing_entities,
+                extra_generic_refs=extra_generic_refs,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(

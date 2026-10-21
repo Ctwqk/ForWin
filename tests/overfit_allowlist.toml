@@ -310,10 +310,9 @@ max_literals = 1
 path = "forwin/characters/normalization.py"
 symbol = "GENERIC_CHARACTER_TOKENS"
 checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P1"
-justification = "泛称表含题材称谓（店小二/师兄/师姐/弟子）；P1 改由本书 lexicon 提供"
-max_literals = 12
+category = "language_lexicon"
+justification = "通用语言泛称；题材称谓由每本书 lexicon 提供"
+max_literals = 8
 
 [[entry]]
 path = "forwin/checker/hard_floor.py"
@@ -599,10 +598,9 @@ max_literals = 5
 path = "forwin/checker/reference_classifier.py"
 symbol = "LANGUAGE_GENERIC_CHARACTER_REFERENCES"
 checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P1"
-justification = "匿名泛称中混入题材称谓（店小二/师兄/师姐/弟子）；P1 移入 lexicon 后余下改登记为 language_lexicon"
-max_literals = 52
+category = "language_lexicon"
+justification = "通用语言泛称；题材称谓由每本书 lexicon 提供"
+max_literals = 48
 
 [[entry]]
 path = "forwin/checker/reference_classifier.py"
@@ -871,15 +869,6 @@ checks = ["cjk_collection"]
 category = "catalog"
 justification = "按 Genesis 文化 profile 选择的命名语料目录"
 max_literals = 20
-
-[[entry]]
-path = "forwin/personality/enrichment.py"
-symbol = "RelationshipPersonalityEnricher._skill_for_relation"
-checks = ["cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P1"
-justification = "按题材称谓（师父/导师…）选关系技能；P1 改由 lexicon 提供"
-max_literals = 6
 
 [[entry]]
 path = "forwin/personality/library.py"

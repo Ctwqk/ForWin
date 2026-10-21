@@ -112,6 +112,7 @@ class ChapterContextAssembler:
             previous_chapter_summaries=data.get("summaries", []),
             active_entities=data.get("entities", []),
             active_relations=data.get("relations", []),
+            canon_name_anchors=data.get("canon_name_anchors", []),
             active_threads=data.get("threads", []),
             timeline=data.get("timeline"),
             world_pressure=data.get("world_pressure"),

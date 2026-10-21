@@ -65,6 +65,9 @@ class _BookStateQueryStub:
         self.thread_reads.append((project_id, as_of_chapter))
         return [SimpleNamespace(description="", recent_beats=self.recent_beats)]
 
+    def canon_name_anchors(self, project_id: str, *, as_of_chapter: int):
+        return []
+
     def active_entities(
         self,
         _project_id: str,
@@ -614,6 +617,7 @@ class SubWorldControlTests(unittest.TestCase):
             active_entities=[SimpleNamespace(name="阿青", description="允许角色")],
             active_threads=[],
             active_relations=[],
+            canon_name_anchors=[],
             timeline=None,
             world_pressure=None,
             audience_hints=None,
@@ -659,6 +663,7 @@ class SubWorldControlTests(unittest.TestCase):
                 )
             ],
             active_relations=[],
+            canon_name_anchors=[],
             timeline=None,
             world_pressure=None,
             audience_hints=None,
@@ -724,6 +729,7 @@ class SubWorldControlTests(unittest.TestCase):
                 SimpleNamespace(name="陈伯伦消失", description="", status="active", priority=2, recent_beats=["陆明检索陈伯伦，发现记录消失。"]),
             ],
             active_relations=[],
+            canon_name_anchors=[],
             timeline=None,
             world_pressure=None,
             audience_hints=None,
@@ -802,7 +808,7 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual([issue.entity_names[0] for issue in issues], ["甲乙丁"])
         self.assertEqual(checker.anchor_reads, [("p1", 6)])
 
-    def test_continuity_checker_has_no_canon_name_anchors_by_default(self) -> None:
+    def test_continuity_checker_has_no_canon_name_anchors_without_kinship_edges(self) -> None:
         book_state = _BookStateQueryStub(
             ["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"]
         )

@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from forwin.book_state.book_frame_repository import BookLexiconRepository
 from forwin.checker.reference_classifier import (
     looks_like_generic_character_reference,
     looks_like_non_character_reference,
@@ -152,6 +153,9 @@ class WriterContractDeltaBuilder:
         writer_output: WriterOutput,
         review_verdict_id: str,
     ) -> WriterContractDeltaResult:
+        extra_generic_refs = frozenset(
+            BookLexiconRepository(self.session).get(project_id).generic_character_refs
+        )
         runtime = BookStateProjection(self.session).load_runtime_as_of(
             project_id,
             as_of_chapter=max(int(chapter_number) - 1, 0),
@@ -357,7 +361,9 @@ class WriterContractDeltaBuilder:
                         node_by_name[normalized_name] = node
                         node_kind_by_name[normalized_name] = kind
                 if node is None and (
-                    looks_like_generic_character_reference(normalized_name)
+                    looks_like_generic_character_reference(
+                        normalized_name, extra_generic_refs=extra_generic_refs
+                    )
                     or looks_like_non_character_reference(normalized_name)
                 ):
                     continue

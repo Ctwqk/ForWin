@@ -164,12 +164,9 @@ class ContinuityChecker:
         *,
         as_of_chapter: int = 10**9,
     ) -> list[CanonNameAnchor]:
-        """Canon name anchors in force before ``as_of_chapter``.
-
-        No anchors are produced yet: they will come from BookState kinship edges
-        (design §7.3, P1), never from patterns over thread prose.
-        """
-        return []
+        if self.book_state is None:
+            return []
+        return self.book_state.canon_name_anchors(project_id, as_of_chapter=as_of_chapter)
 
     @staticmethod
     def _canon_name_scan_text(output: WriterOutput) -> str:

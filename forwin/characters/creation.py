@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from forwin.book_state import BookStateRepository
+from forwin.book_state.book_frame_repository import BookLexiconRepository
 from forwin.audit.events import DecisionEventInfo
 from forwin.models.base import new_id
 from forwin.personality import (
@@ -50,7 +51,10 @@ class CharacterCreationHelper:
         self, request: CharacterCreationRequest
     ) -> CharacterCreationResult:
         if (
-            is_generic_character_name(request.name)
+            is_generic_character_name(
+                request.name,
+                extra_refs=BookLexiconRepository(self.session).get(request.project_id).generic_character_refs,
+            )
             and request.generic_character_policy == "reject_or_group"
         ):
             report = failed_integrity(

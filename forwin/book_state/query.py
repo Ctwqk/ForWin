@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.canon_names import CanonNameAnchor
 from forwin.models.book_state import GraphDeltaRow
 from forwin.protocol.book_state import ReaderPromise
 from forwin.protocol.context import (
@@ -56,6 +57,34 @@ class BookStateQuery:
             )
             self._runtime_cache[key] = runtime
         return runtime
+
+    def canon_name_anchors(
+        self, project_id: str, *, as_of_chapter: int
+    ) -> list[CanonNameAnchor]:
+        runtime = self.runtime(project_id, as_of_chapter=as_of_chapter)
+        anchors: set[tuple[str, str]] = set()
+        for edge in runtime.world.edges_by_id.values():
+            if not edge.is_active or edge.edge_type not in {
+                "kin_of", "family_of", "master_of", "mentor_of"
+            }:
+                continue
+            appellation = str(edge.metadata.get("appellation") or "").strip()
+            if not appellation:
+                continue
+            source = runtime.world.nodes_by_id.get(edge.source_id)
+            target = runtime.world.nodes_by_id.get(edge.target_id)
+            if source is None or target is None:
+                continue
+            if any(
+                node.node_type != "character" or not node.name.strip()
+                for node in (source, target)
+            ):
+                continue
+            anchors.add((f"{source.name}的{appellation}", target.name))
+        return [
+            CanonNameAnchor(role_label=role, canonical_name=name)
+            for role, name in sorted(anchors)
+        ]
 
     def current_story_minute(self, project_id: str, *, as_of_chapter: int) -> int | None:
         return self.session.scalar(

@@ -193,3 +193,8 @@ def test_subworld_generic_autofix_helper_is_removed_from_pipeline_boundary() -> 
     assert looks_like_generic_character_reference("路人") is True
     assert looks_like_generic_character_reference("馆员") is False
     assert looks_like_generic_character_reference("档案区旧书摊主") is False
+
+
+def test_genre_reference_requires_book_lexicon() -> None:
+    assert not looks_like_generic_character_reference("店小二")
+    assert looks_like_generic_character_reference("店小二", extra_generic_refs=frozenset({"店小二"}))

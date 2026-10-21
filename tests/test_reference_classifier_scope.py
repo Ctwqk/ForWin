@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -132,7 +133,8 @@ def test_genre_and_story_candidates_reach_project_entity_classifier() -> None:
         engine.dispose()
 
 
-def test_llm_classifier_receives_nonbinding_genre_candidate_features() -> None:
+@pytest.mark.parametrize("extra_refs", [frozenset(), frozenset({"AI-7"})])
+def test_llm_classifier_receives_nonbinding_genre_candidate_features(extra_refs) -> None:
     class CapturingClient:
         def __init__(self) -> None:
             self.messages: list[dict] = []
@@ -167,16 +169,18 @@ def test_llm_classifier_receives_nonbinding_genre_candidate_features() -> None:
             end_of_chapter_summary="两者进入现场。",
         ),
         existing_entities=[],
+        extra_generic_refs=extra_refs,
     )
 
     payload = json.loads(client.messages[1]["content"])
-    assert payload["reference_candidates"] == [
+    expected_candidates = [
         {
             "name": "AI-7",
             "scope": "genre_candidate",
             "features": ["technical_identifier"],
         }
     ]
+    assert payload["reference_candidates"] == ([] if extra_refs else expected_candidates)
 
 
 def test_story_candidate_without_classifier_fails_closed() -> None:
@@ -244,6 +248,57 @@ def test_writer_contract_rejects_unadmitted_genre_candidate() -> None:
         assert [issue.code for issue in result.issues] == [
             "unresolved_event_entity"
         ]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_reference_classifier_uses_book_generic_refs() -> None:
+    from forwin.characters.normalization import GENERIC_CHARACTER_TOKENS, is_generic_character_name
+
+    assert isinstance(GENERIC_CHARACTER_TOKENS, frozenset)
+    for name in ("店小二", "师兄", "师姐", "弟子"):
+        assert not classify_reference(name).deterministic_generic
+        assert classify_reference(name, extra_generic_refs=frozenset({name})).deterministic_generic
+        assert looks_like_generic_character_reference(name, extra_generic_refs=frozenset({name}))
+        assert not is_generic_character_name(name)
+        assert is_generic_character_name(name, extra_refs=(name,))
+
+
+def test_registrar_and_writer_contract_use_project_generic_refs() -> None:
+    from forwin.book_state.book_frame_repository import BookLexiconRepository
+    from forwin.book_state.lexicon import BookLexicon
+
+    class CapturingClassifier:
+        def classify(self, *, names, extra_generic_refs, **kwargs):
+            self.refs = extra_generic_refs
+            self.names = names
+            return [{"name": name, "decision": "background_generic"} for name in names]
+
+    engine, session = _session()
+    try:
+        project = Project(title="lexicon", premise="p", genre="g")
+        session.add(project)
+        session.flush()
+        BookLexiconRepository(session).save(project.id, BookLexicon(generic_character_refs=("店小二",)))
+        output = WriterOutput(
+            project_id=project.id, chapter_number=1, title="t", body="店小二遇见甲乙。",
+            end_of_chapter_summary="店小二出现。",
+            entity_mentions=[EntityMention(entity_name=name, entity_kind="character", is_named=True) for name in ("店小二", "甲乙")],
+            new_events=[EventCandidate(summary="店小二出现", significance="major", involved_entity_names=["店小二"])],
+        )
+        classifier = CapturingClassifier()
+        result = EntityRegistrar(session=session, classifier=classifier).plan_writer_output(
+            project_id=project.id, chapter_number=1, writer_output=output,
+        )
+        assert result.plan_conflicts == []
+        assert set(result.background_generic_names) == {"店小二", "甲乙"}
+        assert classifier.names == ["甲乙"]
+        assert classifier.refs == frozenset({"店小二"})
+        contract = WriterContractDeltaBuilder(session).build(
+            project_id=project.id, chapter_number=1, writer_output=output, review_verdict_id="review-1",
+        )
+        assert not any(issue.code == "unresolved_event_entity" for issue in contract.issues)
     finally:
         session.close()
         engine.dispose()

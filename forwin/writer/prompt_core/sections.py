@@ -463,8 +463,6 @@ def _canon_name_anchor_section(
     *,
     anchors: Sequence[CanonNameAnchor] = (),
 ) -> str | None:
-    # Callers pass no anchors yet; P1 derives them from BookState kinship edges and
-    # supplies them here instead of parsing thread prose.
     lines = canon_name_anchor_lines(anchors)
     if not lines:
         return None

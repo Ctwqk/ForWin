@@ -29,10 +29,6 @@ LANGUAGE_GENERIC_CHARACTER_REFERENCES = frozenset(
         "路人",
         "守卫",
         "老板",
-        "店小二",
-        "师兄",
-        "师姐",
-        "弟子",
         "同学",
         "众人",
         "人群",
@@ -153,11 +149,13 @@ def reference_rule_catalog() -> tuple[ReferenceRuleDescriptor, ...]:
     return _RULE_CATALOG
 
 
-def classify_reference(name: str) -> ReferenceClassification:
+def classify_reference(
+    name: str, *, extra_generic_refs: frozenset[str] = frozenset()
+) -> ReferenceClassification:
     text = str(name or "").strip()
     if not text:
         return ReferenceClassification(scope="project")
-    if text in LANGUAGE_GENERIC_CHARACTER_REFERENCES:
+    if text in LANGUAGE_GENERIC_CHARACTER_REFERENCES or text in extra_generic_refs:
         return ReferenceClassification(
             scope="language_generic",
             features=("exact_generic",),
@@ -199,8 +197,10 @@ def _looks_like_status_label(text: str) -> bool:
     return re.split(r"[-_－—]", text)[-1] in _STATUS_LABEL_SUFFIXES
 
 
-def looks_like_generic_character_reference(name: str) -> bool:
-    return classify_reference(name).deterministic_generic
+def looks_like_generic_character_reference(
+    name: str, *, extra_generic_refs: frozenset[str] = frozenset()
+) -> bool:
+    return classify_reference(name, extra_generic_refs=extra_generic_refs).deterministic_generic
 
 
 def looks_like_non_character_reference(name: str) -> bool:

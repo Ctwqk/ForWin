@@ -3,6 +3,7 @@ from __future__ import annotations
 from forwin.book_state.query import BookStateQuery
 from forwin.context.request import ContextDraft, ContextRequest
 from forwin.review.query import ReviewQuery
+from forwin.protocol.context import CanonNameAnchorRef
 
 
 class StateContextProvider:
@@ -37,6 +38,10 @@ class StateContextProvider:
                 "entities": entities,
                 "allowed_entities": allowed_entities,
                 "relations": relations,
+                "canon_name_anchors": [
+                    CanonNameAnchorRef(role_label=anchor.role_label, canonical_name=anchor.canonical_name)
+                    for anchor in book_state.canon_name_anchors(project_id, as_of_chapter=as_of_chapter)
+                ],
                 "threads": book_state.active_threads(
                     project_id,
                     as_of_chapter=as_of_chapter,

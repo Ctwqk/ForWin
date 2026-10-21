@@ -62,7 +62,7 @@ def _create_relation(
         project_id=project_id,
         source_id=source_id,
         target_id=target_id,
-        edge_type="mentor_of" if relation_type == "mentor" else "enemy_of",
+        edge_type="mentor_of" if relation_type == "mentor" else "rival_of",
         edge_family="social",
         metadata={
             "description": description,
@@ -231,3 +231,20 @@ def test_manual_relationship_enrichment_api_scans_project(tmp_path: Path) -> Non
     )
     assert response["enriched"] == 2
     assert source_loadout["relationship_patterns"][0]["target"] == target_id
+
+
+def test_skill_selection_uses_edge_type_only() -> None:
+    enricher = RelationshipPersonalityEnricher.__new__(RelationshipPersonalityEnricher)
+    for edge_type, expected in (
+        ("mentor_of", "rel-mentor-protector"),
+        ("master_of", "rel-mentor-protector"),
+        ("rival_of", "rel-rival-respect"),
+        ("enemy_of", ""),
+        ("kin_of", ""),
+    ):
+        edge = WorldEdge(
+            id="edge", project_id="p", source_id="a", target_id="b",
+            edge_type=edge_type, edge_family="kinship_training" if edge_type in {"kin_of", "master_of"} else "social",
+            metadata={"description": "对手、导师、师父，竞争、扶持与保护。"},
+        )
+        assert enricher._skill_for_relation(edge) == expected

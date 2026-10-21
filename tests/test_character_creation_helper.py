@@ -484,3 +484,24 @@ def test_project_personality_policy_resolver_reads_automation_json() -> None:
     assert policy.fallback_character_class == "unknown_core_character"
     assert policy.cast_diversity_enabled is False
     assert policy.relationship_enrichment_enabled is False
+
+
+def test_book_lexicon_generic_refs_extend_generic_names(tmp_path: Path) -> None:
+    from forwin.book_state.book_frame_repository import BookLexiconRepository
+    from forwin.book_state.lexicon import BookLexicon
+
+    engine = get_engine(postgres_test_url("character-creation-book-lexicon"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    with Session.begin() as session:
+        projects = [Project(title=title, premise="p", genre="g") for title in ("with lexicon", "without lexicon")]
+        session.add_all(projects)
+        session.flush()
+        BookLexiconRepository(session).save(projects[0].id, BookLexicon(generic_character_refs=("弟子",)))
+        helper = CharacterCreationHelper(session, personality_library=CharacterPersonalityLibrary(_library_root(tmp_path)))
+        results = [helper.create_character(CharacterCreationRequest(
+            project_id=project.id, source="api_manual", name="弟子", generic_character_policy="reject_or_group",
+        )) for project in projects]
+        assert not results[0].created
+        assert results[0].warnings[0]["code"] == "generic_character_rejected"
+        assert results[1].created

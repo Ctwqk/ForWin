@@ -166,6 +166,11 @@ class LintSignal(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
 
 
+class CanonNameAnchorRef(BaseModel):
+    role_label: str
+    canonical_name: str
+
+
 class ChapterContextPack(BaseModel):
     """Everything a Writer needs to write one chapter."""
 
@@ -194,6 +199,7 @@ class ChapterContextPack(BaseModel):
     # World state
     active_entities: list[EntitySnapshot] = Field(default_factory=list)
     active_relations: list[RelationSnapshot] = Field(default_factory=list)
+    canon_name_anchors: list[CanonNameAnchorRef] = Field(default_factory=list)
     active_threads: list[PlotThreadSnapshot] = Field(default_factory=list)
     timeline: TimelineSnapshot | None = None
     retrieved_memories: list[MemorySnippet] = Field(default_factory=list)

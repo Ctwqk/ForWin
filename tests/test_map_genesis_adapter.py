@@ -131,14 +131,108 @@ def test_connection_roles_are_scoped_ordered_and_deduplicated() -> None:
             {"from": "a", "to": "b", "edge_type": "portal"},
             {"source_node_id": "a", "target_node_id": "a", "edge_type": "mountain_pass"},
             {"from_node_id": "a", "to_node_id": "a", "kind": "portal"},
+            {"from_node_id": "a", "to_node_id": "a", "kind": "mountain_pass"},
             {"from_node_id": "a", "to_node_id": "a", "kind": "传送阵"},
         ],
     }
 
     main, other = build_subworld_map_specs_from_genesis(project_id="p1", map_atlas=atlas)
 
-    assert main.required_connection_roles == ["portal", "mountain_pass"]
-    assert other.required_connection_roles == ["rail", "portal"]
+    assert main.required_connection_roles == ["mountain_pass", "portal"]
+    assert other.required_connection_roles == ["rail"]
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_cross_subworld_world_gate_does_not_define_internal_routes(seed: int) -> None:
+    atlas = {
+        "submaps": [{"id": "main", "name": "Main"}, {"id": "other", "name": "Other"}],
+        "nodes": [
+            {"id": "a", "name": "A", "parent_subworld": "main"},
+            {"id": "b", "name": "B", "parent_subworld": "main"},
+            {"id": "c", "name": "C", "parent_subworld": "other"},
+        ],
+        "edges": [
+            {"from_node_id": "a", "to_node_id": "b", "kind": "road"},
+            {"from_node_id": "a", "to_node_id": "c", "kind": "world_gate"},
+        ],
+    }
+
+    specs = build_subworld_map_specs_from_genesis(project_id="p1", map_atlas=atlas)
+
+    assert [spec.required_connection_roles for spec in specs] == [["road"], ["road"]]
+    for spec in specs:
+        result = generate_subworld_map(spec.model_copy(update={"generation_seed": seed, "target_edge_density": 3.0}))
+        assert result.validation_report.valid is True
+        assert all(edge.edge_type != "world_gate" for edge in result.map_edges)
+        if spec.logical_subworld_id == "main":
+            anchor_ids = {node.id for node in result.map_nodes if node.metadata.get("node_role") == "anchor"}
+            connections = [edge for edge in result.map_edges if edge.metadata.get("required_connection") and edge.status == "open"]
+            assert connections
+            assert all(edge.edge_type == "road" for edge in connections)
+            assert all({edge.from_node_id, edge.to_node_id} == anchor_ids for edge in connections)
+
+
+@pytest.mark.parametrize("single_subworld", [False, True])
+@pytest.mark.parametrize(
+    "edge",
+    [
+        {"from_node_id": "a", "to_node_id": "missing"},
+        {"from_node_id": "missing", "to_node_id": "a"},
+        {"from_node_id": "a", "to_node_id": "unresolved"},
+        {"from_node_id": "a"},
+        {"to_node_id": "a"},
+        {},
+    ],
+)
+def test_connection_roles_skip_unresolvable_endpoints(single_subworld: bool, edge: dict[str, str]) -> None:
+    submaps = [{"id": "main", "name": "Main"}]
+    if not single_subworld:
+        submaps.append({"id": "other", "name": "Other"})
+    atlas = {
+        "submaps": submaps,
+        "nodes": [
+            {"id": "a", "name": "A", "parent_subworld": "main"},
+            {"id": "unresolved", "name": "Unresolved", "parent_subworld": "missing"},
+        ],
+        "edges": [{**edge, "kind": "portal"}],
+    }
+
+    specs = build_subworld_map_specs_from_genesis(project_id="p1", map_atlas=atlas)
+
+    assert all(spec.required_connection_roles == ["road"] for spec in specs)
+
+
+@pytest.mark.parametrize(
+    ("source_key", "target_key", "source_ref", "target_ref", "other_ref"),
+    [
+        ("from_node", "to_node", "A", "B", "C"),
+        ("source_node", "target_node", "a", "b", "c"),
+        ("from_subworld_id", "to_subworld_id", "main", "main", "other"),
+        ("source_subworld_id", "target_subworld_id", "main", "main", "other"),
+        ("from_subworld", "to_subworld", "Main", "Main", "Other"),
+        ("source_subworld", "target_subworld", "Main", "Main", "Other"),
+    ],
+)
+def test_connection_roles_resolve_endpoint_aliases(
+    source_key: str, target_key: str, source_ref: str, target_ref: str, other_ref: str,
+) -> None:
+    atlas = {
+        "submaps": [{"id": "main", "name": "Main"}, {"id": "other", "name": "Other"}],
+        "nodes": [
+            {"id": "a", "name": "A", "parent_subworld": "main"},
+            {"id": "b", "name": "B", "parent_subworld": "main"},
+            {"id": "c", "name": "C", "parent_subworld": "other"},
+        ],
+        "edges": [
+            {source_key: source_ref, target_key: target_ref, "kind": "rail"},
+            {source_key: source_ref, target_key: other_ref, "kind": "portal"},
+        ],
+    }
+
+    main, other = build_subworld_map_specs_from_genesis(project_id="p1", map_atlas=atlas)
+
+    assert main.required_connection_roles == ["rail"]
+    assert other.required_connection_roles == ["road"]
 
 
 def test_region_kind_flows_into_region_type() -> None:

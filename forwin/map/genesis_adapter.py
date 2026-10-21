@@ -239,38 +239,57 @@ def _node_type(kind: str) -> str:
 
 
 def _connection_roles(atlas: dict[str, Any], submap: dict[str, Any]) -> list[str]:
-    single_subworld = len(_normalized_submaps(atlas)) == 1
-    node_rows = _rows_for_subworld(
-        [item for item in (atlas.get("nodes") or []) if isinstance(item, dict)],
-        str(submap["id"]),
-        str(submap["name"]),
-        single_subworld=single_subworld,
-        ref_key="parent_subworld",
-    )
-    related_refs = {str(submap["id"]), str(submap["name"])}
-    related_refs.update(
-        str(item[key]).strip()
-        for item in node_rows
+    submaps = _normalized_submaps(atlas)
+    subworld_by_ref = {
+        str(item[key]): str(item["id"])
+        for item in submaps
         for key in ("id", "name")
-        if item.get(key)
-    )
+    }
+    node_subworld_by_ref: dict[str, str] = {}
+    for node in (atlas.get("nodes") or []):
+        if not isinstance(node, dict):
+            continue
+        subworld_ref = str(node.get("parent_subworld", "") or "").strip()
+        subworld_id = subworld_by_ref.get(subworld_ref, "")
+        if not subworld_ref and len(submaps) == 1:
+            subworld_id = str(submaps[0]["id"])
+        if not subworld_id:
+            continue
+        for key in ("id", "name"):
+            ref = str(node.get(key, "") or "").strip()
+            if ref:
+                node_subworld_by_ref[ref] = subworld_id
     edge_types = {edge_type.value for edge_type in MapEdgeType}
     roles: list[str] = []
     for edge in (atlas.get("edges") or []):
         if not isinstance(edge, dict):
             continue
-        refs = {
-            str(edge[key]).strip()
-            for prefix in ("from", "source", "to", "target")
-            for suffix in ("_node_id", "_node", "", "_subworld_id", "_subworld")
-            if edge.get(key := f"{prefix}{suffix}")
-        }
-        if not (refs & related_refs or (single_subworld and not refs)):
+        from_subworld_id = _edge_endpoint_subworld(edge, ("from", "source"), subworld_by_ref, node_subworld_by_ref)
+        to_subworld_id = _edge_endpoint_subworld(edge, ("to", "target"), subworld_by_ref, node_subworld_by_ref)
+        if from_subworld_id != str(submap["id"]) or to_subworld_id != str(submap["id"]):
             continue
         edge_type = str(edge.get("edge_type") or edge.get("kind") or "")
         if edge_type in edge_types:
             roles.append(edge_type)
     return _unique(roles) or ["road"]
+
+
+def _edge_endpoint_subworld(
+    edge: dict[str, Any],
+    prefixes: tuple[str, str],
+    subworld_by_ref: dict[str, str],
+    node_subworld_by_ref: dict[str, str],
+) -> str:
+    for suffix in ("_subworld_id", "_subworld", "_node_id", "_node", ""):
+        for prefix in prefixes:
+            ref = str(edge.get(f"{prefix}{suffix}", "") or "").strip()
+            if suffix in {"_subworld_id", "_subworld"}:
+                resolved = subworld_by_ref.get(ref, "")
+            else:
+                resolved = node_subworld_by_ref.get(ref) or subworld_by_ref.get(ref, "")
+            if resolved:
+                return resolved
+    return ""
 
 
 def _danger_base(

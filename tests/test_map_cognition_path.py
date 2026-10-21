@@ -80,3 +80,23 @@ def test_field_overrides_and_false_edges_change_observer_path() -> None:
     assert false_known.total_travel_cost == 3
     assert false_known.total_risk == 4
     assert false_known.total_narrative_cost == 5
+
+
+def test_shortest_path_can_be_limited_to_edge_types_with_separate_cache_entries() -> None:
+    edges = [
+        MapEdge(id="pass", project_id="p1", subworld_id="sw1", from_node_id="city", to_node_id="inner", edge_type="mountain_pass", travel_time=4),
+        MapEdge(id="road_1", project_id="p1", subworld_id="sw1", from_node_id="city", to_node_id="gate", edge_type="road", travel_time=5),
+        MapEdge(id="road_2", project_id="p1", subworld_id="sw1", from_node_id="gate", to_node_id="inner", edge_type="road", travel_time=5),
+    ]
+    graph = MapGraph(nodes=_nodes(), edges=edges)
+
+    any_edge = graph.shortest_path("city", "inner")
+    roads = graph.shortest_path("city", "inner", allowed_edge_types=frozenset({"road"}))
+    rivers = graph.shortest_path("city", "inner", allowed_edge_types=frozenset({"river"}))
+
+    assert any_edge.path_edge_ids == ["pass"]
+    assert roads.path_edge_ids == ["road_1", "road_2"]
+    assert rivers.reachable is False
+    # Each filter is cached on its own key, so the unfiltered result is not reused.
+    assert graph.shortest_path("city", "inner").path_edge_ids == ["pass"]
+    assert graph.shortest_path("city", "inner", allowed_edge_types=frozenset({"road"})).path_edge_ids == ["road_1", "road_2"]

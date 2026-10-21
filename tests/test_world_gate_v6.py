@@ -6,11 +6,13 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import select
 
 from forwin.book_state import BookStateCompiler, BookStateRepository
 from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction
 from forwin.book_state.extraction.contract import BookStateExtractionResult
 from forwin.book_state.extraction.translator import ChapterDeltaTranslator
+from forwin.book_state import reveal_schedule
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
 from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
 from forwin.canon import preparation
@@ -54,7 +56,10 @@ def _pack(
             "id": "opp-1", "name": "乙", "role": "role-opp", "desire": "desire-opp",
             "culture_profile_id": "", "backing_faction": "", "base_location": "node-2",
         }],
-        "factions": [],
+        "factions": [{
+            "id": "faction-1", "name": "丙", "role": "role-faction", "goal": "goal-faction",
+            "culture_profile_id": "", "base_location": "node-1",
+        }],
     }
     seed = {
         "calendar": {
@@ -71,6 +76,8 @@ def _pack(
             {"ref": "cast-1", "actor_tier": "minor", "location_ref": "node-1", "travel_mode_ids": hero_modes,
              "resources": [], "agendas": [], "intents": []},
             {"ref": "opp-1", "actor_tier": "minor", "location_ref": "node-2", "travel_mode_ids": [],
+             "resources": [], "agendas": [], "intents": []},
+            {"ref": "faction-1", "actor_tier": "minor", "location_ref": "node-1", "travel_mode_ids": [],
              "resources": [], "agendas": [], "intents": []},
         ],
         "relations": [],
@@ -122,6 +129,10 @@ class _World:
     def rival(self) -> str:
         return self.node("character", "opp-1")
 
+    @property
+    def faction(self) -> str:
+        return self.node("faction", "faction-1")
+
 
 def _session_factory():
     engine = get_engine(postgres_test_url())
@@ -135,6 +146,7 @@ def _seed_world(
     travel_modes: list[dict[str, Any]] | None = None,
     hero_modes: list[str] | None = None,
     reveal_candidates: list[dict[str, Any]] | None = None,
+    extra_edges: tuple[tuple[str, int, int, str, float, bool], ...] = (),
 ) -> _World:
     """Chapter 0: loc 1 -road 2h- loc 2 -hidden route 1h- loc 3; loc 2 -mountain pass 4h- loc 4; loc 5 isolated."""
     pack = _pack(
@@ -163,6 +175,7 @@ def _seed_world(
             ("road", 1, 2, "road", 2.0, True),
             ("hidden", 2, 3, "hidden_route", 1.0, False),
             ("pass", 2, 4, "mountain_pass", 4.0, True),
+            *extra_edges,
         ):
             repo.create_map_edge(MapEdge(
                 id=f"{edge_id}-{project.id}", project_id=project.id, subworld_id=SUBWORLD,
@@ -338,6 +351,27 @@ def test_movement_speed_against_shortest_time_and_tolerance() -> None:
     # Only one offset: the chapter's span is the claimed time.
     assert check({**_time(1, "日"), "offsets": {"arrive_offset": _offset(1)}}) == []
     assert check(_time(1, "时"), travel_tolerance=0.5) == [("warning", "movement_fast_within_tolerance")]
+    # A claim exactly at the inclusive bound is a warning, even where 120 * (1 - 0.7) rounds above 36.
+    assert check(_time(1.6, "时")) == [("warning", "movement_fast_within_tolerance")]
+    assert check(_time(0.6, "时"), travel_tolerance=0.7) == [("warning", "movement_fast_within_tolerance")]
+    engine.dispose()
+
+
+def test_unknown_chapter_duration_checks_speed_only_on_both_offsets() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+
+    def check(**offsets: Any) -> list[tuple[str, str]]:
+        # No elapsed time: the chapter's end is unknown, not zero minutes after its start.
+        return _check(Session, world, 1, {"movements": [_move(world.hero, world.loc(1), world.loc(2), **offsets)]})
+
+    assert check() == [("warning", "movement_duration_unknown")]
+    assert check(arrive_offset=_offset(3)) == [("warning", "movement_duration_unknown")]
+    assert check(depart_offset=_offset(0), arrive_offset=_offset(3)) == []
+    assert check(depart_offset=_offset(0), arrive_offset=_offset(1)) == [("error", "movement_too_fast")]
+    assert check(depart_offset=_offset(2), arrive_offset=_offset(1)) == [
+        ("error", "time_offset_out_of_range"), ("warning", "movement_duration_unknown"),
+    ]
     engine.dispose()
 
 
@@ -362,6 +396,23 @@ def test_travel_mode_speed_requires_allowed_edge_types() -> None:
     engine.dispose()
 
 
+def test_travel_mode_may_take_a_longer_route_it_is_allowed_on() -> None:
+    engine, Session = _session_factory()
+    horse = {"id": "mode-horse", "name": "", "speed_multiplier": 4.0, "allowed_edge_types": ["road"]}
+    world = _seed_world(
+        Session, travel_modes=[horse], hero_modes=["mode-horse"],
+        extra_edges=(("long-road", 2, 4, "road", 10.0, True),),
+    )
+
+    def check(fields: dict[str, Any]) -> list[tuple[str, str]]:
+        # On foot road 2 h + pass 4 h = 360 min; the horse on roads 2 h + 10 h = 12 h / 4 = 180 min.
+        return _check(Session, world, 1, {**fields, "movements": [_move(world.hero, world.loc(1), world.loc(4))]})
+
+    assert check(_time(4, "时")) == []
+    assert check(_time(2, "时")) == [("error", "movement_too_fast")]
+    engine.dispose()
+
+
 def test_restrained_entity_moved_without_release() -> None:
     engine, Session = _session_factory()
     world = _seed_world(Session)
@@ -381,6 +432,25 @@ def test_restrained_entity_moved_without_release() -> None:
     assert restrained == [("error", "restrained_entity_moved")]
     assert released == []
     assert free_rival == []
+    engine.dispose()
+
+
+def test_restraint_release_anywhere_in_the_delta_counts() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    _commit(Session, world, _delta(Session, world, 1, {
+        "entity_changes": [{"ref": world.hero, "field": "restraint.state", "new_value": "imprisoned", "evidence": "e"}],
+    }))
+    delta = _delta(Session, world, 2, {
+        **_time(1, "日"),
+        "entity_changes": [{"ref": world.hero, "field": "restraint.state", "new_value": "free", "evidence": "e"}],
+        "movements": [_move(world.hero, world.loc(1), world.loc(2))],
+    })
+    # The release patch after the movement's location patch still frees the mover.
+    reordered = delta.model_copy(update={"node_patches": list(reversed(delta.node_patches))})
+
+    assert [patch.field_path for patch in reordered.node_patches] == ["state.location_id", "state.restraint.state"]
+    assert _codes(_review(Session, world, reordered)) == []
     engine.dispose()
 
 
@@ -567,6 +637,20 @@ def test_contradicts_hidden_fact_only_when_presented_as_true() -> None:
     engine.dispose()
 
 
+def test_extraction_location_change_without_movement_keeps_reachability_check() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+
+    def relocate(location: str) -> list[tuple[str, str]]:
+        return _check(Session, world, 1, {
+            "entity_changes": [{"ref": world.faction, "field": "location_id", "new_value": location, "evidence": "e"}],
+        })
+
+    assert relocate(world.loc(5)) == [("error", "movement_unreachable")]
+    assert relocate(world.loc(2)) == []
+    engine.dispose()
+
+
 def test_non_extraction_deltas_skip_v6_checks() -> None:
     engine, Session = _session_factory()
     # Seeding already ran the genesis_seed deltas through the gate.
@@ -603,6 +687,39 @@ def test_non_extraction_deltas_skip_v6_checks() -> None:
     assert reachable.accepted is True
     assert _codes(reachable) == []
     assert _codes(isolated) == [("error", "movement_unreachable")]
+    engine.dispose()
+
+
+def test_reveal_schedule_logs_unusable_pack_and_arc_numbers(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session, reveal_candidates=[{"fact_id": "fact-secret", "arc_number": 2, "note": ""}])
+    warnings: list[str] = []
+
+    class Logger:
+        # Other tests reconfigure global logging, so record the module's warnings directly.
+        def warning(self, message: str, *args: Any) -> None:
+            warnings.append(message % args)
+
+    monkeypatch.setattr(reveal_schedule, "logger", Logger())
+
+    def schedule(pack_json: str) -> dict[str, int]:
+        with Session.begin() as session:
+            revision = session.scalars(
+                select(BookGenesisRevision).where(BookGenesisRevision.project_id == world.project_id)
+            ).one()
+            revision.pack_json = pack_json
+        with Session() as session:
+            return reveal_schedule.earliest_reveal_chapters(session, world.project_id)
+
+    text_arc_pack = _pack(travel_modes=[WALK], hero_modes=["mode-walk"], reveal_candidates=[
+        {"fact_id": "fact-secret", "arc_number": "2", "note": ""},
+    ])
+
+    assert schedule("{not json") == {}
+    assert schedule(json.dumps(text_arc_pack)) == {}
+    assert len(warnings) == 2
+    assert "pack_json is not JSON" in warnings[0]
+    assert "non-integer arc_number '2'" in warnings[1]
     engine.dispose()
 
 

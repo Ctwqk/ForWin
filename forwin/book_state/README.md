@@ -8,7 +8,7 @@ Rules:
 
 - `BookStateCompiler` is the final GraphDelta canon writer and is constructed only by `CanonAdmissionService`.
 - `BookStateReviewGate` must run before new changes enter canon, including the Genesis seed.
-- For `source_type="chapter_extraction"` deltas the gate also runs the v6 world checks on the delta's `movements`, `knowledge_tags` and `item_transfers` metadata: time offsets, reachability over the mover's known routes, travel speed within `review.travel_tolerance`, restrained movers, entities dead before the chapter acting (flashbacks exempt), item holders, told sources, and reader reveals against the reveal schedule. Other deltas keep the patch-based reachability check.
+- For `source_type="chapter_extraction"` deltas the gate also runs the v6 world checks on the delta's `movements`, `knowledge_tags` and `item_transfers` metadata: time offsets, reachability over the mover's known routes, travel speed within `review.travel_tolerance`, restrained movers, entities dead before the chapter acting (flashbacks exempt), item holders, told sources, and reader reveals against the reveal schedule. Location changes without a movement record (a faction's, say), and all other deltas, keep the patch-based reachability check.
 - Accepted chapters enter through `CanonAdmissionService.commit_plan`; world edits use `commit_world_edit`, clamp to the latest canon chapter, and recheck under the project lock. The removed `BookStateDirectCommitService` is not an entry point.
 - World, map, cognition, and narrative are always enabled; `canon.book_state_layers` has been removed.
 - Obsidian, LLM KB, wiki/export, and debug APIs must be rebuildable projections from BookState or declared integration rows.

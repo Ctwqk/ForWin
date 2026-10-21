@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from copy import copy, deepcopy
+from functools import cached_property
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -30,6 +32,7 @@ from forwin.protocol.book_state import (
 CHAPTER_EXTRACTION_SOURCE_TYPE = "chapter_extraction"
 DEFAULT_TRAVEL_TOLERANCE = 0.2
 _AWARE_STATES = frozenset({"knows", "believes"})
+_MINUTE_EPSILON = 1e-6
 
 
 class BookStateReviewIssue(BaseModel):
@@ -82,7 +85,7 @@ class BookStateReviewGate:
                     ).run()
                 )
             else:
-                issues.extend(_location_patch_issues(runtime, delta))
+                issues.extend(_location_patch_issues(runtime.map, delta.node_patches))
         accepted = not any(issue.severity == "error" for issue in issues)
         return BookStateReviewVerdict(
             project_id=changes.project_id,
@@ -192,17 +195,17 @@ def _same_value(left, right) -> bool:
     return left == right
 
 
-def _location_patch_issues(runtime: BookStateRuntime, delta: GraphDelta) -> list[BookStateReviewIssue]:
-    """Reachability of a non-extraction location change, from the patch's old location."""
+def _location_patch_issues(map_graph: MapGraph, patches: Iterable[NodePatch]) -> list[BookStateReviewIssue]:
+    """Reachability of a location change from the patch's old location."""
     issues: list[BookStateReviewIssue] = []
-    for patch in delta.node_patches:
+    for patch in patches:
         if not _is_location_patch(patch):
             continue
         old_location = str(patch.old_value or "")
         new_location = str(patch.new_value or "")
         if not old_location or not new_location or old_location == new_location:
             continue
-        if old_location not in runtime.map.nodes_by_id or new_location not in runtime.map.nodes_by_id:
+        if old_location not in map_graph.nodes_by_id or new_location not in map_graph.nodes_by_id:
             issues.append(
                 BookStateReviewIssue(
                     severity="error",
@@ -212,7 +215,7 @@ def _location_patch_issues(runtime: BookStateRuntime, delta: GraphDelta) -> list
                 )
             )
             continue
-        result = runtime.map.shortest_path(old_location, new_location, metric="travel_time")
+        result = map_graph.shortest_path(old_location, new_location, metric="travel_time")
         if not result.reachable:
             issues.append(
                 BookStateReviewIssue(
@@ -269,40 +272,8 @@ class _ChapterExtractionChecks:
 
     # movements
 
-    def _movement_issues(self) -> None:
-        if not self.movements:
-            return
-        graph = self._working_map()
-        lexicon = BookLexiconRepository(self.session).get(self.delta.project_id)
-        modes = {mode.id: mode for mode in lexicon.travel_modes}
-        start, end = self.delta.story_time_start, self.delta.story_time_end
-        chapter_minutes = end - start if start is not None and end is not None else None
-        positions: dict[str, list[int]] = defaultdict(list)
-        for index, patch in enumerate(self.delta.node_patches):
-            if _is_location_patch(patch):
-                positions[patch.node_id].append(index)
-        for movement in self.movements:
-            mover = str(movement.get("entity_id") or "")
-            target = f"node:{mover}"
-            depart, arrive = _minute(movement.get("depart_minute")), _minute(movement.get("arrive_minute"))
-            self._time_offset_issues(target, depart, arrive)
-            # The movement's own location patch; restraint releases before it count.
-            position = positions[mover].pop(0) if positions[mover] else len(self.delta.node_patches)
-            self._restraint_issues(mover, position)
-            from_id, to_id = str(movement.get("from_id") or ""), str(movement.get("to_id") or "")
-            if not from_id or not to_id or from_id == to_id:
-                continue
-            path = self._route(graph, mover, from_id, to_id)
-            if path is None:
-                continue
-            if depart is not None and arrive is not None and arrive >= depart:
-                claimed = arrive - depart
-            else:
-                claimed = chapter_minutes
-            if claimed is not None:
-                self._speed_issues(graph, modes, mover, path, claimed)
-
-    def _working_map(self) -> MapGraph:
+    @cached_property
+    def graph(self) -> MapGraph:
         """The map with this delta's new sites, where movers know the routes the delta discovers."""
         discovered: dict[tuple[str, str], set[str]] = defaultdict(set)
         for patch in self.delta.cognition_patches:
@@ -325,40 +296,93 @@ class _ChapterExtractionChecks:
             graph.apply_map_patch(patch)
         return graph
 
+    def _movement_issues(self) -> None:
+        movers = {str(movement.get("entity_id") or "") for movement in self.movements}
+        # A location change with no movement record (a faction's, say) keeps the patch-based check.
+        unrecorded = [
+            patch for patch in self.delta.node_patches
+            if _is_location_patch(patch) and patch.node_id not in movers
+        ]
+        if unrecorded:
+            self.issues.extend(_location_patch_issues(self.graph, unrecorded))
+        if not self.movements:
+            return
+        lexicon = BookLexiconRepository(self.session).get(self.delta.project_id)
+        modes = {mode.id: mode for mode in lexicon.travel_modes}
+        start, end = self.delta.story_time_start, self._chapter_end()
+        chapter_minutes = end - start if start is not None and end is not None else None
+        for movement in self.movements:
+            mover = str(movement.get("entity_id") or "")
+            target = f"node:{mover}"
+            depart, arrive = _minute(movement.get("depart_minute")), _minute(movement.get("arrive_minute"))
+            self._time_offset_issues(target, depart, arrive)
+            self._restraint_issues(mover)
+            from_id, to_id = str(movement.get("from_id") or ""), str(movement.get("to_id") or "")
+            if not from_id or not to_id or from_id == to_id:
+                continue
+            path = self._route(mover, from_id, to_id)
+            if path is None:
+                continue
+            if depart is not None and arrive is not None and arrive >= depart:
+                claimed = arrive - depart
+            else:
+                claimed = chapter_minutes
+            if claimed is None:
+                self._issue(
+                    "warning", "movement_duration_unknown", target,
+                    f"{mover} moves {from_id} -> {to_id} but the chapter's elapsed time is unknown "
+                    "and the movement has no valid depart and arrive offsets",
+                )
+                continue
+            self._speed_issues(modes, mover, path, claimed)
+
+    def _chapter_end(self) -> int | None:
+        """The chapter's last minute; unknown when the extraction gave no elapsed time."""
+        if self.delta.metadata.get("time_elapsed_minutes") is None:
+            return None
+        return self.delta.story_time_end
+
     def _time_offset_issues(self, target: str, depart: int | None, arrive: int | None) -> None:
-        start, end = self.delta.story_time_start, self.delta.story_time_end
+        start, end = self.delta.story_time_start, self._chapter_end()
         problems = []
-        if start is not None and end is not None:
-            problems.extend(
-                f"{label} minute {minute} is outside the chapter's [{start}, {end}]"
-                for label, minute in (("depart", depart), ("arrive", arrive))
-                if minute is not None and not start <= minute <= end
-            )
+        for label, minute in (("depart", depart), ("arrive", arrive)):
+            if minute is None:
+                continue
+            if start is not None and minute < start:
+                problems.append(f"{label} minute {minute} precedes the chapter's start {start}")
+            elif end is not None and minute > end:
+                problems.append(f"{label} minute {minute} is after the chapter's end {end}")
         if depart is not None and arrive is not None and arrive < depart:
             problems.append(f"arrive minute {arrive} precedes depart minute {depart}")
         if problems:
             self._issue("error", "time_offset_out_of_range", target, "; ".join(problems))
 
-    def _restraint_issues(self, mover: str, position: int) -> None:
+    def _restraint_issues(self, mover: str) -> None:
         if mover not in self.runtime.world.nodes_by_id:
             return
         before = self.runtime.world.get_state(mover)
-        if _restraint_state(before) == "free":
+        if _restraint_state(before) == "free" or self._released(mover, before):
             return
-        node = {"state": deepcopy(before)}
-        for patch in self.delta.node_patches[:position]:
-            if patch.node_id == mover and str(patch.op) != "create" and _is_state_path(patch.field_path):
-                apply_path_patch(node, patch.field_path, patch.new_value, op=str(patch.op))
-        if _restraint_state(node["state"]) != "free":
-            self._issue(
-                "error", "restrained_entity_moved", f"node:{mover}",
-                f"{mover} is {_restraint_state(before)} and moves without being freed first",
-            )
+        self._issue(
+            "error", "restrained_entity_moved", f"node:{mover}",
+            f"{mover} is {_restraint_state(before)} and moves without being freed in the chapter",
+        )
 
-    def _route(self, graph: MapGraph, mover: str, from_id: str, to_id: str) -> PathResult | None:
+    def _released(self, mover: str, before: dict[str, Any]) -> bool:
+        """Whether one of the mover's state patches frees it, wherever it stands in the delta."""
+        node = {"state": deepcopy(before)}
+        for patch in self.delta.node_patches:
+            if patch.node_id != mover or str(patch.op) == "create" or not _is_state_path(patch.field_path):
+                continue
+            apply_path_patch(node, patch.field_path, patch.new_value, op=str(patch.op))
+            if _restraint_state(node["state"]) == "free":
+                return True
+        return False
+
+    def _route(self, mover: str, from_id: str, to_id: str) -> PathResult | None:
         """The mover's known route when it has a cognition overlay, else the objective one."""
         target = f"node:{mover}"
-        objective = graph.shortest_path(from_id, to_id, metric="travel_time")
+        objective = self.graph.shortest_path(from_id, to_id, metric="travel_time")
         if not objective.reachable:
             self._issue(
                 "error", "movement_unreachable", target,
@@ -368,7 +392,7 @@ class _ChapterExtractionChecks:
         observer = self._overlay_key(mover)
         if observer is None:
             return objective
-        known = graph.shortest_path(from_id, to_id, metric="travel_time", observer=observer)
+        known = self.graph.shortest_path(from_id, to_id, metric="travel_time", observer=observer)
         if not known.reachable:
             self._issue(
                 "error", "movement_route_unknown_to_mover", target,
@@ -377,33 +401,32 @@ class _ChapterExtractionChecks:
             return None
         return known
 
-    def _speed_issues(
-        self, graph: MapGraph, modes: dict[str, TravelMode], mover: str, path: PathResult, claimed: int,
-    ) -> None:
-        edge_types = {
-            str(graph.edges_by_id[edge_id].edge_type)
-            for edge_id in path.path_edge_ids
-            if edge_id in graph.edges_by_id
-        }
-        # The fastest of the mover's travel modes allowed on every edge of the path.
-        multiplier = max(
-            (
-                modes[mode_id].speed_multiplier
-                for mode_id in self.runtime.world.get_state(mover).get("travel_mode_ids") or []
-                if mode_id in modes and edge_types <= set(modes[mode_id].allowed_edge_types)
-            ),
-            default=1.0,
-        )
-        shortest = path.total_travel_time * 60 / multiplier
+    def _speed_issues(self, modes: dict[str, TravelMode], mover: str, path: PathResult, claimed: int) -> None:
+        # Speed 1.0 over the mover's route, or one of its travel modes over the fastest route that
+        # mode may use; both follow the same known-route rule.
+        observer = self._overlay_key(mover)
+        candidates = [path.total_travel_time * 60]
+        for mode_id in self.runtime.world.get_state(mover).get("travel_mode_ids") or []:
+            mode = modes.get(mode_id)
+            if mode is None:
+                continue
+            by_mode = self.graph.shortest_path(
+                path.from_node_id, path.to_node_id, metric="travel_time", observer=observer,
+                allowed_edge_types=frozenset(mode.allowed_edge_types),
+            )
+            if by_mode.reachable:
+                candidates.append(by_mode.total_travel_time * 60 / mode.speed_multiplier)
+        shortest = min(candidates)
         if shortest <= 0:
             return
         detail = (
             f"{mover} covers {path.from_node_id} -> {path.to_node_id} in {claimed} min; "
             f"the shortest is {shortest:g} min"
         )
-        if claimed < shortest * (1 - self.tolerance):
+        # The epsilon keeps a claim exactly at a bound from losing to float rounding.
+        if claimed < shortest * (1 - self.tolerance) - _MINUTE_EPSILON:
             self._issue("error", "movement_too_fast", f"node:{mover}", detail)
-        elif claimed < shortest:
+        elif claimed < shortest - _MINUTE_EPSILON:
             self._issue("warning", "movement_fast_within_tolerance", f"node:{mover}", detail)
 
     # entities and items

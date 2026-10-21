@@ -114,10 +114,15 @@ class MapGraph:
         allow_blocked: bool = False,
         algorithm: str = "dijkstra",
         composite_weights: dict[str, float] | None = None,
+        allowed_edge_types: frozenset[str] | None = None,
     ) -> PathResult:
+        """``allowed_edge_types`` limits the search to edges of those types, e.g. one travel mode's."""
         observer_key = f"{observer[0]}:{observer[1]}" if observer else "objective"
         weights_key = ",".join(f"{key}={value}" for key, value in sorted((composite_weights or {}).items()))
-        cache_key = (from_node_id, to_node_id, f"{metric}:{algorithm}:{weights_key}", observer_key)
+        search_key = f"{metric}:{algorithm}:{weights_key}"
+        if allowed_edge_types is not None:
+            search_key += ":edge_types=" + ",".join(sorted(allowed_edge_types))
+        cache_key = (from_node_id, to_node_id, search_key, observer_key)
         if not allow_hidden and not allow_blocked and cache_key in self.path_cache:
             return self.path_cache[cache_key]
 
@@ -154,6 +159,8 @@ class MapGraph:
                 allow_hidden=allow_hidden,
                 allow_blocked=allow_blocked,
             ):
+                if allowed_edge_types is not None and str(edge.edge_type) not in allowed_edge_types:
+                    continue
                 weight = self._metric_weight(edge, str(metric), composite_weights=composite_weights)
                 current_cost = distances.get(current.node_id, float("inf"))
                 next_cost = current_cost + weight

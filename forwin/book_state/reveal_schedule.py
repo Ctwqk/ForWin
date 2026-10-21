@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import Project
+
+
+logger = logging.getLogger(__name__)
 
 
 def earliest_reveal_chapters(session: Session, project_id: str) -> dict[str, int]:
@@ -22,12 +26,24 @@ def earliest_reveal_chapters(session: Session, project_id: str) -> dict[str, int
     arc_starts: dict[int, int] = {}
     for arc in _mappings(blueprint.get("arcs")):
         number, start = _integer(arc.get("arc_number")), _integer(arc.get("chapter_start"))
-        if number is not None and start is not None:
-            arc_starts[number] = start
+        if number is None or start is None:
+            logger.warning(
+                "project %s: book_arc_blueprint arc has a non-integer arc_number or chapter_start: %r",
+                project_id, {key: arc.get(key) for key in ("arc_number", "chapter_start")},
+            )
+            continue
+        arc_starts[number] = start
     schedule: dict[str, int] = {}
     for candidate in _mappings(seed.get("reveal_candidates")):
         fact_id = str(candidate.get("fact_id") or "").strip()
-        start = arc_starts.get(_integer(candidate.get("arc_number")))
+        number = _integer(candidate.get("arc_number"))
+        if number is None:
+            logger.warning(
+                "project %s: reveal candidate %r has a non-integer arc_number %r",
+                project_id, fact_id, candidate.get("arc_number"),
+            )
+            continue
+        start = arc_starts.get(number)
         if not fact_id or start is None:
             continue
         node_id = seed_ref_id(project_id, "fact", fact_id)
@@ -43,9 +59,13 @@ def _active_pack(session: Session, project_id: str) -> dict[str, Any]:
         return {}
     try:
         pack = json.loads(revision.pack_json or "{}")
-    except ValueError:
+    except ValueError as exc:
+        logger.warning("project %s: genesis revision %s pack_json is not JSON: %s", project_id, revision.id, exc)
         return {}
-    return _mapping(pack)
+    if not isinstance(pack, dict):
+        logger.warning("project %s: genesis revision %s pack_json is not an object", project_id, revision.id)
+        return {}
+    return pack
 
 
 def _mapping(value: Any) -> dict[str, Any]:

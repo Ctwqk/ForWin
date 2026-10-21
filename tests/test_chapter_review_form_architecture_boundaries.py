@@ -54,7 +54,7 @@ FORBIDDEN_FIXTURE_TERMS = [
 ]
 
 REPAIR_TIME_CANON_STATE_FILES = [
-    "forwin/planning/future_plan_audit/countdown_drift_pre_audit.py",
+    "forwin/planning/future_plan_audit/ledger_state_drift_pre_audit.py",
 ]
 
 

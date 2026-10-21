@@ -1091,7 +1091,6 @@ def test_future_plan_pre_audits_are_owner_local() -> None:
 
     owner = ROOT / "forwin/planning/future_plan_audit"
     for module_name in (
-        "countdown_drift_pre_audit.py",
         "ledger_state_drift_pre_audit.py",
         "obligation_pre_audit.py",
         "signal_pre_audit.py",

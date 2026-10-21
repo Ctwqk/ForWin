@@ -76,32 +76,6 @@ def test_plan_patch_validator_rejects_missing_patch_binding_and_past_chapter() -
     assert "missing_reviewer_context_injections" in result.errors
 
 
-def test_plan_patch_validator_allows_current_unaccepted_canon_plan_staleness_patch() -> None:
-    patch = NarrativePlanPatch(
-        id="patch-current",
-        project_id="project-1",
-        patch_type="canon_plan_staleness",
-        target_scope="chapter",
-        affected_chapters=[23],
-        target_plan_id="plan-23",
-        new_contract={"countdown_key": "memory_reset", "latest_remaining_minutes": 90},
-        writer_context_injections=[{"countdown_key": "memory_reset", "latest_remaining_minutes": 90}],
-        reviewer_context_injections=[{"countdown_key": "memory_reset", "payoff_test": "不得超过90分钟"}],
-        expected_resolution_tests=["不得超过90分钟"],
-    )
-
-    result = PlanPatchValidator().validate(
-        patch=patch,
-        obligations=[],
-        current_chapter=23,
-        target_total_chapters=60,
-        accepted_chapters=[],
-    )
-
-    assert result.passed is True
-    assert result.errors == []
-
-
 def test_plan_patch_validator_allows_current_invariant_binding_patch() -> None:
     patch = NarrativePlanPatch(
         id="patch-invariant-current",
@@ -128,18 +102,18 @@ def test_plan_patch_validator_allows_current_invariant_binding_patch() -> None:
     assert result.errors == []
 
 
-def test_plan_patch_validator_rejects_future_plan_audit_patch_for_accepted_chapter() -> None:
+def test_plan_patch_validator_rejects_obligation_patch_for_accepted_chapter() -> None:
     patch = NarrativePlanPatch(
         id="patch-accepted",
         project_id="project-1",
-        patch_type="future_plan_audit",
+        patch_type="obligation_plan_binding",
         target_scope="chapter",
         affected_chapters=[24],
         target_plan_id="plan-24",
-        new_contract={"countdown_key": "memory_reset", "latest_remaining_minutes": 90},
-        writer_context_injections=[{"countdown_key": "memory_reset", "latest_remaining_minutes": 90}],
-        reviewer_context_injections=[{"countdown_key": "memory_reset", "payoff_test": "不得超过90分钟"}],
-        expected_resolution_tests=["不得超过90分钟"],
+        new_contract={"obligations_to_resolve": ["obl-1"]},
+        writer_context_injections=[{"obligation_id": "obl-1"}],
+        reviewer_context_injections=[{"obligation_id": "obl-1", "payoff_test": "给出明确动机证据。"}],
+        expected_resolution_tests=["给出明确动机证据。"],
     )
 
     result = PlanPatchValidator().validate(
@@ -158,7 +132,7 @@ def test_plan_patch_validator_rejects_removing_unresolved_obligation() -> None:
     patch = NarrativePlanPatch(
         id="patch-remove",
         project_id="project-1",
-        patch_type="future_plan_audit",
+        patch_type="obligation_plan_binding",
         target_scope="chapter",
         affected_chapters=[24],
         target_plan_id="plan-24",

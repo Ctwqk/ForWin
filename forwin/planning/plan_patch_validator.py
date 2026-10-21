@@ -38,7 +38,6 @@ class PlanPatchValidator:
         target_total = int(target_total_chapters or 0)
         accepted = {int(chapter) for chapter in accepted_chapters or []}
         current_chapter_patch_types = {
-            "canon_plan_staleness",
             "invariant_plan_binding",
             "obligation_pre_write",
             "signal_pre_write",

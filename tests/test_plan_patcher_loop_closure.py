@@ -6,8 +6,6 @@ from forwin.canon_quality.chapter_review_form.evidence_validator import Validati
 from forwin.canon_quality.chapter_review_form.form_schema import (
     ChapterReviewAnswers,
     ChapterReviewForm,
-    CountdownReviewAsk,
-    CountdownReviewAnswer,
     FinalChapterAnswer,
     FormAnswer,
     NewObservations,
@@ -24,17 +22,6 @@ def test_form_signals_are_plan_patchable() -> None:
         chapter_number=12,
         form_schema_version=FORM_SCHEMA_VERSION,
         characters=[],
-        countdowns=[
-            CountdownReviewAnswer(
-                key="倒计时甲",
-                mentioned_in_chapter=True,
-                status_in_this_chapter=_answer("advanced"),
-                new_value_minutes=20,
-                new_value_evidence=_answer("20"),
-                consistent_with_prior=_answer("false"),
-                inconsistency_kind="regression",
-            )
-        ],
         obligations=[
             ObligationReviewAnswer(
                 id="义务-1",
@@ -64,29 +51,16 @@ def test_form_signals_are_plan_patchable() -> None:
             chapter_number=12,
             form_schema_version=FORM_SCHEMA_VERSION,
             characters=[],
-            countdowns=[
-                CountdownReviewAsk(
-                    key="倒计时甲",
-                    label="倒计时甲",
-                    prior_value_minutes=12,
-                    prior_status="active",
-                    last_updated_chapter=11,
-                )
-            ],
             obligations=[],
             open_signals=[],
         ),
         validation_report=ValidationReport(
             validated=[
-                "countdowns[0].status_in_this_chapter",
-                "countdowns[0].new_value_evidence",
-                "countdowns[0].consistent_with_prior",
                 "obligations[0].addressed",
                 "open_signals[0].status",
                 "final_chapter.main_crisis_status",
             ],
             blocking_paths=[
-                "countdowns[0].consistent_with_prior",
                 "obligations[0].addressed",
                 "open_signals[0].status",
                 "final_chapter.main_crisis_status",
@@ -97,25 +71,6 @@ def test_form_signals_are_plan_patchable() -> None:
 
     payload_by_type = {signal.signal_type: signal.payload for signal in projection.signals}
 
-    assert payload_by_type["form_countdown_inconsistency"]["plan_patchable"] is True
-    assert payload_by_type["form_countdown_inconsistency"]["patch_kind"] == "countdown_drift"
-    assert payload_by_type["form_countdown_inconsistency"]["suppression_key"] == "countdown:倒计时甲"
-    assert payload_by_type["form_countdown_inconsistency"]["generic_patch_kind"] == "ledger_state_drift"
-    assert payload_by_type["form_countdown_inconsistency"]["generic_suppression_key"] == "invariant:countdown:倒计时甲"
-    assert payload_by_type["form_countdown_inconsistency"]["invariant_key"] == "countdown:倒计时甲"
-    assert payload_by_type["form_countdown_inconsistency"]["invariant_kind"] == "monotonic_numeric"
-    assert payload_by_type["form_countdown_inconsistency"]["expected"] == {
-        "current_value": 12,
-        "status": "active",
-        "value_unit": "minutes",
-    }
-    assert payload_by_type["form_countdown_inconsistency"]["observed"] == {
-        "current_value": 20,
-        "status": "advanced",
-        "value_unit": "minutes",
-    }
-    assert payload_by_type["form_countdown_inconsistency"]["prior_value_minutes"] == 12
-    assert payload_by_type["form_countdown_inconsistency"]["prior_status"] == "active"
     assert payload_by_type["form_obligation_unresolved"]["plan_patchable"] is True
     assert payload_by_type["form_obligation_unresolved"]["patch_kind"] == "obligation_unresolved"
     assert payload_by_type["form_obligation_unresolved"]["suppression_key"] == "obligation:义务-1"
@@ -127,47 +82,7 @@ def test_form_signals_are_plan_patchable() -> None:
     assert payload_by_type["form_final_chapter_unresolved"]["suppression_key"] == "final:main_crisis"
 
 
-def test_countdown_drift_signal_creates_next_chapter_plan_patch() -> None:
-    from forwin.planning.future_plan_audit.countdown_drift_pre_audit import (
-        select_countdown_drift_targets,
-    )
-
-    targets = select_countdown_drift_targets(
-        [
-            {
-                "signal_id": "sig-countdown",
-                "signal_type": "form_countdown_inconsistency",
-                "severity": "error",
-                "chapter_number": 12,
-                "subject_key": "倒计时甲",
-                "description": "倒计时甲发生跨章回退。",
-                "payload": {
-                    "plan_patchable": True,
-                    "patch_kind": "countdown_drift",
-                    "suppression_key": "countdown:倒计时甲",
-                    "prior_value_minutes": 12,
-                },
-            }
-        ]
-    )
-
-    assert targets == [
-        {
-            "patch_kind": "countdown_drift",
-            "suppression_key": "countdown:倒计时甲",
-            "prior_value_minutes": 12,
-            "task": (
-                "本章必须明确处理 倒计时甲 的当前状态：12 分钟。"
-                "如继续，必须 ≤ 该值；如已 closed，不得再次出现正数剩余时间；"
-                "如确实重新开启，必须显式写出 reopen 事件并命名为新的局部窗口。"
-            ),
-            "source_signal_id": "sig-countdown",
-            "source_mode": "chapter_review_form",
-        }
-    ]
-
-
-def test_future_plan_auditor_promotes_countdown_drift_signal_to_ledger_state_patch() -> None:
+def test_future_plan_auditor_preserves_form_invariant_drift_patch() -> None:
     plan = _plan(13, one_line="角色A继续处理事件-1。")
 
     result = FuturePlanAuditor().audit_plans(
@@ -175,7 +90,7 @@ def test_future_plan_auditor_promotes_countdown_drift_signal_to_ledger_state_pat
         current_chapter=12,
         trigger_stage="pre_write",
         plans=[plan],
-        canon_quality_context={"open_signals": [_form_signal("form_countdown_inconsistency", "倒计时甲")]},
+        canon_quality_context={"open_signals": [_form_signal("form_invariant_drift", "rule-1")]},
         obligations=[],
         target_total_chapters=20,
         include_current=False,
@@ -184,9 +99,9 @@ def test_future_plan_auditor_promotes_countdown_drift_signal_to_ledger_state_pat
     assert [issue.issue_type for issue in result.issues] == ["ledger_state_drift_pre_write_required"]
     assert result.plan_patches[0].patch_type == "ledger_state_drift_pre_write"
     assert result.plan_patches[0].writer_context_injections[0]["type"] == "ledger_state_drift_resolution"
-    assert result.metadata["suppressed_prompt_constraint_keys"] == ["invariant:countdown:倒计时甲"]
+    assert result.metadata["suppressed_prompt_constraint_keys"] == ["invariant:rule-1"]
     assert result.metadata["form_plan_patch_signals_consumed"] == 1
-    assert result.issues[0].metadata["source_signal_id"] == "sig-form_countdown_inconsistency"
+    assert result.issues[0].metadata["source_signal_id"] == "sig-form_invariant_drift"
 
 
 def test_form_obligation_signal_behaves_like_urgent_obligation_patch() -> None:
@@ -257,12 +172,12 @@ def _plan(chapter_number: int, *, one_line: str) -> ChapterPlan:
 
 def _form_signal(signal_type: str, subject_key: str) -> dict[str, object]:
     patch_kind_by_type = {
-        "form_countdown_inconsistency": "countdown_drift",
+        "form_invariant_drift": "ledger_state_drift",
         "form_obligation_unresolved": "obligation_unresolved",
         "form_open_signal_persisting": "signal_persisting",
     }
     prefix_by_type = {
-        "form_countdown_inconsistency": "countdown",
+        "form_invariant_drift": "invariant",
         "form_obligation_unresolved": "obligation",
         "form_open_signal_persisting": "signal",
     }

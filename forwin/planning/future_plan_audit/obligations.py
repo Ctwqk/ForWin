@@ -9,9 +9,6 @@ from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.planning.band_plan_patcher import BandPlanPatcher
-from forwin.planning.future_plan_audit.countdown_drift_pre_audit import (
-    select_countdown_drift_targets,
-)
 from forwin.planning.future_plan_audit.ledger_state_drift_pre_audit import (
     select_ledger_state_drift_targets,
 )
@@ -43,30 +40,11 @@ class FuturePlanObligationMixin:
     ) -> list[tuple[FuturePlanAuditIssue, NarrativePlanPatch]]:
         result: list[tuple[FuturePlanAuditIssue, NarrativePlanPatch]] = []
         open_signals = _open_signal_constraints(canon_quality_context)
-        consumed_signal_ids: set[str] = set()
         for candidate in select_ledger_state_drift_targets(open_signals):
             plan = _first_eligible_plan(plans, current_chapter=current_chapter, include_current=include_current)
             if plan is None:
                 continue
             issue, patch = self._ledger_state_drift_patch(
-                project_id=project_id,
-                current_chapter=current_chapter,
-                plan=plan,
-                candidate=candidate,
-            )
-            result.append((issue, patch))
-            if candidate.source_signal_id:
-                consumed_signal_ids.add(candidate.source_signal_id)
-        countdown_compat_signals = [
-            signal
-            for signal in open_signals
-            if str(signal.get("signal_id") or "").strip() not in consumed_signal_ids
-        ]
-        for candidate in select_countdown_drift_targets(countdown_compat_signals):
-            plan = _first_eligible_plan(plans, current_chapter=current_chapter, include_current=include_current)
-            if plan is None:
-                continue
-            issue, patch = self._countdown_drift_patch(
                 project_id=project_id,
                 current_chapter=current_chapter,
                 plan=plan,
@@ -195,75 +173,6 @@ class FuturePlanObligationMixin:
         )
         return issue, patch
 
-    def _countdown_drift_patch(
-        self,
-        *,
-        project_id: str,
-        current_chapter: int,
-        plan: ChapterPlan,
-        candidate: dict[str, Any],
-    ) -> tuple[FuturePlanAuditIssue, NarrativePlanPatch]:
-        chapter_number = int(plan.chapter_number or 0)
-        task = str(candidate.get("task") or "").strip()
-        suppression_key = str(candidate.get("suppression_key") or "").strip()
-        source_signal_id = str(candidate.get("source_signal_id") or "").strip()
-        metadata = {
-            "patch_kind": "countdown_drift",
-            "current_chapter": current_chapter,
-            "suppression_key": suppression_key,
-            "source_signal_id": source_signal_id,
-            "source_mode": str(candidate.get("source_mode") or "chapter_review_form"),
-            "plan_patchable": True,
-        }
-        issue = FuturePlanAuditIssue(
-            issue_type="countdown_drift_pre_write_required",
-            severity="error",
-            target_chapter=chapter_number,
-            target_plan_id=str(plan.id or ""),
-            description=task,
-            evidence_refs=[f"signal:{source_signal_id}", f"chapter_plan:{chapter_number}"] if source_signal_id else [
-                f"chapter_plan:{chapter_number}"
-            ],
-            patch_type="countdown_drift_pre_write",
-            metadata=metadata,
-        )
-        patch = NarrativePlanPatch(
-            id=new_id(),
-            project_id=project_id,
-            patch_type="countdown_drift_pre_write",
-            target_scope="chapter",
-            target_plan_id=str(plan.id or ""),
-            target_arc_id=str(plan.arc_plan_id or ""),
-            affected_chapters=[chapter_number],
-            source_signal_ids=[source_signal_id] if source_signal_id else [],
-            old_contract=_chapter_plan_contract(plan),
-            new_contract={
-                "countdown_drift_task": task,
-                "suppression_key": suppression_key,
-            },
-            diff_summary=task,
-            must_preserve=[str(plan.title or ""), str(plan.one_line or "")],
-            must_not_change=["drop countdown drift handling without explicit evidence"],
-            writer_context_injections=[
-                {
-                    "type": "countdown_drift_resolution",
-                    "instruction": task,
-                    "suppression_key": suppression_key,
-                    "source_signal_id": source_signal_id,
-                }
-            ],
-            reviewer_context_injections=[
-                {
-                    "type": "countdown_drift_resolution",
-                    "payoff_test": task,
-                    "source_signal_id": source_signal_id,
-                }
-            ],
-            expected_resolution_tests=[task],
-            validation_status="pending",
-            metadata=metadata,
-        )
-        return issue, patch
 
     def _must_resolve_obligation_patch(
         self,

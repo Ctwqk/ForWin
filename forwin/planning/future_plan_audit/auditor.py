@@ -12,14 +12,10 @@ from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 
 from .apply import FuturePlanApplyMixin
-from .countdown import FuturePlanCountdownMixin
-from .custody import FuturePlanCustodyMixin
 from .helpers import (
     _band_contract_covers_obligation,
     _band_row_for_obligation,
     _chapter_plan_contract,
-    _character_state_constraints,
-    _countdown_constraints,
     _loads,
     _minimum_scope_for_obligation,
 )
@@ -30,8 +26,6 @@ from .patches import FuturePlanPatchMixin
 
 class FuturePlanAuditor(
     FuturePlanApplyMixin,
-    FuturePlanCustodyMixin,
-    FuturePlanCountdownMixin,
     FuturePlanObligationMixin,
     FuturePlanPatchMixin,
 ):
@@ -73,8 +67,6 @@ class FuturePlanAuditor(
         inspected.sort()
         issues: list[FuturePlanAuditIssue] = []
         patches: list[NarrativePlanPatch] = []
-        countdowns = _countdown_constraints(canon_quality_context)
-        character_state_constraints = _character_state_constraints(canon_quality_context)
         immutable_invariants = immutable_rule_invariants(canon_quality_context)
         suppressed_prompt_constraint_keys: set[str] = set()
         form_plan_patch_signals_consumed = 0
@@ -91,22 +83,6 @@ class FuturePlanAuditor(
             )
             if invariant_binding is not None:
                 issue, patch = invariant_binding
-                issues.append(issue)
-                patches.append(patch)
-            for issue, patch in self._audit_countdown_plan(
-                project_id=project_id,
-                current_chapter=int(current_chapter or 0),
-                plan=plan,
-                countdowns=countdowns,
-            ):
-                issues.append(issue)
-                patches.append(patch)
-            for issue, patch in self._audit_character_state_plan(
-                project_id=project_id,
-                current_chapter=int(current_chapter or 0),
-                plan=plan,
-                character_state_constraints=character_state_constraints,
-            ):
                 issues.append(issue)
                 patches.append(patch)
         band_covered_obligation_ids: set[str] = set()

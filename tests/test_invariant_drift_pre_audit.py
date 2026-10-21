@@ -37,34 +37,7 @@ def test_form_invariant_drift_creates_ledger_state_target() -> None:
     assert target.source_signal_id == "sig-deadline"
 
 
-def test_legacy_countdown_signal_adapts_to_generic_ledger_state_target() -> None:
-    targets = select_ledger_state_drift_targets(
-        [
-            {
-                "signal_id": "sig-countdown",
-                "signal_type": "form_countdown_inconsistency",
-                "subject_key": "main",
-                "payload": {
-                    "plan_patchable": True,
-                    "prior_value_minutes": 12,
-                    "new_value_minutes": 20,
-                },
-            }
-        ]
-    )
-
-    assert len(targets) == 1
-    target = targets[0]
-    assert target.invariant_key == "countdown:main"
-    assert target.kind == "monotonic_numeric"
-    assert target.subject_key == "main"
-    assert target.suppression_key == "invariant:countdown:main"
-    assert target.expected == {"current_value": 12, "value_unit": "minutes"}
-    assert target.observed == {"current_value": 20, "value_unit": "minutes"}
-    assert "12 分钟" in target.task
-
-
-def test_deadline_target_does_not_use_countdown_wording() -> None:
+def test_deadline_target_preserves_deadline_wording() -> None:
     targets = select_ledger_state_drift_targets(
         [
             {

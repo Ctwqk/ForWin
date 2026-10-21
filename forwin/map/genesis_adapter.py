@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from forwin.models.subworld import project_scoped_subworld_id
-from forwin.protocol.book_state import MapEdgeType
+from forwin.protocol.book_state import MAP_SUBMAP_SCOPES, MapEdgeType
 
 from .protocol import MapAnchorNodeSpec, SubWorldMapSpec
 
@@ -125,7 +125,7 @@ def _normalized_submaps(atlas: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "id": "subworld-main-stage",
                 "name": "未命名小世界",
-                "scope": "macro_region",
+                "scope": "continent",
                 "summary": str(atlas.get("overview", "") or ""),
                 "culture_traits": [],
                 "terrain": [],
@@ -238,8 +238,8 @@ def _anchor_specs(
 
 
 def _subworld_type(submap: dict[str, Any]) -> str:
-    scope = str(submap.get("scope", "") or "").lower()
-    return scope if scope in {"realm", "plane", "underground"} else "continent"
+    scope = str(submap.get("scope", "") or "").strip().lower()
+    return scope if scope in MAP_SUBMAP_SCOPES else "continent"
 
 
 def _node_type(kind: str) -> str:

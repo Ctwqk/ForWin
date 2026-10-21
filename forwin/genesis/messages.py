@@ -17,7 +17,7 @@ from forwin.book_state.schema import (
     RULE_HARDNESS,
 )
 from forwin.models.project import Project
-from forwin.protocol.book_state import MapEdgeType, WORLD_EDGE_TYPES
+from forwin.protocol.book_state import MAP_SUBMAP_SCOPES, MapEdgeType, WORLD_EDGE_TYPES
 from forwin.genesis.helpers import (
     _book_arc_list,
     _locked_stage_context,
@@ -39,7 +39,7 @@ from forwin.genesis.world_seed import (
 def _map_output_requirement() -> str:
     return (
         "返回 MapAtlas JSON，至少包含 overview、topology_rules、submaps、regions、nodes、edges。"
-        "submaps[].scope 只能为 continent、realm、plane、underground，默认 continent。"
+        f"submaps[].scope 只能为 {' / '.join(MAP_SUBMAP_SCOPES)}，默认 continent。"
         "submaps[] 与 nodes[] 的 danger_level 为 0–5 的整数；缺失、非法或未知时用 null，不编造或截断。"
         "edges 每项为 {id, from_node_id, to_node_id, kind, bidirectional, hidden}，id 按 edge-{n} 编号；"
         "from_node_id 与 to_node_id 必须引用已有 nodes[].id，无效端点的边丢弃。"
@@ -217,7 +217,7 @@ def _build_stage_refine_messages(
     output_requirement: list[tuple[str, Any]] = (
         [("输出要求", _world_seed_output_requirement())] if stage_key == "world_seed" else []
     )
-    if stage_key == "map":
+    if stage_key == "map" and not target_path and not wrap_scalar_value:
         output_requirement = [("输出要求", _map_output_requirement())]
     sections: list[tuple[str, Any]] = [
         ("阶段", f"{label} ({stage_key})"),

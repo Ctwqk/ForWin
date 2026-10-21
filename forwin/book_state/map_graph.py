@@ -116,7 +116,7 @@ class MapGraph:
         composite_weights: dict[str, float] | None = None,
         allowed_edge_types: frozenset[str] | None = None,
     ) -> PathResult:
-        """``allowed_edge_types`` limits the search to edges of those types, e.g. one travel mode's."""
+        """Filter by edge type or a world gate's source type, e.g. one travel mode's."""
         observer_key = f"{observer[0]}:{observer[1]}" if observer else "objective"
         weights_key = ",".join(f"{key}={value}" for key, value in sorted((composite_weights or {}).items()))
         search_key = f"{metric}:{algorithm}:{weights_key}"
@@ -159,7 +159,10 @@ class MapGraph:
                 allow_hidden=allow_hidden,
                 allow_blocked=allow_blocked,
             ):
-                if allowed_edge_types is not None and str(edge.edge_type) not in allowed_edge_types:
+                if (allowed_edge_types is not None
+                        and str(edge.edge_type) not in allowed_edge_types
+                        and not (edge.edge_type == "world_gate"
+                                 and str(edge.metadata.get("source_edge_type", "")) in allowed_edge_types)):
                     continue
                 weight = self._metric_weight(edge, str(metric), composite_weights=composite_weights)
                 current_cost = distances.get(current.node_id, float("inf"))

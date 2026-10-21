@@ -90,6 +90,121 @@ def test_map_edge_legacy_keys_and_boolean_strings():
     ]
 
 
+@pytest.mark.parametrize("from_key,to_key", [
+    ("from_node_id", "to_node_id"), ("source_node_id", "target_node_id"),
+    ("from_node", "to_node"), ("source_node", "target_node"),
+    ("from", "to"), ("source", "target"),
+])
+def test_map_edge_name_endpoints_resolve_to_unique_node_ids(from_key, to_key):
+    atlas = normalize({
+        "nodes": [{"id": "a", "name": "A"}, {"id": "b", "name": "B"}],
+        "edges": [{from_key: "A", to_key: "B", "kind": "river"}],
+    })
+    assert atlas["edges"] == [{
+        "id": "edge-1", "from_node_id": "a", "to_node_id": "b",
+        "kind": "river", "bidirectional": True, "hidden": False,
+    }]
+    assert normalize(atlas) == atlas
+
+
+@pytest.mark.parametrize("from_key,to_key", [
+    ("from_subworld", "to_subworld"), ("from_subworld_id", "to_subworld_id"),
+    ("source_subworld", "target_subworld"), ("source_subworld_id", "target_subworld_id"),
+])
+def test_map_edge_subworld_refs_are_kept_and_build_interconnections(from_key, to_key):
+    from forwin.map.service import build_interconnections_from_genesis_atlas
+
+    atlas = normalize({
+        "submaps": [{"id": "main", "name": "Main"}, {"id": "other", "name": "Other"}],
+        "edges": [{from_key: "main", to_key: "Other", "kind": "rail", "hidden": True}],
+    })
+    assert atlas["edges"] == [{
+        "id": "edge-1", from_key: "main", to_key: "Other", "kind": "rail",
+        "bidirectional": True, "hidden": True,
+    }]
+    assert normalize(atlas) == atlas
+    specs = genesis_adapter.build_subworld_map_specs_from_genesis(project_id="p", map_atlas=atlas)
+    connections, source = build_interconnections_from_genesis_atlas(project_id="p", specs=specs, map_atlas=atlas)
+    assert source == "atlas_edges"
+    assert len(connections) == 1
+    assert connections[0].from_subworld_id == specs[0].subworld_id
+    assert connections[0].to_subworld_id == specs[1].subworld_id
+    assert connections[0].metadata["source_edge_type"] == "rail"
+    assert connections[0].hidden is True
+
+
+@pytest.mark.parametrize("flags", [{"status": "hidden"}, {"visibility": "secret"},
+                                  {"status": "open", "visibility": "secret", "hidden": False}])
+def test_map_edge_legacy_hidden_flags(flags):
+    atlas = normalize({
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "edges": [{"from": "a", "to": "b", **flags}],
+    })
+    assert atlas["edges"][0]["hidden"] is True
+
+
+def test_map_edge_drops_log_index_and_reason_and_names_match_exactly(caplog):
+    atlas = normalize({
+        "nodes": [{"id": "a", "name": "Same"}, {"id": "b", "name": "Same"},
+                  {"id": "c", "name": "Unique"}],
+        "edges": [None, {"from": "Same", "to": "c"},
+                  {"from": "a", "to": "unique"}, {"from": "a", "to": "missing"},
+                  {"from": "a", "to": "Unique"}],
+    })
+    assert len(atlas["edges"]) == 1
+    assert atlas["edges"][0]["to_node_id"] == "c"
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 4
+    for index, record in enumerate(warnings, start=1):
+        assert f"edge {index}" in record.message
+    assert "object" in warnings[0].message
+    assert "ambiguous" in warnings[1].message
+    assert "unresolved" in warnings[2].message
+    assert "unresolved" in warnings[3].message
+
+
+def test_map_kind_and_scope_are_case_insensitive():
+    atlas = normalize({
+        "submaps": [{"scope": " Realm "}],
+        "nodes": [{"id": "a"}, {"id": "b"}],
+        "edges": [{"from": "a", "to": "b", "kind": " River "}],
+    })
+    assert atlas["submaps"][0]["scope"] == "realm"
+    assert atlas["edges"][0]["kind"] == "river"
+    assert genesis_adapter._subworld_type({"scope": " Realm "}) == "realm"
+
+
+def test_map_scope_defaults_and_editor_match_shared_vocabulary():
+    import re
+    from pathlib import Path
+
+    from forwin.genesis.fallbacks import _fallback_map
+    from forwin.genesis.messages import _map_output_requirement
+    from forwin.protocol.book_state import MAP_SUBMAP_SCOPES
+
+    assert MAP_SUBMAP_SCOPES == ("continent", "realm", "plane", "underground")
+    assert _fallback_map({})["submaps"][0]["scope"] == "continent"
+    assert genesis_adapter._normalized_submaps({})[0]["scope"] == "continent"
+    assert " / ".join(MAP_SUBMAP_SCOPES) in _map_output_requirement()
+    source = (Path(__file__).resolve().parents[1] / "forwin/ui_assets/home/app_state.js").read_text()
+    submaps = source.split("collection: 'submaps',", 1)[1].split("collection:", 1)[0]
+    assert re.search(r"scope: '([^']+)'", submaps).group(1) == "continent"
+    options = submaps.split("path: 'scope',", 1)[1].split("options: [", 1)[1].split("]", 1)[0]
+    assert tuple(re.findall(r"value: '([^']+)'", options)) == MAP_SUBMAP_SCOPES
+
+
+@pytest.mark.parametrize("target_path,wrap_scalar", [("nodes[0]", False), ("overview", True), ("", True)])
+def test_map_targeted_refine_omits_whole_atlas_requirement(target_path, wrap_scalar):
+    from forwin.genesis.messages import _build_stage_refine_messages, _map_output_requirement
+
+    messages = _build_stage_refine_messages(
+        None, pack={}, stage_key="map", instruction="Update", target_path=target_path,
+        current_payload={}, support_context={}, fallback_stage_payload={},
+        wrap_scalar_value=wrap_scalar,
+    )
+    assert _map_output_requirement() not in messages[-1]["content"]
+
+
 @pytest.mark.parametrize("refine", [False, True])
 def test_map_prompts_require_structured_fields(refine):
     from forwin.genesis.messages import _build_stage_generation_messages, _build_stage_refine_messages

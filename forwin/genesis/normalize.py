@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 from forwin.genesis.constants import (
     _WORLD_BIBLE_KEYS,
     _WORLD_ROOT_KEYS,
-    logger,
 )
 from typing import Any
 from forwin.world_templates import (
@@ -13,7 +14,7 @@ from forwin.world_templates import (
     default_world_extensions,
 )
 from forwin.models.project import Project
-from forwin.protocol.book_state import MapEdgeType, WORLD_EDGE_TYPES
+from forwin.protocol.book_state import MAP_SUBMAP_SCOPES, MapEdgeType, WORLD_EDGE_TYPES
 from forwin.genesis.helpers import (
     _deep_merge,
     _empty_stage_world,
@@ -26,6 +27,8 @@ from forwin.genesis.names_paths import (
     _generate_culture_names,
     _normalize_generator_civilization,
 )
+
+logger = logging.getLogger(__name__)
 
 def _normalize_world_payload(self, *, payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
     normalized = payload if isinstance(payload, dict) else {}
@@ -245,6 +248,39 @@ def _normalize_map_bool(value: Any, *, default: bool) -> bool:
     return default
 
 
+def _map_edge_ref(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("id", "node_id", "name", "subworld_id", "subworld_name"):
+            if ref := str(value.get(key) or "").strip():
+                return ref
+        return ""
+    return str(value or "").strip()
+
+
+def _normalize_map_edge_endpoint(
+    edge: dict[str, Any], *, side: str, alias: str, node_ids: set[str],
+    node_ids_by_name: dict[str, list[str]], subworld_refs: set[str],
+) -> dict[str, str]:
+    for key in (f"{side}_subworld_id", f"{alias}_subworld_id", f"{side}_subworld", f"{alias}_subworld"):
+        ref = _map_edge_ref(edge.get(key))
+        if ref and ref in subworld_refs:
+            return {key: ref}
+    for key in (f"{side}_node_id", f"{alias}_node_id", f"{side}_node", f"{alias}_node", side, alias):
+        ref = _map_edge_ref(edge.get(key))
+        if not ref:
+            continue
+        if ref in node_ids:
+            return {f"{side}_node_id": ref}
+        matches = node_ids_by_name.get(ref, [])
+        if len(matches) == 1:
+            return {f"{side}_node_id": matches[0]}
+        if len(matches) > 1:
+            raise ValueError(f"ambiguous {side} node name: {ref!r}")
+        if ref in subworld_refs:
+            return {f"{side}_subworld": ref}
+    raise ValueError(f"unresolved {side} endpoint")
+
+
 def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str, Any], world_bible: dict[str, Any] | None = None) -> dict[str, Any]:
     normalized = payload if isinstance(payload, dict) else {}
     culture_profile_ids = {
@@ -265,12 +301,12 @@ def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str,
         if culture_profile_id and culture_profile_id not in culture_profile_ids:
             culture_profile_id = ""
         name = str(item.get("name", "")).strip() or "未命名小世界"
-        scope = str(item.get("scope", "")).strip()
+        scope = str(item.get("scope", "")).strip().lower()
         normalized_submaps.append(
             {
                 "id": subworld_id,
                 "name": name,
-                "scope": scope if scope in {"continent", "realm", "plane", "underground"} else "continent",
+                "scope": scope if scope in MAP_SUBMAP_SCOPES else "continent",
                 "danger_level": _normalize_map_danger_level(item.get("danger_level")),
                 "parent_scope": str(item.get("parent_scope", "")).strip(),
                 "culture_profile_id": culture_profile_id,
@@ -376,22 +412,35 @@ def _normalize_map_payload(self, *, payload: dict[str, Any], fallback: dict[str,
         )
         node_ids.add(node_id)
     normalized_edges = []
+    node_ids_by_name: dict[str, list[str]] = {}
+    for node in normalized_nodes:
+        node_ids_by_name.setdefault(node["name"], []).append(node["id"])
+    subworld_refs = subworld_ids | subworld_names
     edge_types = {kind.value for kind in MapEdgeType}
-    for item in (normalized.get("edges") or fallback.get("edges") or []):
+    for index, item in enumerate((normalized.get("edges") or fallback.get("edges") or []), start=1):
         if not isinstance(item, dict):
+            logger.warning("Dropped map edge %s: expected an object", index)
             continue
-        from_node_id = str(item.get("from_node_id") or item.get("source_node_id") or item.get("from") or item.get("source") or "").strip()
-        to_node_id = str(item.get("to_node_id") or item.get("target_node_id") or item.get("to") or item.get("target") or "").strip()
-        if from_node_id not in node_ids or to_node_id not in node_ids:
+        endpoints: dict[str, str] = {}
+        try:
+            for side, alias in (("from", "source"), ("to", "target")):
+                endpoints.update(_normalize_map_edge_endpoint(
+                    item, side=side, alias=alias, node_ids=node_ids,
+                    node_ids_by_name=node_ids_by_name, subworld_refs=subworld_refs,
+                ))
+        except ValueError as exc:
+            logger.warning("Dropped map edge %s: %s", index, exc)
             continue
-        kind = str(item.get("kind") or item.get("edge_type") or item.get("type") or "").strip()
+        kind = str(item.get("kind") or item.get("edge_type") or item.get("type") or "").strip().lower()
+        hidden_statuses = {"hidden", "secret", "concealed"}
         normalized_edges.append({
             "id": f"edge-{len(normalized_edges) + 1}",
-            "from_node_id": from_node_id,
-            "to_node_id": to_node_id,
+            **endpoints,
             "kind": kind if kind in edge_types else "road",
             "bidirectional": _normalize_map_bool(item.get("bidirectional"), default=True),
-            "hidden": _normalize_map_bool(item.get("hidden"), default=False),
+            "hidden": (_normalize_map_bool(item.get("hidden"), default=False)
+                       or str(item.get("status", "")).strip().lower() in hidden_statuses
+                       or str(item.get("visibility", "")).strip().lower() in hidden_statuses),
         })
     result = {
         "overview": str(normalized.get("overview", "")).strip() or str(fallback.get("overview", "")),

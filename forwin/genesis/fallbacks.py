@@ -52,7 +52,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
             {
                 "id": "subworld-1",
                 "name": "",
-                "scope": "macro_region",
+                "scope": "continent",
                 "parent_scope": "",
                 "culture_profile_id": "",
                 "summary": "",

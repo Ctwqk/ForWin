@@ -102,6 +102,9 @@ class MapNodeType(_StrEnum):
     DUNGEON_ROOM = "dungeon_room"
 
 
+MAP_SUBMAP_SCOPES = ("continent", "realm", "plane", "underground")
+
+
 class MapEdgeType(_StrEnum):
     ROAD = "road"
     PATH = "path"

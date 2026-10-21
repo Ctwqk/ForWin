@@ -100,3 +100,31 @@ def test_shortest_path_can_be_limited_to_edge_types_with_separate_cache_entries(
     # Each filter is cached on its own key, so the unfiltered result is not reused.
     assert graph.shortest_path("city", "inner").path_edge_ids == ["pass"]
     assert graph.shortest_path("city", "inner", allowed_edge_types=frozenset({"road"})).path_edge_ids == ["road_1", "road_2"]
+
+
+def test_world_gate_travel_modes_match_source_type_and_keep_cache_separate() -> None:
+    graph = MapGraph(nodes=_nodes(), edges=[
+        MapEdge(id="road_gate", project_id="p1", subworld_id="sw1", from_node_id="city", to_node_id="inner",
+                edge_type="world_gate", metadata={"source_edge_type": "road"}, travel_time=5, bidirectional=True),
+        MapEdge(id="portal_gate", project_id="p1", subworld_id="sw1", from_node_id="city", to_node_id="inner",
+                edge_type="world_gate", metadata={"source_edge_type": "portal"}, travel_time=1),
+    ])
+    for _ in range(2):
+        assert graph.shortest_path("city", "inner").path_edge_ids == ["portal_gate"]
+        assert graph.shortest_path("city", "inner", allowed_edge_types=frozenset({"road"})).path_edge_ids == ["road_gate"]
+        assert graph.shortest_path("city", "inner", allowed_edge_types=frozenset({"portal"})).path_edge_ids == ["portal_gate"]
+        assert graph.shortest_path("city", "inner", allowed_edge_types=frozenset({"world_gate"})).path_edge_ids == ["portal_gate"]
+        assert not graph.shortest_path("city", "inner", allowed_edge_types=frozenset({"river"})).reachable
+        assert not graph.shortest_path("city", "inner", allowed_edge_types=frozenset()).reachable
+    assert graph.shortest_path("inner", "city", allowed_edge_types=frozenset({"road"})).path_edge_ids == ["road_gate__reverse"]
+
+
+def test_road_mode_rejects_portal_gates_and_non_gate_metadata() -> None:
+    for edge_type, metadata in [("world_gate", {"source_edge_type": "portal"}), ("world_gate", {}),
+                                ("portal", {"source_edge_type": "road"})]:
+        graph = MapGraph(nodes=_nodes(), edges=[
+            MapEdge(id="edge", project_id="p1", subworld_id="sw1", from_node_id="city", to_node_id="inner",
+                    edge_type=edge_type, metadata=metadata, travel_time=1),
+        ])
+        assert graph.shortest_path("city", "inner").reachable
+        assert not graph.shortest_path("city", "inner", allowed_edge_types=frozenset({"road"})).reachable

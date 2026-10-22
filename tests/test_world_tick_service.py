@@ -11,7 +11,8 @@ from sqlalchemy import select
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.runtime import BookStateRuntime
-from forwin.canon import CanonAdmissionService
+from forwin.canon import CanonAdmissionService, CanonStaleVersion, CanonWorldTickOutcome
+from forwin.canon.historical_rewrite import HistoricalCanonRewriteRepository
 from forwin.maintenance.events import POST_CANON_STEP_NAMES
 from forwin.maintenance.post_canon import (
     PostCanonMaintenanceService,
@@ -27,20 +28,23 @@ from forwin.models.maintenance import PostCanonMaintenanceRun
 from forwin.models.genesis import PromptTrace
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.planning.goals import load_goals_json
-from forwin.protocol.book_state import GraphDelta, NarrativePatch, WorldNode
+from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta, NarrativePatch, NodePatch, WorldNode
 from forwin.runtime.policy import RuntimePolicy
 from forwin.simulation.world import WorldTurnDraft
+from forwin.state.updater import StateUpdater
 from forwin.world_engine.actor_turns import ActorTurnRunner
-from forwin.world_engine.adjudicator import WorldAdjudicator
+from forwin.world_engine.adjudicator import AdjudicationCall, WorldAdjudicator
 from forwin.world_engine.conflict_delegate import WorldConflictDelegate
 from forwin.world_engine.conflict_repository import WorldConflictRepository
-from forwin.world_engine.delta_builder import tick_event_fact_ref
+from forwin.world_engine.delta_builder import TickIssue, WorldTickDeltaBuilder, tick_event_fact_ref
 from forwin.world_engine.propagation import chapter_events
 from forwin.world_engine.tick import WorldTickResult, WorldTickService
 from forwin.world_engine.tick_nodes import outcome_candidate
 from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE, AdjudicatedOutcome, TickCandidate, WorldEffects
 from forwin.writer.prompt_core.world_engine import ACTOR_CONSTRAINT_FEEDBACK, plot_response_goal
 from tests import test_world_gate_v6
+from tests.test_canon_atomic_transaction import _prepare_chapter_candidate
+from tests.test_historical_rewrite_world_ticks import _accept, _complete_post_canon
 from tests.test_world_gate_v6 import (
     OPENING,
     _commit,
@@ -67,7 +71,7 @@ def _policy(**world: Any) -> RuntimePolicy:
 # a stub model client for the three world roles
 
 
-Handler = Callable[[dict[str, Any], str], dict[str, Any]]
+Handler = Callable[[dict[str, Any], str], dict[str, Any] | str]
 
 
 class _WorldLLM:
@@ -94,7 +98,9 @@ class _WorldLLM:
         handler = self.handlers.get(_STAGES[stage])
         if handler is None:
             raise ConnectionError(f"{stage} is unavailable")
-        answer = json.dumps(handler(json.JSONDecoder().raw_decode(content)[0], content), ensure_ascii=False)
+        # A handler answers with an object, or with the raw text to return.
+        reply = handler(json.JSONDecoder().raw_decode(content)[0], content)
+        answer = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
         self.llm_attempt_events.append({
             "attempt_no": 1, "stage_key": stage, "model": model, "output_chars": len(answer),
         })
@@ -144,10 +150,12 @@ def _review(option: str) -> Handler:
 
 def _seed_tick_world(
     Session, monkeypatch: pytest.MonkeyPatch, *, later_impact: str = "moderate", rival_strikes: bool = False,
+    errands: int = 0,
 ) -> _World:
     """An onstage intent due an hour in, an offstage one three days in (``later_impact``), a clock two hours in.
 
-    With ``rival_strikes`` the rival also means to strike at the hero three days in, offstage.
+    With ``rival_strikes`` the rival also means to strike at the hero three days in, offstage. ``errands``
+    more offstage intents of the hero fall due one an hour from the first hour on.
     """
     original = test_world_gate_v6._pack
 
@@ -171,6 +179,11 @@ def _seed_tick_world(
             "id": "clock-1", "label": "label-1", "owner_ref": "cast-1", "scope": "public",
             "on_expire": "on-expire-1", "due_in": {"amount": 2, "unit": "时"},
         }]
+        seed["actors"][0]["intents"].extend(
+            {**intent, "id": f"intent-errand-{index:02d}", "summary": f"summary-errand-{index:02d}",
+             "requires_onstage": False, "impact_level": "minor", "scheduled_in": {"amount": index + 1, "unit": "时"}}
+            for index in range(errands)
+        )
         if rival_strikes:
             seed["actors"][1]["agendas"] = [{
                 "id": "agenda-r", "goal": "goal-r", "motivation": "", "horizon": "", "priority": 3,
@@ -232,11 +245,14 @@ def _delta_id(chapter: GraphDelta) -> str:
     return f"world-tick:{chapter.project_id}:{_tick_id(chapter)}"
 
 
-def _service(Session, llm: _WorldLLM) -> WorldTickService:
+def _service(
+    Session, llm: _WorldLLM, *, admission: CanonAdmissionService | None = None, adjudicator: Any = None,
+    without_model: bool = False,
+) -> WorldTickService:
     return WorldTickService(
-        llm_client=llm,
-        admission=CanonAdmissionService(),
-        adjudicator=WorldAdjudicator(llm),
+        llm_client=None if without_model else llm,
+        admission=admission or CanonAdmissionService(),
+        adjudicator=adjudicator or WorldAdjudicator(llm),
         actor_runner=ActorTurnRunner(llm),
         conflict_delegate=WorldConflictDelegate(llm),
         audit_writer_factory=own_transaction_audit_writer(Session),
@@ -614,21 +630,31 @@ def test_world_step_runs_before_planning_and_records_tick_result() -> None:
             status="committed",
         ))
     llm = _WorldLLM(actor_turn=_quiet_turns)
+    calls: list[str] = []
+    tick_service = _service(Session, llm)
+    tick_run = tick_service.run
+
+    def tick(session, commit, *, policy):  # noqa: ANN001
+        calls.append("tick")
+        return tick_run(session, commit, policy=policy)
+
+    def simulate(**_kwargs: Any) -> WorldTurnDraft:
+        calls.append("simulator")
+        return WorldTurnDraft(pressure_level="low", pressure_summary="", notable_shifts=[])
+
+    tick_service.run = tick  # type: ignore[method-assign]
     service = PostCanonMaintenanceService(
         session_factory=Session,
         stage_analyzer=object(),
         pacing_strategist=object(),
         replan_governor=object(),
         arc_envelope_manager=object(),
-        world_simulator=SimpleNamespace(
-            simulate=lambda **_kwargs: WorldTurnDraft(pressure_level="low", pressure_summary="", notable_shifts=[]),
-        ),
+        world_simulator=SimpleNamespace(simulate=simulate),
         artifact_store=object(),
         llm_client=llm,
-        world_tick=_service(Session, llm),
+        world_tick=tick_service,
     )
     service.heartbeat = lambda _claim: None  # type: ignore[method-assign]
-    calls: list[str] = []
     world_step = service._step_runners["world"]
     service._step_runners = {
         "world": lambda session, commit: calls.append("world") or world_step(session, commit),
@@ -641,7 +667,8 @@ def test_world_step_runs_before_planning_and_records_tick_result() -> None:
     service.run(canon_commit_id=commit_id, worker_id="worker-1")
 
     assert POST_CANON_STEP_NAMES == ("world", "planning", "arc", "feedback")
-    assert calls == list(POST_CANON_STEP_NAMES)
+    # Inside the world step the tick runs first, then the world simulator.
+    assert calls == ["world", "tick", "simulator", "planning", "arc", "feedback"]
     with Session() as session:
         run = session.scalars(select(PostCanonMaintenanceRun).where(
             PostCanonMaintenanceRun.canon_commit_id == commit_id, PostCanonMaintenanceRun.step_name == "world",
@@ -945,6 +972,395 @@ def test_failed_option_side_effect_rolls_back_and_escalates_and_slips_are_not_ra
 
     # The same slip a chapter later is already open for a human, so the tick raises no second conflict.
     third = _chapter(Session, world, 3, days=1)
-    assert _tick(Session, llm, third, policy=policy).conflict_ids == []
+    again = _tick(Session, llm, third, policy=policy)
+    assert again.conflict_ids == []
     assert [row.id for row in _conflicts(Session, world)] == [conflict.id]
+    # The discarded slip leaves a trace naming the conflict that already holds it.
+    slip = f"onstage:{_onstage(world)}"
+    assert slip in again.dropped_candidate_ids
+    [dropped] = [
+        _payload(event) for event in _events(Session, world, DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED)
+        if _payload(event)["tick_id"] == _tick_id(third) and _payload(event)["candidate_id"] == slip
+    ]
+    assert (dropped["candidate_id"], dropped["reason"], dropped["conflict_id"]) == (slip, "already_held", conflict.id)
     engine.dispose()
+
+
+# fix round 1
+
+
+def _rewrite_chapter_one(Session, world: _World, chapter_plan_id: str, original: GraphDelta) -> str:
+    """Rewrite the latest chapter, 1, with the same extraction under a new delta id; the new commit's id."""
+    with Session.begin() as session:
+        HistoricalCanonRewriteRepository(session).mark_pending(
+            project_id=world.project_id, chapter_number=1, reason="rewrite the latest chapter",
+        )
+        plan = session.get(ChapterPlan, chapter_plan_id)
+        plan.status = "planned"
+        session.flush()
+        candidate = _prepare_chapter_candidate(
+            session, project_id=world.project_id, chapter=plan, version=2, body="Chapter 1 version 2.",
+            summary="Chapter 1 rewritten.", delta_id="", delta_summary="", node_id="",
+            graph_deltas=[original.model_copy(update={"id": f"{original.id}-v2"})],
+        )
+    outcome = CanonAdmissionService(session_factory=Session).commit_plan(candidate)
+    assert not outcome.blocked, outcome.failure_reason
+    return outcome.commit_id
+
+
+def _commit_record(Session, commit_id: str) -> CanonCommitRecord:
+    with Session() as session:
+        record = session.get(CanonCommitRecord, commit_id)
+        session.expunge(record)
+        return record
+
+
+def test_rewriting_the_latest_chapter_keeps_its_tick_and_runs_no_second_one(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    with Session.begin() as session:
+        updater = StateUpdater(session)
+        arc = updater.create_arc_plan(world.project_id, "arc")
+        plan_id = updater.create_chapter_plan(world.project_id, arc.id, 1, "c1", "c1 event", ["goal"]).id
+        updater.create_chapter_plan(world.project_id, arc.id, 2, "c2", "c2 event", ["goal"])
+    original = _delta(Session, world, 1, _time(4, "日"))
+    first = _accept(Session, world.project_id, 1, version=1, deltas=[original])
+    # No slip is allowed and every conflict waits for a human, so a second tick would block chapter 2.
+    policy = _policy(max_onstage_slips=0, conflict_delegate="human")
+    llm = _WorldLLM(adjudicate=_outcomes(), actor_turn=_quiet_turns)
+
+    def tick(commit_id: str) -> WorldTickResult:
+        with Session.begin() as session:
+            return _service(Session, llm).run(session, _commit_record(Session, commit_id), policy=policy)
+
+    ticked = tick(first[0])
+    _complete_post_canon(Session, world.project_id, 1, first, world_delta_ids=tuple(ticked.graph_delta_ids))
+    assert _runtime(Session, world).world.get_state(_onstage(world))["status"] == "due"
+    calls = len(llm.calls)
+
+    rewritten = _rewrite_chapter_one(Session, world, plan_id, original)
+    again = tick(rewritten)
+
+    assert again == WorldTickResult(
+        tick_id=f"tick-{rewritten}", graph_delta_ids=[], conflict_ids=[], dropped_candidate_ids=[],
+        postponed_candidate_ids=[], skipped_reason="chapter_already_ticked",
+    )
+    assert len(llm.calls) == calls
+    # The rewrite replayed the first tick's delta; it stays the chapter's one tick.
+    assert [json.loads(row.metadata_json)["tick_id"] for row in _tick_deltas(Session, world)] == [
+        f"tick-{first[0]}",
+    ]
+    runtime = _runtime(Session, world)
+    assert runtime.world.get_state(_onstage(world))["slip_count"] == 0
+    assert _conflicts(Session, world) == []
+    with Session() as session:
+        assert WorldConflictRepository(session).open_blocking(world.project_id, next_chapter=2) is None
+    engine.dispose()
+
+
+def _disrupt_the_later_intent(Session, world: _World, chapter: GraphDelta) -> None:
+    """Another canon writer, as a direct conflict resolve does, disrupts the later intent at chapter 1."""
+    tick_id = "conflict-race"
+    delta = GraphDelta(
+        id=f"world-tick:{world.project_id}:{tick_id}", project_id=world.project_id, chapter_number=1,
+        story_time_start=chapter.story_time_end, story_time_end=chapter.story_time_end,
+        source_type=WORLD_ENGINE_SOURCE_TYPE, source_id=tick_id, summary="summary-race",
+        node_patches=[NodePatch(
+            node_id=_later(world), node_type="intent", op="set", field_path="state.status",
+            old_value="planned", new_value="disrupted",
+        )],
+        evidence_refs=[f"world_tick:{tick_id}"], metadata={"tick_id": tick_id, "source_chapter": 1},
+    )
+    with Session.begin() as session:
+        CanonAdmissionService().commit_world_tick(
+            session=session, project_id=world.project_id, chapter_number=1,
+            approved_changes=ApprovedGraphDeltaSet(project_id=world.project_id, chapter_number=1, graph_deltas=[delta]),
+            tick_id=tick_id,
+        )
+
+
+def test_canon_written_during_the_tick_makes_it_stale_and_a_retry_commits(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _chapter(Session, world, 1)
+    meeting = {
+        "intent_id": _later(world), "result": "resolved", "summary": "summary-meeting",
+        "effects": {"events": [{
+            "summary": "event-meeting", "participant_refs": [world.hero], "location_id": world.loc(1),
+            "visibility": "public", "at": chapter.story_time_end - 30,
+        }]},
+    }
+    raced: list[bool] = []
+
+    def turns(payload: dict[str, Any], content: str) -> dict[str, Any]:
+        # While the first actor thinks, another writer changes the canon the tick reasoned on.
+        if not raced:
+            raced.append(True)
+            _disrupt_the_later_intent(Session, world, chapter)
+        return _quiet_turns(payload, content)
+
+    with pytest.raises(CanonStaleVersion):
+        _tick(Session, _WorldLLM(adjudicate=_outcomes(meeting), actor_turn=turns), chapter)
+
+    # The step rolled back: only the other writer's delta is left, and the tick never overwrote it.
+    assert [row.source_id for row in _tick_deltas(Session, world)] == ["conflict-race"]
+    assert _runtime(Session, world).world.get_state(_later(world))["status"] == "disrupted"
+
+    retried = _tick(Session, _WorldLLM(adjudicate=_outcomes(meeting), actor_turn=_quiet_turns), chapter)
+
+    assert retried.graph_delta_ids == [_delta_id(chapter)]
+    runtime = _runtime(Session, world)
+    assert runtime.world.get_state(_later(world))["status"] == "disrupted"
+    assert runtime.world.get_state(world.node("clock", "clock-1"))["status"] == "expired"
+    engine.dispose()
+
+
+def _failing_build(monkeypatch: pytest.MonkeyPatch, candidate_prefix: str | None) -> None:
+    """The tick's whole build reports an error on the first candidate whose id starts with ``candidate_prefix``;
+    with None, an error of the tick as a whole. Per-candidate builds of the checks are left alone."""
+    original = WorldTickDeltaBuilder.build
+
+    def build(self, *, context, candidates, news_in_transit, tick_id):  # noqa: ANN001
+        result = original(
+            self, context=context, candidates=candidates, news_in_transit=news_in_transit, tick_id=tick_id,
+        )
+        if len(candidates) < 2:
+            return result
+        if candidate_prefix is None:
+            failing = ""
+        else:
+            matching = [item.candidate_id for item in candidates if item.candidate_id.startswith(candidate_prefix)]
+            if not matching:
+                return result
+            failing = matching[0]
+        issue = TickIssue(severity="error", code="injected_error", message="injected", candidate_id=failing)
+        return type(result)(None, [*result.issues, issue])
+
+    monkeypatch.setattr(WorldTickDeltaBuilder, "build", build)
+
+
+def test_final_build_error_drops_the_candidate_and_commits_the_rest(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    # A one-day chapter: the clock runs out and the onstage intent falls due, but nothing is adjudicated.
+    chapter = _chapter(Session, world, 1, days=1)
+    clock = world.node("clock", "clock-1")
+    _failing_build(monkeypatch, "clock:")
+
+    result = _tick(Session, _WorldLLM(adjudicate=_outcomes(), actor_turn=_quiet_turns), chapter)
+
+    assert result.dropped_candidate_ids == [f"clock:{clock}"]
+    [dropped] = _events(Session, world, DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED)
+    assert (_payload(dropped)["reason"], _payload(dropped)["issues"][0]["code"]) == ("build_error", "injected_error")
+    assert result.graph_delta_ids == [_delta_id(chapter)]
+    runtime = _runtime(Session, world)
+    assert runtime.world.get_state(clock)["status"] == "running"
+    assert runtime.world.get_state(_onstage(world))["status"] == "due"
+    # The dropped clock's event spreads no news.
+    expiry = tick_event_fact_ref(world.project_id, _tick_id(chapter), f"clock:{clock}", 0)
+    assert _knows(runtime, world.rival, expiry) is None
+    [delta] = _tick_deltas(Session, world)
+    assert expiry not in json.dumps(json.loads(delta.metadata_json)["news_in_transit"])
+    engine.dispose()
+
+
+def test_final_build_error_on_an_in_tick_option_escalates_its_conflict(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _chapter(Session, world, 1)
+    _failing_build(monkeypatch, "conflict:")
+
+    result = _tick(Session, _ambushing(world, chapter, "veto_world"), chapter)
+
+    [conflict] = _conflicts(Session, world)
+    assert result.dropped_candidate_ids == [f"conflict:{conflict.id}:veto"]
+    assert (conflict.status, conflict.required_decider) == ("open", "human")
+    [escalated] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_ESCALATED)
+    assert _payload(escalated)["failure_reason"] == "build_error"
+    assert _payload(escalated)["trace_id"]
+    assert _events(Session, world, DecisionEventType.WORLD_CONFLICT_RESOLVED) == []
+    runtime = _runtime(Session, world)
+    assert runtime.world.get_state(world.rival)["alive_status"] != "dead"
+    assert runtime.world.get_state(_later(world))["status"] == "planned"
+    assert result.graph_delta_ids == [_delta_id(chapter)]
+    engine.dispose()
+
+
+def test_final_build_error_without_a_candidate_raises(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _chapter(Session, world, 1)
+    _failing_build(monkeypatch, None)
+
+    with pytest.raises(RuntimeError, match="does not build"):
+        _tick(Session, _WorldLLM(adjudicate=_outcomes(), actor_turn=_quiet_turns), chapter)
+
+    assert _tick_deltas(Session, world) == []
+    engine.dispose()
+
+
+def test_answers_that_never_parse_drop_world_nodes_as_invalid_output(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _chapter(Session, world, 1)
+    # The model answers every call, but never with JSON.
+    llm = _WorldLLM(adjudicate=lambda _payload, _content: "not json", actor_turn=lambda _payload, _content: "not json")
+
+    result = _tick(Session, llm, chapter)
+
+    actors = (world.hero, world.rival, world.faction)
+    nodes = [f"adjudication:{_later(world)}", *(f"actor_turn:{actor}" for actor in actors)]
+    assert sorted(result.dropped_candidate_ids) == sorted(nodes)
+    assert {
+        _payload(event)["candidate_id"]: _payload(event)["reason"]
+        for event in _events(Session, world, DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED)
+    } == dict.fromkeys(nodes, "invalid_output")
+    engine.dispose()
+
+
+def _settle_every_intent(payload: dict[str, Any], _content: str) -> dict[str, Any]:
+    return {"outcomes": [
+        {"intent_id": intent["id"], "result": "disrupted", "summary": "summary-blocked", "effects": {}}
+        for intent in payload["intents"]
+    ]}
+
+
+def _errands(world: _World, count: int) -> list[str]:
+    return [world.node("intent", f"cast-1/intent-errand-{index:02d}") for index in range(count)]
+
+
+def test_adjudication_takes_the_twenty_earliest_due_intents(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    # Twenty-four errands fall due hour by hour, then the later intent: twenty-five due intents.
+    world = _seed_tick_world(Session, monkeypatch, errands=24)
+    chapter = _chapter(Session, world, 1)
+    llm = _WorldLLM(adjudicate=_settle_every_intent, actor_turn=_quiet_turns)
+
+    result = _tick(Session, llm, chapter)
+
+    [asked] = [json.JSONDecoder().raw_decode(content)[0] for stage, content in llm.calls if stage == "world.adjudicate"]
+    errands = _errands(world, 24)
+    assert [intent["id"] for intent in asked["intents"]] == errands[:20]
+    runtime = _runtime(Session, world)
+    assert {runtime.world.get_state(ref)["status"] for ref in errands[:20]} == {"disrupted"}
+    # The rest stay due for the next tick, and none of them is dropped.
+    waiting = [*errands[20:], _later(world)]
+    assert {runtime.world.get_state(ref)["status"] for ref in waiting} == {"planned"}
+    assert result.dropped_candidate_ids == []
+    engine.dispose()
+
+
+class _GuardedAdjudicator:
+    """The real adjudicator, except that more than ``limit`` intents are over its prompt guard."""
+
+    def __init__(self, inner: WorldAdjudicator, limit: int) -> None:
+        self.inner = inner
+        self.limit = limit
+        self.batches: list[int] = []
+
+    def adjudicate(self, *, context, intents, **kwargs):  # noqa: ANN001, ANN003
+        self.batches.append(len(intents))
+        if len(intents) <= self.limit:
+            return self.inner.adjudicate(context=context, intents=intents, **kwargs)
+        trace = {"trace_scope": "world_engine", "stage_key": "world.adjudicate",
+                 "input_snapshot": context.model_dump(mode="json")}
+        ids = tuple(sorted(intent.id for intent in intents))
+        return AdjudicationCall(None, trace, ["prompt_too_large"], ids, "prompt_too_large")
+
+
+def test_oversized_adjudication_retries_with_half_the_batch(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch, errands=24)
+    chapter = _chapter(Session, world, 1)
+    llm = _WorldLLM(adjudicate=_settle_every_intent, actor_turn=_quiet_turns)
+    adjudicator = _GuardedAdjudicator(WorldAdjudicator(llm), limit=10)
+
+    with Session.begin() as session:
+        result = _service(Session, llm, adjudicator=adjudicator).run(session, _canon_commit(chapter), policy=POLICY)
+
+    # Twenty are over the guard; the earlier ten fit, and the later ten wait with the rest.
+    assert adjudicator.batches == [20, 10]
+    errands = _errands(world, 24)
+    runtime = _runtime(Session, world)
+    assert {runtime.world.get_state(ref)["status"] for ref in errands[:10]} == {"disrupted"}
+    assert {runtime.world.get_state(ref)["status"] for ref in [*errands[10:], _later(world)]} == {"planned"}
+    assert result.dropped_candidate_ids == []
+    engine.dispose()
+
+
+def test_retrying_a_committed_tick_returns_its_delta(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _chapter(Session, world, 1)
+    _tick(Session, _WorldLLM(adjudicate=_outcomes(), actor_turn=_quiet_turns), chapter)
+    llm = _WorldLLM(adjudicate=_outcomes(), actor_turn=_quiet_turns)
+
+    again = _tick(Session, llm, chapter)
+
+    assert again == WorldTickResult(
+        tick_id=_tick_id(chapter), graph_delta_ids=[_delta_id(chapter)], conflict_ids=[], dropped_candidate_ids=[],
+        postponed_candidate_ids=[], skipped_reason="tick_already_committed",
+    )
+    assert llm.calls == []
+    assert [row.id for row in _tick_deltas(Session, world)] == [_delta_id(chapter)]
+    engine.dispose()
+
+
+class _ConcurrentlyCommitted(CanonAdmissionService):
+    """Another run of the same tick committed its delta while this one was running."""
+
+    def commit_world_tick(self, *, session, project_id, chapter_number, approved_changes, tick_id):  # noqa: ANN001
+        return CanonWorldTickOutcome(graph_delta_ids=(f"world-tick:{project_id}:{tick_id}",), idempotent=True)
+
+
+def test_tick_committed_by_another_run_meanwhile_is_stale(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _chapter(Session, world, 1)
+    llm = _ambushing(world, chapter, "veto_world")
+
+    with pytest.raises(CanonStaleVersion, match="committed by another run"):
+        with Session.begin() as session:
+            _service(Session, llm, admission=_ConcurrentlyCommitted()).run(
+                session, _canon_commit(chapter), policy=POLICY,
+            )
+
+    # Nothing of this run stands: no resolution against a delta that lacks its veto.
+    assert _conflicts(Session, world) == []
+    assert _events(Session, world, DecisionEventType.WORLD_CONFLICT_RESOLVED) == []
+    engine.dispose()
+
+
+def test_without_a_model_the_tick_commits_its_deterministic_parts(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _chapter(Session, world, 1)
+    llm = _WorldLLM(adjudicate=_outcomes(), actor_turn=_quiet_turns)
+
+    with Session.begin() as session:
+        result = _service(Session, llm, without_model=True).run(session, _canon_commit(chapter), policy=POLICY)
+
+    assert llm.calls == []
+    actors = (world.hero, world.rival, world.faction)
+    assert {
+        _payload(event)["candidate_id"]: _payload(event)["reason"]
+        for event in _events(Session, world, DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED)
+    } == dict.fromkeys(
+        [f"adjudication:{_later(world)}", *(f"actor_turn:{actor}" for actor in actors)], "llm_unavailable",
+    )
+    assert result.graph_delta_ids == [_delta_id(chapter)]
+    runtime = _runtime(Session, world)
+    assert runtime.world.get_state(world.node("clock", "clock-1"))["status"] == "expired"
+    assert runtime.world.get_state(_onstage(world))["status"] == "due"
+    assert runtime.world.get_state(_later(world))["status"] == "planned"
+    engine.dispose()
+
+
+def test_a_maintenance_service_built_without_the_container_keeps_the_tick_off_the_model() -> None:
+    llm = _WorldLLM()
+    service = PostCanonMaintenanceService(
+        session_factory=object(), stage_analyzer=object(), pacing_strategist=object(), replan_governor=object(),
+        arc_envelope_manager=object(), world_simulator=object(), artifact_store=object(), llm_client=llm,
+    )
+
+    assert service._world_tick_service().llm_client is None

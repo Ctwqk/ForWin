@@ -966,6 +966,8 @@ class PostCanonMaintenanceService:
 
     def _world_tick_service(self) -> WorldTickService:
         if self.world_tick is None:
+            # Only a service built without the container gets here; it cannot tell whether a model is
+            # configured, so the tick's LLM nodes stay off.
             self.world_tick = build_world_tick_service(
                 llm_client=self.llm_client,
                 session_factory=self.session_factory,
@@ -1029,10 +1031,10 @@ def build_world_tick_service(
     llm_client: Any,
     session_factory: Callable[[], Session],
     artifact_store: Any,
-    llm_available: bool = True,
+    llm_available: bool = False,
     admission: CanonAdmissionService | None = None,
 ) -> WorldTickService:
-    """The world tick with its model roles on ``llm_client``; without a usable model its LLM nodes are skipped."""
+    """The world tick with its model roles on ``llm_client``; unless ``llm_available``, its LLM nodes are skipped."""
     from forwin.canon.admission import CanonAdmissionService
     from forwin.world_engine.actor_turns import ActorTurnRunner
     from forwin.world_engine.adjudicator import WorldAdjudicator

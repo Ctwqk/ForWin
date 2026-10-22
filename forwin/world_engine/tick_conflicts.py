@@ -140,21 +140,25 @@ class TickConflicts:
         self.repo = WorldConflictRepository(session)
         self.conflict_ids: list[str] = []
         self.resolutions: list[InTickResolution] = []
-        # An open conflict over the same intent and violation already holds this change.
+        # The open conflict over each intent and violation: it already holds a new change of that kind.
         self._open = {
-            (row.intent_ref, row.violated)
+            (row.intent_ref, row.violated): row.id
             for row in self.repo.list(context.project_id, status="open") if row.intent_ref
         }
 
-    def hold(self, draft: ConflictDraft, *, extra: Mapping[str, Any]) -> None:
-        """Store the conflict and route it: auto and Codex decisions run in this tick, the rest wait for a human."""
+    def hold(self, draft: ConflictDraft, *, extra: Mapping[str, Any]) -> str:
+        """Store the conflict and route it: auto and Codex decisions run in this tick, the rest wait for a human.
+
+        Returns the id of the open conflict that already holds such a change for the same intent, in which
+        case nothing is stored; otherwise "".
+        """
         key = (draft.intent_ref, draft.violated)
         if draft.intent_ref and key in self._open:
-            return
+            return self._open[key]
         decider = route_conflict(draft, policy=self.policy)
         row = self.repo.create(draft, required_decider=decider, options=available_options(draft))
         if draft.intent_ref:
-            self._open.add(key)
+            self._open[key] = row.id
         self.session.add(conflict_detected_event(
             row, chapter_number=self.context.chapter_number, extra={"tick_id": self.tick_id, **extra},
         ))
@@ -173,10 +177,12 @@ class TickConflicts:
             if delegation.escalate or delegation.option is None:
                 # The delegate recorded the escalation; the conflict only changes hands.
                 self._hand_to_human(self._locked(row.id))
-                return
-            self._decide(row.id, ConflictDecision(
-                option=delegation.option, decided_by="codex", rationale=delegation.rationale, decided_at=_utcnow(),
-            ), trace_id=delegation.trace_id)
+            else:
+                self._decide(row.id, ConflictDecision(
+                    option=delegation.option, decided_by="codex", rationale=delegation.rationale,
+                    decided_at=_utcnow(),
+                ), trace_id=delegation.trace_id)
+        return ""
 
     def cancel(self, conflict_id: str, *, failure_reason: str, detail: str) -> None:
         """Drop a decided option from the tick and hand its conflict to a human; the change stays held."""

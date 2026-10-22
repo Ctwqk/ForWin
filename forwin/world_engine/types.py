@@ -22,6 +22,11 @@ NEW_FACT_REF_PREFIX = f"{FACT_REF_PREFIX}new:"
 NEW_AGENDA_REF = "new"
 # An agenda's priority range; AgendaChange leaves it unbounded, so consumers check it.
 AGENDA_PRIORITY_MIN, AGENDA_PRIORITY_MAX = 1, 5
+# Why an LLM node settled nothing: no call reached the model, the model's answers never validated,
+# or the prompt was over its guard.
+LLM_UNAVAILABLE = "llm_unavailable"
+INVALID_OUTPUT = "invalid_output"
+PROMPT_TOO_LARGE = "prompt_too_large"
 _SEED_MODULUS = 2_000_000_000
 
 

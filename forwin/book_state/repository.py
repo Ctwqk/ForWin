@@ -1214,15 +1214,27 @@ class BookStateRepository:
 
     def latest_world_snapshot(self, project_id: str, as_of_chapter: int) -> WorldSnapshot | None:
         row = self.session.execute(
-            select(WorldSnapshotRow)
+            self._latest_world_snapshot_select(WorldSnapshotRow, project_id, as_of_chapter)
+        ).scalar_one_or_none()
+        return _world_snapshot_from_row(row) if row else None
+
+    def latest_world_snapshot_id(self, project_id: str, as_of_chapter: int) -> str | None:
+        """The id of the snapshot ``latest_world_snapshot`` returns, without loading it."""
+        return self.session.execute(
+            self._latest_world_snapshot_select(WorldSnapshotRow.id, project_id, as_of_chapter)
+        ).scalar_one_or_none()
+
+    @staticmethod
+    def _latest_world_snapshot_select(entity: Any, project_id: str, as_of_chapter: int):
+        return (
+            select(entity)
             .where(
                 WorldSnapshotRow.project_id == project_id,
                 WorldSnapshotRow.as_of_chapter <= as_of_chapter,
             )
             .order_by(WorldSnapshotRow.as_of_chapter.desc(), WorldSnapshotRow.built_at.desc(), WorldSnapshotRow.id.desc())
             .limit(1)
-        ).scalar_one_or_none()
-        return _world_snapshot_from_row(row) if row else None
+        )
 
     def latest_map_snapshot(self, project_id: str, as_of_chapter: int) -> MapSnapshot | None:
         row = self.session.execute(

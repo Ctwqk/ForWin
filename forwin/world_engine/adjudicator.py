@@ -18,7 +18,9 @@ from forwin.skills import serialize_prompt_layers
 from forwin.utils import parse_llm_json
 from forwin.world_engine.constraints import ConstraintIssue
 from forwin.world_engine.effect_validation import effect_reference_issues
-from forwin.world_engine.types import AdjudicationResult, TickContext
+from forwin.world_engine.types import (
+    INVALID_OUTPUT, LLM_UNAVAILABLE, PROMPT_TOO_LARGE, AdjudicationResult, TickContext,
+)
 from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_PROMPT_CHARS, build_adjudication_messages
 
 
@@ -32,6 +34,9 @@ class AdjudicationCall:
     prompt_trace: dict
     issues: list[str]
     missing_intent_ids: tuple[str, ...] = ()
+    # Why the missing intents are missing: LLM_UNAVAILABLE when no call returned an answer,
+    # INVALID_OUTPUT when the answers never covered them validly, PROMPT_TOO_LARGE; empty when none is.
+    failure_reason: str = ""
 
 
 def _validated_result(
@@ -76,6 +81,8 @@ class WorldAdjudicator:
         best_key: tuple[int, int] | None = None
         result = None
         issues: list[str] = []
+        # Whether any call returned an answer, valid or not.
+        answered = False
         intent_ids = {intent.id for intent in intents}
         if not intents:
             result = AdjudicationResult()
@@ -96,13 +103,14 @@ class WorldAdjudicator:
                     business_retries=business_retries, result=None, issues=issues,
                     failure_reason="prompt_too_large",
                 )
-                return AdjudicationCall(None, prompt_trace, issues, tuple(sorted(intent_ids)))
+                return AdjudicationCall(None, prompt_trace, issues, tuple(sorted(intent_ids)), PROMPT_TOO_LARGE)
             retry_feedback = []
             raw = ""
             call_error: Exception | None = None
             failure_reason = ""
             try:
                 raw = self._call_chat(messages)
+                answered = True
                 try:
                     parsed = AdjudicationResult.model_validate(parse_llm_json(raw, error_prefix=_PARSER_NAME))
                 except Exception as exc:  # noqa: BLE001
@@ -158,7 +166,8 @@ class WorldAdjudicator:
             business_retries=business_retries, result=result, issues=issues,
         )
         missing = intent_ids - {outcome.intent_id for outcome in result.outcomes} if result is not None else intent_ids
-        return AdjudicationCall(result, prompt_trace, issues, tuple(sorted(missing)))
+        failure_reason = (INVALID_OUTPUT if answered else LLM_UNAVAILABLE) if missing else ""
+        return AdjudicationCall(result, prompt_trace, issues, tuple(sorted(missing)), failure_reason)
 
     def _call_chat(self, messages: list[dict]) -> str:
         kwargs: dict[str, Any] = {

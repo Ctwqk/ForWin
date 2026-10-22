@@ -18,20 +18,18 @@ from forwin.protocol.book_state import WorldNode
 from forwin.runtime.policy import WorldPolicy
 from forwin.writer.prompt_core.world_engine import ACTOR_CONSTRAINT_FEEDBACK, ACTOR_VETO_SUMMARY
 
-from .actor_turns import ActorTurnCall, ActorTurnRunner, ActorView, turn_to_candidate
-from .adjudicator import AdjudicationCall, WorldAdjudicator
+from .actor_turns import ActorTurnRunner, ActorView, turn_to_candidate
+from .adjudicator import WorldAdjudicator
 from .constraints import ConstraintIssue
-from .types import AdjudicatedOutcome, TickCandidate, TickContext
+from .types import (
+    INVALID_OUTPUT,
+    LLM_UNAVAILABLE,
+    PROMPT_TOO_LARGE,
+    AdjudicatedOutcome,
+    TickCandidate,
+    TickContext,
+)
 
-
-# Why a node left the tick: no model answered, the answer stayed invalid, or the prompt was too large.
-LLM_UNAVAILABLE = "llm_unavailable"
-INVALID_OUTPUT = "invalid_output"
-PROMPT_TOO_LARGE = "prompt_too_large"
-# The issue the adjudicator and the actor runner report for an oversized prompt, and the runner's
-# last issue when every attempt's call raised.
-_PROMPT_TOO_LARGE_ISSUE = "prompt_too_large"
-_TURN_CALL_FAILED_PREFIX = "Actor turn failed after"
 
 SaveTrace = Callable[[dict], str]
 
@@ -105,7 +103,8 @@ def adjudicate(
     trace_id = save_trace(call.prompt_trace)
     outcomes = {outcome.intent_id: outcome for outcome in call.result.outcomes} if call.result is not None else {}
     results = NodeResults()
-    reason = _adjudication_failure(call)
+    # Every intent the call left unsettled fails for the call's one reason.
+    reason = call.failure_reason or INVALID_OUTPUT
     for intent in intents:
         outcome = outcomes.get(intent.id)
         if outcome is not None:
@@ -118,13 +117,6 @@ def adjudicate(
             issues=tuple(ConstraintIssue(reason, message, intent.id) for message in messages), trace_id=trace_id,
         ))
     return results
-
-
-def _adjudication_failure(call: AdjudicationCall) -> str:
-    # The adjudicator returns no result only when every attempt's call raised or the prompt was too large.
-    if call.result is not None:
-        return INVALID_OUTPUT
-    return PROMPT_TOO_LARGE if _PROMPT_TOO_LARGE_ISSUE in call.issues else LLM_UNAVAILABLE
 
 
 # actor turns
@@ -158,7 +150,7 @@ def take_turns(
             # A turn with a result is valid; its issues only note what was set aside, such as a duplicate turn.
             results.candidates.append(turn_to_candidate(call, now=context.now, calendar=calendar, lexicon=lexicon))
             continue
-        reason = _turn_failure(call)
+        reason = call.failure_reason or INVALID_OUTPUT
         results.failures.append(NodeFailure(
             candidate_id=actor_turn_candidate_id(call.actor_id), origin="actor_turn", actor_id=call.actor_id,
             intent_id="", reason=reason,
@@ -166,14 +158,6 @@ def take_turns(
             trace_id=trace_ids[batch],
         ))
     return results
-
-
-def _turn_failure(call: ActorTurnCall) -> str:
-    if _PROMPT_TOO_LARGE_ISSUE in call.issues:
-        return PROMPT_TOO_LARGE
-    if any(issue.startswith(_TURN_CALL_FAILED_PREFIX) for issue in call.issues):
-        return LLM_UNAVAILABLE
-    return INVALID_OUTPUT
 
 
 def unavailable(*, intents: Sequence[WorldNode] = (), actor_ids: Sequence[str] = ()) -> NodeResults:

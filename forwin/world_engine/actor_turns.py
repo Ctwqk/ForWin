@@ -31,8 +31,8 @@ from forwin.world_engine.constraints import ConstraintIssue
 from forwin.world_engine.effect_validation import scoped_effect_reference_issues
 from forwin.world_engine.travel import estimate_travel
 from forwin.world_engine.types import (
-    AGENDA_PRIORITY_MAX, AGENDA_PRIORITY_MIN, NEW_AGENDA_REF, ActorTurnBatch, ActorTurnResult, TickCandidate,
-    TickContext, WorldEffects,
+    AGENDA_PRIORITY_MAX, AGENDA_PRIORITY_MIN, INVALID_OUTPUT, LLM_UNAVAILABLE, NEW_AGENDA_REF, PROMPT_TOO_LARGE,
+    ActorTurnBatch, ActorTurnResult, TickCandidate, TickContext, WorldEffects,
 )
 from forwin.writer.prompt_core.world_engine import MAX_ACTOR_TURN_PROMPT_CHARS, build_actor_turn_messages
 
@@ -117,6 +117,9 @@ class ActorTurnCall:
     # Shared by the actors of one batch.
     prompt_trace: dict
     issues: list[str]
+    # Without a result: LLM_UNAVAILABLE when no call returned an answer, INVALID_OUTPUT when the answers
+    # never held a valid turn for the actor, PROMPT_TOO_LARGE; empty with a result.
+    failure_reason: str = ""
 
 
 # ranking
@@ -538,6 +541,8 @@ class ActorTurnRunner:
         retry_feedback: list[str] = []
         messages: list[dict] = []
         too_large = False
+        # Whether any call returned an answer, valid or not.
+        answered = False
         for attempt_no in range(1, self.max_attempts + 1):
             # A retry asks again only for the actors still without a valid turn.
             messages = build_actor_turn_messages(
@@ -556,6 +561,7 @@ class ActorTurnRunner:
             failure_reason = ""
             try:
                 raw = self._call_chat(messages, actor_count=len(pending))
+                answered = True
                 try:
                     parsed = ActorTurnBatch.model_validate(parse_llm_json(raw, error_prefix=_PARSER_NAME))
                 except Exception as exc:  # noqa: BLE001
@@ -626,8 +632,13 @@ class ActorTurnRunner:
             business_retries=business_retries, results=results, issues=issues,
             failure_reason="prompt_too_large" if too_large else "",
         )
+        failure_reason = PROMPT_TOO_LARGE if too_large else INVALID_OUTPUT if answered else LLM_UNAVAILABLE
         return [
-            ActorTurnCall(actor_id, results.get(actor_id), prompt_trace, issues[actor_id]) for actor_id in actor_ids
+            ActorTurnCall(
+                actor_id, results.get(actor_id), prompt_trace, issues[actor_id],
+                "" if actor_id in results else failure_reason,
+            )
+            for actor_id in actor_ids
         ]
 
     def _call_chat(self, messages: list[dict], *, actor_count: int) -> str:

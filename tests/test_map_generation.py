@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from forwin.map.generator import generate_subworld_map
@@ -108,10 +110,75 @@ def test_one_way_declaration_does_not_disconnect_generated_map() -> None:
 
     assert result.validation_report.valid, result.validation_report.errors
     assert len(result.map_edges) == result.summary["target_edge_count"]
-    graph = MapGraph(nodes=result.map_nodes, edges=result.map_edges)
+    graph = MapGraph(nodes=result.map_nodes, edges=[
+        edge for edge in result.map_edges if edge.status == "open" and edge.edge_type != "hidden_route"
+    ])
     assert all(graph.shortest_path(result.map_nodes[0].id, node.id).reachable for node in result.map_nodes)
     (declared,) = [edge for edge in result.map_edges if edge.metadata.get("required_connection")]
     assert declared.bidirectional is False
+
+
+@pytest.mark.parametrize("endpoint", ["from_source_node_id", "to_source_node_id"])
+def test_unknown_declared_endpoint_is_skipped_with_warning(endpoint: str, caplog) -> None:
+    spec = _spec(9)
+    spec.required_anchor_nodes[0].source_node_id = "a"
+    spec.required_anchor_nodes[1].source_node_id = "b"
+    spec.required_connections = [RequiredConnection(**{
+        "from_source_node_id": "a", "to_source_node_id": "b", "edge_type": "road",
+        "source_edge_id": "missing-anchor", endpoint: "unknown",
+    })]
+
+    with caplog.at_level(logging.WARNING, logger="forwin.map.generator"):
+        result = generate_subworld_map(spec)
+
+    assert result.validation_report.valid
+    assert not any(edge.metadata.get("source_edge_id") == "missing-anchor" for edge in result.map_edges)
+    assert any(record.name == "forwin.map.generator" and record.levelno == logging.WARNING
+               and "missing-anchor" in record.getMessage() for record in caplog.records)
+
+
+def test_unknown_declared_edge_type_is_skipped() -> None:
+    spec = _spec(9)
+    spec.required_anchor_nodes[0].source_node_id = "a"
+    spec.required_anchor_nodes[1].source_node_id = "b"
+    spec.required_connections = [RequiredConnection(
+        from_source_node_id="a", to_source_node_id="b", edge_type="secret", source_edge_id="invalid-type",
+    )]
+
+    result = generate_subworld_map(spec)
+
+    assert result.validation_report.valid
+    assert not any(edge.metadata.get("source_edge_id") == "invalid-type" for edge in result.map_edges)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 80])
+@pytest.mark.parametrize("bidirectional", [True, False])
+def test_declared_hidden_route_does_not_replace_visible_backbone(seed: int, bidirectional: bool) -> None:
+    spec = SubWorldMapSpec(
+        project_id="p1", subworld_id="sw1", name="World", subworld_type="continent",
+        target_region_count=1, target_node_count=8, target_edge_density=1.0,
+        required_region_roles=["Region"], generation_seed=seed,
+        required_anchor_nodes=[
+            MapAnchorNodeSpec(name=ref, node_type="site", region_role="Region", narrative_function="", source_node_id=ref)
+            for ref in ("a", "b", "c", "d", "e")
+        ],
+        required_connections=[
+            RequiredConnection(from_source_node_id="a", to_source_node_id="b", edge_type="road", bidirectional=bidirectional),
+            RequiredConnection(from_source_node_id="b", to_source_node_id="c", edge_type="road", bidirectional=bidirectional),
+            RequiredConnection(from_source_node_id="d", to_source_node_id="e", edge_type="hidden_route", source_edge_id="de"),
+        ],
+    )
+
+    result = generate_subworld_map(spec)
+
+    assert result.validation_report.valid
+    graph = MapGraph(nodes=result.map_nodes, edges=[
+        edge for edge in result.map_edges if edge.status == "open" and edge.edge_type != "hidden_route"
+    ])
+    assert all(graph.shortest_path(result.map_nodes[0].id, node.id).reachable for node in result.map_nodes)
+    (declared,) = [edge for edge in result.map_edges if edge.metadata.get("source_edge_id") == "de"]
+    assert declared.status == "open"
+    assert declared.discovered_by_default is True
 
 
 @pytest.mark.parametrize("region_name", ["宗门山门", "禁魔战遗迹荒"])

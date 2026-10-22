@@ -8,6 +8,7 @@ weighted directed MapEdges power path validation.
 from __future__ import annotations
 
 import hashlib
+import logging
 import random
 from dataclasses import dataclass
 from uuid import NAMESPACE_URL, uuid5
@@ -16,6 +17,9 @@ from forwin.protocol.book_state import MapEdge, MapEdgeType, MapNode
 
 from .protocol import SCHEME_C_NAME, MapGenerationResult, RegionEdge, RegionNode, SubWorldMapSpec
 from .validator import validate_subworld_map
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -36,12 +40,12 @@ def generate_subworld_map(spec: SubWorldMapSpec) -> MapGenerationResult:
     candidates = _generate_candidate_edges(spec, regions, region_edges, nodes, rng)
     required = [candidate for candidate in candidates if (candidate.metadata or {}).get("required_connection")]
     mst_candidates = _build_mst(
-        nodes, [candidate for candidate in candidates if not candidate.hidden],
-        preselected=[candidate for candidate in required if not candidate.hidden],
+        nodes, [candidate for candidate in candidates if not candidate.hidden and candidate.edge_type != "hidden_route"],
+        preselected=[candidate for candidate in required if not candidate.hidden and candidate.edge_type != "hidden_route"],
     )
     target_edge_count = max(len(nodes) - 1, round(len(nodes) * spec.target_edge_density))
     selected = [*required, *mst_candidates]
-    if any(not edge.hidden and not edge.bidirectional for edge in required):
+    if any(not edge.hidden and edge.edge_type != "hidden_route" and not edge.bidirectional for edge in required):
         selected = _connect_directed_backbone(nodes, selected, candidates)
     selected_keys = {
         (edge.from_node_id, edge.to_node_id, edge.edge_type, edge.hidden)
@@ -219,9 +223,16 @@ def _generate_candidate_edges(
     anchors = [node for node in nodes if node.metadata.get("node_role") == "anchor"]
     if spec.required_connections:
         anchors_by_source = {node.metadata["source_node_id"]: node for node in anchors if node.metadata.get("source_node_id")}
+        edge_types = {edge_type.value for edge_type in MapEdgeType}
         for connection in spec.required_connections:
-            left = anchors_by_source[connection.from_source_node_id]
-            right = anchors_by_source[connection.to_source_node_id]
+            left = anchors_by_source.get(connection.from_source_node_id)
+            right = anchors_by_source.get(connection.to_source_node_id)
+            if left is None or right is None:
+                logger.warning("Skipping declared edge %r: endpoint is not a subworld anchor", connection.source_edge_id)
+                continue
+            if connection.edge_type not in edge_types:
+                logger.warning("Skipping declared edge %r: unknown edge type %r", connection.source_edge_id, connection.edge_type)
+                continue
             candidates.append(_candidate(
                 left, right, connection.edge_type, rng,
                 bidirectional=connection.bidirectional, hidden=connection.hidden,
@@ -291,7 +302,10 @@ def _connect_directed_backbone(
     # Union-find guarantees weak connectivity; one-way declarations may still
     # need a visible route from the entry side of the graph.
     result = list(selected)
-    available = sorted((edge for edge in candidates if not edge.hidden), key=lambda edge: edge.score)
+    available = sorted(
+        (edge for edge in candidates if not edge.hidden and edge.edge_type != "hidden_route"),
+        key=lambda edge: edge.score,
+    )
     available.extend(
         _CandidateEdge(left.id, right.id, "path", 9999.0)
         for left, right in zip(nodes, nodes[1:])
@@ -299,7 +313,7 @@ def _connect_directed_backbone(
     while True:
         adjacency: dict[str, list[str]] = {node.id: [] for node in nodes}
         for edge in result:
-            if not edge.hidden:
+            if not edge.hidden and edge.edge_type != "hidden_route":
                 adjacency[edge.from_node_id].append(edge.to_node_id)
                 if edge.bidirectional:
                     adjacency[edge.to_node_id].append(edge.from_node_id)

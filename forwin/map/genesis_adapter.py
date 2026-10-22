@@ -72,7 +72,9 @@ def build_subworld_map_specs_from_genesis(
         )
         target_region_count = max(3, len(region_roles))
         target_node_count = max(12, target_region_count * 3 + len(anchors))
-        connection_roles, required_connections = _connection_roles(atlas, submap)
+        connection_roles, required_connections = _connection_roles(
+            atlas, submap, anchor_source_ids={anchor.source_node_id for anchor in anchors if anchor.source_node_id},
+        )
         specs.append(
             SubWorldMapSpec(
                 project_id=project_id,
@@ -262,6 +264,7 @@ def _node_type(kind: str) -> str:
 
 def _connection_roles(
     atlas: dict[str, Any], submap: dict[str, Any],
+    *, anchor_source_ids: set[str],
 ) -> tuple[list[str], list[RequiredConnection]]:
     submaps = _normalized_submaps(atlas)
     subworld_by_ref = {
@@ -296,6 +299,7 @@ def _connection_roles(
     edge_types = {edge_type.value for edge_type in MapEdgeType}
     roles: list[str] = []
     connections: list[RequiredConnection] = []
+    seen_connections: set[tuple[frozenset[str] | tuple[str, str], str, bool]] = set()
     for edge in (atlas.get("edges") or []):
         if not isinstance(edge, dict):
             continue
@@ -308,15 +312,23 @@ def _connection_roles(
             roles.append(edge_type)
             from_node_id = _edge_endpoint_node_id(edge, ("from", "source"), node_id_by_ref)
             to_node_id = _edge_endpoint_node_id(edge, ("to", "target"), node_id_by_ref)
-            if from_node_id and to_node_id:
-                connections.append(RequiredConnection(
-                    from_source_node_id=from_node_id,
-                    to_source_node_id=to_node_id,
-                    edge_type=edge_type,
-                    bidirectional=edge.get("bidirectional", True),
-                    hidden=edge.get("hidden", False),
-                    source_edge_id=str(edge.get("id") or edge.get("edge_id") or edge.get("source_edge_id") or ""),
-                ))
+            if from_node_id not in anchor_source_ids or to_node_id not in anchor_source_ids or from_node_id == to_node_id:
+                continue
+            bidirectional = edge.get("bidirectional") is not False
+            hidden = edge.get("hidden") is True
+            pair = frozenset((from_node_id, to_node_id)) if bidirectional else (from_node_id, to_node_id)
+            key = (pair, edge_type, hidden)
+            if key in seen_connections:
+                continue
+            seen_connections.add(key)
+            connections.append(RequiredConnection(
+                from_source_node_id=from_node_id,
+                to_source_node_id=to_node_id,
+                edge_type=edge_type,
+                bidirectional=bidirectional,
+                hidden=hidden,
+                source_edge_id=str(edge.get("id") or edge.get("edge_id") or edge.get("source_edge_id") or ""),
+            ))
     return _unique(roles) or ["road"], connections
 
 

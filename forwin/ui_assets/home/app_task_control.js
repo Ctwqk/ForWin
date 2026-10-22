@@ -553,6 +553,54 @@
       });
     }
 
+    function decideWorldConflictFromDrawer(projectId, conflict) {
+      openProjectControlActionModal({
+        title: '世界冲突决定',
+        description: conflict.summary,
+        confirmLabel: '提交决定',
+        errorTitle: '世界冲突处理失败',
+        fields: [
+          { name: 'option', label: '处理选项', type: 'select', options: conflict.options, value: conflict.options[0] },
+          { name: 'rationale', label: '决定说明', type: 'textarea', rows: 3 },
+        ],
+        onSubmit: async ({ option, reason, rationale }) => {
+          await requestJson(`/api/projects/${projectId}/world-conflicts/${conflict.id}/resolve`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ option, reason, rationale }),
+          });
+          setGlobalStatus('世界冲突已处理。', '世界冲突');
+          await loadBooks();
+          if (currentDrawerTask?.project_id === projectId) {
+            await openTaskDrawer(currentDrawerTask.task_kind, currentDrawerTask.task_id);
+          }
+        },
+      });
+    }
+
+    async function renderWorldConflictsCard(item) {
+      const card = createNode('section', '', 'detail-card');
+      card.id = 'world_conflicts_card';
+      card.appendChild(createNode('div', '世界冲突', 'task-id'));
+      try {
+        const conflicts = await requestJson(`/api/projects/${item.project_id}/world-conflicts?status=open`);
+        const open = conflicts.filter((conflict) => conflict.status === 'open');
+        if (!open.length) card.appendChild(createNode('div', '当前没有待处理的世界冲突。', 'meta-line'));
+        open.forEach((conflict) => {
+          const row = createNode('div', '', 'chapter-row');
+          row.appendChild(createNode('strong', conflict.summary));
+          row.appendChild(createNode('div', `impact：${conflict.impact_level} | violated：${conflict.violated} | blocks_from_chapter：${conflict.blocks_from_chapter}`, 'meta-line'));
+          const decide = createButton('决定', () => decideWorldConflictFromDrawer(item.project_id, conflict), 'ghost');
+          decide.disabled = !Array.isArray(conflict.options) || !conflict.options.length;
+          row.appendChild(decide);
+          card.appendChild(row);
+        });
+      } catch (error) {
+        card.appendChild(createNode('div', error.message || String(error), 'meta-line'));
+      }
+      return card;
+    }
+
     function renderProjectControlCard(item, project = {}) {
       const policy = project.runtime_policy || runtimeCatalogState?.bootstrap_policy || {};
       const chapterLength = policy.chapter_length || {};
@@ -816,6 +864,7 @@
       body.appendChild(renderGenerationControlPanel(item, projectDetail, projectChapters || []));
       if (item.project_id && projectDetail) {
         body.appendChild(renderProjectControlCard(item, projectDetail));
+        body.appendChild(await renderWorldConflictsCard(item));
         body.appendChild(await renderCausalReplayCard(item, projectDetail));
         body.appendChild(await renderAuditInsightsCard(item));
       }

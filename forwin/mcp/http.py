@@ -23,6 +23,7 @@ from .models import (
     StageKey,
     TaskListView,
     WorldModelConflictListView,
+    WorldConflictListView,
 )
 
 
@@ -425,10 +426,33 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
 
     @register_read_tool(
         "world_conflict_list",
-        "List deterministic WorldModel conflicts for a project. Use this when checking world-state contradictions before writing or reviewing.",
+        "List world-plan conflicts for a project. Use this when checking pending human decisions or resolved world changes.",
     )
-    async def world_conflict_list(project_id: str):
-        return WorldModelConflictListView(conflicts=await client.world_conflict_list(project_id=project_id))
+    async def world_conflict_list(project_id: str, status: str | None = None):
+        return WorldConflictListView(conflicts=await client.world_conflict_list(project_id=project_id, status=status))
+
+    @register_read_tool(
+        "world_conflict_get",
+        "Get one world-plan conflict with its offered options and decision. Use this when preparing a human resolution.",
+    )
+    async def world_conflict_get(project_id: str, conflict_id: str):
+        return await client.world_conflict_get(project_id=project_id, conflict_id=conflict_id)
+
+    @register_write_tool(
+        "world_conflict_resolve",
+        "Resolve a world-plan conflict with a human decision and required reason. Use this when the user has chosen an offered option.",
+    )
+    async def world_conflict_resolve(project_id: str, conflict_id: str, option: str, rationale: str, reason: str):
+        return await client.world_conflict_resolve(
+            project_id=project_id, conflict_id=conflict_id, option=option, rationale=rationale, reason=reason,
+        )
+
+    @register_read_tool(
+        "world_model_signal_list",
+        "List CanonQualitySignal world-model signals. Use this when inspecting deterministic canon quality issues.",
+    )
+    async def world_model_signal_list(project_id: str):
+        return WorldModelConflictListView(conflicts=await client.world_model_signal_list(project_id=project_id))
 
     @register_read_tool(
         "world_export_obsidian",

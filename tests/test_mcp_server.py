@@ -56,6 +56,62 @@ api_module: HttpRuntimeHarness
 
 
 class ForWinAPIClientUnitTests(unittest.TestCase):
+    def test_mcp_world_conflict_tools_and_signal_list(self) -> None:
+        calls = []
+        conflict = {
+            "id": "c1", "project_id": "p1", "source": "world_tick",
+            "detected_after_chapter": 1, "story_time": 60,
+            "involved_refs": ["actor-1"], "violated": "impact_review",
+            "proposed_change": {}, "impact_level": "major", "options": ["veto_world"],
+            "required_decider": "human", "blocks_from_chapter": 2, "status": "open",
+            "summary": "Review change", "decision": {}, "result_refs": [],
+        }
+
+        def handler(request):
+            calls.append((request.method, request.url.path, dict(request.url.params)))
+            if request.url.path.endswith("/world-model/conflicts"):
+                return httpx.Response(200, json=[{
+                    "id": "s1", "project_id": "p1", "conflict_type": "quality_signal",
+                }])
+            if request.method == "POST":
+                self.assertEqual(json.loads(request.content), {
+                    "option": "veto_world", "rationale": "preserve plan", "reason": "human review",
+                })
+                return httpx.Response(200, json={**conflict, "status": "resolved"})
+            return httpx.Response(200, json=[conflict] if request.url.path.endswith("world-conflicts") else conflict)
+
+        server = build_mcp_server(api_client=ForWinAPIClient(
+            base_url="http://forwin.invalid", transport=httpx.MockTransport(handler),
+        ))
+
+        async def run():
+            async with Client(server) as client:
+                catalog = {tool.name: tool for tool in await client.list_tools()}
+                for name in ("world_conflict_list", "world_conflict_get", "world_conflict_resolve", "world_model_signal_list"):
+                    self.assertIn(name, catalog)
+                    self.assertIn("Use this when", catalog[name].description)
+                    self.assertEqual(catalog[name].annotations.readOnlyHint, name != "world_conflict_resolve")
+                self.assertIn("reason", catalog["world_conflict_resolve"].inputSchema["required"])
+                result = await client.call_tool("world_conflict_list", {"project_id": "p1", "status": "open"})
+                self.assertEqual(ForWinMCPIntegrationTests._result_payload(result)["conflicts"][0]["id"], "c1")
+                result = await client.call_tool("world_conflict_get", {"project_id": "p1", "conflict_id": "c1"})
+                self.assertEqual(ForWinMCPIntegrationTests._result_payload(result)["summary"], "Review change")
+                result = await client.call_tool("world_conflict_resolve", {
+                    "project_id": "p1", "conflict_id": "c1", "option": "veto_world",
+                    "rationale": "preserve plan", "reason": "human review",
+                })
+                self.assertEqual(ForWinMCPIntegrationTests._result_payload(result)["status"], "resolved")
+                result = await client.call_tool("world_model_signal_list", {"project_id": "p1"})
+                self.assertEqual(ForWinMCPIntegrationTests._result_payload(result)["conflicts"][0]["id"], "s1")
+
+        asyncio.run(run())
+        self.assertEqual(calls, [
+            ("GET", "/api/projects/p1/world-conflicts", {"status": "open"}),
+            ("GET", "/api/projects/p1/world-conflicts/c1", {}),
+            ("POST", "/api/projects/p1/world-conflicts/c1/resolve", {}),
+            ("GET", "/api/projects/p1/world-model/conflicts", {}),
+        ])
+
     def test_mcp_set_world_conflict_delegate(self) -> None:
         policy = RuntimePolicy.for_profile(
             "standard", model_profile_id="env-kimi"
@@ -675,6 +731,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     "world_model_get",
                     "world_page_get",
                     "world_conflict_list",
+                    "world_conflict_get",
+                    "world_conflict_resolve",
+                    "world_model_signal_list",
                     "world_export_obsidian",
                 ]
             ),

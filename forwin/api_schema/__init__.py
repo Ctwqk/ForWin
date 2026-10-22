@@ -10,6 +10,8 @@ from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.planning.contracts import PlanTaskItem
 from forwin.protocol.subworld import SubWorldSummary
 
+from .world_conflicts import WorldConflictInfo, WorldConflictResolveRequest
+
 from .llm import (
     ModelProfile,
 )
@@ -214,6 +216,8 @@ from .review import (
 )
 
 __all__ = [
+    "WorldConflictInfo",
+    "WorldConflictResolveRequest",
     "DEFAULT_MINIMAX_BASE_URL",
     "DEFAULT_MINIMAX_MODEL",
     "BandCheckpointDetail",

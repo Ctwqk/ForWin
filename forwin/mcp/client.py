@@ -26,6 +26,7 @@ from .models import (
     StageStateView,
     TaskView,
     WorldModelConflictView,
+    WorldConflictView,
     WorldModelExportView,
     WorldModelPageView,
     WorldModelSnapshotView,
@@ -644,7 +645,27 @@ class ForWinAPIClient:
             raise RuntimeError("Expected WorldModel page payload from ForWin API.")
         return WorldModelPageView.model_validate(payload)
 
-    async def world_conflict_list(self, *, project_id: str) -> list[WorldModelConflictView]:
+    async def world_conflict_list(self, *, project_id: str, status: str | None = None) -> list[WorldConflictView]:
+        payload = await self._request_json(
+            "GET", f"/api/projects/{project_id}/world-conflicts",
+            params={"status": status} if status is not None else None,
+        )
+        return [WorldConflictView.model_validate(item) for item in self._ensure_list(payload)]
+
+    async def world_conflict_get(self, *, project_id: str, conflict_id: str) -> WorldConflictView:
+        payload = await self._request_json("GET", f"/api/projects/{project_id}/world-conflicts/{conflict_id}")
+        return WorldConflictView.model_validate(payload)
+
+    async def world_conflict_resolve(
+        self, *, project_id: str, conflict_id: str, option: str, rationale: str, reason: str,
+    ) -> WorldConflictView:
+        payload = await self._request_json(
+            "POST", f"/api/projects/{project_id}/world-conflicts/{conflict_id}/resolve",
+            json={"option": option, "rationale": rationale, "reason": reason},
+        )
+        return WorldConflictView.model_validate(payload)
+
+    async def world_model_signal_list(self, *, project_id: str) -> list[WorldModelConflictView]:
         payload = await self._request_json("GET", f"/api/projects/{project_id}/world-model/conflicts")
         return [WorldModelConflictView.model_validate(item) for item in self._ensure_list(payload)]
 

@@ -90,6 +90,7 @@ class MockForWinBackend:
     world_pages: list[dict[str, Any]] = field(default_factory=list)
     world_snapshots: list[dict[str, Any]] = field(default_factory=list)
     world_conflicts: list[dict[str, Any]] = field(default_factory=list)
+    world_plan_conflicts: list[dict[str, Any]] = field(default_factory=list)
     world_proposals: list[dict[str, Any]] = field(default_factory=list)
     personality_skills: list[dict[str, Any]] = field(default_factory=list)
     character_personalities: list[dict[str, Any]] = field(default_factory=list)
@@ -842,6 +843,28 @@ class MockForWinBackend:
                     "items": [{"id": f"{endpoint}-1", "title": "V4 调试项"}],
                 },
             )
+            return
+        world_conflict = re.fullmatch(
+            r"/api/projects/([^/]+)/world-conflicts(?:/([^/]+)(/resolve)?)?", path,
+        )
+        if world_conflict:
+            project_id, conflict_id, resolving = world_conflict.groups()
+            rows = [row for row in self.world_plan_conflicts if row["project_id"] == project_id]
+            if conflict_id is None and method == "GET":
+                status = parse_qs(urlparse(route.request.url).query).get("status", [None])[0]
+                json_reply(route, [row for row in rows if status is None or row["status"] == status])
+                return
+            row = next((row for row in rows if row["id"] == conflict_id), None)
+            if row is None:
+                json_reply(route, {"detail": "world conflict not found"}, 404)
+            elif resolving and method == "POST":
+                payload = read_json(route)
+                self.capture(route, payload)
+                row["status"] = "resolved"
+                row["decision"] = {"decided_by": "human", **payload}
+                json_reply(route, row)
+            else:
+                json_reply(route, row)
             return
         world = re.fullmatch(
             r"/api/projects/([^/]+)/world-model/(pages|snapshots|conflicts|proposals)",

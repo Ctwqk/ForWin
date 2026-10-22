@@ -614,6 +614,25 @@ def test_post_convergence_http_owners_have_no_duplicate_proposal_facades() -> No
     assert "def require_project(" in _read("forwin/http/request_support.py")
 
 
+def test_world_conflict_routes_have_dedicated_owner() -> None:
+    routes = _read("forwin/http/routes.py")
+    adapter = _read("forwin/http/adapters/api_world_conflict_routes.py")
+    assert "api_world_conflict_routes.build_handlers" in routes
+    for path in (
+        "/api/projects/{project_id}/world-conflicts",
+        "/api/projects/{project_id}/world-conflicts/{conflict_id}",
+        "/api/projects/{project_id}/world-conflicts/{conflict_id}/resolve",
+        "/api/projects/{project_id}/world-model/conflicts",
+    ):
+        assert f'"{path}"' in routes
+    assert "WorldConflictRepository" in adapter
+    assert "ConflictResolutionService" in adapter
+    assert "CanonAdmissionService" in adapter
+    assert "ProjectPolicyStore" in adapter
+    assert "BookStateCompiler(" not in adapter
+    assert "list_project_world_model_conflicts" not in adapter
+
+
 def test_obsidian_reverse_import_stays_removed_with_generic_proposal_ownership() -> None:
     removed_paths = (
         "forwin/obsidian/importer.py",

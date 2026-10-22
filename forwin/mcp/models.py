@@ -4,6 +4,8 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from forwin.api_schema.world_conflicts import WorldConflictInfo
+
 StageKey = Literal[
     "brief",
     "world",
@@ -408,6 +410,14 @@ class WorldModelPageView(BaseModel):
     status: str = "canon_live"
     as_of_chapter: int = 0
     updated_at: str = ""
+
+
+class WorldConflictView(WorldConflictInfo):
+    pass
+
+
+class WorldConflictListView(BaseModel):
+    conflicts: list[WorldConflictView] = Field(default_factory=list)
 
 
 class WorldModelConflictView(BaseModel):

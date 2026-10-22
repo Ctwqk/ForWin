@@ -27,6 +27,7 @@ from forwin.http.adapters import (
     api_system_routes,
     api_task_routes,
     api_world_model_routes,
+    api_world_conflict_routes,
 )
 from forwin.api_schema import (
     ActiveGenerationTaskCheckResponse,
@@ -104,6 +105,7 @@ from forwin.api_schema import (
     TropeTemplateValidationResponse,
     WorldEditProposalInfo,
     WorldModelConflictInfo,
+    WorldConflictInfo,
     WorldModelExportResponse,
     WorldModelPageInfo,
     WorldModelSnapshotInfo,
@@ -210,6 +212,7 @@ def register_api_routes(
     project_control_handlers = api_project_control_routes.build_handlers(
         service=deps.project_control.service,
     )
+    world_conflict_handlers = api_world_conflict_routes.build_handlers(get_session=get_session)
     world_model_handlers = api_world_model_routes.build_handlers(
         get_session=get_session,
         get_config=get_config,
@@ -247,6 +250,7 @@ def register_api_routes(
         **project_handlers,
         **project_control_handlers,
         **world_model_handlers,
+        **world_conflict_handlers,
         **book_state_handlers,
         **obsidian_handlers,
         **llm_kb_handlers,
@@ -678,6 +682,24 @@ def register_api_routes(
             ["GET"],
             handlers["get_project_world_model_page"],
             {"response_model": WorldModelPageInfo},
+        ),
+        (
+            "/api/projects/{project_id}/world-conflicts",
+            ["GET"],
+            handlers["list_project_world_conflicts"],
+            {"response_model": list[WorldConflictInfo]},
+        ),
+        (
+            "/api/projects/{project_id}/world-conflicts/{conflict_id}",
+            ["GET"],
+            handlers["get_project_world_conflict"],
+            {"response_model": WorldConflictInfo},
+        ),
+        (
+            "/api/projects/{project_id}/world-conflicts/{conflict_id}/resolve",
+            ["POST"],
+            handlers["resolve_project_world_conflict"],
+            {"response_model": WorldConflictInfo},
         ),
         (
             "/api/projects/{project_id}/world-model/conflicts",

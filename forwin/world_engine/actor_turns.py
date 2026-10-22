@@ -41,8 +41,15 @@ _STAGE_KEY = "world.actor_turn"
 _PARSER_NAME = "ActorTurnRunner JSON parser"
 MAX_REACHABLE_PLACES = 12
 MAX_RECENT_VETOES = 5
+MAX_PENDING_INTENTS = 10
+# Newest first, so a long book's views stay well under the prompt guard.
+MAX_KNOWN_FACTS = 60
+MAX_PUBLIC_FACTS = 30
 # The knowledge states in which an actor holds a fact and acts on it.
 _HELD_STATES = frozenset({"heard", "suspects", "believes", "knows"})
+_PENDING_INTENT_STATUSES = frozenset({"planned", "due", "held"})
+# News of an event reaches an actor only through propagation's recorded knowledge.
+_EVENT_FACT_TYPE = "event"
 _VETO_OPTION = "veto_world"
 # Travel minutes absorb float noise before rounding up.
 _MINUTE_EPSILON = 1e-6
@@ -64,11 +71,15 @@ class ActorView(BaseModel):
     restraint: dict[str, Any] = Field(default_factory=dict)
     # {id, node_type, name} of the items and resources it holds.
     holdings: list[dict[str, Any]] = Field(default_factory=list)
-    # {id, goal, motivation, horizon, status, priority, means_refs, constraints, secrecy_refs}
+    # {id, goal, motivation, horizon, status, priority, means_refs, constraints, secrecy_refs}: active agendas.
     agendas: list[dict[str, Any]] = Field(default_factory=list)
-    # {ref, proposition, state, related_refs?}: facts it holds a recorded state for, without truth values.
+    # {id, summary, action_type, location_id, scheduled_at, status, target_refs}: its planned, due and held
+    # intents, soonest first.
+    pending_intents: list[dict[str, Any]] = Field(default_factory=list)
+    # {ref, proposition, state, related_refs?}: facts it holds a recorded state for, without truth values,
+    # newest first.
     facts: list[dict[str, Any]] = Field(default_factory=list)
-    # {ref, proposition, related_refs?}: public facts it knows without a record, newest first.
+    # {ref, proposition, related_refs?}: static public facts it knows without a record, newest first.
     public_facts: list[dict[str, Any]] = Field(default_factory=list)
     # {id, node_type, name} of the other nodes the entries above name.
     entities: list[dict[str, Any]] = Field(default_factory=list)
@@ -91,7 +102,9 @@ class ActorView(BaseModel):
         """The refs its output may name."""
         return {
             self.actor_id,
-            *(item["id"] for item in [*self.holdings, *self.agendas, *self.entities, *self.clocks]),
+            *(item["id"] for item in [
+                *self.holdings, *self.agendas, *self.pending_intents, *self.entities, *self.clocks,
+            ]),
             *(fact["ref"] for fact in [*self.facts, *self.public_facts]),
         } | self.place_ids()
 
@@ -180,9 +193,11 @@ def build_actor_view(
     resources = state.get("resources")
     agendas = sorted(
         (node for node in world.nodes_by_id.values()
-         if str(node.node_type) == "agenda" and node.profile.get("owner_ref") == actor_id),
+         if str(node.node_type) == "agenda" and node.is_active and node.profile.get("owner_ref") == actor_id
+         and world.get_state(node.id).get("status") == "active"),
         key=lambda node: node.id,
     )
+    pending_intents = _pending_intents(runtime, actor_id)
     holdings = sorted(
         (node for node in world.nodes_by_id.values()
          if str(node.node_type) in {"item", "resource"} and world.get_state(node.id).get("holder_id") == actor_id),
@@ -194,8 +209,12 @@ def build_actor_view(
         *(ref for fact in [*facts, *public_facts] for ref in fact.get("related_refs", ())),
         *(ref for node in agendas for key in ("means_refs", "secrecy_refs")
           for ref in _strings(world.get_state(node.id).get(key))),
-        *(clock["owner_ref"] for clock in clocks if clock.get("owner_ref")),
-    } - {actor_id, *(node.id for node in [*agendas, *holdings])}
+        *(ref for intent in pending_intents for ref in [*intent["target_refs"], intent["location_id"]]),
+        # An insider clock's on_expire may name a node; free text matches none and is dropped below.
+        *(ref for clock in clocks for ref in (clock.get("owner_ref"), clock.get("on_expire"))
+          if isinstance(ref, str)),
+        *([restraint["by_ref"]] if isinstance(restraint, dict) and isinstance(restraint.get("by_ref"), str) else []),
+    } - {actor_id, "", *(item.id for item in [*agendas, *holdings]), *(item["id"] for item in pending_intents)}
     return ActorView(
         actor_id=actor_id,
         name=actor.name,
@@ -207,6 +226,7 @@ def build_actor_view(
         restraint=restraint if isinstance(restraint, dict) and restraint.get("state", "free") != "free" else {},
         holdings=[_summary(node) for node in holdings],
         agendas=[_agenda(runtime, node) for node in agendas],
+        pending_intents=pending_intents,
         facts=facts,
         public_facts=public_facts,
         entities=[entry for ref in sorted(named) if (entry := _entity(runtime, ref)) is not None],
@@ -244,6 +264,30 @@ def _agenda(runtime: BookStateRuntime, node: WorldNode) -> dict[str, Any]:
     }
 
 
+def _pending_intents(runtime: BookStateRuntime, actor_id: str) -> list[dict[str, Any]]:
+    """Its own planned, due and held intents, soonest first, so a turn need not propose them again."""
+    world = runtime.world
+    pending: list[tuple[int | float, str, dict]] = []
+    for node in world.nodes_by_id.values():
+        if str(node.node_type) != "intent" or node.profile.get("owner_ref") != actor_id:
+            continue
+        state = world.get_state(node.id)
+        if state.get("status") not in _PENDING_INTENT_STATUSES:
+            continue
+        scheduled_at = state.get("scheduled_at")
+        scheduled_at = scheduled_at if type(scheduled_at) is int else None
+        pending.append((scheduled_at if scheduled_at is not None else math.inf, node.id, {
+            "id": node.id,
+            "summary": str(node.profile.get("summary") or node.summary or node.name),
+            "action_type": node.profile.get("action_type"),
+            "location_id": str(node.profile.get("location_id") or ""),
+            "scheduled_at": scheduled_at,
+            "status": state.get("status"),
+            "target_refs": _strings(node.profile.get("target_refs")),
+        }))
+    return [entry for *_key, entry in sorted(pending, key=lambda item: item[:2])[:MAX_PENDING_INTENTS]]
+
+
 def _cognition(runtime: BookStateRuntime, actor: WorldNode) -> CognitionView:
     key = (_OBSERVER_TYPES[str(actor.node_type)], actor.id)
     view = runtime.cognition_by_observer.get(key)
@@ -256,24 +300,33 @@ def _cognition(runtime: BookStateRuntime, actor: WorldNode) -> CognitionView:
 
 
 def _known_facts(runtime: BookStateRuntime, cognition: CognitionView) -> tuple[list[dict], list[dict]]:
-    """Facts with a recorded held state, and public facts known by default; a false belief reads as held."""
+    """Facts with a recorded held state, and static public facts known by default, each list newest first.
+
+    A false belief reads as held. An unrecorded event fact stays unknown: its news arrives through
+    propagation, which records the knowledge.
+    """
     known = set(runtime.world.nodes_by_id) | set(runtime.map.nodes_by_id)
-    recorded: list[tuple[str, dict]] = []
+    recorded: list[tuple[int, str, dict]] = []
     public: list[tuple[int, str, dict]] = []
     for fact in runtime.world.facts_by_id.values():
+        ref = f"{FACT_REF_PREFIX}{fact.id}"
+        if ref not in cognition.knowledge_by_ref and fact.fact_type == _EVENT_FACT_TYPE:
+            continue
         state = cognition.knowledge_state(fact)
         if state not in _HELD_STATES:
             continue
-        ref = f"{FACT_REF_PREFIX}{fact.id}"
         entry: dict[str, Any] = {"ref": ref, "proposition": fact.proposition}
         related = [item for item in dict.fromkeys(fact.related_node_refs) if item in known and item != "reader"]
         if related:
             entry["related_refs"] = related
         if ref in cognition.knowledge_by_ref:
-            recorded.append((ref, {**entry, "state": state}))
+            recorded.append((-fact.created_at_chapter, ref, {**entry, "state": state}))
         else:
             public.append((-fact.created_at_chapter, ref, entry))
-    return [entry for _ref, entry in sorted(recorded)], [entry for *_key, entry in sorted(public)]
+    return (
+        [entry for *_key, entry in sorted(recorded, key=lambda item: item[:2])[:MAX_KNOWN_FACTS]],
+        [entry for *_key, entry in sorted(public, key=lambda item: item[:2])[:MAX_PUBLIC_FACTS]],
+    )
 
 
 def _reachable_places(
@@ -371,7 +424,9 @@ def _calendar(calendar: StoryCalendar | None) -> StoryCalendar:
 
 
 def _minutes(wait: Duration, calendar: StoryCalendar | None, lexicon: BookLexicon) -> int:
-    """A wait in the book's units; a negative wait counts as none."""
+    """A wait in the book's units; a negative wait counts as none, a non-finite one is invalid."""
+    if not math.isfinite(wait.amount):
+        raise StoryClockError("Duration amount must be finite")
     return duration_to_minutes(_calendar(calendar), lexicon, amount=max(wait.amount, 0.0), unit_name=wait.unit)
 
 
@@ -434,9 +489,13 @@ def _turn_issues(
 
 
 class ActorTurnRunner:
-    def __init__(self, llm_client, *, max_attempts: int = 2, max_tokens: int = 6000):
+    def __init__(
+        self, llm_client, *, max_attempts: int = 2, max_tokens_per_actor: int = 6000, max_tokens: int = 16000,
+    ):
         self.llm_client = llm_client
         self.max_attempts = max(1, int(max_attempts))
+        # A call's budget grows with the actors it asks, up to max_tokens.
+        self.max_tokens_per_actor = max_tokens_per_actor
         self.max_tokens = max_tokens
         self._chat_parameters = inspect.signature(llm_client.chat).parameters
 
@@ -493,7 +552,7 @@ class ActorTurnRunner:
             call_error: Exception | None = None
             failure_reason = ""
             try:
-                raw = self._call_chat(messages)
+                raw = self._call_chat(messages, actor_count=len(pending))
                 try:
                     parsed = ActorTurnBatch.model_validate(parse_llm_json(raw, error_prefix=_PARSER_NAME))
                 except Exception as exc:  # noqa: BLE001
@@ -568,9 +627,9 @@ class ActorTurnRunner:
             ActorTurnCall(actor_id, results.get(actor_id), prompt_trace, issues[actor_id]) for actor_id in actor_ids
         ]
 
-    def _call_chat(self, messages: list[dict]) -> str:
+    def _call_chat(self, messages: list[dict], *, actor_count: int) -> str:
         kwargs: dict[str, Any] = {
-            "temperature": 0.5, "max_tokens": self.max_tokens,
+            "temperature": 0.5, "max_tokens": min(self.max_tokens_per_actor * actor_count, self.max_tokens),
             "response_format": {"type": "json_object"}, "task_family": "world_engine",
             "stage_key": _STAGE_KEY, "output_schema": ActorTurnBatch.model_json_schema(),
         }

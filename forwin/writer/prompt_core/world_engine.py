@@ -48,9 +48,9 @@ ACTOR_TURN_INSTRUCTIONS = (
     "两者都可能与真相不符；不要假设视图之外的人物、地点或事实。",
     "turns 中每个输入 actor_id 恰好一项，含 0 到 max_new_intents_per_actor 个 new_intents、agenda_changes 与 "
     "next_turn_in；不得替其他行动者决策。",
-    "引用只能使用该行动者视图中的 id：自身、agendas、holdings、entities、clocks、facts 与 public_facts 的 ref；"
-    "location_id 只能是当前位置或 reachable_places 中的地点。不得触碰 boundary_refs 中的引用，"
-    "也不要重复 vetoes 中被否决的行动。",
+    "引用只能使用该行动者视图中的 id：自身、agendas、pending_intents、holdings、entities、clocks、facts 与 "
+    "public_facts 的 ref；location_id 只能是当前位置或 reachable_places 中的地点。不得触碰 boundary_refs 中的引用，"
+    "也不要重复 vetoes 中被否决的行动。pending_intents 是它已有的计划，不要再次提出与之相同或重复的意图。",
     "agenda_ref 用自己的 agenda id，或留空；新建议程时 agenda_changes 中恰好一项的 agenda_ref 为允许值给出的新议程标记"
     "并附 goal，意图的 agenda_ref 写同一标记即指向它。priority 只能取允许值给出的范围。",
     "scheduled_in 与 next_turn_in 的 unit 只使用本书日历单位或 lexicon 别名；意图地点须在 scheduled_in 之内到达，"
@@ -178,7 +178,11 @@ def build_actor_turn_messages(
     feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
     retry_feedback: Sequence[str] = (),
 ) -> list[dict]:
-    """One batch of actor turns: the shared calendar and lexicon, and each actor's own view only."""
+    """One batch of actor turns: the shared calendar and lexicon, and each actor's own view only.
+
+    Actors batched together share one prompt, so between them isolation rests on the instructions;
+    a batch size of 1 keeps every call to a single actor's knowledge.
+    """
     actors = [_without_empty(view.model_dump(mode="json")) for view in views]
     payload = {
         "context": context.model_dump(mode="json"),

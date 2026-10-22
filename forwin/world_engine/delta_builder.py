@@ -40,6 +40,8 @@ from forwin.protocol.book_state import (
 )
 
 from .types import (
+    AGENDA_PRIORITY_MAX,
+    AGENDA_PRIORITY_MIN,
     NEW_AGENDA_REF,
     NEW_FACT_REF_PREFIX,
     WORLD_ENGINE_SOURCE_TYPE,
@@ -55,9 +57,6 @@ from .types import (
     TickCandidate,
     TickContext,
 )
-
-
-_AGENDA_PRIORITY_MIN, _AGENDA_PRIORITY_MAX = 1, 5
 
 
 def _tick_local_id(project_id: str, tick_id: str, candidate_id: str, kind: str, local: int | str) -> str:
@@ -395,7 +394,7 @@ class _TickBuilder:
     def _agenda_change(self, candidate: TickCandidate, change: AgendaChange, index: int) -> None:
         priority = (
             None if change.priority is None
-            else min(max(change.priority, _AGENDA_PRIORITY_MIN), _AGENDA_PRIORITY_MAX)
+            else min(max(change.priority, AGENDA_PRIORITY_MIN), AGENDA_PRIORITY_MAX)
         )
         if change.agenda_ref == NEW_AGENDA_REF:
             owner = self._owner(candidate)

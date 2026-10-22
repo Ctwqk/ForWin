@@ -68,9 +68,9 @@ def _clock(ref, label, *, owner="", scope=None, status="running", due_at=900):
     return _node(ref, "clock", profile=profile, due_at=due_at, status=status)
 
 
-def _fact(ref, proposition, *, sensitivity="secret", truth="true", related=(), chapter=1):
+def _fact(ref, proposition, *, sensitivity="secret", truth="true", related=(), chapter=1, kind=""):
     return FactNode(id=ref, project_id="p", proposition=proposition, sensitivity_level=sensitivity,
-                    truth_value=truth, related_node_refs=list(related), created_at_chapter=chapter)
+                    truth_value=truth, related_node_refs=list(related), created_at_chapter=chapter, fact_type=kind)
 
 
 def _overlay(observer_type, observer_id, **fields):
@@ -435,7 +435,7 @@ def test_runner_call_kwargs_trace_and_allowed_values():
     client.last_call_result = SimpleNamespace(
         backend="codex_bridge", actual_model="test-actual-model", fallback_used=False, trace={"codex_job_id": "job-1"},
     )
-    [call] = _run(client, max_tokens=4321)
+    [call] = _run(client, max_tokens_per_actor=4321)
     messages, kwargs = client.calls[0]
     assert kwargs["stage_key"] == "world.actor_turn"
     assert kwargs["task_family"] == "world_engine"
@@ -503,8 +503,9 @@ def test_unparseable_output_exhausts_attempts():
 
 def test_public_facts_are_dropped_before_the_size_guard():
     runtime = _runtime()
-    for index in range(800):
-        runtime.world.add_fact(_fact(f"bulk-{index:03d}", "bulk-public-proposition-" * 3, sensitivity="public"))
+    # Even capped, these public facts overflow the guard, so they go as a last resort.
+    for index in range(40):
+        runtime.world.add_fact(_fact(f"bulk-{index:03d}", "bulk-public-proposition-" * 100, sensitivity="public"))
     client = StubLLM({"turns": [_turn()]})
     [call] = _run(client, [_view(runtime=runtime)])
     assert call.result is not None and len(client.calls) == 1
@@ -559,9 +560,146 @@ def test_turn_to_candidate_schedules_next_turn_after_now(wait, expected):
     assert candidate.agenda_changes == call.result.agenda_changes
     assert candidate.summary == "intent-summary\nsecond-intent"
     assert candidate.effects.model_dump(exclude_defaults=True) == {}
+    assert candidate.impact_level == "minor"
 
 
 def test_turn_to_candidate_requires_a_result():
     from forwin.world_engine.actor_turns import ActorTurnCall, turn_to_candidate
     with pytest.raises(ValueError):
         turn_to_candidate(ActorTurnCall("hero", None, {}, ["dropped"]), now=NOW, calendar=CALENDAR, lexicon=LEXICON)
+
+
+# fix round 1
+
+
+def test_unrecorded_public_event_facts_wait_for_news():
+    runtime = _runtime()
+    runtime.world.add_fact(_fact("public-event", "event-news-proposition", sensitivity="public", kind="event"))
+    view = _view(runtime=runtime)
+    assert "event-news-proposition" not in json.dumps(view.model_dump(mode="json"))
+    assert "fact:public-event" not in view.references()
+    # Static public facts keep the default.
+    assert [fact["ref"] for fact in view.public_facts] == ["fact:public-news"]
+
+    runtime.cognition_by_observer[("character", "hero")].knowledge_by_ref["fact:public-event"] = "heard"
+    heard = {fact["ref"]: fact for fact in _view(runtime=runtime).facts}
+    assert heard["fact:public-event"]["state"] == "heard"
+
+
+def test_actor_view_lists_own_pending_intents():
+    from forwin.world_engine.actor_turns import MAX_PENDING_INTENTS
+    assert MAX_PENDING_INTENTS == 10
+    runtime = _runtime()
+    runtime.world.add_node(_node("warden", name="warden-name", location_id="far"))
+
+    def intent(ref, owner="hero", status="planned", scheduled_at=700, **profile):
+        runtime.world.add_node(_node(ref, "intent", profile={
+            "owner_ref": owner, "summary": f"{ref}-summary", "action_type": "investigate",
+            "target_refs": ["warden"], "location_id": "far", **profile,
+        }, status=status, scheduled_at=scheduled_at))
+
+    intent("due-intent", status="due", scheduled_at=650)
+    intent("held-intent", status="held", scheduled_at=660)
+    intent("resolved-intent", status="resolved", scheduled_at=600)
+    intent("rival-intent", owner="rival", scheduled_at=600)
+    for index in range(10):
+        intent(f"planned-{index:02d}", scheduled_at=700 + index)
+    view = _view(runtime=runtime)
+    assert [item["id"] for item in view.pending_intents] == [
+        "due-intent", "held-intent", *[f"planned-{index:02d}" for index in range(8)],
+    ]
+    assert view.pending_intents[0] == {
+        "id": "due-intent", "summary": "due-intent-summary", "action_type": "investigate", "location_id": "far",
+        "scheduled_at": 650, "status": "due", "target_refs": ["warden"],
+    }
+    assert "warden" in {entity["id"] for entity in view.entities}
+    assert {"warden", "due-intent"} <= view.references()
+
+    client = StubLLM({"turns": [_turn(new_intents=[_intent(target_refs=["warden"])])]})
+    [call] = _run(client, [view])
+    assert call.issues == []
+    system, user = (message["content"] for message in client.calls[0][0])
+    assert "pending_intents" in system
+    assert "due-intent-summary" in user
+    assert "rival-intent-summary" not in user and "resolved-intent-summary" not in user
+
+
+def test_fact_lists_are_capped_by_recency():
+    from forwin.world_engine.actor_turns import MAX_KNOWN_FACTS, MAX_PUBLIC_FACTS
+    runtime = _runtime()
+    overlay = runtime.cognition_by_observer[("character", "hero")]
+    for index in range(500):
+        runtime.world.add_fact(_fact(f"news-{index:03d}", f"recorded-news-{index:03d}-" * 4, chapter=index))
+        overlay.knowledge_by_ref[f"fact:news-{index:03d}"] = "heard"
+    for index in range(100):
+        runtime.world.add_fact(_fact(f"lore-{index:03d}", f"public-lore-{index:03d}-" * 4, sensitivity="public",
+                                     chapter=index))
+    view = _view(runtime=runtime)
+    assert len(view.facts) == MAX_KNOWN_FACTS
+    assert view.facts[0]["ref"] == "fact:news-499"
+    assert view.facts[-1]["ref"] == f"fact:news-{500 - MAX_KNOWN_FACTS:03d}"
+    assert len(view.public_facts) == MAX_PUBLIC_FACTS
+    assert view.public_facts[0]["ref"] == "fact:lore-099"
+
+    client = StubLLM({"turns": [_turn()]})
+    [call] = _run(client, [view])
+    assert len(client.calls) == 1 and call.result is not None
+    user = client.calls[0][0][-1]["content"]
+    assert len(user) <= 60000
+    assert "recorded-news-499" in user and "public-lore-099" in user
+    assert "recorded-news-000" not in user
+
+
+def test_actor_view_lists_only_active_agendas():
+    runtime = _runtime()
+    runtime.world.add_node(_agenda("hero/abandoned", "hero", "abandoned-goal"))
+    runtime.world.states_by_node_id["hero/abandoned"]["status"] = "abandoned"
+    runtime.world.add_node(_node("hero/retired", "agenda", is_active=False,
+                                 profile={"owner_ref": "hero", "goal": "retired-goal"}, status="active"))
+    view = _view(runtime=runtime)
+    assert [agenda["id"] for agenda in view.agendas] == ["hero/agenda"]
+    bad = {"turns": [_turn(new_intents=[_intent(agenda_ref="hero/abandoned")])]}
+    client = StubLLM(bad, {"turns": [_turn()]})
+    _run(client, [view])
+    assert "hero/abandoned" in _retry_feedback(client.calls[1])
+
+
+def test_restraint_captor_and_clock_expiry_node_are_usable_refs():
+    runtime = _runtime()
+    runtime.world.add_node(_node("warden", name="warden-name"))
+    runtime.world.add_node(_node("trigger", "event", name="trigger-name"))
+    runtime.world.states_by_node_id["hero"]["restraint"] = {"state": "restrained", "by_ref": "warden", "since": 1}
+    runtime.world.get_node("own-clock").profile["on_expire"] = "trigger"
+    view = _view(runtime=runtime)
+    assert view.restraint["by_ref"] == "warden"
+    assert {"warden", "trigger"} <= {entity["id"] for entity in view.entities}
+    client = StubLLM({"turns": [_turn(new_intents=[_intent(target_refs=["warden", "trigger"])])]})
+    [call] = _run(client, [view])
+    assert call.issues == [] and len(client.calls) == 1
+
+
+def test_max_tokens_scale_with_the_actors_asked():
+    runtime = _runtime()
+    views = [_view(actor, runtime) for actor in ("hero", "rival", "ally")]
+    client = StubLLM(
+        {"turns": [_turn(new_intents=[_intent()] * 3), _turn("rival")]},
+        {"turns": [_turn()]},
+        {"turns": [_turn("ally")]},
+    )
+    _run(client, views, policy=WorldPolicy(actor_turn_batch_size=2), max_tokens_per_actor=3000)
+    assert [kwargs["max_tokens"] for _, kwargs in client.calls] == [6000, 3000, 3000]
+    client = StubLLM({"turns": [_turn(), _turn("rival"), _turn("ally")]})
+    _run(client, views, policy=WorldPolicy(actor_turn_batch_size=3), max_tokens_per_actor=6000, max_tokens=16000)
+    assert client.calls[0][1]["max_tokens"] == 16000
+
+
+@pytest.mark.parametrize("amount", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("field", ["scheduled_in", "next_turn_in"])
+def test_non_finite_duration_retries_with_feedback(amount, field):
+    wait = {"amount": amount, "unit": "watch"}
+    bad = _turn(new_intents=[_intent(scheduled_in=wait)]) if field == "scheduled_in" else _turn(next_turn_in=wait)
+    client = StubLLM({"turns": [bad]}, {"turns": [_turn()]})
+    [call] = _run(client)
+    assert call.result is not None and len(client.calls) == 2
+    retry = _retry_feedback(client.calls[1])
+    assert "invalid_duration" in retry and field in retry and "finite" in retry

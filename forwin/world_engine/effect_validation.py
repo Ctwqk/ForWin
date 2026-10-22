@@ -35,10 +35,10 @@ def scoped_effect_reference_issues(
     modes = set(travel_mode_ids)
     issues: list[str] = []
 
-    def check(ref: str, path: str, *, refs: set[str] = allowed, optional: bool = False) -> None:
+    def check(ref: str, path: str, *, within: set[str] = allowed, optional: bool = False) -> None:
         if optional and not ref:
             return
-        if ref not in refs:
+        if ref not in within:
             issues.append(f"unknown_ref at {path}: {ref!r}")
 
     def value_refs(value: Any, path: str, *, is_ref: bool = False) -> None:
@@ -62,8 +62,8 @@ def scoped_effect_reference_issues(
                    is_ref=item.field.endswith(("_id", "_ids", "_ref", "_refs")))
     for index, item in enumerate(effects.movements):
         check(item.entity_ref, f"movements[{index}].entity_ref")
-        check(item.to_location_id, f"movements[{index}].to_location_id", refs=locations)
-        check(item.travel_mode_id, f"movements[{index}].travel_mode_id", refs=modes, optional=True)
+        check(item.to_location_id, f"movements[{index}].to_location_id", within=locations)
+        check(item.travel_mode_id, f"movements[{index}].travel_mode_id", within=modes, optional=True)
     for index, item in enumerate(effects.item_transfers):
         check(item.item_ref, f"item_transfers[{index}].item_ref")
         check(item.from_ref, f"item_transfers[{index}].from_ref", optional=True)
@@ -77,6 +77,6 @@ def scoped_effect_reference_issues(
             check(ref, f"new_facts[{index}].known_by")
     for index, item in enumerate(effects.knowledge):
         check(item.observer_ref, f"knowledge[{index}].observer_ref")
-        check(item.fact_ref, f"knowledge[{index}].fact_ref", refs=allowed | new_facts)
+        check(item.fact_ref, f"knowledge[{index}].fact_ref", within=allowed | new_facts)
         check(item.source_ref, f"knowledge[{index}].source_ref", optional=True)
     return issues

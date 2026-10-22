@@ -456,10 +456,7 @@ class LLMCallRouter:
         if family in CODEX_PRIMARY_FAMILIES:
             return "codex_primary"
         if family in WRITER_FAMILIES:
-            if stage in CODEX_PRIMARY_WRITER_STAGES or any(
-                token in stage
-                for token in ("state_event", "thread_time", "lore_timeline")
-            ):
+            if stage in CODEX_PRIMARY_WRITER_STAGES:
                 return "codex_primary"
             if stage in ORDINARY_PRIMARY_WRITER_STAGES or any(
                 token in stage for token in ("chapter_rewrite", "repair")

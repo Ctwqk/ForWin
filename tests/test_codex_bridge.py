@@ -406,7 +406,7 @@ class CodexBridgeTests(unittest.TestCase):
                 [{"role": "user", "content": "只输出 JSON"}],
                 intent=LLMCallIntent(
                     task_family="writer",
-                    stage_key="state_event_extraction",
+                    stage_key="chapter_delta_extraction",
                     output_schema={"type": "object"},
                 ),
                 response_format={"type": "json_object"},
@@ -426,7 +426,7 @@ class CodexBridgeTests(unittest.TestCase):
                 [{"role": "user", "content": "只输出 JSON"}],
                 intent=LLMCallIntent(
                     task_family="writer",
-                    stage_key="state_event_extraction",
+                    stage_key="chapter_delta_extraction",
                     output_schema=schema,
                 ),
                 response_format={"type": "json_object"},
@@ -514,7 +514,7 @@ class CodexBridgeTests(unittest.TestCase):
             temperature=0.1,
             max_tokens=100,
             response_format={"type": "json_object"},
-            stage_key="state_event_extraction",
+            stage_key="chapter_delta_extraction",
         )
 
         self.assertNotIn("output_schema", llm.calls[0])
@@ -525,6 +525,14 @@ def test_chapter_delta_extraction_uses_codex_primary():
     assert router._codex_policy(LLMCallIntent(
         task_family="writer", stage_key="chapter_delta_extraction",
     )) == "codex_primary"
+
+
+def test_retired_extraction_stage_keys_are_not_codex_primary():
+    router = LLMCallRouter(ordinary_adapter=object(), codex_client=object(), codex_enabled=True)
+    for stage_key in ("state_event_extraction", "thread_time_extraction", "lore_timeline_notes"):
+        assert router._codex_policy(LLMCallIntent(
+            task_family="writer", stage_key=stage_key,
+        )) == "ordinary_primary", stage_key
 
 
 if __name__ == "__main__":

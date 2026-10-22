@@ -19,6 +19,12 @@ class LLMClientRetryTests(unittest.TestCase):
             response_format={"type": "json_object"},
         ), "canon_extraction")
 
+    def test_retired_extraction_stage_keys_get_no_extraction_route(self) -> None:
+        for stage_key in ("state_event_extraction", "thread_time_extraction", "lore_timeline_notes"):
+            self.assertNotEqual(LLMClient._llm_task_route(
+                task_family="writer", stage_key=stage_key, response_format={"type": "json_object"},
+            ), "canon_extraction", stage_key)
+
     def test_wall_timeout_closes_hung_custom_http_client(self) -> None:
         class HangingHTTPClient:
             def __init__(self) -> None:
@@ -762,7 +768,7 @@ class LLMClientRetryTests(unittest.TestCase):
                     [{"role": "user", "content": "抽取 canon 事件"}],
                     response_format={"type": "json_object"},
                     task_family="writer",
-                    stage_key="state_event_extraction",
+                    stage_key="chapter_delta_extraction",
                 )
             attempts = client.drain_llm_attempt_events()
         finally:
@@ -770,7 +776,7 @@ class LLMClientRetryTests(unittest.TestCase):
 
         self.assertEqual(result, "{\"ok\": true}")
         self.assertEqual(calls, ["gpt-5.3-codex-spark", "kimi-k2.5"])
-        self.assertEqual([item["stage_key"] for item in attempts], ["state_event_extraction", "state_event_extraction"])
+        self.assertEqual([item["stage_key"] for item in attempts], ["chapter_delta_extraction", "chapter_delta_extraction"])
         self.assertEqual(attempts[0]["llm_task_route"], "canon_extraction")
 
     def test_feedback_analysis_routes_spark_then_kimi_then_minimax(self) -> None:
@@ -986,7 +992,7 @@ class LLMClientRetryTests(unittest.TestCase):
                     [{"role": "user", "content": "抽取 canon 事件"}],
                     response_format={"type": "json_object"},
                     task_family="writer",
-                    stage_key="state_event_extraction",
+                    stage_key="chapter_delta_extraction",
                 )
             attempts = client.drain_llm_attempt_events()
         finally:
@@ -1182,7 +1188,7 @@ class LLMClientRetryTests(unittest.TestCase):
                     [{"role": "user", "content": "抽 canon"}],
                     response_format={"type": "json_object"},
                     task_family="writer",
-                    stage_key="state_event_extraction",
+                    stage_key="chapter_delta_extraction",
                 )
             attempts = client.drain_llm_attempt_events()
         finally:

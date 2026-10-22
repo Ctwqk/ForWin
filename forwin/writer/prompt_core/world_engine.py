@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
@@ -12,7 +13,7 @@ from forwin.book_state.lexicon import BookLexicon, lexicon_to_payload
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
 from forwin.book_state.schema import AGENDA_STATUSES, IMPACT_LEVELS, INTENT_ACTION_TYPES
 from forwin.book_state.story_clock import StoryCalendar, calendar_to_payload
-from forwin.protocol.book_state import WORLD_EDGE_TYPES, WorldNode
+from forwin.protocol.book_state import WORLD_EDGE_TYPES, FactNode, MapNode, WorldEdge, WorldNode
 from forwin.world_engine.constraints import ConstraintIssue
 from forwin.world_engine.types import (
     AGENDA_PRIORITY_MAX, AGENDA_PRIORITY_MIN, NEW_AGENDA_REF, NEW_FACT_REF_PREFIX, ActorTurnBatch,
@@ -25,6 +26,9 @@ if TYPE_CHECKING:
 
 MAX_ADJUDICATION_PROMPT_CHARS = 60000
 MAX_ACTOR_TURN_PROMPT_CHARS = 60000
+MAX_CONFLICT_REVIEW_PROMPT_CHARS = 60000
+# What a chapter-plan goal keeps when the conflict review prompt is still over its guard.
+MAX_CONFLICT_REVIEW_GOAL_CHARS = 200
 
 
 ADJUDICATION_INSTRUCTIONS = (
@@ -58,6 +62,22 @@ ACTOR_TURN_INSTRUCTIONS = (
     "约束反馈与重试反馈按 actor_id 修正对应结果；所有空列表返回 []。完整输出结构如下，额外的允许值列表补充 schema 中"
     "未列出的枚举。",
 )
+
+
+CONFLICT_REVIEW_INSTRUCTIONS = (
+    "你替用户审一条世界与规划的冲突：世界推演想做的变化与当前规划相抵触。从 options 中选择一个处理选项，"
+    "返回 JSON 对象，不输出正文或 Markdown。",
+    "只依据输入：冲突记录、涉及引用在检测章节时的世界状态、当前卷规划与接下来的章节计划。"
+    "不要假设输入之外的人物、地点或事实，不要编造补丁或新的计划。",
+    "选项含义：veto_world 否决这次世界变化，行动者之后重新行动；plot_responds 接受变化，由下一个未写章节回应；"
+    "accept_with_obligation 接受变化，并记下一条之后必须兑现的叙事义务；amend_plan 接受变化并修改规划，须由用户确认。",
+    "优先保住当前卷的目标、赌注与回报方向，以及接下来章节计划仍然可写；规划不受损时尊重世界的因果。",
+    "option 必须是 options 中的一项；rationale 用一两句话说明理由；evidence 只列输入中支持判断的引用 id 或字段名；"
+    "risk_level 表示所选选项对规划的风险。完整输出结构如下。",
+)
+
+# The BookState model each conflict-snapshot slice kind dumps, for dropping its default-valued fields.
+_SLICE_MODELS = {"world_node": WorldNode, "world_edge": WorldEdge, "map_node": MapNode, "fact": FactNode}
 
 
 def _without_empty(value: Any) -> Any:
@@ -215,4 +235,32 @@ def build_actor_turn_messages(
         for actor in actors:
             actor.pop("public_facts", None)
         user = json.dumps(payload, ensure_ascii=False) + suffix
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _compact_slice(item: dict) -> dict:
+    model = _SLICE_MODELS.get(item.get("kind"))
+    if model is None:
+        return item
+    return {**item, "value": model.model_validate(item["value"]).model_dump(mode="json", exclude_defaults=True)}
+
+
+def build_conflict_review_messages(
+    *, context_snapshot: Mapping[str, Any], options: Sequence[str], output_schema: Mapping[str, Any],
+) -> list[dict]:
+    """One conflict for the reviewer: its record, the involved refs' state, the volume plan and the next chapters.
+
+    Over the guard, the BookState slices drop their default-valued fields first, then each chapter-plan
+    goal is cut to MAX_CONFLICT_REVIEW_GOAL_CHARS; the caller rejects a prompt that is still over.
+    """
+    payload = {**copy.deepcopy(dict(context_snapshot)), "options": list(options)}
+    system = "\n".join(CONFLICT_REVIEW_INSTRUCTIONS) + "\n" + json.dumps(output_schema, ensure_ascii=False)
+    user = json.dumps(payload, ensure_ascii=False)
+    if len(user) > MAX_CONFLICT_REVIEW_PROMPT_CHARS and "book_state" in payload:
+        payload["book_state"] = [_compact_slice(item) for item in payload["book_state"]]
+        user = json.dumps(payload, ensure_ascii=False)
+    if len(user) > MAX_CONFLICT_REVIEW_PROMPT_CHARS and "upcoming_chapters" in payload:
+        for chapter in payload["upcoming_chapters"]:
+            chapter["goals"] = [goal[:MAX_CONFLICT_REVIEW_GOAL_CHARS] for goal in chapter.get("goals", [])]
+        user = json.dumps(payload, ensure_ascii=False)
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]

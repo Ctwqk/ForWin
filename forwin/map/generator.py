@@ -34,9 +34,15 @@ def generate_subworld_map(spec: SubWorldMapSpec) -> MapGenerationResult:
     regions, region_edges = _generate_region_graph(spec, rng)
     nodes = _generate_region_nodes(spec, regions, rng)
     candidates = _generate_candidate_edges(spec, regions, region_edges, nodes, rng)
-    mst_candidates = _build_mst(nodes, [candidate for candidate in candidates if not candidate.hidden])
+    required = [candidate for candidate in candidates if (candidate.metadata or {}).get("required_connection")]
+    mst_candidates = _build_mst(
+        nodes, [candidate for candidate in candidates if not candidate.hidden],
+        preselected=[candidate for candidate in required if not candidate.hidden],
+    )
     target_edge_count = max(len(nodes) - 1, round(len(nodes) * spec.target_edge_density))
-    selected = list(mst_candidates)
+    selected = [*required, *mst_candidates]
+    if any(not edge.hidden and not edge.bidirectional for edge in required):
+        selected = _connect_directed_backbone(nodes, selected, candidates)
     selected_keys = {
         (edge.from_node_id, edge.to_node_id, edge.edge_type, edge.hidden)
         for edge in selected
@@ -211,11 +217,22 @@ def _generate_candidate_edges(
             candidates.append(_candidate(left_node, right_node, "border_crossing", rng, bidirectional=True))
 
     anchors = [node for node in nodes if node.metadata.get("node_role") == "anchor"]
-    for left, right in zip(anchors, anchors[1:]):
-        edge_type = _connection_role_to_edge_type(_pick(spec.required_connection_roles, rng, fallback="road"))
-        candidates.append(_candidate(left, right, edge_type, rng, bidirectional=True, metadata={"required_connection": True}))
+    if spec.required_connections:
+        anchors_by_source = {node.metadata["source_node_id"]: node for node in anchors if node.metadata.get("source_node_id")}
+        for connection in spec.required_connections:
+            left = anchors_by_source[connection.from_source_node_id]
+            right = anchors_by_source[connection.to_source_node_id]
+            candidates.append(_candidate(
+                left, right, connection.edge_type, rng,
+                bidirectional=connection.bidirectional, hidden=connection.hidden,
+                metadata={"required_connection": True, "source_edge_id": connection.source_edge_id},
+            ))
+    else:
+        for left, right in zip(anchors, anchors[1:]):
+            edge_type = _connection_role_to_edge_type(_pick(spec.required_connection_roles, rng, fallback="road"))
+            candidates.append(_candidate(left, right, edge_type, rng, bidirectional=True, metadata={"required_connection": True}))
 
-    visible_candidates = list(candidates)
+    visible_candidates = [candidate for candidate in candidates if not candidate.hidden]
     rng.shuffle(visible_candidates)
     for candidate in visible_candidates[: max(1, len(nodes) // 8)]:
         candidates.append(
@@ -226,13 +243,16 @@ def _generate_candidate_edges(
                 score=candidate.score * 0.55,
                 bidirectional=False,
                 hidden=True,
-                metadata={"hidden_route": True, **(candidate.metadata or {})},
+                metadata={"hidden_route": True},
             )
         )
     return candidates
 
 
-def _build_mst(nodes: list[MapNode], candidates: list[_CandidateEdge]) -> list[_CandidateEdge]:
+def _build_mst(
+    nodes: list[MapNode], candidates: list[_CandidateEdge],
+    *, preselected: list[_CandidateEdge] | None = None,
+) -> list[_CandidateEdge]:
     parent = {node.id: node.id for node in nodes}
 
     def find(node_id: str) -> str:
@@ -249,18 +269,55 @@ def _build_mst(nodes: list[MapNode], candidates: list[_CandidateEdge]) -> list[_
         parent[right_root] = left_root
         return True
 
+    connected_count = sum(union(edge.from_node_id, edge.to_node_id) for edge in (preselected or []))
     result: list[_CandidateEdge] = []
     for candidate in sorted(candidates, key=lambda item: item.score):
+        if connected_count >= len(nodes) - 1:
+            break
         if union(candidate.from_node_id, candidate.to_node_id):
             result.append(candidate)
-        if len(result) >= len(nodes) - 1:
-            break
+            connected_count += 1
 
-    if len(result) < len(nodes) - 1:
+    if connected_count < len(nodes) - 1:
         for left, right in zip(nodes, nodes[1:]):
             if union(left.id, right.id):
                 result.append(_CandidateEdge(left.id, right.id, "path", 9999.0, bidirectional=True))
     return result
+
+
+def _connect_directed_backbone(
+    nodes: list[MapNode], selected: list[_CandidateEdge], candidates: list[_CandidateEdge],
+) -> list[_CandidateEdge]:
+    # Union-find guarantees weak connectivity; one-way declarations may still
+    # need a visible route from the entry side of the graph.
+    result = list(selected)
+    available = sorted((edge for edge in candidates if not edge.hidden), key=lambda edge: edge.score)
+    available.extend(
+        _CandidateEdge(left.id, right.id, "path", 9999.0)
+        for left, right in zip(nodes, nodes[1:])
+    )
+    while True:
+        adjacency: dict[str, list[str]] = {node.id: [] for node in nodes}
+        for edge in result:
+            if not edge.hidden:
+                adjacency[edge.from_node_id].append(edge.to_node_id)
+                if edge.bidirectional:
+                    adjacency[edge.to_node_id].append(edge.from_node_id)
+        reachable = {nodes[0].id}
+        pending = [nodes[0].id]
+        while pending:
+            for neighbor in adjacency[pending.pop()]:
+                if neighbor not in reachable:
+                    reachable.add(neighbor)
+                    pending.append(neighbor)
+        if len(reachable) == len(nodes):
+            return result
+        bridge = next(
+            edge for edge in available
+            if (edge.from_node_id in reachable and edge.to_node_id not in reachable)
+            or (edge.bidirectional and edge.to_node_id in reachable and edge.from_node_id not in reachable)
+        )
+        result.append(bridge)
 
 
 def _compute_edge_weights(
@@ -385,6 +442,7 @@ def _candidate(
     rng: random.Random,
     *,
     bidirectional: bool,
+    hidden: bool = False,
     metadata: dict | None = None,
 ) -> _CandidateEdge:
     return _CandidateEdge(
@@ -393,6 +451,7 @@ def _candidate(
         edge_type=edge_type,
         score=_coordinate_distance(left, right) + rng.random(),
         bidirectional=bidirectional,
+        hidden=hidden,
         metadata=metadata or {},
     )
 

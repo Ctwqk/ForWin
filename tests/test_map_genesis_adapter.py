@@ -108,14 +108,116 @@ def test_connection_roles_come_from_atlas_edge_types(edge_type: str | None) -> N
     spec = build_subworld_map_specs_from_genesis(project_id="p1", map_atlas=atlas)[0]
 
     assert spec.required_connection_roles == [edge_type or "road"]
-    # Include the optional anchor connection alongside the baseline routes.
-    result = generate_subworld_map(spec.model_copy(update={"target_edge_density": 3.0}))
+    result = generate_subworld_map(spec)
     assert result.validation_report.valid is True
     anchor_ids = {node.id for node in result.map_nodes if node.metadata.get("node_role") == "anchor"}
     connections = [edge for edge in result.map_edges if edge.metadata.get("required_connection") and edge.status == "open"]
     assert connections
     assert all(edge.edge_type == (edge_type or "road") for edge in connections)
     assert all({edge.from_node_id, edge.to_node_id} == anchor_ids for edge in connections)
+
+
+def _three_anchor_atlas(**edge_flags) -> dict:
+    return {
+        "submaps": [{"id": "main", "name": "Main"}],
+        "nodes": [
+            {"id": name.lower(), "name": name, "parent_subworld": "main"}
+            for name in ("A", "B", "C")
+        ],
+        "edges": [{"id": "ac", "from_node_id": "a", "to_node_id": "c", "kind": "river", **edge_flags}],
+    }
+
+
+def _generate_atlas(atlas, *, density=1.0):
+    spec = build_subworld_map_specs_from_genesis(project_id="p1", map_atlas=atlas)[0]
+    result = generate_subworld_map(spec.model_copy(update={"target_edge_density": density}))
+    ids = {node.metadata["source_node_id"]: node.id for node in result.map_nodes
+           if node.metadata.get("source_node_id")}
+    connections = [edge for edge in result.map_edges if edge.metadata.get("required_connection")]
+    return spec, result, ids, connections
+
+
+def test_declared_atlas_edges_connect_their_endpoints() -> None:
+    spec, result, ids, connections = _generate_atlas(_three_anchor_atlas())
+
+    assert [(edge.from_node_id, edge.to_node_id, edge.edge_type) for edge in connections] == [
+        (ids["a"], ids["c"], "river"),
+    ]
+    assert connections[0].metadata["source_edge_id"] == "ac"
+    assert spec.required_connections[0].from_source_node_id == "a"
+    assert spec.required_connections[0].to_source_node_id == "c"
+    assert result.validation_report.valid
+    assert len(result.map_edges) == result.summary["target_edge_count"]
+
+
+def test_declared_hidden_edge_is_hidden_and_undiscovered() -> None:
+    _, result, ids, connections = _generate_atlas(_three_anchor_atlas(hidden=True))
+
+    assert len(connections) == 1
+    edge = connections[0]
+    assert (edge.from_node_id, edge.to_node_id, edge.edge_type) == (ids["a"], ids["c"], "river")
+    assert edge.status == "hidden"
+    assert edge.discovered_by_default is False
+    assert edge.visibility_default == "hidden"
+    # Hidden declarations must not replace the visible spanning tree.
+    from forwin.book_state.map_graph import MapGraph
+    graph = MapGraph(nodes=result.map_nodes, edges=[edge for edge in result.map_edges if edge.status == "open"])
+    assert all(graph.shortest_path(result.map_nodes[0].id, node.id).reachable for node in result.map_nodes)
+
+
+def test_declared_one_way_edge_is_not_bidirectional() -> None:
+    _, _, ids, connections = _generate_atlas(_three_anchor_atlas(bidirectional=False))
+
+    assert len(connections) == 1
+    edge = connections[0]
+    assert (edge.from_node_id, edge.to_node_id) == (ids["a"], ids["c"])
+    assert edge.bidirectional is False
+
+
+def test_seed_ignores_revision_and_atlas_changes() -> None:
+    atlas = _three_anchor_atlas()
+    first = build_subworld_map_specs_from_genesis(project_id="p1", genesis_revision_id="rev1", map_atlas=atlas)[0]
+    second = build_subworld_map_specs_from_genesis(
+        project_id="p1", genesis_revision_id="rev2", map_atlas={**atlas, "overview": "Revised atlas", "edges": []},
+    )[0]
+
+    assert first.generation_seed == second.generation_seed
+    assert generate_subworld_map(first).map_nodes == generate_subworld_map(second).map_nodes
+    other_project = build_subworld_map_specs_from_genesis(project_id="p2", map_atlas=atlas)[0]
+    other_world = build_subworld_map_specs_from_genesis(project_id="p1", map_atlas={"submaps": [{"id": "other"}]})[0]
+    assert first.generation_seed != other_project.generation_seed
+    assert first.generation_seed != other_world.generation_seed
+
+
+def test_subworld_without_declared_edges_keeps_anchor_chain() -> None:
+    _, _, ids, connections = _generate_atlas({**_three_anchor_atlas(), "edges": []})
+
+    assert {(edge.from_node_id, edge.to_node_id) for edge in connections} == {
+        (ids["a"], ids["b"]), (ids["b"], ids["c"]),
+    }
+    assert all(edge.bidirectional and edge.edge_type == "road" for edge in connections)
+
+
+def test_declared_cycles_and_parallel_edges_survive_the_budget() -> None:
+    atlas = _three_anchor_atlas()
+    atlas["edges"] = [
+        {"id": str(index), "from_node_id": left, "to_node_id": right, "kind": "river"}
+        for index, (left, right) in enumerate([("a", "b"), ("b", "c"), ("c", "a")] * 5)
+    ]
+    _, result, _, connections = _generate_atlas(atlas)
+
+    assert len(connections) == 15
+    assert {edge.metadata["source_edge_id"] for edge in connections} == {str(index) for index in range(15)}
+    assert result.validation_report.valid
+    assert len(result.map_edges) > result.summary["target_edge_count"]
+
+
+def test_declared_endpoint_ids_take_precedence_over_node_names() -> None:
+    atlas = _three_anchor_atlas()
+    atlas["nodes"][1]["name"] = "a"
+    _, _, ids, connections = _generate_atlas(atlas)
+
+    assert [(edge.from_node_id, edge.to_node_id) for edge in connections] == [(ids["a"], ids["c"])]
 
 
 def test_connection_roles_are_scoped_ordered_and_deduplicated() -> None:
@@ -140,6 +242,8 @@ def test_connection_roles_are_scoped_ordered_and_deduplicated() -> None:
 
     assert main.required_connection_roles == ["mountain_pass", "portal"]
     assert other.required_connection_roles == ["rail"]
+    assert [connection.edge_type for connection in main.required_connections] == ["mountain_pass", "portal", "mountain_pass"]
+    assert [(connection.from_source_node_id, connection.to_source_node_id) for connection in other.required_connections] == [("b", "c")]
 
 
 @pytest.mark.parametrize("seed", range(5))
@@ -200,6 +304,7 @@ def test_connection_roles_skip_unresolvable_endpoints(single_subworld: bool, edg
     specs = build_subworld_map_specs_from_genesis(project_id="p1", map_atlas=atlas)
 
     assert all(spec.required_connection_roles == ["road"] for spec in specs)
+    assert all(spec.required_connections == [] for spec in specs)
 
 
 @pytest.mark.parametrize(
@@ -233,6 +338,11 @@ def test_connection_roles_resolve_endpoint_aliases(
 
     assert main.required_connection_roles == ["rail"]
     assert other.required_connection_roles == ["road"]
+    if "subworld" not in source_key:
+        assert [(edge.from_source_node_id, edge.to_source_node_id) for edge in main.required_connections] == [("a", "b")]
+    else:
+        assert main.required_connections == []
+    assert other.required_connections == []
 
 
 def test_region_kind_flows_into_region_type() -> None:

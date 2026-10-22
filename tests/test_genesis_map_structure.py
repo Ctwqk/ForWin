@@ -66,12 +66,12 @@ def test_map_edge_kinds_reach_adapter_connection_roles(kind):
     assert atlas["edges"][0]["kind"] == kind
     specs = genesis_adapter.build_subworld_map_specs_from_genesis(project_id="p", map_atlas=atlas)
     assert specs[0].required_connection_roles == [kind]
-    # Include every candidate so edge-budget selection cannot mask type propagation.
-    generated = generate_subworld_map(specs[0].model_copy(update={"target_edge_density": 10.0}))
+    generated = generate_subworld_map(specs[0])
     connections = [edge for edge in generated.map_edges
                    if edge.metadata.get("required_connection") and edge.status == "open"]
-    assert connections
+    assert len(connections) == 1
     assert all(edge.edge_type == kind for edge in connections)
+    assert connections[0].discovered_by_default is True
     ids = {node.metadata["source_node_id"]: node.id for node in generated.map_nodes
            if node.metadata.get("source_node_id")}
     graph = MapGraph(nodes=generated.map_nodes, edges=connections)

@@ -4,7 +4,7 @@ import pytest
 
 from forwin.map.generator import generate_subworld_map
 from forwin.book_state.map_graph import MapGraph
-from forwin.map.protocol import SCHEME_C_NAME, MapAnchorNodeSpec, SubWorldMapSpec
+from forwin.map.protocol import SCHEME_C_NAME, MapAnchorNodeSpec, RequiredConnection, SubWorldMapSpec
 
 
 def _spec(seed: int = 123456) -> SubWorldMapSpec:
@@ -68,6 +68,50 @@ def test_generation_creates_reachable_required_anchors_and_density() -> None:
         anchor_id = next(node.id for node in result.map_nodes if node.name == anchor_name)
         assert graph.shortest_path(entry_id, anchor_id).reachable is True
     assert all(edge.distance >= 0 and edge.travel_time >= 0 for edge in result.map_edges)
+
+
+def test_declared_cycle_counts_toward_density_and_spanning_tree() -> None:
+    spec = SubWorldMapSpec(
+        project_id="p1", subworld_id="sw1", name="World", subworld_type="continent",
+        target_region_count=1, target_node_count=6, target_edge_density=1.0,
+        required_region_roles=["Region"],
+        required_anchor_nodes=[
+            MapAnchorNodeSpec(name=ref, node_type="site", region_role="Region", narrative_function="", source_node_id=ref)
+            for ref in ("a", "b", "c")
+        ],
+        required_connections=[
+            RequiredConnection(from_source_node_id=left, to_source_node_id=right, edge_type="river", source_edge_id=str(index))
+            for index, (left, right) in enumerate((("a", "b"), ("b", "c"), ("c", "a")))
+        ],
+    )
+
+    first = generate_subworld_map(spec)
+    second = generate_subworld_map(spec)
+
+    assert first == second
+    assert first.validation_report.valid
+    assert len(first.map_edges) == 6
+    assert sum(bool(edge.metadata.get("required_connection")) for edge in first.map_edges) == 3
+    graph = MapGraph(nodes=first.map_nodes, edges=first.map_edges)
+    assert all(graph.shortest_path(first.map_nodes[0].id, node.id).reachable for node in first.map_nodes)
+
+
+def test_one_way_declaration_does_not_disconnect_generated_map() -> None:
+    from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis
+
+    spec = build_subworld_map_specs_from_genesis(project_id="p1", map_atlas={
+        "submaps": [{"id": "main", "name": "Main"}],
+        "nodes": [{"id": ref, "name": ref.upper(), "parent_subworld": "main"} for ref in ("a", "b", "c")],
+        "edges": [{"from_node_id": "a", "to_node_id": "c", "kind": "river", "bidirectional": False}],
+    })[0]
+    result = generate_subworld_map(spec.model_copy(update={"generation_seed": 80}))
+
+    assert result.validation_report.valid, result.validation_report.errors
+    assert len(result.map_edges) == result.summary["target_edge_count"]
+    graph = MapGraph(nodes=result.map_nodes, edges=result.map_edges)
+    assert all(graph.shortest_path(result.map_nodes[0].id, node.id).reachable for node in result.map_nodes)
+    (declared,) = [edge for edge in result.map_edges if edge.metadata.get("required_connection")]
+    assert declared.bidirectional is False
 
 
 @pytest.mark.parametrize("region_name", ["宗门山门", "禁魔战遗迹荒"])

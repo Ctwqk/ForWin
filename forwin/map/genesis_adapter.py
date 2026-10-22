@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from typing import Any
 
 from forwin.models.subworld import project_scoped_subworld_id
 from forwin.protocol.book_state import MAP_SUBMAP_SCOPES, MapEdgeType
 
-from .protocol import MapAnchorNodeSpec, SubWorldMapSpec
+from .protocol import MapAnchorNodeSpec, RequiredConnection, SubWorldMapSpec
 
 
 _SAFE_NODE_TYPES = {
@@ -73,6 +72,7 @@ def build_subworld_map_specs_from_genesis(
         )
         target_region_count = max(3, len(region_roles))
         target_node_count = max(12, target_region_count * 3 + len(anchors))
+        connection_roles, required_connections = _connection_roles(atlas, submap)
         specs.append(
             SubWorldMapSpec(
                 project_id=project_id,
@@ -107,12 +107,13 @@ def build_subworld_map_specs_from_genesis(
                     if item.get("kind") and str(item["kind"]).strip()
                 },
                 required_anchor_nodes=anchors,
-                required_connection_roles=_connection_roles(atlas, submap),
+                required_connection_roles=connection_roles,
+                required_connections=required_connections,
                 danger_profile={"base": _danger_base(submap, region_rows, node_rows)},
                 resource_profile={"themes": list(submap.get("resource_themes", []) or [])},
                 faction_profile={"resident_factions": list(submap.get("resident_factions", []) or [])},
                 narrative_functions=_unique([anchor.narrative_function for anchor in anchors]),
-                generation_seed=_stable_seed(project_id, genesis_revision_id, logical_subworld_id, atlas),
+                generation_seed=_stable_seed(project_id, logical_subworld_id),
             )
         )
     return specs
@@ -259,7 +260,9 @@ def _node_type(kind: str) -> str:
     return normalized if normalized in _SAFE_NODE_TYPES else "site"
 
 
-def _connection_roles(atlas: dict[str, Any], submap: dict[str, Any]) -> list[str]:
+def _connection_roles(
+    atlas: dict[str, Any], submap: dict[str, Any],
+) -> tuple[list[str], list[RequiredConnection]]:
     submaps = _normalized_submaps(atlas)
     subworld_by_ref = {
         str(item[key]): str(item["id"])
@@ -267,6 +270,7 @@ def _connection_roles(atlas: dict[str, Any], submap: dict[str, Any]) -> list[str
         for key in ("id", "name")
     }
     node_subworld_by_ref: dict[str, str] = {}
+    node_id_by_ref: dict[str, str] = {}
     for node in (atlas.get("nodes") or []):
         if not isinstance(node, dict):
             continue
@@ -279,9 +283,19 @@ def _connection_roles(atlas: dict[str, Any], submap: dict[str, Any]) -> list[str
         for key in ("id", "name"):
             ref = str(node.get(key, "") or "").strip()
             if ref:
-                node_subworld_by_ref[ref] = subworld_id
+                if key == "id":
+                    node_subworld_by_ref[ref] = subworld_id
+                else:
+                    node_subworld_by_ref.setdefault(ref, subworld_id)
+                node_id = str(node.get("id", "") or "").strip()
+                if node_id and _has_atlas_node_name(node):
+                    if key == "id":
+                        node_id_by_ref[ref] = node_id
+                    else:
+                        node_id_by_ref.setdefault(ref, node_id)
     edge_types = {edge_type.value for edge_type in MapEdgeType}
     roles: list[str] = []
+    connections: list[RequiredConnection] = []
     for edge in (atlas.get("edges") or []):
         if not isinstance(edge, dict):
             continue
@@ -292,7 +306,29 @@ def _connection_roles(atlas: dict[str, Any], submap: dict[str, Any]) -> list[str
         edge_type = str(edge.get("edge_type") or edge.get("kind") or "")
         if edge_type in edge_types:
             roles.append(edge_type)
-    return _unique(roles) or ["road"]
+            from_node_id = _edge_endpoint_node_id(edge, ("from", "source"), node_id_by_ref)
+            to_node_id = _edge_endpoint_node_id(edge, ("to", "target"), node_id_by_ref)
+            if from_node_id and to_node_id:
+                connections.append(RequiredConnection(
+                    from_source_node_id=from_node_id,
+                    to_source_node_id=to_node_id,
+                    edge_type=edge_type,
+                    bidirectional=edge.get("bidirectional", True),
+                    hidden=edge.get("hidden", False),
+                    source_edge_id=str(edge.get("id") or edge.get("edge_id") or edge.get("source_edge_id") or ""),
+                ))
+    return _unique(roles) or ["road"], connections
+
+
+def _edge_endpoint_node_id(
+    edge: dict[str, Any], prefixes: tuple[str, str], node_id_by_ref: dict[str, str],
+) -> str:
+    for suffix in ("_node_id", "_node", ""):
+        for prefix in prefixes:
+            ref = str(edge.get(f"{prefix}{suffix}", "") or "").strip()
+            if ref in node_id_by_ref:
+                return node_id_by_ref[ref]
+    return ""
 
 
 def _edge_endpoint_subworld(
@@ -322,9 +358,8 @@ def _danger_base(
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 2.0
 
 
-def _stable_seed(project_id: str, genesis_revision_id: str, subworld_id: str, atlas: dict[str, Any]) -> int:
-    raw = json.dumps(atlas, ensure_ascii=False, sort_keys=True)
-    digest = hashlib.sha256(f"{project_id}|{genesis_revision_id}|{subworld_id}|{raw}".encode("utf-8")).hexdigest()
+def _stable_seed(project_id: str, subworld_id: str) -> int:
+    digest = hashlib.sha256(f"{project_id}|{subworld_id}".encode("utf-8")).hexdigest()
     return int(digest[:12], 16) % 2_000_000_000
 
 

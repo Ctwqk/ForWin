@@ -55,6 +55,15 @@ class MapAnchorNodeSpec(_MapProtocolModel):
     source_subworld_id: str = ""
 
 
+class RequiredConnection(_MapProtocolModel):
+    from_source_node_id: str
+    to_source_node_id: str
+    edge_type: str
+    bidirectional: bool = True
+    hidden: bool = False
+    source_edge_id: str = ""
+
+
 class SubWorldMapSpec(_MapProtocolModel):
     project_id: str
     subworld_id: str
@@ -71,6 +80,7 @@ class SubWorldMapSpec(_MapProtocolModel):
     region_kinds: dict[str, str] = Field(default_factory=dict)
     required_anchor_nodes: list[MapAnchorNodeSpec] = Field(default_factory=list)
     required_connection_roles: list[str] = Field(default_factory=list)
+    required_connections: list[RequiredConnection] = Field(default_factory=list)
     danger_profile: dict[str, Any] = Field(default_factory=dict)
     resource_profile: dict[str, Any] = Field(default_factory=dict)
     faction_profile: dict[str, Any] = Field(default_factory=dict)
@@ -228,6 +238,7 @@ __all__ = [
     "RegionEdge",
     "RegionNode",
     "RegionType",
+    "RequiredConnection",
     "SCHEME_C_NAME",
     "SubWorldMapSpec",
     "SubWorldNode",

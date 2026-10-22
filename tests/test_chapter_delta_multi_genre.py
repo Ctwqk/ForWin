@@ -188,7 +188,7 @@ def _start_book(pipeline, genre: str) -> _Book:
         # A project from project_create carries a runtime policy, which chapter context reads.
         ProjectPolicyStore(session).initialize(project, pipeline.policy)
         session.refresh(project)
-        # Genesis revision ids vary; seed 15 keeps all three genres' travel paths stable.
+        # Fix the layout independently of the project's stable seed formula.
         with (
             patch("forwin.map.genesis_adapter._stable_seed", return_value=15),
             patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=_planning_with(chapter["plan"])),

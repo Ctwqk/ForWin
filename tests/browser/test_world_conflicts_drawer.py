@@ -61,3 +61,60 @@ def test_resolution_closes_modal_before_refresh_failure(page, browser_test_base_
     assert page.evaluate("window.modalOpenDuringRefresh") is False
     assert backend.world_plan_conflicts[0]["status"] == "resolved"
     assert len(backend.captured_payloads("/api/projects/project-1/world-conflicts/conflict-1/resolve")) == 1
+
+
+def test_second_decision_modal_survives_first_resolution_refresh(page, browser_test_base_url):
+    conflict = {
+        "project_id": "project-1", "status": "open", "impact_level": "major",
+        "violated": "protection", "blocks_from_chapter": 3, "options": ["veto_world"],
+    }
+    backend = MockForWinBackend(world_plan_conflicts=[
+        {**conflict, "id": "conflict-1", "summary": "First held change"},
+        {**conflict, "id": "conflict-2", "summary": "Second held change"},
+    ])
+    goto_home(page, browser_test_base_url, backend)
+    switch_home_tab(page, "task")
+    page.get_by_role("button", name="查看详情").first.click()
+    card = page.locator("#world_conflicts_card")
+    card.get_by_role("button", name="决定", exact=True).first.click()
+    page.locator("#project_control_action_modal_reason").fill("first review")
+    page.locator("#project_control_action_field_rationale").fill("first rationale")
+    page.evaluate("""() => {
+        const originalSubmit = submitProjectControlActionModal;
+        window.submitProjectControlActionModal = async () => {
+            await originalSubmit();
+            window.firstSubmitFinished = true;
+        };
+        window.loadBooks = () => new Promise(resolve => {
+            window.finishFirstRefresh = resolve;
+        });
+    }""")
+    page.locator("#project_control_action_modal_submit").click()
+    page.wait_for_function("typeof window.finishFirstRefresh === 'function'")
+    card.get_by_role("button", name="决定", exact=True).nth(1).click()
+    page.locator("#project_control_action_modal_reason").fill("second review in progress")
+    page.locator("#project_control_action_field_rationale").fill("second rationale in progress")
+    page.evaluate("window.finishFirstRefresh()")
+    page.wait_for_function("window.firstSubmitFinished === true")
+    expect(page.locator("#project_control_action_modal_shell")).to_be_visible()
+    expect(page.locator("#project_control_action_modal_description")).to_have_text("Second held change")
+    expect(page.locator("#project_control_action_modal_reason")).to_have_value("second review in progress")
+    expect(page.locator("#project_control_action_field_rationale")).to_have_value("second rationale in progress")
+    assert backend.world_plan_conflicts[0]["status"] == "resolved"
+    assert backend.world_plan_conflicts[1]["status"] == "open"
+
+
+def test_modal_late_failure_uses_original_action_error_title(page, browser_test_base_url):
+    goto_home(page, browser_test_base_url, MockForWinBackend())
+    page.evaluate("""() => {
+        openProjectControlActionModal({
+            title: 'Original action', errorTitle: 'Original action failed', reason: 'review',
+            onSubmit: async () => {
+                closeProjectControlActionModal();
+                throw new Error('late failure');
+            },
+        });
+    }""")
+    page.locator("#project_control_action_modal_submit").click()
+    expect(page.locator("#global_status_title")).to_have_text("Original action failed")
+    expect(page.locator("#global_status")).to_contain_text("late failure")

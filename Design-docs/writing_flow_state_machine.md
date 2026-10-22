@@ -110,7 +110,7 @@ stateDiagram-v2
     planning --> arc
     arc --> feedback
     feedback --> order_controls
-    order_controls --> accepted: maintenance barrier complete
+    order_controls --> accepted: run complete
     running_post_acceptance --> paused: safe pause
     accepted --> [*]
     failed --> [*]
@@ -158,7 +158,7 @@ worker 已 claim lease 并开始推进。`GenerationApplicationService` 根据 p
 
 `needs_review`
 
-人工 review checkpoint。P3 还会在 open human world conflict 的 `blocks_from_chapter` 起、写下一章前发出 `paused_for_review`，任务进入 `needs_review`；派生阻断为 `world_conflict_pending`，不要求把已接受章节改成 needs_review。continue / review-approve（`continue_generation=true`） 在该阻断仍有效时返回 409；解决冲突后仍需显式继续。
+人工 review checkpoint。触发来源包括 checkpoint 模式、copilot 模式非 pass、blackbox fail 且未 force accept、canon 写入冻结、周期性 `review_interval_chapters`。存在 `needs_review` 章节时，continue API 会拒绝继续，要求先 approve review。P3 还会在 open human world conflict 的 `blocks_from_chapter` 起、写下一章前发出 `paused_for_review`，任务进入 `needs_review`；派生阻断为 `world_conflict_pending`，不要求把已接受章节改成 needs_review。continue / review-approve（`continue_generation=true`）在该阻断仍有效时返回 409；解决冲突后仍需显式继续。
 
 `cancelled`
 

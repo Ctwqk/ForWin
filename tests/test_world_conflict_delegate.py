@@ -14,7 +14,7 @@ from forwin.models import Base, Project
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.protocol.book_state import FactNode, MapNode, WorldNode
 from forwin.runtime.policy import ModelsPolicy, RuntimePolicy
-from forwin.world_engine import conflict_delegate
+from forwin.world_engine import conflict_delegate, conflict_routing
 from forwin.world_engine.conflict_delegate import WorldConflictDelegate, build_conflict_context_snapshot
 from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.world_engine.conflict_routing import available_options, route_conflict
@@ -302,6 +302,29 @@ def test_prompt_too_large_escalates_without_calling_codex(session: Session) -> N
     assert updater.events[0].related_object_id == conflict.id
 
 
+@pytest.mark.parametrize("options_json", ["[]", ""], ids=["empty_list", "empty_string"])
+def test_empty_options_escalate_without_calling_codex(session: Session, options_json: str) -> None:
+    updater = RecordingUpdater()
+    llm = FakeCodexLLM(_answer("veto_world"))
+    conflict = _conflict(session)
+    conflict.options_json = options_json
+
+    delegation = WorldConflictDelegate(llm).decide(
+        conflict=conflict, context_snapshot={}, policy=_policy(), audit_writer=updater.writer(),
+    )
+
+    assert delegation.option is None
+    assert delegation.escalate is True
+    assert delegation.failure_reason == "no_options"
+    assert llm.calls == []
+    assert updater.traces == []
+    assert updater.event_types() == ["world_conflict_escalated"]
+    assert updater.events[0].payload["failure_reason"] == "no_options"
+    assert updater.events[0].related_object_id == conflict.id
+    assert conflict.status == "open"
+    assert conflict.required_decider == "codex"
+
+
 def test_review_prompt_drops_default_fields_then_truncates_goals(monkeypatch) -> None:
     node = WorldNode(id="actor-1", project_id=PROJECT_ID, node_type="character", name="actor-one")
     long_goal = "g" * 5000
@@ -399,8 +422,9 @@ def test_build_conflict_context_snapshot_omits_missing_plans(session: Session) -
     assert set(snapshot) == {"conflict"}
 
 
-def test_world_conflict_delegate_module_has_no_canon_write_surface() -> None:
-    source = Path(conflict_delegate.__file__).read_text()
+@pytest.mark.parametrize("module", [conflict_delegate, conflict_routing], ids=["delegate", "routing"])
+def test_world_conflict_delegate_module_has_no_canon_write_surface(module) -> None:
+    source = Path(module.__file__).read_text()
 
     for forbidden in (
         "forwin.canon",

@@ -206,6 +206,19 @@ def test_resolve_route_rejects_invalid_decision_before_service(mock_conflict_api
     session.commit.assert_not_called()
 
 
+def test_resolve_route_maps_canon_write_failure_to_409(mock_conflict_api):
+    from forwin.canon.admission import CanonWriteFailure
+
+    client, session, service, _, _ = mock_conflict_api
+    service.resolve.side_effect = CanonWriteFailure("held change violates current canon")
+    response = client.post("/api/projects/p1/world-conflicts/c1/resolve", json={
+        "option": "veto_world", "rationale": "preserve plan", "reason": "human review",
+    })
+    assert response.status_code == 409
+    assert response.json()["detail"] == "canon refused the change: held change violates current canon"
+    session.commit.assert_not_called()
+
+
 def test_resolve_route_reports_missing_policy(mock_conflict_api):
     from forwin.runtime.policy_store import ProjectPolicyMissing
 

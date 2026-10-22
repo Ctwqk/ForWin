@@ -74,6 +74,7 @@ def load_open_world_conflicts_by_project(
         .order_by(
             WorldPlanConflictRow.blocks_from_chapter,
             WorldPlanConflictRow.created_at,
+            WorldPlanConflictRow.id,
         )
     ).all()
     grouped: dict[str, list[WorldConflictBlockInfo]] = {
@@ -118,7 +119,7 @@ def _derive_blocking_reason(
                 for item in open_world_conflicts
                 if item.blocks_from_chapter <= conflict_chapter
             ),
-            key=lambda item: (item.blocks_from_chapter, item.created_at),
+            key=lambda item: (item.blocks_from_chapter, item.created_at, item.conflict_id),
             default=None,
         )
         if conflict is not None:

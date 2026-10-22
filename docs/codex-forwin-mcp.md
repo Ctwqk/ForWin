@@ -88,10 +88,12 @@ Use only the options returned by the existing inspection tools:
 
 | Option | Effect |
 | --- | --- |
-| `veto_world` | Rejects the held change, marks an unsettled intent vetoed, and lets the actor reroll within the recent-window `world.max_rerolls` budget. Historical rewrite offers only this option. |
-| `accept_with_obligation` | Commits the change and a `world_change_response` obligation due by `min(latest+6, target)`, bound to the next unaccepted plan. Available only at minor/moderate and outside narrative-boundary conflicts. |
+| `veto_world` | Rejects the held change, marks an unsettled intent vetoed, and lets the actor reroll only while the actor's `veto_world` resolution count on conflicts detected at or after chapter `latest - world.max_rerolls` is below `world.max_rerolls`. Historical rewrite offers only this option. |
+| `accept_with_obligation` | Commits the change and a `world_change_response` obligation due by `min(latest+6, target)` (`latest` is the latest canon chapter; `target` is `project.target_total_chapters`), bound to the next unaccepted plan. Available only at minor/moderate and outside narrative-boundary conflicts. |
 | `plot_responds` | Commits the change and adds a response goal to the next unaccepted chapter plan. |
 | `amend_plan` | Human only: commits the change and releases broken protections. The user adjusts the plan manually in P3. |
+
+`accept_with_obligation` and `plot_responds` fail as unavailable without a next unaccepted plan; `accept_with_obligation` also fails if the book has no chapter after `latest`.
 
 Protection, milestone and reveal-schedule boundary conflicts offer only veto/amend; other non-historical conflicts offer veto/plot_responds/amend, with the lighter-level obligation option above. Resolution commits world changes through `commit_world_tick(tick_id="conflict-<id>")`; changes, obligations/plan effects and closure share one SAVEPOINT. After a successful resolution, reread the conflict and project, check for any remaining blocks, and follow Resume Writing's active-task check before explicitly continuing. Resolving a conflict does not enqueue generation.
 

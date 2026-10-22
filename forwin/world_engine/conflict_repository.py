@@ -62,7 +62,7 @@ class WorldConflictRepository:
         statement = select(WorldPlanConflictRow).where(WorldPlanConflictRow.project_id == project_id)
         if status is not None:
             statement = statement.where(WorldPlanConflictRow.status == status)
-        return list(self.session.scalars(statement.order_by(WorldPlanConflictRow.created_at.desc())))
+        return list(self.session.scalars(statement.order_by(WorldPlanConflictRow.created_at.desc(), WorldPlanConflictRow.id)))
 
     def open_blocking(self, project_id: str, *, next_chapter: int) -> WorldPlanConflictRow | None:
         return self.session.scalar(
@@ -73,7 +73,7 @@ class WorldConflictRepository:
                 WorldPlanConflictRow.required_decider == "human",
                 WorldPlanConflictRow.blocks_from_chapter <= next_chapter,
             )
-            .order_by(WorldPlanConflictRow.blocks_from_chapter, WorldPlanConflictRow.created_at)
+            .order_by(WorldPlanConflictRow.blocks_from_chapter, WorldPlanConflictRow.created_at, WorldPlanConflictRow.id)
             .limit(1)
         )
 

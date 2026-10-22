@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -325,3 +326,29 @@ def test_future_audit_has_no_countdown_or_custody_mixins() -> None:
     mixin_names = {cls.__name__ for cls in FuturePlanAuditor.__mro__}
     assert "FuturePlanCountdownMixin" not in mixin_names
     assert "FuturePlanCustodyMixin" not in mixin_names
+
+
+@pytest.mark.parametrize("description", ['Placeholder "TODO" leaked', 'back\\slash leaked', 'Line1\nLine2'], ids=["quote", "backslash", "newline"])
+def test_patched_signal_with_escaped_description_is_not_reselected(description: str) -> None:
+    plan = _plan(14, one_line="Follow the evidence.")
+    signal = {
+        "signal_id": "sig-escaped", "description": description,
+        "signal_type": "placeholder_leakage", "severity": "error", "chapter_number": 10,
+    }
+    auditor = FuturePlanAuditor()
+    result = auditor.audit_plans(
+        project_id="project-1", current_chapter=13, trigger_stage="pre_write", plans=[plan],
+        canon_quality_context={"open_signals": [signal]}, obligations=[],
+        target_total_chapters=20, include_current=False,
+    )
+    assert len(result.plan_patches) == 1
+    auditor.apply_plan_patch(plan, result.plan_patches[0])
+    assert "sig-escaped" not in plan.goals_json
+    assert _plan_mentions_signal(plan, signal_id="sig-escaped", description=description)
+    assert select_stale_signal_targets(
+        open_signals=[signal], plans=[plan], current_chapter=13, include_current=False,
+    ) == []
+
+
+def test_empty_signal_description_does_not_match_unrelated_plan() -> None:
+    assert not _plan_mentions_signal(_plan(14, one_line="Follow the evidence."), signal_id="", description="")

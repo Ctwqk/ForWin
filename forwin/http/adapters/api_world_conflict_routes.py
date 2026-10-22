@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from forwin.api_schema.world_conflicts import WorldConflictInfo, WorldConflictResolveRequest
-from forwin.canon.admission import CanonAdmissionService
+from forwin.canon.admission import CanonAdmissionService, CanonWriteFailure
 from forwin.http.request_support import _utcnow, require_project
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.runtime.policy_store import ProjectPolicyMissing, ProjectPolicyStore
@@ -77,6 +77,8 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
                 ).resolve(project_id=project_id, conflict_id=conflict_id, decision=decision)
             except (ConflictNotOpen, ConflictStale) as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except CanonWriteFailure as exc:
+                raise HTTPException(status_code=409, detail=f"canon refused the change: {exc}") from exc
             except (ValidationError, json.JSONDecodeError):
                 raise
             except (ValueError, ConflictOptionUnavailable) as exc:

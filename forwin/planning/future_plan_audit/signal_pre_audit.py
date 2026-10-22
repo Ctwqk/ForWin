@@ -67,7 +67,7 @@ def _plan_mentions_signal(plan: ChapterPlan, *, signal_id: str, description: str
     text = _plan_text(plan)
     if signal_id and signal_id in text:
         return True
-    return bool(description and description[:80] in text)
+    return bool(description and json.dumps(description[:80], ensure_ascii=False)[1:-1] in text)
 
 
 def _plan_text(plan: ChapterPlan) -> str:

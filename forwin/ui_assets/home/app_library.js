@@ -766,14 +766,15 @@
     }
 
     async function submitProjectControlActionModal() {
-      if (!currentProjectControlAction?.onSubmit) return;
+      const action = currentProjectControlAction;
+      if (!action?.onSubmit) return;
       const reason = String(document.getElementById('project_control_action_modal_reason').value || '').trim();
       if (!reason) {
         setGlobalStatus('项目控制动作必须填写 reason。', '项目控制动作');
         return;
       }
       const values = {};
-      (Array.isArray(currentProjectControlAction.fields) ? currentProjectControlAction.fields : []).forEach((field) => {
+      (Array.isArray(action.fields) ? action.fields : []).forEach((field) => {
         const control = document.getElementById(`project_control_action_field_${field.name}`);
         if (!control) return;
         if (field.type === 'number') {
@@ -783,10 +784,10 @@
         }
       });
       try {
-        await currentProjectControlAction.onSubmit({ reason, ...values });
-        closeProjectControlActionModal();
+        await action.onSubmit({ reason, ...values });
+        if (currentProjectControlAction === action) closeProjectControlActionModal();
       } catch (error) {
-        setGlobalStatus(error.message || String(error), currentProjectControlAction.errorTitle || '项目控制动作失败');
+        setGlobalStatus(error.message || String(error), action.errorTitle || '项目控制动作失败');
       }
     }
 

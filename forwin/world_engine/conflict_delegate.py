@@ -180,16 +180,36 @@ class WorldConflictDelegate:
         options = tuple(json.loads(conflict.options_json or "[]"))
         preferred = role_models(policy, WORLD_CONFLICT_STAGE_KEY)
         requested_model = preferred[0] if preferred else WORLD_CONFLICT_DEFAULT_MODEL
-        output_schema = _output_schema(options)
-        messages = build_conflict_review_messages(
-            context_snapshot=context_snapshot, options=options, output_schema=output_schema,
-        )
         envelope = CodexCallEnvelope(
             project_id=conflict.project_id,
             chapter_number=conflict.detected_after_chapter,
             scope="chapter",
             related_object_type="world_conflict",
             related_object_id=conflict.id,
+        )
+        if not options:
+            rationale = "The conflict has no available options."
+            audit_writer.save_decision_event(
+                _escalation_event(
+                    envelope,
+                    CodexCallVerdict(
+                        summary=f"World conflict {conflict.id} escalated to a human: no_options.",
+                        reason=rationale,
+                        actor_id="",
+                        payload=_escalation_payload(
+                            conflict, failure_reason="no_options", answer=None,
+                            requested_model=requested_model,
+                        ),
+                    ),
+                    actor_type="system",
+                    related_object_type="world_conflict",
+                    related_object_id=conflict.id,
+                )
+            )
+            return WorldConflictDelegation(rationale=rationale, failure_reason="no_options")
+        output_schema = _output_schema(options)
+        messages = build_conflict_review_messages(
+            context_snapshot=context_snapshot, options=options, output_schema=output_schema,
         )
         prompt_chars = len(messages[-1]["content"])
         if prompt_chars > MAX_CONFLICT_REVIEW_PROMPT_CHARS:

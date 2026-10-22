@@ -170,3 +170,13 @@ def test_p2_docs_describe_current_extraction_and_schema() -> None:
             "director_setup_without_delivery",
         ):
             assert marker in text, (name, marker)
+
+
+def test_p3_docs_describe_world_conflict_contracts() -> None:
+    for name in ("CURRENT_ARCHITECTURE.md", "CURRENT_DESIGN.md", "DESIGN_STATUS.md"):
+        text = _read(DOC_ROOT / name)
+        for marker in (
+            "0005_world_plan_conflicts", "world_conflict_pending", "commit_world_tick",
+            '("world", "planning", "arc", "feedback")', "world_model_signal_list",
+        ):
+            assert marker in text, (name, marker)

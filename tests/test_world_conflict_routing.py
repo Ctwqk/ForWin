@@ -59,6 +59,7 @@ def test_auto_route_defaults_to_veto() -> None:
         ("world_tick", "major", ("veto_world", "plot_responds", "amend_plan")),
         ("world_tick", "critical", ("veto_world", "plot_responds", "amend_plan")),
         ("historical_rewrite", "minor", ("veto_world",)),
+        ("historical_rewrite", "moderate", ("veto_world",)),
         ("historical_rewrite", "major", ("veto_world",)),
         ("historical_rewrite", "critical", ("veto_world",)),
     ],
@@ -83,3 +84,13 @@ def test_other_violations_keep_the_impact_options(violated: str) -> None:
     assert available_options(_draft(impact_level="minor", violated=violated)) == (
         "veto_world", "plot_responds", "amend_plan", "accept_with_obligation",
     )
+
+
+@pytest.mark.parametrize("impact_level", ["minor", "moderate", "major", "critical"])
+@pytest.mark.parametrize("delegate", ["codex", "human"])
+def test_historical_rewrite_routing_matches_replay_cas(impact_level: str, delegate: str) -> None:
+    from forwin.world_engine.conflict_events import REPLAY_CAS_DECIDER, REPLAY_CAS_OPTIONS
+
+    draft = _draft(source="historical_rewrite", impact_level=impact_level)
+    assert available_options(draft) == REPLAY_CAS_OPTIONS == ("veto_world",)
+    assert route_conflict(draft, policy=_policy(delegate)) == REPLAY_CAS_DECIDER == "human"

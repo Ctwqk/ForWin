@@ -116,6 +116,32 @@ def test_open_blocking_ignores_auto_codex_and_later_chapters(session):
     assert repo.open_blocking("project-1", next_chapter=8).id == later.id
 
 
+def test_conflict_readers_break_timestamp_ties_by_id(session):
+    from forwin.application.read_models.generation import (
+        _derive_blocking_reason, load_open_world_conflicts,
+        load_open_world_conflicts_by_project,
+    )
+    from forwin.world_engine.conflict_repository import WorldConflictRepository
+
+    repo = WorldConflictRepository(session)
+    for conflict_id in ("conflict-z", "conflict-a"):
+        row = repo.create(_draft(), required_decider="human", options=["veto_world"])
+        row.id = conflict_id
+        row.created_at = datetime(2026, 10, 22)
+        session.flush()
+    session.commit()
+    assert repo.open_blocking("project-1", next_chapter=4).id == "conflict-a"
+    assert [row.id for row in repo.list("project-1")] == ["conflict-a", "conflict-z"]
+    batched = load_open_world_conflicts_by_project(session, ["project-1"])["project-1"]
+    assert [row.conflict_id for row in batched] == ["conflict-a", "conflict-z"]
+    for conflicts in (load_open_world_conflicts(session, "project-1"), list(reversed(batched))):
+        reason = _derive_blocking_reason(
+            plans=[], latest_band_checkpoint=None, open_world_conflicts=conflicts, next_chapter=4,
+        )
+        assert reason.code == "world_conflict_pending"
+        assert reason.detail.startswith("conflict_id=conflict-a:")
+
+
 def test_mark_resolved_twice_raises_conflict_not_open(session):
     from forwin.world_engine.conflict_repository import ConflictNotOpen, WorldConflictRepository
 

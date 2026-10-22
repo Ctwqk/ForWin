@@ -69,8 +69,9 @@ def run_hard_floor(
     delta = writer_output.chapter_delta
     generation_meta = writer_output.generation_meta if isinstance(writer_output.generation_meta, dict) else {}
     # Without an extraction, or when every fact it found lost its evidence, the floor cannot
-    # tell whether the chapter has events. Draft review or canon preparation blocks such a
-    # chapter for manual review, so the floor does not fail it.
+    # tell whether the chapter has events, so it does not fail the chapter. The
+    # world_consistency signal blocks it at draft review, and canon preparation blocks a
+    # chapter that still has no extraction.
     checks["chapter_delta_available"] = delta is not None and not every_fact_dropped(
         delta, generation_meta.get("chapter_delta_issues") or [],
     )

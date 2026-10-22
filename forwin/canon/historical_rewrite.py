@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.compiler import BookStateCompiler
+from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.repository import BookStateRepository, _dump, _loads
+from forwin.book_state.runtime import BookStateRuntime
+from forwin.book_state.schema import IMPACT_LEVELS
 from forwin.models.audit import DecisionEvent
 from forwin.models.book_state import (
     BookCognitionSnapshotRow,
@@ -18,8 +22,22 @@ from forwin.models.book_state import (
 )
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.knowledge import KnowledgeEditProposalRow
+from forwin.models.maintenance import PostCanonMaintenanceRun
 from forwin.models.project import ChapterPlan
-from forwin.protocol.book_state import BookStateCompileResult, GraphDelta
+from forwin.models.world_conflict import WorldPlanConflictRow
+from forwin.protocol.book_state import (
+    BookStateCompileResult,
+    CognitionPatch,
+    EdgePatch,
+    FactPatch,
+    GraphDelta,
+    MapPatch,
+    NarrativePatch,
+    NodePatch,
+)
+from forwin.world_engine.conflict_repository import WorldConflictRepository
+from forwin.world_engine.conflict_types import ConflictDraft
+from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE
 
 from .plan import CanonCommitPlan
 
@@ -46,6 +64,44 @@ def _delta_manifest(value: object) -> list[str]:
             "historical rewrite delta manifest missing or invalid"
         )
     return value
+
+
+def _string_items(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _highest_candidate_impact(delta: GraphDelta) -> str:
+    """The highest impact among the tick's candidates; "moderate" without any."""
+    impacts = delta.metadata.get("candidate_impacts")
+    ranks = (
+        [
+            IMPACT_LEVELS.index(level)
+            for level in impacts.values()
+            if level in IMPACT_LEVELS
+        ]
+        if isinstance(impacts, dict)
+        else []
+    )
+    return IMPACT_LEVELS[max(ranks)] if ranks else "moderate"
+
+
+def _patch_ref(patch: object) -> str:
+    """The BookState ref a patch targets."""
+    if isinstance(patch, NodePatch):
+        return patch.node_id
+    if isinstance(patch, EdgePatch):
+        return patch.edge_id
+    if isinstance(patch, FactPatch):
+        return f"{FACT_REF_PREFIX}{patch.fact_id}"
+    if isinstance(patch, MapPatch):
+        return patch.target_id
+    if isinstance(patch, CognitionPatch):
+        return patch.observer_id
+    if isinstance(patch, NarrativePatch):
+        return patch.target_ref
+    return ""
 
 
 class HistoricalCanonRewriteRepository:
@@ -117,17 +173,16 @@ class HistoricalCanonRewriteRepository:
             raise HistoricalRewriteInvalid(
                 "historical rewrite delta manifest missing or invalid"
             )
-        chapter_ids = list(
-            self.session.scalars(
-                select(GraphDeltaRow.id)
-                .where(
-                    GraphDeltaRow.project_id == previous.project_id,
-                    GraphDeltaRow.chapter_number == previous.chapter_number,
-                )
-                .order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
-                .with_for_update()
+        chapter_rows = self.session.execute(
+            select(GraphDeltaRow.id, GraphDeltaRow.source_type)
+            .where(
+                GraphDeltaRow.project_id == previous.project_id,
+                GraphDeltaRow.chapter_number == previous.chapter_number,
             )
-        )
+            .order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
+            .with_for_update()
+        ).all()
+        chapter_ids = [delta_id for delta_id, _ in chapter_rows]
         owned_ids = set(delta_ids)
         if not owned_ids.issubset(chapter_ids):
             raise HistoricalRewriteInvalid(
@@ -136,21 +191,60 @@ class HistoricalCanonRewriteRepository:
         retained_ids = [
             delta_id for delta_id in chapter_ids if delta_id not in owned_ids
         ]
-        if retained_ids:
+        # A retained delta is an accepted world edit or a world tick's delta.
+        tick_ids = {
+            delta_id
+            for delta_id, source_type in chapter_rows
+            if delta_id not in owned_ids and source_type == WORLD_ENGINE_SOURCE_TYPE
+        }
+        edit_ids = set(retained_ids) - tick_ids
+        if edit_ids:
             world_edit_ids = set(
                 self.session.scalars(
                     select(KnowledgeEditProposalRow.graph_delta_id).where(
                         KnowledgeEditProposalRow.project_id == previous.project_id,
                         KnowledgeEditProposalRow.status == "accepted",
-                        KnowledgeEditProposalRow.graph_delta_id.in_(retained_ids),
+                        KnowledgeEditProposalRow.graph_delta_id.in_(edit_ids),
                     )
                 )
             )
-            if world_edit_ids != set(retained_ids):
+            if world_edit_ids != edit_ids:
                 raise HistoricalRewriteInvalid(
                     "historical rewrite delta manifest missing or invalid"
                 )
+        if tick_ids and self._unlisted_world_tick_deltas(previous, tick_ids):
+            raise HistoricalRewriteInvalid(
+                "historical rewrite delta manifest missing or invalid"
+            )
         return delta_ids, retained_ids
+
+    def _unlisted_world_tick_deltas(
+        self, record: CanonCommitRecord, tick_ids: set[str]
+    ) -> set[str]:
+        """Tick deltas that no chapter world step or decided conflict lists."""
+        unlisted = set(tick_ids)
+        # Every world step of the chapter counts: a retained tick ran after the
+        # commit that an earlier rewrite of the chapter superseded.
+        for result_json in self.session.scalars(
+            select(PostCanonMaintenanceRun.result_json).where(
+                PostCanonMaintenanceRun.project_id == record.project_id,
+                PostCanonMaintenanceRun.chapter_number == record.chapter_number,
+                PostCanonMaintenanceRun.step_name == "world",
+                PostCanonMaintenanceRun.status == "succeeded",
+            )
+        ):
+            result = _loads(result_json, {})
+            if isinstance(result, dict):
+                unlisted.difference_update(_string_items(result.get("graph_delta_ids")))
+        if unlisted:
+            for refs_json in self.session.scalars(
+                select(WorldPlanConflictRow.result_refs_json).where(
+                    WorldPlanConflictRow.project_id == record.project_id,
+                    WorldPlanConflictRow.status == "resolved",
+                )
+            ):
+                unlisted.difference_update(_string_items(_loads(refs_json, [])))
+        return unlisted
 
     def pending_marker(
         self, previous: CanonCommitRecord, *, persist_backfill: bool = True
@@ -291,23 +385,44 @@ class HistoricalCanonReplacement:
         delta_ids: list[str],
         compiler: BookStateCompiler,
     ) -> BookStateCompileResult:
-        """Restore accepted standalone edits after the replacement chapter contribution."""
+        """Restore retained edits and ticks after the replacement contribution."""
         repo = BookStateRepository(self.session)
         project_id = compile_result.project_id
         chapter_number = compile_result.chapter_number
+        cognition_views = repo.load_cognition_views(
+            project_id, as_of_chapter=chapter_number
+        )
         cognition_after = max(
-            (
-                int(view.as_of_chapter or 0)
-                for view in repo.load_cognition_views(
-                    project_id, as_of_chapter=chapter_number
-                ).values()
-            ),
+            (int(view.as_of_chapter or 0) for view in cognition_views.values()),
             default=-1,
         )
         runtime = compiler.projection.load_runtime_as_of(
             project_id, as_of_chapter=chapter_number
         )
         retained_ids = set(delta_ids)
+        if cognition_after < chapter_number:
+            # The loader replays cognition beyond its checkpoint, these retained
+            # deltas' included. Rebuild it without them, so each one is checked
+            # against, and applied after, the replacement contribution.
+            for views in (
+                runtime.cognition_by_observer,
+                runtime.map.cognition_by_observer,
+            ):
+                views.clear()
+                views.update(cognition_views)
+            for delta in repo.list_graph_deltas(
+                project_id,
+                after_chapter=cognition_after,
+                through_chapter=chapter_number,
+            ):
+                if delta.id not in retained_ids:
+                    compiler.projection.apply_delta_to_runtime(
+                        runtime,
+                        delta,
+                        apply_world=False,
+                        apply_map=False,
+                        apply_narrative=False,
+                    )
         deltas = [
             delta
             for delta in repo.list_graph_deltas(
@@ -319,14 +434,7 @@ class HistoricalCanonReplacement:
         ]
         if {delta.id for delta in deltas} != retained_ids:
             raise ValueError("historical rewrite delta manifest missing or invalid")
-        for delta in deltas:
-            # The loader already replays cognition beyond its checkpoint. Only
-            # a replacement-chapter checkpoint still needs these retained edits.
-            compiler.projection.apply_delta_to_runtime(
-                runtime, delta, apply_cognition=cognition_after >= chapter_number
-            )
-        for delta in deltas:
-            compiler._persist_delta_side_effects(runtime, delta)
+        deltas = self._replay(runtime, deltas, compiler=compiler)
         provisional_world = self.session.get(
             WorldSnapshotRow, compile_result.world_snapshot_id
         )
@@ -357,7 +465,10 @@ class HistoricalCanonReplacement:
         world, map_snapshot, cognition = compiler.projection.persist_snapshots(
             runtime,
             as_of_chapter=chapter_number,
-            source_delta_ids=[*compile_result.graph_delta_ids, *delta_ids],
+            source_delta_ids=[
+                *compile_result.graph_delta_ids,
+                *(delta.id for delta in deltas),
+            ],
             active_world_line_ids=world_line_ids,
             as_of_story_time=next(
                 (delta.story_time for delta in reversed(deltas) if delta.story_time),
@@ -420,11 +531,11 @@ class HistoricalCanonReplacement:
             )
         replayed = []
         for commit in commits:
-            deltas = deltas_by_chapter.get(commit.chapter_number, [])
-            for delta in deltas:
-                compiler.projection.apply_delta_to_runtime(runtime, delta)
-            for delta in deltas:
-                compiler._persist_delta_side_effects(runtime, delta)
+            deltas = self._replay(
+                runtime,
+                deltas_by_chapter.get(commit.chapter_number, []),
+                compiler=compiler,
+            )
             world, map_snapshot, cognition = compiler.projection.persist_snapshots(
                 runtime,
                 as_of_chapter=commit.chapter_number,
@@ -461,6 +572,101 @@ class HistoricalCanonReplacement:
             replayed.append(commit.chapter_number)
         self.session.flush()
         return replayed
+
+    def _replay(
+        self,
+        runtime: BookStateRuntime,
+        deltas: list[GraphDelta],
+        *,
+        compiler: BookStateCompiler,
+    ) -> list[GraphDelta]:
+        """Re-apply and re-materialize deltas as recorded; return those still in effect.
+
+        A world tick's delta read the canon it ran on, so it is checked against
+        the replayed runtime the way the compiler checks a new delta.
+        """
+        replayed = []
+        for delta in deltas:
+            if delta.source_type == WORLD_ENGINE_SOURCE_TYPE:
+                mismatches = compiler.cas_mismatches(runtime, delta)
+                if mismatches:
+                    self._drop_world_tick_delta(delta, mismatches)
+                    continue
+            compiler.projection.apply_delta_to_runtime(runtime, delta)
+            replayed.append(delta)
+        for delta in replayed:
+            compiler._persist_delta_side_effects(runtime, delta)
+        return replayed
+
+    def _drop_world_tick_delta(
+        self, delta: GraphDelta, mismatches: list[tuple[str, Any, Any]]
+    ) -> None:
+        """Take the tick's delta out of effect; a human decides how the world responds.
+
+        The range rewind already undid its rows, so leaving it out of the replay
+        is enough; removing it from the ledger keeps any later replay or rewrite
+        from finding it again.
+        """
+        BookStateRepository(self.session).retire_chapter_deltas(
+            self.plan.project_id, delta.chapter_number, delta_ids=[delta.id]
+        )
+        tick_id = str(delta.metadata.get("tick_id") or "")
+        labels = [label for label, _, _ in mismatches]
+        summary = (
+            f"Rewriting chapter {self.plan.chapter_number} changed what world tick "
+            f"{tick_id} read ({', '.join(labels)}); its delta {delta.id} no longer "
+            "applies."
+        )
+        conflict = WorldConflictRepository(self.session).create(
+            ConflictDraft(
+                project_id=self.plan.project_id,
+                source="historical_rewrite",
+                detected_after_chapter=delta.chapter_number,
+                story_time=delta.story_time_end or 0,
+                involved_refs=list(
+                    dict.fromkeys(_patch_ref(patch) for _, patch, _ in mismatches)
+                ),
+                violated="replay_cas",
+                impact_level=_highest_candidate_impact(delta),
+                summary=summary,
+                proposed_change={"graph_delta_id": delta.id, "tick_id": tick_id},
+                blocks_from_chapter=self.through_chapter + 1,
+            ),
+            required_decider="human",
+            options=("veto_world",),
+        )
+        self.session.add(
+            DecisionEvent(
+                project_id=self.plan.project_id,
+                chapter_number=delta.chapter_number,
+                event_family="business_event",
+                event_type=DecisionEventType.WORLD_CONFLICT_DETECTED,
+                actor_type="system",
+                scope="chapter",
+                summary=summary,
+                payload_json=_dump(
+                    {
+                        "conflict_id": conflict.id,
+                        "rewritten_chapter": self.plan.chapter_number,
+                        "graph_delta_id": delta.id,
+                        "tick_id": tick_id,
+                        "cas_mismatches": [
+                            {
+                                "patch": label,
+                                "expected": patch.old_value,
+                                "current": current,
+                            }
+                            for label, patch, current in mismatches
+                        ],
+                        # The ledger no longer holds the delta; this is its record.
+                        "graph_delta": delta,
+                    }
+                ),
+                related_object_type="world_conflict",
+                related_object_id=conflict.id,
+            )
+        )
+        self.session.flush()
 
     def mark_prior_commit_superseded(self) -> None:
         # Project locking in admission serializes allocation. Keep the original

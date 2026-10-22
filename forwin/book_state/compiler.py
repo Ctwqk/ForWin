@@ -202,18 +202,26 @@ class BookStateCompiler:
             "repair",
             "retcon_block",
         }
-        for label, patch, current in self._iter_patch_current_values(runtime, delta):
-            old_value = getattr(patch, "old_value", None)
-            if old_value is None:
-                continue
-            if _json_equal(old_value, current):
-                continue
+        for label, patch, current in self.cas_mismatches(runtime, delta):
             if is_repair and forced_accept_reason:
                 continue
             blocked.append(
-                f"{delta.id}:{label} old_value mismatch; expected {old_value!r}, current {current!r}"
+                f"{delta.id}:{label} old_value mismatch; expected {patch.old_value!r}, current {current!r}"
             )
         return blocked
+
+    def cas_mismatches(
+        self,
+        runtime: BookStateRuntime,
+        delta: GraphDelta,
+    ) -> list[tuple[str, Any, Any]]:
+        """``(label, patch, current)`` for each patch whose ``old_value`` the runtime no longer holds."""
+        return [
+            (label, patch, current)
+            for label, patch, current in self._iter_patch_current_values(runtime, delta)
+            if getattr(patch, "old_value", None) is not None
+            and not _json_equal(patch.old_value, current)
+        ]
 
     def _iter_patch_current_values(
         self,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
@@ -13,6 +14,10 @@ from forwin.application.read_models import (
     _recent_rows_by_project,
 )
 from forwin.api_schema import TaskCenterItemResponse
+from forwin.application.read_models.generation import (
+    WorldConflictBlockInfo,
+    load_open_world_conflicts,
+)
 from forwin.models.planning_control import BandCheckpoint
 from forwin.models.audit import DecisionEvent
 from forwin.models.project import ChapterPlan, Project
@@ -169,6 +174,7 @@ class TaskCenterService:
                         plans_by_project.get(project.id, []),
                         latest_band_checkpoint=latest_checkpoint_map.get(project.id),
                         decision_events=decision_timeline_map.get(project.id, []),
+                        open_world_conflicts=load_open_world_conflicts(session, project.id),
                         next_arc_chapter_start=next_arc_start_map.get(project.id, 0),
                     )
                 )
@@ -201,6 +207,7 @@ class TaskCenterService:
                 plans_by_project.get(project.id, []),
                 latest_band_checkpoint=latest_checkpoint_map.get(project.id),
                 decision_events=decision_timeline_map.get(project.id, []),
+                open_world_conflicts=load_open_world_conflicts(session, project.id),
                 next_arc_chapter_start=load_next_planned_arc_starts(
                     session, [project.id]
                 ).get(project.id, 0),
@@ -244,6 +251,7 @@ class TaskCenterService:
         latest_band_checkpoint: BandCheckpoint | None,
         decision_events: list[Any],
         next_arc_chapter_start: int = 0,
+        open_world_conflicts: Sequence[WorldConflictBlockInfo] = (),
     ) -> TaskCenterItemResponse:
         requested = len(plans)
         config = self.config_provider()
@@ -256,6 +264,7 @@ class TaskCenterService:
             review_interval_chapters=review_interval,
             latest_band_checkpoint=latest_band_checkpoint,
             decision_events=decision_events,
+            open_world_conflicts=open_world_conflicts,
             next_arc_chapter_start=next_arc_chapter_start,
         )
         accepted = list(generation_control.accepted_chapters)

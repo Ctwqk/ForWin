@@ -23,6 +23,7 @@ from .arc_snapshot import (
 )
 from .generation import (
     build_generation_control,
+    load_open_world_conflicts,
     effective_target_total_chapters,
     load_next_planned_arc_starts,
 )
@@ -153,6 +154,7 @@ def build_project_summaries(
             review_interval_chapters=policy_record.policy.pause.review_interval_chapters,
             latest_band_checkpoint=latest_checkpoint,
             decision_events=decision_timeline_map.get(project.id, []),
+            open_world_conflicts=load_open_world_conflicts(session, project.id),
             future_constraints_enabled=policy_record.policy.planning.future_constraints,
             next_arc_chapter_start=next_arc_start_map.get(project.id, 0),
         )

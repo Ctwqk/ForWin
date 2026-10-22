@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Callable
 
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -20,11 +22,32 @@ from forwin.audit.events import (
 )
 from forwin.models.planning_control import BandCheckpoint
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.world_engine.conflict_repository import WorldConflictRepository
 from .arc_snapshot import _band_checkpoint_detail
 
 
 DisplayDatetime = Callable[[datetime | None], str]
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
+
+
+class WorldConflictBlockInfo(BaseModel):
+    conflict_id: str
+    blocks_from_chapter: int
+    summary: str
+
+
+def load_open_world_conflicts(
+    session: Session, project_id: str
+) -> list[WorldConflictBlockInfo]:
+    return [
+        WorldConflictBlockInfo(
+            conflict_id=row.id,
+            blocks_from_chapter=row.blocks_from_chapter,
+            summary=row.summary,
+        )
+        for row in WorldConflictRepository(session).list(project_id, status="open")
+        if row.required_decider == "human"
+    ]
 
 
 def _derive_blocking_reason(
@@ -33,7 +56,34 @@ def _derive_blocking_reason(
     latest_band_checkpoint: BandCheckpoint | None,
     decision_events: list[DecisionEventInfo] | None = None,
     future_constraints_enabled: bool = True,
+    open_world_conflicts: Sequence[WorldConflictBlockInfo] = (),
 ) -> BlockingReasonInfo:
+    blocking_plan = next(
+        (
+            plan
+            for plan in sorted(plans, key=lambda item: item.chapter_number)
+            if plan.status in {"planned", "drafted", "needs_review", "failed"}
+        ),
+        None,
+    )
+    if blocking_plan is not None:
+        conflict = min(
+            (
+                item
+                for item in open_world_conflicts
+                if item.blocks_from_chapter <= blocking_plan.chapter_number
+            ),
+            key=lambda item: item.blocks_from_chapter,
+            default=None,
+        )
+        if conflict is not None:
+            return BlockingReasonInfo(
+                code="world_conflict_pending",
+                message=chapter_blocking_message("world_conflict_pending"),
+                chapter_number=blocking_plan.chapter_number,
+                detail=f"conflict_id={conflict.conflict_id}: {conflict.summary}",
+            )
+
     ordered_events = list(decision_events or [])
     fallback_event_id = (
         str(getattr(ordered_events[0], "id", "") or "") if ordered_events else ""
@@ -144,14 +194,6 @@ def _derive_blocking_reason(
             or f"第 {constraint_block_plan.chapter_number} 章命中了 hard future constraint。",
         )
 
-    blocking_plan = next(
-        (
-            plan
-            for plan in sorted(plans, key=lambda item: item.chapter_number)
-            if plan.status in {"planned", "drafted", "needs_review", "failed"}
-        ),
-        None,
-    )
     if blocking_plan is not None and blocking_plan.chapter_number > 1:
         previous_plan = next(
             (
@@ -283,6 +325,7 @@ def build_generation_control(
     decision_events: list[DecisionEventInfo] | None = None,
     future_constraints_enabled: bool = True,
     next_arc_chapter_start: int = 0,
+    open_world_conflicts: Sequence[WorldConflictBlockInfo] = (),
 ) -> GenerationControlInfo:
     accepted = [plan.chapter_number for plan in plans if plan.status == "accepted"]
     drafted = [plan.chapter_number for plan in plans if plan.status == "drafted"]
@@ -347,6 +390,7 @@ def build_generation_control(
         latest_band_checkpoint=latest_band_checkpoint,
         decision_events=decision_events,
         future_constraints_enabled=future_constraints_enabled,
+        open_world_conflicts=open_world_conflicts,
     )
     can_resume = bool(
         (next_candidates or resume_from_next_arc) and not pending_review and not drafted
@@ -380,6 +424,8 @@ def build_generation_control(
 
 
 __all__ = [
+    "WorldConflictBlockInfo",
+    "load_open_world_conflicts",
     "_derive_blocking_reason",
     "_derive_next_gate",
     "effective_target_total_chapters",

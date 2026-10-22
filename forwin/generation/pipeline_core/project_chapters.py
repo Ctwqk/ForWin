@@ -22,6 +22,7 @@ from forwin.checker.rules import ContinuityChecker
 from sqlalchemy.orm import Session
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
+from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.review.repair.service import (
     _canon_repair_scope,
     _canon_repair_scope_can_run,
@@ -125,6 +126,25 @@ class ChapterExecutionStage:
                     frozen_artifacts=frozen_artifacts,
                     current_chapter=max(0, chapter_num - 1),
                 )
+            conflict = WorldConflictRepository(session).open_blocking(
+                project_id, next_chapter=chapter_num
+            )
+            if conflict is not None:
+                self._emit_progress(
+                    "stage_changed",
+                    stage="paused_for_review",
+                    project_id=project_id,
+                    requested_chapters=requested_chapters,
+                    current_chapter=chapter_num,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                    frozen_artifacts=frozen_artifacts,
+                    payload={"reason": "world_conflict", "conflict_id": conflict.id},
+                )
+                paused_chapters.append(chapter_num)
+                break
+
             print(f"\n{'─' * 60}")
             print(f"正在生成第 {chapter_num} 章...")
             print(f"{'─' * 60}")

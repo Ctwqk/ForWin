@@ -28,6 +28,7 @@ BlockingReasonCode = Literal[
     "band_checkpoint_warn",
     "band_checkpoint_fail",
     "future_constraint_block",
+    "world_conflict_pending",
 ]
 
 
@@ -113,6 +114,8 @@ def chapter_blocking_message(
         return f"{band_id or '上一 band'} checkpoint 未通过，需修复或 override 后继续。"
     if reason == "future_constraint_block":
         return "存在未来叙事约束冲突，需先处理后才能继续。"
+    if reason == "world_conflict_pending":
+        return "存在世界与计划冲突，需人工处理后才能继续。"
     return ""
 
 

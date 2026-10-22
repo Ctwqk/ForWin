@@ -1108,6 +1108,7 @@ def test_book_state_extraction_has_one_current_owner() -> None:
         "chapter_delta_schema.py",
         "chapter_input.py",
         "evidence.py",
+        "ref_check.py",
         "translator.py",
         "world_review.py",
     ]

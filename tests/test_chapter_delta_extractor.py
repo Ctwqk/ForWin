@@ -240,6 +240,70 @@ def test_required_fulfillment_retry_respects_attempt_budget():
     assert result.extraction.plan_fulfillment == []
 
 
+TWO_SITES = replace(INPUT, locations=INPUT.locations + (LocationRow("site-2", "Hall", "region-1", "world-1"),))
+
+
+def moving_to(to_ref, *, participants=()):
+    response = payload()
+    response["movements"] = [
+        {"entity_ref": "person-1", "from_ref": "site-1", "to_ref": to_ref, "evidence": "Ari opened the gate."},
+    ]
+    if participants:
+        response["events"] = [{
+            "summary": "Ari opens the gate", "participant_refs": list(participants), "significance": "minor",
+            "visibility": "public", "evidence": "Ari opened the gate.",
+        }]
+    return response
+
+
+def test_unknown_ref_retries_once_naming_the_ref_and_its_path():
+    client = StubLLM(moving_to("Hall"), moving_to("site-2"))
+
+    result = extract(client, extraction_input=TWO_SITES)
+
+    assert result.attempts == len(client.calls) == 2
+    assert result.extraction.movements[0].to_ref == "site-2"
+    assert result.issues == ()
+    feedback = client.calls[1][0][-1]["content"].split("上一轮错误反馈：\n")[1]
+    assert "movements[0].to_ref" in feedback
+    assert "'Hall'" in feedback and "'site-2'" in feedback
+    assert len(result.prompt_trace["output_summary"]["business_retry_events"]) == 1
+
+
+def test_persistent_unknown_ref_gets_one_targeted_retry():
+    client = StubLLM(moving_to("site-9"), moving_to("site-9"), moving_to("site-2"))
+
+    result = extract(client, extraction_input=TWO_SITES)
+
+    assert result.attempts == len(client.calls) == 2
+    # The translator still reports the ref.
+    assert result.extraction.movements[0].to_ref == "site-9"
+
+
+@pytest.mark.parametrize("better_first", [True, False])
+def test_best_candidate_has_the_fewest_unknown_refs(better_first):
+    one = moving_to("site-9")
+    two = moving_to("site-9", participants=("Nobody",))
+    client = StubLLM(*((one, two) if better_first else (two, one)))
+
+    result = extract(client, extraction_input=TWO_SITES)
+
+    assert result.attempts == len(client.calls) == 2
+    assert result.extraction.events == []
+
+
+def test_unknown_refs_outrank_absent_targets_in_the_best_candidate():
+    absent_target = moving_to("site-2")
+    absent_target["plan_fulfillment"] = []
+    client = StubLLM(absent_target, moving_to("site-9"))
+
+    result = extract(client, max_attempts=2, extraction_input=TWO_SITES)
+
+    assert result.attempts == len(client.calls) == 2
+    assert result.extraction.movements[0].to_ref == "site-2"
+    assert result.extraction.plan_fulfillment == []
+
+
 @pytest.mark.parametrize("failure", ["not JSON", {}, RuntimeError("provider unavailable")])
 def test_evidence_candidate_survives_failed_retries(failure):
     first = payload()

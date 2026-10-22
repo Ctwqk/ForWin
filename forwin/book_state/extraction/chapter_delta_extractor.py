@@ -17,12 +17,13 @@ from forwin.observability.llm_trace import (
 from forwin.skills import serialize_prompt_layers
 from forwin.utils import parse_llm_json
 from forwin.writer.prompt_core.chapter_delta import (
-    build_chapter_delta_messages, build_plan_fulfillment_feedback,
+    build_chapter_delta_messages, build_plan_fulfillment_feedback, build_unknown_ref_feedback,
 )
 
 from .chapter_delta_schema import ChapterDeltaExtraction, ExtractionIssue
 from .chapter_input import ChapterExtractionInput, build_chapter_extraction_input
 from .evidence import dropped_ratio, validate_evidence
+from .ref_check import unknown_refs
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -128,12 +129,14 @@ class ChapterDeltaExtractor:
         evidence_retried = False
         elapsed_retried = False
         fulfillment_retried = False
+        refs_retried = False
         required_targets = {
             target.target_id for target in extraction_input.fulfillment_targets
             if target.target_id.startswith(("goal:", "obligation:"))
         }
-        best_absent_count = len(required_targets) + 1
-        # Keep the best validated candidate if a later retry fails or omits more targets.
+        # Keep the best validated candidate if a later retry fails, names more unknown refs
+        # or omits more targets.
+        best_key: tuple[int, int] | None = None
         extraction = None
         issues: list[ExtractionIssue] = []
         body_hash = _sha256(chapter_body)
@@ -190,6 +193,10 @@ class ChapterDeltaExtractor:
                 if absent_targets and not fulfillment_retried and attempt_no < self.max_attempts:
                     fulfillment_retried = True
                     feedback.append(build_plan_fulfillment_feedback(sorted(absent_targets)))
+                unknown = unknown_refs(candidate, extraction_input)
+                if unknown and not refs_retried and attempt_no < self.max_attempts:
+                    refs_retried = True
+                    feedback.extend(build_unknown_ref_feedback(unknown))
                 if dropped_ratio(candidate_issues, parsed) > 0.5 and not evidence_retried and attempt_no < self.max_attempts:
                     evidence_retried = True
                     feedback.extend(f"{issue.code} at {issue.path}: {issue.message}" for issue in candidate_issues)
@@ -203,9 +210,11 @@ class ChapterDeltaExtractor:
                     candidate_issues.append(ExtractionIssue(
                         severity="warning", code="elapsed_unknown", path="time.elapsed", message=str(exc),
                     ))
-                if len(absent_targets) <= best_absent_count:
+                # An unknown ref fails translation, so it outweighs an absent target.
+                key = (len(unknown), len(absent_targets))
+                if best_key is None or key <= best_key:
                     extraction, issues = candidate, candidate_issues
-                    best_absent_count = len(absent_targets)
+                    best_key = key
 
             if (feedback or call_error is not None) and attempt_no < self.max_attempts:
                 business_retries.append({

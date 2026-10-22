@@ -7,6 +7,7 @@ from dataclasses import asdict
 
 from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction
 from forwin.book_state.extraction.chapter_input import ChapterExtractionInput
+from forwin.book_state.extraction.ref_check import UnknownRef
 from forwin.book_state.knowledge import KNOWLEDGE_CHANNELS, KNOWLEDGE_STATES
 from forwin.protocol.book_state import WORLD_EDGE_TYPES
 
@@ -17,6 +18,19 @@ def build_plan_fulfillment_feedback(target_ids: Sequence[str]) -> str:
         + ". Report each of these target ids; for done/partial quote the chapter body verbatim, "
         "or report status missing."
     )
+
+
+def build_unknown_ref_feedback(unknown: Sequence[UnknownRef]) -> list[str]:
+    lines = [
+        f"unknown_ref at {item.path}: {item.ref!r} {item.reason}"
+        + (f"; its id is {item.suggestion!r}" if item.suggestion else "")
+        for item in unknown
+    ]
+    lines.append(
+        "Refs take only ids from the given tables, reader, or new:<name>; "
+        "a new: location must also be declared in new_sites."
+    )
+    return lines
 
 
 def build_chapter_delta_messages(

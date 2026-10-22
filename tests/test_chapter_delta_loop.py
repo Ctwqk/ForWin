@@ -12,8 +12,6 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Callable
-from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -28,7 +26,7 @@ from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
-from forwin.narrative_obligations.types import NarrativeObligation
+from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import ChapterLengthPolicy, RuntimePolicy
@@ -271,3 +269,64 @@ def test_persistent_goal_miss_ends_in_manual_review_after_its_rewrites(
     assert all("plan_goal_missing" in codes for codes in _review_codes(pipeline, book))
     assert _chapter_status(pipeline, book) == "needs_review"
     assert _committed_source(pipeline, book) == []
+
+
+def _too_fast(pipeline, session, book: _Book) -> dict[str, Any]:
+    """The fixture movement, claimed in under half the time the world gate allows."""
+    (movement,) = book.extraction()["movements"]
+    shortest = _shortest_minutes(session, book.project_id, movement)
+    unit = min(StoryCalendarRepository(session).get(book.project_id).units, key=lambda item: item.minutes)
+    claimed_minutes = math.floor(shortest * (1 - pipeline.policy.review.travel_tolerance) / 2)
+    assert claimed_minutes > 0
+    return {
+        **movement,
+        "depart_offset": {"amount": 0, "unit": unit.name},
+        "arrive_offset": {"amount": claimed_minutes / unit.minutes, "unit": unit.name},
+    }
+
+
+def test_world_error_is_rewritten_reextracted_committed_and_resolves_its_obligation(make_pipeline) -> None:
+    pipeline = make_pipeline()
+    book = _start_book(pipeline, GENRE)
+    with pipeline._SessionFactory() as session:  # noqa: SLF001
+        obligations = NarrativeObligationRepository(session)
+        # An open obligation carries the applied plan patch that deferred it.
+        patch = obligations.create_plan_patch(NarrativePlanPatch(
+            project_id=book.project_id, affected_chapters=[2], source_obligation_ids=["obl-sword-tomb"],
+            validation_status="passed", applied=True,
+        ))
+        # Due next chapter, so the pre-write plan audit does not demand it now; chapter one
+        # can still resolve it early.
+        obligation = obligations.create_obligation(NarrativeObligation(
+            id="obl-sword-tomb", project_id=book.project_id, origin_chapter_number=0,
+            obligation_type="reader_promise", priority="P1", status="active",
+            summary="祁长烬决定去母亲守过的剑冢。", hardness="design_debt", deadline_chapter=2,
+            payoff_test="第2章前祁长烬决定去剑冢。", linked_plan_patch_ids=[patch.id],
+        ))
+        session.commit()
+        too_fast = _too_fast(pipeline, session, book)
+    first, corrected = _draft(book, 0), _draft(book, 1)
+    target = f"obligation:{obligation.id}"
+    goal = _goal("done", book)
+    client = _Extraction(dict([
+        _answer(book, first, movements=[too_fast], plan_fulfillment=[goal, {"target_id": target, "status": "missing"}]),
+        _answer(book, corrected, plan_fulfillment=[
+            goal, {"target_id": target, "status": "done", "evidence": "他决定先不回山门，去母亲守过的剑冢看一看"},
+        ]),
+    ]))
+    writer = _Writer(book, [first, corrected])
+
+    result = _run(pipeline, book, writer, client)
+
+    assert result.completed_chapters == [1], result
+    # The world error went to a draft rewrite, whose new body got its own extraction.
+    assert writer.stage_keys == ["chapter_draft", "chapter_rewrite"]
+    assert client.extracted == [body_sha256(first), body_sha256(corrected)]
+    first_errors, rewrite_errors = _review_codes(pipeline, book)
+    assert "movement_too_fast" in first_errors
+    assert rewrite_errors == []
+    assert _committed_source(pipeline, book) == [f"chapter:1:{body_sha256(corrected)}"]
+    # After acceptance the committed delta's fulfillment resolved the obligation ahead of its deadline.
+    with pipeline._SessionFactory() as session:  # noqa: SLF001
+        stored = session.get(NarrativeObligationRow, obligation.id)
+        assert (stored.status, stored.resolution_chapter) == ("resolved", 1)

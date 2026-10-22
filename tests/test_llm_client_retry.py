@@ -16,6 +16,13 @@ from forwin.writer.llm import LLMClient
 
 
 class LLMClientRetryTests(unittest.TestCase):
+    def test_world_engine_family_routes_to_planning_json(self) -> None:
+        for stage_key in ("world.adjudicate", "world.actor_turn"):
+            for response_format in (None, {"type": "json_object"}):
+                self.assertEqual(LLMClient._llm_task_route(
+                    task_family="world_engine", stage_key=stage_key, response_format=response_format,
+                ), "planning_json_general")
+
     def test_runtime_passes_registry_to_profile_routing_and_options(self) -> None:
         config = InfrastructureConfig(
             codex_enabled=False,

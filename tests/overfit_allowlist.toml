@@ -980,6 +980,13 @@ justification = "writer prompt 构造模块（拼接 LLM 说明文字与解析 p
 max_literals = 20
 
 [[entry]]
+path = "forwin/writer/prompt_core/world_engine.py"
+checks = ["cjk_collection", "fixture_term"]
+category = "prompt_text"
+justification = "Structured world adjudication instructions; story facts come only from BookState inputs."
+max_literals = 7
+
+[[entry]]
 path = "forwin/writer/prompt_core/world_repair.py"
 symbol = "WORLD_REPAIR_FIXES"
 checks = ["cjk_collection"]

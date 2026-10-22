@@ -60,6 +60,20 @@ from .types import (
 _AGENDA_PRIORITY_MIN, _AGENDA_PRIORITY_MAX = 1, 5
 
 
+def _tick_local_id(project_id: str, tick_id: str, candidate_id: str, kind: str, local: int | str) -> str:
+    """A stable id for something one candidate creates; a rebuild without other candidates keeps it."""
+    return _stable_id(project_id, kind, "\0".join((tick_id, candidate_id, str(local))))
+
+
+def tick_event_fact_ref(project_id: str, tick_id: str, candidate_id: str, event_index: int) -> str:
+    """``fact:<id>`` of the fact the builder creates for a candidate's ``effects.events[event_index]``.
+
+    Later candidates of the same tick, such as its news, reference the event's fact by this ref.
+    """
+    event_id = _tick_local_id(project_id, tick_id, candidate_id, "event", event_index)
+    return f"{FACT_REF_PREFIX}{_stable_id(project_id, 'fact', event_id)}"
+
+
 class TickIssue(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -253,8 +267,7 @@ class _TickBuilder:
         return {"source": WORLD_ENGINE_SOURCE_TYPE, "tick_id": self.tick_id, "candidate_id": self.candidate_id}
 
     def _local_id(self, kind: str, local: int | str) -> str:
-        """A stable id for something one candidate creates; a rebuild without other candidates keeps it."""
-        return _stable_id(self.project_id, kind, "\0".join((self.tick_id, self.candidate_id, str(local))))
+        return _tick_local_id(self.project_id, self.tick_id, self.candidate_id, kind, local)
 
     # references
 
@@ -705,8 +718,8 @@ class _TickBuilder:
             return
         summary = event.summary.strip()
         event_id = self._local_id("event", index)
-        fact_id = _stable_id(self.project_id, "fact", event_id)
-        fact_ref = f"{FACT_REF_PREFIX}{fact_id}"
+        fact_ref = tick_event_fact_ref(self.project_id, self.tick_id, self.candidate_id, index)
+        fact_id = fact_ref.removeprefix(FACT_REF_PREFIX)
         sensitivity = "secret" if event.visibility == "secret" else "public"
         self._create_node(WorldNode(
             id=event_id,
@@ -846,4 +859,4 @@ class _TickBuilder:
         return queue
 
 
-__all__ = ["TickDeltaBuild", "TickIssue", "WorldTickDeltaBuilder"]
+__all__ = ["TickDeltaBuild", "TickIssue", "WorldTickDeltaBuilder", "tick_event_fact_ref"]

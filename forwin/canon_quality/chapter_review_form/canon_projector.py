@@ -63,6 +63,7 @@ def project_validated_answers(
     _project_blocking_section_answers(
         result=result,
         answers=answers,
+        form=form,
         blocking_paths=blocking_paths,
         draft_id=draft_id,
         policy=policy,
@@ -150,10 +151,12 @@ def _project_blocking_section_answers(
     *,
     result: ProjectionResult,
     answers: ChapterReviewAnswers,
+    form: ChapterReviewForm | None,
     blocking_paths: set[str],
     draft_id: str,
     policy: FormBlockingPolicy,
 ) -> None:
+    open_signals_by_id = {item.id: item for item in form.open_signals} if form is not None else {}
     for index, obligation in enumerate(answers.obligations):
         path = f"obligations[{index}].addressed"
         if path in blocking_paths:
@@ -179,13 +182,14 @@ def _project_blocking_section_answers(
     for index, open_signal in enumerate(answers.open_signals):
         path = f"open_signals[{index}].status"
         if path in blocking_paths:
+            ask = open_signals_by_id.get(open_signal.id)
             signal = _blocking_signal(
                 answers=answers,
                 signal_type="form_open_signal_persisting",
                 subject_key=open_signal.id,
                 answer=open_signal.status,
                 answer_path=path,
-                description=f"Open signal {open_signal.id} is still unresolved.",
+                description=ask.description if ask is not None else "An open signal is still unresolved.",
                 draft_id=draft_id,
                 index=index + 1,
                 patch_kind="signal_persisting",

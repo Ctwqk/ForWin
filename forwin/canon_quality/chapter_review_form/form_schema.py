@@ -46,7 +46,7 @@ class CharacterReviewAnswer(BaseModel):
 class CountdownReviewAsk(BaseModel):
     key: str
     label: str
-    scope: str = "public"
+    scope: str = "secret"
     prior_value_minutes: int | None
     prior_status: Literal["active", "paused", "closed", "fulfilled", "reopened", "consistent", "warning", "conflict", "resolved"]
     last_updated_chapter: int

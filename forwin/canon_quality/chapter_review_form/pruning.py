@@ -61,19 +61,20 @@ def select_characters_to_ask(*, rows: list[Any], chapter_text: str) -> list[Any]
 
 
 def select_countdowns_to_ask(*, rows: list[Any], chapter_text: str) -> list[Any]:
-    """The nearest running countdowns, other open ones, and mentioned closed ones."""
-    protected = sorted((row for row in rows if _is_protected_countdown(row)), key=_countdown_sort_key)
+    """The nearest running countdowns, other open ones, and any mentioned ones."""
+    protected = sorted((row for row in rows if _is_protected_countdown(row)), key=_countdown_sort_key)[:MAX_PROTECTED_COUNTDOWNS]
+    protected_ids = {id(row) for row in protected}
     selected: list[Any] = []
     for row in rows:
-        if _is_protected_countdown(row):
+        if id(row) in protected_ids:
             continue
         key = str(row_value(row, "countdown_key") or row_value(row, "key") or "").strip()
         label = str(row_value(row, "label") or key).strip()
         status = countdown_status(row)
         mentioned = bool(key and key in chapter_text) or bool(label and label in chapter_text)
-        if status in OPEN_COUNTDOWN_STATUSES or mentioned:
+        if mentioned or (status in OPEN_COUNTDOWN_STATUSES and not _is_protected_countdown(row)):
             selected.append(row)
-    return protected[:MAX_PROTECTED_COUNTDOWNS] + selected
+    return protected + selected
 
 
 def countdown_status(item: Any) -> str:
@@ -118,6 +119,9 @@ def select_obligations_to_ask(*, obligations: list[Any], chapter_number: int) ->
 def fit_form_budget(form: Any, *, max_chars: int) -> Any:
     max_chars = int(max_chars or 0)
     _sort_for_pruning(form)
+    protected_countdown_ids = {
+        id(item) for item in form.countdowns[:MAX_PROTECTED_COUNTDOWNS] if _is_protected_countdown(item)
+    }
     dropped = {"open_signals": 0, "obligations": 0, "countdowns": 0, "characters": 0}
 
     while _form_size(form) > max_chars:
@@ -127,7 +131,7 @@ def fit_form_budget(form: Any, *, max_chars: int) -> Any:
         if _drop_lowest_priority(form.obligations, _is_protected_obligation):
             dropped["obligations"] += 1
             continue
-        if _drop_lowest_priority(form.countdowns, _is_protected_countdown):
+        if _drop_lowest_priority(form.countdowns, lambda item: id(item) in protected_countdown_ids):
             dropped["countdowns"] += 1
             continue
         if _drop_lowest_priority(form.characters, _is_protected_character):
@@ -220,7 +224,7 @@ def _protected_counts(form: Any) -> dict[str, int]:
     return {
         "open_signals": sum(1 for item in form.open_signals if _is_protected_signal(item)),
         "obligations": sum(1 for item in form.obligations if _is_protected_obligation(item)),
-        "countdowns": sum(1 for item in form.countdowns if _is_protected_countdown(item)),
+        "countdowns": min(MAX_PROTECTED_COUNTDOWNS, sum(1 for item in form.countdowns if _is_protected_countdown(item))),
         "characters": sum(1 for item in form.characters if _is_protected_character(item)),
     }
 

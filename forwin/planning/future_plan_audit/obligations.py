@@ -266,7 +266,7 @@ class FuturePlanObligationMixin:
         description_text = str(signal.get("description") or "").strip()
         instruction = (
             f"修复第{signal_chapter}章遗留质量信号 {signal_type}"
-            f"{f'({signal_id})' if signal_id else ''}：{description_text}"
+            f"：{description_text}"
         ).strip()
         metadata = {
             "signal_id": signal_id,

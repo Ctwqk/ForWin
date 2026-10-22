@@ -5,7 +5,7 @@ import logging
 import pytest
 
 from forwin.canon_quality.chapter_review_form.form_builder import build_form
-from forwin.canon_quality.chapter_review_form.pruning import FormBudgetExceeded
+from forwin.canon_quality.chapter_review_form.pruning import FormBudgetExceeded, fit_form_budget
 from forwin.canon_quality.chapter_review_form.service import review_chapter_with_form
 from forwin.protocol.writer import WriterOutput
 
@@ -234,6 +234,42 @@ def test_protected_countdowns_are_capped_by_remaining() -> None:
     form = build_form(project_id="p1", chapter_number=2, chapter_text="", countdown_rows=rows)
     assert [item.prior_value_minutes for item in form.countdowns] == [10, 20, 30, 40, 50, 60]
     assert [item.key for item in form.countdowns] == ["clock-1", "clock-3", "clock-5", "clock-7", "clock-6", "clock-4"]
+
+
+@pytest.mark.parametrize("mention", ["c7", "Clock seven"])
+def test_mentioned_clock_beyond_protected_cap_is_asked_and_pruned_first(mention: str) -> None:
+    rows = [
+        {"countdown_key": f"c{index}", "label": "Clock seven" if index == 7 else f"Clock {index}",
+         "remaining_minutes": index + 1, "status": "active"}
+        for index in range(8)
+    ]
+    form = build_form(project_id="p1", chapter_number=2, chapter_text=mention, countdown_rows=rows)
+    assert [item.key for item in form.countdowns] == ["c0", "c1", "c2", "c3", "c4", "c5", "c7"]
+    assert form.countdowns[-1].prior_status == "active"
+    assert form.countdowns[-1].prior_value_minutes == 8
+
+    fit_form_budget(form, max_chars=len(form.model_dump_json()) - 1)
+    assert [item.key for item in form.countdowns] == ["c0", "c1", "c2", "c3", "c4", "c5"]
+
+
+def test_equal_remaining_countdowns_are_capped_in_key_order() -> None:
+    rows = [
+        {"countdown_key": f"c{index}", "label": f"Clock {index}", "remaining_minutes": 5, "status": "active"}
+        for index in [7, 2, 5, 0, 6, 3, 1, 4]
+    ]
+    form = build_form(project_id="p1", chapter_number=2, chapter_text="", countdown_rows=rows)
+    assert [item.key for item in form.countdowns] == ["c0", "c1", "c2", "c3", "c4", "c5"]
+
+
+def test_six_protected_countdowns_over_budget_raise() -> None:
+    rows = [
+        {"countdown_key": f"c{index}", "label": "x" * 1800, "remaining_minutes": index + 1, "status": "active"}
+        for index in range(6)
+    ]
+    with pytest.raises(FormBudgetExceeded) as exc_info:
+        build_form(project_id="p1", chapter_number=2, chapter_text="", countdown_rows=rows, token_budget_chars=1000)
+    assert exc_info.value.protected_counts["countdowns"] == 6
+    assert [item.key for item in exc_info.value.form.countdowns] == ["c0", "c1", "c2", "c3", "c4", "c5"]
 
 
 @pytest.mark.parametrize("status,remaining", [("active", None), ("paused", 5), ("reopened", 5)])

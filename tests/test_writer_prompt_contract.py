@@ -1,9 +1,83 @@
 from __future__ import annotations
 
+import json
+
+from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
+from forwin.canon_quality.chapter_review_form.canon_projector import project_validated_answers
+from forwin.canon_quality.chapter_review_form.evidence_validator import ValidationReport
+from forwin.canon_quality.chapter_review_form.form_builder import build_form
+from forwin.canon_quality.chapter_review_form.form_schema import (
+    ChapterReviewAnswers,
+    CountdownReviewAnswer,
+    FormAnswer,
+    OpenSignalReviewAnswer,
+)
+from forwin.models.project import ChapterPlan
+from forwin.planning.future_plan_audit import FuturePlanAuditor
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import BandDelightSchedule, BandObligationContract
 from forwin.writer.prompt_core import _canon_quality_context_section, build_single_chapter_draft_prompt
 from forwin.writer.prompt_core.sections import _story_basics_section
+from forwin.writer.prompt_core.constraints import _open_signal_constraint_sections
+
+
+def test_secret_countdown_stays_hidden_in_persisting_writer_constraints_and_plan_patch() -> None:
+    clock_id = "clock-node-secret-123"
+    label = "Hidden departure deadline"
+    form = build_form(
+        project_id="p1", chapter_number=2, chapter_text="",
+        countdown_rows=[{"countdown_key": clock_id, "label": label, "scope": "secret",
+                         "remaining_minutes": 10, "status": "active"}],
+    )
+    initial = project_validated_answers(
+        form=form,
+        answers=ChapterReviewAnswers(
+            project_id="p1", chapter_number=2, form_schema_version=FORM_SCHEMA_VERSION,
+            countdowns=[CountdownReviewAnswer(
+                key=clock_id, mentioned_in_chapter=True, status_in_this_chapter=FormAnswer(value="active"),
+                consistent_with_prior=FormAnswer(value="false", confidence=0.95),
+            )],
+        ),
+        validation_report=ValidationReport(blocking_paths=["countdowns[0].consistent_with_prior"]),
+    ).signals[0]
+    assert initial.description == "A countdown is inconsistent with prior canon."
+    assert clock_id in initial.signal_id
+    later_form = build_form(
+        project_id="p1", chapter_number=4, chapter_text="", open_signal_rows=[initial.model_dump()],
+    )
+    persisting = project_validated_answers(
+        form=later_form,
+        answers=ChapterReviewAnswers(
+            project_id="p1", chapter_number=4, form_schema_version=FORM_SCHEMA_VERSION,
+            open_signals=[OpenSignalReviewAnswer(id=initial.signal_id, status=FormAnswer(value="persisting", confidence=0.95))],
+        ),
+        validation_report=ValidationReport(blocking_paths=["open_signals[0].status"]),
+    ).signals[0]
+    assert clock_id in persisting.signal_id
+    signal = persisting.model_dump()
+    sections = _open_signal_constraint_sections([signal], suppressed=set())
+    assert sections
+    constraint_text = "\n".join(section.text for section in sections)
+    plan = ChapterPlan(
+        id="plan-5", project_id="p1", arc_plan_id="arc-1", chapter_number=5,
+        title="Next chapter", one_line="Continue.", goals_json="[]", task_contract_json="[]",
+        experience_plan_json="{}", status="planned",
+    )
+    auditor = FuturePlanAuditor()
+    _, patch = auditor._stale_signal_patch(
+        project_id="p1", current_chapter=4, plan=plan, signal=signal,
+        suppression_key=f"signal:{initial.signal_id}",
+    )
+    instruction = patch.new_contract["form_instruction"]
+    auditor.apply_plan_patch(plan, patch)
+    goals = json.loads(plan.goals_json)
+    markers = json.loads(plan.experience_plan_json)["progress_markers"]
+    assert goals == markers == [instruction]
+    for text in [constraint_text, instruction, *goals, *markers]:
+        assert text
+        assert label not in text
+        assert clock_id not in text
+    assert patch.source_signal_ids == [persisting.signal_id]
 
 
 def test_writer_prompt_includes_protagonist_naming_contract() -> None:

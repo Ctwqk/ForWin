@@ -9,6 +9,7 @@ from forwin.models import Base, ChapterPlan, Project
 from forwin.models.phase import BandExperiencePlan
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.planning.future_plan_audit import FuturePlanAuditor
+from forwin.planning.future_plan_audit.signal_pre_audit import _plan_mentions_signal, select_stale_signal_targets
 from forwin.protocol.experience import BandDelightSchedule
 
 
@@ -310,8 +311,14 @@ def test_future_plan_auditor_promotes_stale_open_signal_to_pre_write_patch() -> 
         {"goals": json.loads(plan.goals_json), "experience": json.loads(plan.experience_plan_json)},
         ensure_ascii=False,
     )
-    assert "sig-1" in serialized
+    assert "sig-1" not in serialized
     assert "第10章残留占位符" in serialized
+    assert result.plan_patches[0].metadata["signal_id"] == "sig-1"
+    assert result.plan_patches[0].source_signal_ids == ["sig-1"]
+    signal = {"signal_id": "sig-1", "description": "第10章残留占位符，必须替换为具体证据。",
+              "signal_type": "placeholder_leakage", "severity": "error", "chapter_number": 10}
+    assert _plan_mentions_signal(plan, signal_id="sig-1", description=signal["description"])
+    assert select_stale_signal_targets(open_signals=[signal], plans=[plan], current_chapter=13, include_current=False) == []
 
 
 def test_future_audit_has_no_countdown_or_custody_mixins() -> None:

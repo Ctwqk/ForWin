@@ -124,16 +124,14 @@ def _clock_row(
 ) -> dict[str, Any]:
     due_at = state.get("due_at")
     remaining = due_at - story_minute if type(due_at) is int and story_minute is not None else None
-    row = {
+    return {
         "countdown_key": node.id,
         "label": str(node.profile.get("label") or node.name or node.id),
-        "scope": str(node.profile.get("scope") or "public"),
+        "scope": str(node.profile.get("scope") or "secret"),
         "remaining_minutes": remaining,
         "status": _COUNTDOWN_STATUS_BY_CLOCK.get(str(state.get("status") or "running"), "active"),
         "chapter_number": as_of_chapter,
     }
-    row["status"] = countdown_status(row)
-    return row
 
 
 def _character_ask(row: Any) -> CharacterReviewAsk:
@@ -153,7 +151,7 @@ def _countdown_ask(row: Any) -> CountdownReviewAsk:
     return CountdownReviewAsk(
         key=key,
         label=label,
-        scope=str(row_value(row, "scope") or "public"),
+        scope=str(row_value(row, "scope") or "secret"),
         prior_value_minutes=_optional_int(row_value(row, "remaining_minutes", None)),
         prior_status=_countdown_status(countdown_status(row)),
         last_updated_chapter=int(row_value(row, "chapter_number", 0) or 0),

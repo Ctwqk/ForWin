@@ -6,17 +6,20 @@ from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.config import FormBlockingPolicy
 from forwin.canon_quality.chapter_review_form.canon_projector import project_validated_answers
 from forwin.canon_quality.chapter_review_form.evidence_validator import RejectedAnswer, ValidationReport
-from forwin.canon_quality.chapter_review_form.form_builder import build_form
+from forwin.canon_quality.chapter_review_form.form_builder import _clock_row, build_form
 from forwin.canon_quality.chapter_review_form.form_schema import (
     CharacterReviewAnswer,
     ChapterReviewAnswers,
+    ChapterReviewForm,
     CountdownReviewAnswer,
     FormAnswer,
     NewObservations,
     ObligationReviewAnswer,
+    OpenSignalReviewAnswer,
 )
 from forwin.canon_quality.chapter_review_form.service import review_chapter_with_form
 from forwin.protocol.writer import WriterOutput
+from forwin.protocol.book_state import WorldNode
 
 
 def test_projector_validated_character_answer_emits_nothing() -> None:
@@ -207,6 +210,60 @@ def test_secret_clock_signal_reveals_neither_label_nor_id() -> None:
     assert "Departure deadline" not in signal.description
     assert "clock-node-123" not in signal.description
     assert projection.review_issues[0]["description"] == signal.description
+
+
+@pytest.mark.parametrize("source", ["profile", "row", "legacy_form"])
+def test_clock_without_scope_projects_generic_description(source: str) -> None:
+    row = {"countdown_key": "clock-node-123", "label": "Departure deadline", "remaining_minutes": 10, "status": "active"}
+    if source == "profile":
+        row = _clock_row(
+            WorldNode(id="clock-node-123", project_id="p1", node_type="clock", profile={"label": "Departure deadline"}),
+            {"due_at": 110, "status": "running"}, story_minute=100, as_of_chapter=1,
+        )
+    form = build_form(project_id="p1", chapter_number=2, chapter_text="", countdown_rows=[row])
+    if source == "legacy_form":
+        raw_form = form.model_dump()
+        raw_form["countdowns"][0].pop("scope")
+        form = ChapterReviewForm.model_validate(raw_form)
+    answers = _answers(countdowns=[CountdownReviewAnswer(
+        key="clock-node-123", mentioned_in_chapter=True,
+        status_in_this_chapter=FormAnswer(value="active"),
+        consistent_with_prior=FormAnswer(value="false", confidence=0.95),
+    )])
+    projection = project_validated_answers(
+        answers=answers, form=form,
+        validation_report=ValidationReport(blocking_paths=["countdowns[0].consistent_with_prior"]),
+    )
+    assert form.countdowns[0].scope == "secret"
+    assert projection.signals[0].description == "A countdown is inconsistent with prior canon."
+
+
+@pytest.mark.parametrize("form_kind", ["matching", "unmatched", "missing"])
+def test_persisting_signal_description_uses_matching_ask_or_generic_fallback(form_kind: str) -> None:
+    signal_id = "p1:2:form_countdown_inconsistency:clock-node-123:1"
+    form = build_form(
+        project_id="p1", chapter_number=4, chapter_text="",
+        open_signal_rows=[
+            {"signal_id": "other", "description": "Another signal.", "chapter_number": 2},
+            {"signal_id": signal_id, "description": "A countdown is inconsistent with prior canon.", "chapter_number": 2},
+        ],
+    )
+    if form_kind == "unmatched":
+        form.open_signals = [item for item in form.open_signals if item.id != signal_id]
+    answers = ChapterReviewAnswers(
+        project_id="p1", chapter_number=4, form_schema_version=FORM_SCHEMA_VERSION,
+        open_signals=[OpenSignalReviewAnswer(id=signal_id, status=FormAnswer(value="persisting", confidence=0.95))],
+    )
+    projection = project_validated_answers(
+        answers=answers, form=None if form_kind == "missing" else form,
+        validation_report=ValidationReport(blocking_paths=["open_signals[0].status"]),
+    )
+    signal = projection.signals[0]
+    expected = "A countdown is inconsistent with prior canon." if form_kind == "matching" else "An open signal is still unresolved."
+    assert signal.description == expected
+    assert projection.review_issues[0]["description"] == expected
+    assert signal.subject_key == signal_id
+    assert signal.payload["suppression_key"] == f"signal:{signal_id}"
 
 
 @pytest.mark.parametrize("scope", ["public", "secret"])

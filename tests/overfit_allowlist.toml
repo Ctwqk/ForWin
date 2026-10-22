@@ -985,7 +985,7 @@ max_literals = 20
 path = "forwin/writer/prompt_core/world_engine.py"
 checks = ["cjk_collection", "fixture_term"]
 category = "prompt_text"
-justification = "Structured world adjudication and actor-turn instructions; story facts come only from BookState inputs and actor views; the conflict review instructions describe the option tokens and see only the conflict snapshot."
+justification = "Structured world adjudication and actor-turn instructions; story facts come only from BookState inputs and actor views; the conflict review instructions describe the option tokens and see only the conflict snapshot; the plot-response templates name no story ref."
 max_literals = 18
 
 [[entry]]

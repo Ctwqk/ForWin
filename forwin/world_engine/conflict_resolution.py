@@ -2,7 +2,9 @@
 
 ``option_candidates`` turns the decision into world changes and ``record_option_side_effects`` records
 what the option owes the plan; ``ConflictResolutionService.resolve`` composes the two around one
-commit, and the world tick reuses both inside its own delta.
+commit, and the world tick reuses both inside its own delta. Either way the option's world changes are
+checked against current canon first (running_state); a held change canon has since ruled out is stale.
+What the plan and the obligation ledger tell the writer comes only from the change's public events.
 """
 
 from __future__ import annotations
@@ -12,14 +14,16 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.audit.events import DecisionEventType
-from forwin.book_state.book_frame_repository import BookLexiconRepository
+from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
+from forwin.book_state.reviewer import CHAPTER_EXTRACTION_SOURCE_TYPE
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.book_state.schema import ACTOR_NODE_TYPES
 from forwin.canon.admission import CanonAdmissionService, CanonStaleVersion, CanonWriteFailure
@@ -34,13 +38,14 @@ from forwin.planning.future_plan_audit.patches import FuturePlanPatchMixin
 from forwin.planning.query import PlanningQuery
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 from forwin.runtime.policy import RuntimePolicy
-from forwin.writer.prompt_core.world_engine import plot_response_goal
+from forwin.writer.prompt_core.world_engine import world_change_response
 
 from .conflict_repository import ConflictNotOpen, WorldConflictRepository
 from .conflict_types import ConflictDecision
 from .constraints import check_narrative_boundaries
 from .delta_builder import WorldTickDeltaBuilder
 from .propagation import latest_news_in_transit, propagate_news, tick_events
+from .running_state import RunningStateCheck
 from .types import EffectEvent, NewsItem, TickCandidate, TickContext, WorldEffects, tick_seed
 
 
@@ -51,6 +56,7 @@ PLOT_RESPONSE_PATCH_TYPE = "world_conflict_response"
 # A veto stops an open intent; one the story already settled keeps its status.
 _SETTLED_INTENT_STATUSES = frozenset({"resolved", "disrupted", "vetoed"})
 _EVENT_ACTOR_TYPES = {"human": "manual_ui", "codex": "worker", "auto": "system"}
+_ONSTAGE_SLIP = "onstage_slip"
 
 
 class ConflictStale(RuntimeError):
@@ -264,6 +270,20 @@ def record_option_side_effects(
     return OptionSideEffects(obligation_id="", plan_patch_id="")
 
 
+def _writer_text(conflict: WorldPlanConflictRow) -> str:
+    """What the writer is told of the conflict's accepted change: its public events, or a template.
+
+    The held change's summary is objective truth (an adjudicated secret, an actor's plan), so it never
+    reaches the writer (Ruling P32).
+    """
+    try:
+        held = TickCandidate.model_validate(json.loads(conflict.proposed_change_json or "{}"))
+    except ValueError:
+        held = None
+    public = [event.summary for event in held.effects.events if event.visibility == "public"] if held else []
+    return world_change_response(public, onstage_slip=conflict.violated == _ONSTAGE_SLIP)
+
+
 def _next_unaccepted_plan(session: Session, project_id: str, *, latest_chapter: int) -> ChapterPlan:
     plans = PlanningQuery().future_chapters(session, project_id=project_id, current_chapter=latest_chapter)
     if not plans:
@@ -280,7 +300,7 @@ def _record_obligation(
         raise ConflictOptionUnavailable(f"No chapter follows chapter {latest_chapter} within the book's {total}")
     plan = _next_unaccepted_plan(session, conflict.project_id, latest_chapter=latest_chapter)
     obligation_id = new_id()
-    summary = conflict.summary
+    summary = _writer_text(conflict)
     obligation = NarrativeObligation(
         id=obligation_id,
         project_id=conflict.project_id,
@@ -334,7 +354,7 @@ def _record_obligation(
 def _record_plot_response(session: Session, conflict: WorldPlanConflictRow, *, latest_chapter: int) -> str:
     """Put the response goal first in the next unaccepted plan's goals and progress markers."""
     plan = _next_unaccepted_plan(session, conflict.project_id, latest_chapter=latest_chapter)
-    goal = plot_response_goal(conflict.summary)
+    goal = _writer_text(conflict)
     patch = NarrativePlanPatch(
         id=new_id(),
         project_id=conflict.project_id,
@@ -403,15 +423,19 @@ class ConflictResolutionService:
     def resolve(self, *, project_id: str, conflict_id: str, decision: ConflictDecision) -> ConflictResolutionResult:
         """Carry out ``decision``: commit its world changes, record its side effects and close the conflict.
 
-        Everything lands in one SAVEPOINT. ConflictStale (canon moved under the change, or a newer
-        chapter landed) and ConflictOptionUnavailable roll it back whole, leaving the conflict open
-        and the session usable; any other CanonWriteFailure propagates after the same rollback.
+        The project row is locked right after the conflict row, so no other canon writer commits while
+        the resolution reads canon and the news queue. The option's world changes are checked against
+        that canon first: one that no longer holds raises ConflictStale. Everything else lands in one
+        SAVEPOINT. ConflictStale and ConflictOptionUnavailable roll it back whole, leaving the conflict
+        open and the session usable; any other CanonWriteFailure propagates after the same rollback.
         """
         session = self.session
         repo = WorldConflictRepository(session)
         row = repo.get(project_id, conflict_id, for_update=True)
         if row is None:
             raise LookupError(f"World conflict {conflict_id} not found in project {project_id}")
+        # FOR NO KEY UPDATE, as canon admission takes it: after the conflict row, as the world tick orders them.
+        session.execute(select(Project.id).where(Project.id == project_id).with_for_update(key_share=True))
         if row.status != "open":
             raise ConflictNotOpen(f"Conflict {row.id} is {row.status}")
         _check_decision(row, decision)
@@ -424,19 +448,19 @@ class ConflictResolutionService:
             if row.actor_ref.strip() else 0
         )
         runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=latest)
-        story_end = BookStateQuery(session).current_story_minute(project_id, as_of_chapter=latest)
-        now = story_end if story_end is not None else row.story_time
+        context = _resolution_context(session, project_id, chapter_number=latest, fallback_now=row.story_time)
         candidates = option_candidates(
-            row, decision, runtime=runtime, policy=self.policy, reroll_count=reroll_count, now=now,
+            row, decision, runtime=runtime, policy=self.policy, reroll_count=reroll_count, now=context.now,
         )
         tick_id = f"conflict-{row.id}"
+        self._check_against_canon(row, candidates, runtime=runtime, context=context, tick_id=tick_id)
         graph_delta_ids: tuple[str, ...] = ()
         warnings: tuple[dict[str, str], ...] = ()
         try:
             with session.begin_nested():
                 if candidates:
                     graph_delta_ids, warnings = self._commit(
-                        row, decision, candidates, runtime=runtime, tick_id=tick_id, chapter_number=latest, now=now,
+                        row, decision, candidates, runtime=runtime, tick_id=tick_id, context=context,
                     )
                 effects = record_option_side_effects(session, row, decision, latest_chapter=latest)
                 refs = [*graph_delta_ids, effects.obligation_id, effects.plan_patch_id]
@@ -464,6 +488,32 @@ class ConflictResolutionService:
             warnings=warnings,
         )
 
+    def _check_against_canon(
+        self,
+        conflict: WorldPlanConflictRow,
+        candidates: Sequence[TickCandidate],
+        *,
+        runtime: BookStateRuntime,
+        context: TickContext,
+        tick_id: str,
+    ) -> None:
+        """Raise ConflictStale when the option's changes no longer hold against current canon (Ruling P30).
+
+        The held change was checked against the canon of its tick; earlier resolutions or a rewrite may
+        have changed it since. A veto changes nothing that can fail.
+        """
+        check = RunningStateCheck(
+            self.session, context=context, runtime=runtime,
+            lexicon=BookLexiconRepository(self.session).get(conflict.project_id),
+            calendar=StoryCalendarRepository(self.session).get(conflict.project_id),
+            tick_id=tick_id, travel_tolerance=self.policy.review.travel_tolerance,
+        )
+        for candidate in candidates:
+            issues = check.admit(candidate)
+            if issues:
+                details = "; ".join(f"{issue.code}: {issue.message}" for issue in issues)
+                raise ConflictStale(f"Conflict {conflict.id}: the held change no longer holds against canon: {details}")
+
     def _commit(
         self,
         conflict: WorldPlanConflictRow,
@@ -472,8 +522,7 @@ class ConflictResolutionService:
         *,
         runtime: BookStateRuntime,
         tick_id: str,
-        chapter_number: int,
-        now: int,
+        context: TickContext,
     ) -> tuple[tuple[str, ...], tuple[dict[str, str], ...]]:
         """Build the candidates and their news into one world_engine delta on the latest canon chapter,
         commit it, and return its ids with the builder's warnings."""
@@ -482,18 +531,11 @@ class ConflictResolutionService:
             runtime,
             BookLexiconRepository(self.session).get(project_id),
             events=tick_events(project_id, tick_id, candidates),
+            # Read under the project lock, so no other writer's queue is lost.
             in_transit=latest_news_in_transit(self.session, project_id),
-            now=now,
+            now=context.now,
             candidate_id=f"conflict:{conflict.id}:news",
             summary=conflict.summary,
-        )
-        # The resolution happens at the latest chapter's end: its window is that one minute.
-        context = TickContext(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            now=now,
-            window_start=now,
-            seed=tick_seed(project_id, chapter_number),
         )
         build = WorldTickDeltaBuilder(self.session).build(
             context=context,
@@ -510,9 +552,9 @@ class ConflictResolutionService:
         outcome = self.admission.commit_world_tick(
             session=self.session,
             project_id=project_id,
-            chapter_number=chapter_number,
+            chapter_number=context.chapter_number,
             approved_changes=ApprovedGraphDeltaSet(
-                project_id=project_id, chapter_number=chapter_number, graph_deltas=[delta],
+                project_id=project_id, chapter_number=context.chapter_number, graph_deltas=[delta],
             ),
             tick_id=tick_id,
         )
@@ -520,6 +562,24 @@ class ConflictResolutionService:
             {"code": issue.code, "message": issue.message} for issue in build.issues if issue.severity == "warning"
         )
         return outcome.graph_delta_ids, warnings
+
+
+def _resolution_context(session: Session, project_id: str, *, chapter_number: int, fallback_now: int) -> TickContext:
+    """The latest canon chapter's window: a resolution lands at the chapter's end, and a change held in the
+    chapter's tick keeps the times that tick gave it."""
+    story_end = BookStateQuery(session).current_story_minute(project_id, as_of_chapter=chapter_number)
+    now = story_end if story_end is not None else fallback_now
+    starts = [
+        delta.story_time_start for delta in BookStateRepository(session).list_graph_deltas(
+            project_id, after_chapter=chapter_number - 1, through_chapter=chapter_number,
+        )
+        if delta.source_type == CHAPTER_EXTRACTION_SOURCE_TYPE and delta.story_time_start is not None
+    ]
+    start = starts[-1] if starts else now
+    return TickContext(
+        project_id=project_id, chapter_number=chapter_number, now=now, window_start=min(start, now),
+        seed=tick_seed(project_id, chapter_number),
+    )
 
 
 __all__ = [

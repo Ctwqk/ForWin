@@ -722,3 +722,34 @@ def test_seed_knowledge_outlasts_newer_event_news_under_the_cap():
                         "fact:public-heard", "fact:seed-secret"]
     assert refs[6] == f"fact:event-{MAX_KNOWN_FACTS + 4:03d}"
     assert all(f"fact:event-{index:03d}" not in refs for index in range(11))
+
+
+def test_actor_view_shows_the_highest_priority_agendas_only():
+    from forwin.world_engine.actor_turns import MAX_ACTOR_AGENDAS
+    runtime = _runtime()
+    for index in range(MAX_ACTOR_AGENDAS + 3):
+        runtime.world.add_node(_agenda(f"hero/extra-{index:02d}", "hero", f"extra-goal-{index:02d}"))
+        runtime.world.states_by_node_id[f"hero/extra-{index:02d}"]["priority"] = 1 + index % 5
+    runtime.world.states_by_node_id["hero/agenda"].pop("priority")
+    view = _view(runtime=runtime)
+    assert len(view.agendas) == MAX_ACTOR_AGENDAS
+    # Highest priority first, then id; an agenda without a priority ranks in the middle.
+    assert [agenda["id"] for agenda in view.agendas] == [
+        "hero/extra-04", "hero/extra-09", "hero/extra-03", "hero/extra-08", "hero/agenda",
+        "hero/extra-02", "hero/extra-07", "hero/extra-01",
+    ]
+
+
+def test_too_many_agenda_changes_retry_with_feedback():
+    from forwin.world_engine.actor_turns import MAX_AGENDA_CHANGES_PER_TURN
+    changes = [
+        {"agenda_ref": "hero/agenda", "priority": 1 + index % 5} for index in range(MAX_AGENDA_CHANGES_PER_TURN + 1)
+    ]
+    client = StubLLM({"turns": [_turn(agenda_changes=changes)]}, {"turns": [_turn()]})
+    [call] = _run(client)
+    assert call.result is not None and len(client.calls) == 2
+    assert "too_many_agenda_changes" in _retry_feedback(client.calls[1])
+    assert _user_payload(client.calls[0])["max_agenda_changes_per_actor"] == MAX_AGENDA_CHANGES_PER_TURN
+    allowed = [{"turns": [_turn(agenda_changes=changes[:MAX_AGENDA_CHANGES_PER_TURN])]}]
+    [kept] = _run(StubLLM(*allowed))
+    assert kept.result is not None and kept.issues == []

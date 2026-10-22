@@ -14,7 +14,18 @@ from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_locat
 from forwin.book_state.schema import ACTOR_TIERS, IMPACT_LEVELS, WORLD_NODE_FIELDS
 from forwin.book_state.story_clock import StoryCalendar, StoryClockError, duration_to_minutes
 from forwin.world_engine.travel import estimate_travel
-from forwin.world_engine.types import EffectEntityChange, TickCandidate, WorldEffects
+from forwin.world_engine.types import NEW_FACT_REF_PREFIX, EffectEntityChange, TickCandidate, WorldEffects
+
+
+# The state.status values that end a faction, organization, group or site: it no longer exists.
+ENDED_STATUSES = frozenset({"destroyed", "dissolved", "disbanded", "inactive"})
+# Node types whose end is major; WORLD_NODE_FIELDS gives each a state.status.
+_ENDING_TYPES = frozenset({"faction", "organization", "group", "site_state"})
+# State fields whose change is major on the node types WORLD_NODE_FIELDS gives them to: who leads a
+# faction or group, and which faction controls a site.
+_MAJOR_STATE_FIELDS = frozenset({"leader_id", "controller_faction_id"})
+# The knowledge states in which an observer holds a fact as known.
+_KNOWN_STATES = frozenset({"knows", "believes"})
 
 
 @dataclass(frozen=True)
@@ -39,11 +50,10 @@ class BudgetResult:
 
 
 def _path(runtime: BookStateRuntime, ref: str, field: str) -> str:
+    """The field's path as the builder writes it: a profile field when only the profile has it, else state."""
     field = field.strip()
-    if field in {"state", "profile", "is_active", "sensitivity_level"} or field.startswith(("state.", "profile.")):
+    if field in {"state", "profile"} or field.startswith(("state.", "profile.")):
         return field
-    if ref.startswith(FACT_REF_PREFIX) and field == "sensitivity":
-        return "sensitivity_level"
     node = runtime.world.get_node(ref)
     fields = WORLD_NODE_FIELDS.get(str(node.node_type), {}) if node else {}
     root = field.split(".", 1)[0]
@@ -139,13 +149,12 @@ def classify_impact(
         if not isinstance(old, dict) or not isinstance(new, dict):
             continue
         changed = {field for field in old.keys() | new.keys() if old.get(field) != new.get(field)}
+        fields = WORLD_NODE_FIELDS.get(kind, {}).get("state", set())
         major = (
             (kind == "character" and "alive_status" in changed and new.get("alive_status") == "dead"
              and runtime.world.get_state(ref).get("actor_tier") in {"major", "minor"})
-            or (kind in {"faction", "organization", "group", "site_state"}
-                and before.get("is_active") is not False and after.get("is_active") is False)
-            or (kind in {"faction", "organization", "group"} and "controlled_by_id" in changed)
-            or (before.get("sensitivity_level") in HIDDEN_SENSITIVITY and after.get("sensitivity_level") == "public")
+            or (kind in _ENDING_TYPES and not _ended(old) and _ended(new))
+            or bool(changed & _MAJOR_STATE_FIELDS & fields)
         )
         moderate = (
             (kind in {"item", "resource"} and "holder_id" in changed)
@@ -169,10 +178,39 @@ def classify_impact(
         if (node is not None and node.node_type == "event" and state.get("visibility_level") == "public"
                 and hidden.intersection(_refs(after))):
             level = max(level, IMPACT_LEVELS.index("major"))
-    # EffectEvent has no dedicated fact_refs field; inspect its structural references.
-    if any(event.visibility == "public" and hidden.intersection(event.participant_refs) for event in candidate.effects.events):
+    if _exposes_secret(runtime, candidate):
         level = max(level, IMPACT_LEVELS.index("major"))
     return IMPACT_LEVELS[level]
+
+
+def _ended(state: dict[str, Any]) -> bool:
+    return state.get("status") in ENDED_STATUSES
+
+
+def _exposes_secret(runtime: BookStateRuntime, candidate: TickCandidate) -> bool:
+    """A knowledge effect makes a hidden or secret fact known to an observer that did not know it.
+
+    A new hidden fact counts for the observers outside its known_by; its known_by made it.
+    """
+    makers = {
+        f"{NEW_FACT_REF_PREFIX}{fact.key}": set(fact.known_by)
+        for fact in candidate.effects.new_facts if fact.sensitivity in HIDDEN_SENSITIVITY
+    }
+    for item in candidate.effects.knowledge:
+        if item.state not in _KNOWN_STATES:
+            continue
+        if item.fact_ref in makers:
+            if item.observer_ref not in makers[item.fact_ref]:
+                return True
+            continue
+        fact = runtime.world.facts_by_id.get(item.fact_ref.removeprefix(FACT_REF_PREFIX))
+        if fact is None or fact.sensitivity_level not in HIDDEN_SENSITIVITY:
+            continue
+        views = [view for (_kind, observer_id), view in runtime.cognition_by_observer.items()
+                 if observer_id == item.observer_ref]
+        if not any(view.knowledge_by_ref.get(item.fact_ref) in _KNOWN_STATES for view in views):
+            return True
+    return False
 
 
 def _owner(runtime: BookStateRuntime, candidate: TickCandidate) -> str:
@@ -338,7 +376,7 @@ def check_narrative_boundaries(
                 path, value = _path(runtime, ref, field), payload.get("value")
             else:
                 path, value = {
-                    "must_exist": ("is_active", True),
+                    "must_exist": ("state.status", None),
                     "must_be_alive": ("state.alive_status", "alive"),
                 }.get(kind, ("", None))
             for changed, changed_path, before, after in transitions:
@@ -350,7 +388,8 @@ def check_narrative_boundaries(
                 if old == new:
                     continue
                 if kind == "must_exist":
-                    violated |= new is False
+                    # A destroyed or inactive ref no longer exists; one that had already ended stays so.
+                    violated |= new in ENDED_STATUSES and old not in ENDED_STATUSES
                 elif kind == "must_be_alive":
                     violated |= new == "dead"
                 else:

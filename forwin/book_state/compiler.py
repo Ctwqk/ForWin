@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from forwin.book_state.cognition import CognitionView
+from forwin.book_state.narrative import OPEN_PROTECTION_UNTIL, PROTECTION_UNTIL_PATH
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository, _as_jsonable, _world_edge_as_of
 from forwin.book_state.runtime import INACTIVE_SPANS_KEY, BookStateRuntime
@@ -442,7 +443,12 @@ def _narrative_current(runtime: BookStateRuntime, patch: Any) -> Any:
         target = runtime.narrative.nodes_by_id.get(target_id)
     if target is None:
         return None
-    return _get_path(target.model_dump(mode="json"), patch.field_path)
+    current = _get_path(target.model_dump(mode="json"), patch.field_path)
+    is_protection = getattr(target, "node_type", "") == "review_constraint"
+    if current is None and is_protection and patch.field_path == PROTECTION_UNTIL_PATH:
+        # An open protection may leave until_chapter out; a release records it as open, until_chapter 0.
+        return OPEN_PROTECTION_UNTIL
+    return current
 
 
 def _split_target_ref(target_ref: str) -> tuple[str, str]:

@@ -12,7 +12,7 @@ from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
 from forwin.book_state.story_clock import CalendarUnit, StoryCalendar
 from forwin.protocol.book_state import CognitionOverlay, FactNode, MapEdge, MapNode, WORLD_EDGE_TYPES, WorldEdge, WorldNode
-from forwin.world_engine.constraints import ConstraintIssue
+from forwin.world_engine.constraints import ENDED_STATUSES, ConstraintIssue
 from forwin.world_engine.types import AdjudicationResult, TickContext, WorldEffects
 
 
@@ -169,6 +169,7 @@ def test_prompt_lists_canonical_enum_values_missing_from_json_schema():
     assert allowed == {
         "knowledge_state": list(KNOWLEDGE_STATES), "knowledge_channel": list(KNOWLEDGE_CHANNELS),
         "edge_type": sorted(WORLD_EDGE_TYPES), "new_fact_ref_prefix": "fact:new:",
+        "ended_status": sorted(ENDED_STATUSES),
     }
 
 
@@ -401,3 +402,37 @@ def test_shared_reference_validator_accepts_known_refs_and_free_text():
         "new_facts": [{"key": "new", "proposition": "truth", "truth_value": True, "sensitivity": "hidden", "known_by": ["owner"]}],
     })
     assert effect_reference_issues(effects, _runtime(), lexicon) == []
+
+
+def test_prompt_leaves_past_events_and_settled_intents_out_of_full_bodies_and_the_index():
+    runtime = _runtime()
+    # The book's history at the owner's site: events and intents settled long ago, and a live bystander.
+    for index in range(3):
+        runtime.world.add_node(_node(f"event-{index}", "event", profile={"location_id": "site"},
+                                     location_id="site", participant_ids=["owner"]))
+    runtime.world.add_node(_node("settled-intent", "intent", profile={"owner_ref": "target", "location_id": "site"},
+                                 status="resolved"))
+    runtime.world.add_node(_node("gone", location_id="site").model_copy(update={"is_active": False}))
+    payload, _user = _prompt_payload(runtime)
+    assert {node["id"] for node in payload["world_nodes"]} == {"owner", "target", "item"}
+    index = {node["id"] for node in payload["world_node_index"]}
+    # Intents still to happen stay in the index; events, settled intents and rules leave it.
+    assert "intent-2" in index and "gone" in index
+    assert index.isdisjoint({"event-0", "event-1", "event-2", "settled-intent", "rule", "intent-1"})
+
+
+def test_prompt_shows_every_standing_fact_and_only_the_newest_event_facts():
+    from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_EVENT_FACTS
+
+    runtime = _runtime()
+    for index in range(MAX_ADJUDICATION_EVENT_FACTS + 5):
+        runtime.world.add_fact(FactNode(id=f"event-fact-{index:02d}", project_id="p", proposition="event-truth",
+                                        fact_type="event", related_node_refs=["owner"], created_at_chapter=index))
+    runtime.world.add_fact(FactNode(id="old-standing", project_id="p", proposition="standing-truth",
+                                    related_node_refs=["owner"], created_at_chapter=0))
+    payload, _user = _prompt_payload(runtime)
+    ids = {fact["id"] for fact in payload["facts"]}
+    assert {"hidden", "old-standing"} <= ids
+    assert sorted(ref for ref in ids if ref.startswith("event-fact-")) == [
+        f"event-fact-{index:02d}" for index in range(5, MAX_ADJUDICATION_EVENT_FACTS + 5)
+    ]

@@ -8,12 +8,14 @@ from typing import Any
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.runtime import BookStateRuntime
-from forwin.canon import CanonAdmissionService, CanonWriteFailure
+from forwin.book_state import BookStateCompiler
+from forwin.canon import CanonAdmissionService, CanonStaleVersion, CanonWriteFailure
 from forwin.models import ArcPlanVersion, ChapterPlan, NarrativeObligationRow, NarrativePlanPatchRow, Project
 from forwin.models.audit import DecisionEvent
 from forwin.models.book_state import GraphDeltaRow
@@ -36,12 +38,17 @@ from forwin.world_engine.types import (
     WORLD_ENGINE_SOURCE_TYPE,
     EffectEntityChange,
     EffectEvent,
+    EffectMovement,
     EffectRelationChange,
     NewsItem,
     TickCandidate,
     WorldEffects,
 )
-from forwin.writer.prompt_core.world_engine import plot_response_goal
+from forwin.writer.prompt_core.world_engine import (
+    ONSTAGE_SLIP_RESPONSE_GOAL,
+    PLOT_RESPONSE_GENERIC_GOAL,
+    plot_response_goal,
+)
 from tests.test_world_gate_v6 import _commit, _delta, _session_factory, _time, _World
 from tests.test_world_tick_delta import _build, _built, _commit_tick, _context, _issues, _patches
 from tests.test_world_tick_steps import _seed_steps_world
@@ -427,17 +434,20 @@ def test_accept_with_obligation_commits_change_and_records_obligation(monkeypatc
     assert faction.knowledge_by_ref[fact_ref] == "knows"
     with Session() as session:
         obligation = session.get(NarrativeObligationRow, result.obligation_id)
+        # The writer-visible texts come from the change's public event, not the conflict summary.
+        response = plot_response_goal("event-held")
         assert (
             obligation.obligation_type, obligation.summary, obligation.payoff_test, obligation.deadline_chapter,
             obligation.origin_chapter_number, obligation.status,
-        ) == ("world_change_response", SUMMARY, SUMMARY, 7, 1, "planned")
+        ) == ("world_change_response", response, response, 7, 1, "planned")
         patch = session.get(NarrativePlanPatchRow, result.plan_patch_id)
         assert (patch.target_plan_id, patch.applied, json.loads(patch.affected_chapters_json)) == (
             book.plans[2], True, [2],
         )
         assert json.loads(obligation.linked_plan_patch_ids_json) == [result.plan_patch_id]
     goals, _experience = _plan(Session, book.plans[2])
-    assert any(result.obligation_id in goal and SUMMARY in goal for goal in goals)
+    assert any(result.obligation_id in goal and "event-held" in goal for goal in goals)
+    assert not any(SUMMARY in goal for goal in goals)
     assert _plan(Session, book.plans[3])[0] == ["goal-3"]
     assert _row(Session, book, conflict_id) == (
         "resolved", [delta_id, result.obligation_id, result.plan_patch_id], "accept_with_obligation",
@@ -528,8 +538,8 @@ def test_plot_responds_adds_goal_to_next_unwritten_plan(monkeypatch) -> None:
     assert set(payload["warnings"][0]) == {"code", "message"}
 
     delta_id = _delta_id(book, conflict_id)
-    goal = plot_response_goal(SUMMARY)
-    assert SUMMARY in goal and goal != SUMMARY
+    goal = plot_response_goal("event-held")
+    assert "event-held" in goal and SUMMARY not in goal and "summary-held" not in goal
     assert result.graph_delta_ids == (delta_id,)
     assert result.obligation_id == ""
     goals, experience = _plan(Session, book.plans[2])
@@ -615,7 +625,7 @@ def test_resolving_twice_raises_and_applies_once(monkeypatch) -> None:
 
     assert [delta.id for delta in _resolution_deltas(Session, book, conflict_id)] == list(first.graph_delta_ids)
     assert len(_resolved_events(Session, book, conflict_id)) == 1
-    assert _plan(Session, book.plans[2])[0] == [plot_response_goal(SUMMARY), "goal-2"]
+    assert _plan(Session, book.plans[2])[0] == [plot_response_goal("event-held"), "goal-2"]
     with Session() as session:
         assert len(session.scalars(select(NarrativePlanPatchRow.id).where(
             NarrativePlanPatchRow.project_id == book.project_id,
@@ -643,26 +653,25 @@ class _RacingAdmission(CanonAdmissionService):
         return super().commit_world_tick(**kwargs)
 
 
+class _StaleAdmission(CanonAdmissionService):
+    """Canon admission finds a patch's old_value no longer current."""
+
+    def commit_world_tick(self, **kwargs: Any):
+        raise CanonStaleVersion("old_value mismatch")
+
+
 def test_stale_held_change_keeps_conflict_open(monkeypatch) -> None:
     engine, Session = _session_factory()
     book = _book(Session, monkeypatch)
     conflict_id = _conflict(Session, book, proposed_change=_held(book).model_dump(mode="json"))
-    # A concurrent tick disrupts the intent the held change resolves.
-    racing_tick = _built(Session, _context(book.world, book.chapter), [TickCandidate(
-        candidate_id="race", origin="adjudication", summary="summary-race", effects=WorldEffects(),
-        intent_status_changes={book.later: "disrupted"},
-    )], tick_id="tick-race")
 
-    def race() -> None:
-        _commit_tick(Session, book.world, racing_tick, tick_id="tick-race")
-
-    _resolve_failing(Session, book, conflict_id, "plot_responds", ConflictStale, admission=_RacingAdmission(race))
+    _resolve_failing(Session, book, conflict_id, "plot_responds", ConflictStale, admission=_StaleAdmission())
 
     assert _row(Session, book, conflict_id) == ("open", [], "")
     assert _resolution_deltas(Session, book, conflict_id) == []
     assert _resolved_events(Session, book, conflict_id) == []
     assert _plan(Session, book.plans[2])[0] == ["goal-2"]
-    assert _runtime(Session, book).world.get_state(book.later)["status"] == "disrupted"
+    assert _runtime(Session, book).world.get_state(book.later)["status"] == "planned"
     engine.dispose()
 
 
@@ -760,17 +769,39 @@ def test_veto_reroll_cap_counts_only_recent_vetoes(monkeypatch) -> None:
     engine.dispose()
 
 
-def test_a_chapter_committed_under_the_resolution_makes_it_stale(monkeypatch) -> None:
+def test_no_canon_writer_commits_under_a_resolution(monkeypatch) -> None:
     engine, Session = _session_factory()
     book = _book(Session, monkeypatch)
+    # An earlier tick left news in transit: the resolution must carry exactly that queue forward.
+    news = NewsItem(fact_ref=book.world.fact("fact-public"), observer_ref=book.world.faction, arrive_at=book.now + 30)
+    _commit_tick(Session, book.world, _built(Session, _context(book.world, book.chapter), [], tick_id="tick-1",
+                                             news=[news]), tick_id="tick-1")
     conflict_id = _conflict(Session, book, proposed_change=_held(book).model_dump(mode="json"))
-    chapter_two = _delta(Session, book.world, 2, _time(1, "日"))
+    blocked: list[bool] = []
 
     def race() -> None:
-        _commit(Session, book.world, chapter_two)
+        # Another canon writer, as a chapter commit or a second resolve would, reaches for the project row.
+        with Session() as other:
+            try:
+                other.execute(select(Project.id).where(Project.id == book.project_id).with_for_update(
+                    key_share=True, nowait=True,
+                ))
+            except OperationalError:
+                blocked.append(True)
+            else:
+                blocked.append(False)
+            other.rollback()
 
-    _resolve_failing(Session, book, conflict_id, "plot_responds", ConflictStale, admission=_RacingAdmission(race))
-    assert _row(Session, book, conflict_id) == ("open", [], "")
+    with Session.begin() as session:
+        _service(session, admission=_RacingAdmission(race)).resolve(
+            project_id=book.project_id, conflict_id=conflict_id, decision=_decision("plot_responds"),
+        )
+
+    # The resolution held the project row from the start, so the writer would have waited for it.
+    assert blocked == [True]
+    assert _row(Session, book, conflict_id)[0] == "resolved"
+    [delta] = _resolution_deltas(Session, book, conflict_id)
+    assert news.model_dump(mode="json") in delta.metadata["news_in_transit"]
     engine.dispose()
 
 
@@ -818,7 +849,7 @@ def test_veto_with_an_unknown_actor_only_stops_the_intent(monkeypatch) -> None:
     engine.dispose()
 
 
-def test_builder_releases_only_review_constraints_and_keeps_an_absent_until_chapter(monkeypatch) -> None:
+def test_builder_releases_only_review_constraints_and_records_an_absent_until_chapter_as_open(monkeypatch) -> None:
     engine, Session = _session_factory()
     book = _book(Session, monkeypatch, protections=lambda world: [
         ("protect-open", {"ref": world.rival, "kind": "must_be_alive", "source": "test"}),
@@ -837,6 +868,193 @@ def test_builder_releases_only_review_constraints_and_keeps_an_absent_until_chap
     built = _built(Session, context, [release("protect-open")], tick_id="tick-release")
     assert [(patch.target_ref, patch.field_path, patch.old_value, patch.new_value)
             for patch in built.narrative_patches] == [
-        ("review_constraint:protect-open", "payload.until_chapter", None, 1),
+        ("review_constraint:protect-open", "payload.until_chapter", 0, 1),
     ]
+    engine.dispose()
+
+
+def test_releasing_an_open_protection_rewinds_to_open(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    # An open protection that leaves until_chapter out altogether.
+    book = _book(Session, monkeypatch, protections=lambda world: [
+        ("protect-open", {"ref": world.rival, "kind": "must_be_alive", "source": "test"}),
+    ])
+    held = TickCandidate(
+        candidate_id="adjudication:kill", origin="adjudication", actor_id=book.world.hero, summary="summary-kill",
+        effects=WorldEffects(entity_changes=[
+            EffectEntityChange(ref=book.world.rival, field="alive_status", new_value="dead"),
+        ]),
+        impact_level="major",
+    )
+    conflict_id = _conflict(
+        Session, book, proposed_change=held.model_dump(mode="json"), options=["veto_world", "amend_plan"],
+        violated="protection", impact="major", actor_ref=book.world.hero,
+    )
+
+    # The release records the open protection as until_chapter 0, and canon admission's CAS accepts that.
+    _resolve(Session, book, conflict_id, "amend_plan")
+
+    [delta] = _resolution_deltas(Session, book, conflict_id)
+    [release] = delta.narrative_patches
+    assert (release.field_path, release.old_value, release.new_value) == ("payload.until_chapter", 0, 1)
+    assert _runtime(Session, book).narrative.nodes_by_id["protect-open"].payload["until_chapter"] == 1
+
+    # Rewind chapter 1 without the release, as a rewrite that drops its delta does.
+    with Session.begin() as session:
+        repository = BookStateRepository(session)
+        repository.invalidate_project_range(book.project_id, from_chapter=1, through_chapter=1)
+        repository.retire_chapter_deltas(book.project_id, 1, delta_ids=[delta.id])
+    rewound = _runtime(Session, book)
+    assert "until_chapter" not in rewound.narrative.nodes_by_id["protect-open"].payload
+    assert [v.constraint_node_id for v in check_narrative_boundaries(rewound, held, next_chapter=2)] == [
+        "protect-open",
+    ]
+    # The release replays onto the rewound canon: its old_value is the open protection's.
+    with Session() as session:
+        assert BookStateCompiler(session).cas_mismatches(rewound, delta) == []
+        closed = rewound.narrative.nodes_by_id["protect-open"]
+        rewound.narrative.nodes_by_id["protect-open"] = closed.model_copy(
+            update={"payload": {**closed.payload, "until_chapter": 5}},
+        )
+        assert [label for label, _patch, _current in BookStateCompiler(session).cas_mismatches(rewound, delta)] == [
+            "narrative:review_constraint:protect-open:payload.until_chapter",
+        ]
+    engine.dispose()
+
+
+# writer-visible text (Ruling P32)
+
+
+def _plot_texts(Session, book: _Book, result: ConflictResolutionResult) -> str:
+    """Everything the writer may read of a resolution: plan goals and markers, obligation and plan patch."""
+    goals, experience = _plan(Session, book.plans[2])
+    with Session() as session:
+        texts = [*goals, json.dumps(experience, ensure_ascii=False)]
+        if result.obligation_id:
+            obligation = session.get(NarrativeObligationRow, result.obligation_id)
+            texts.extend([obligation.summary, obligation.payoff_test])
+        patch = session.get(NarrativePlanPatchRow, result.plan_patch_id)
+        texts.extend([
+            patch.writer_context_injections_json, patch.new_contract_json, patch.reviewer_context_injections_json,
+            patch.expected_resolution_tests_json,
+        ])
+    return "\n".join(texts)
+
+
+@pytest.mark.parametrize("option", ["plot_responds", "accept_with_obligation"])
+def test_a_secret_change_reaches_the_writer_only_as_a_generic_response(monkeypatch, option) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    secret = _held(book).model_copy(update={
+        "summary": "summary-secret-truth",
+        "effects": WorldEffects(events=[EffectEvent(
+            summary="event-secret", participant_refs=[book.world.hero], location_id=book.world.loc(1),
+            visibility="secret", at=book.now,
+        )]),
+    })
+    conflict_id = _conflict(Session, book, proposed_change=secret.model_dump(mode="json"))
+
+    result = _resolve(Session, book, conflict_id, option)
+
+    texts = _plot_texts(Session, book, result)
+    for hidden in ("summary-secret-truth", "event-secret", SUMMARY):
+        assert hidden not in texts
+    assert PLOT_RESPONSE_GENERIC_GOAL in texts
+    if option == "plot_responds":
+        assert _plan(Session, book.plans[2])[0] == [PLOT_RESPONSE_GENERIC_GOAL, "goal-2"]
+    engine.dispose()
+
+
+def test_a_public_event_is_all_the_writer_reads_of_a_mixed_change(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    held = _held(book)
+    mixed = held.model_copy(update={"effects": held.effects.model_copy(update={"events": [
+        *held.effects.events,
+        EffectEvent(summary="event-secret", participant_refs=[book.world.hero], location_id=book.world.loc(1),
+                    visibility="secret", at=book.now),
+    ]})})
+    conflict_id = _conflict(Session, book, proposed_change=mixed.model_dump(mode="json"))
+
+    result = _resolve(Session, book, conflict_id, "plot_responds")
+
+    assert _plan(Session, book.plans[2])[0] == [plot_response_goal("event-held"), "goal-2"]
+    assert "event-secret" not in _plot_texts(Session, book, result)
+    engine.dispose()
+
+
+def test_an_accepted_onstage_slip_asks_the_next_chapter_to_stage_it(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    conflict_id = _conflict(
+        Session, book, proposed_change=_slip(book, book.onstage), violated="onstage_slip", impact="minor",
+        intent_ref=book.onstage, actor_ref=book.world.hero,
+    )
+
+    result = _resolve(Session, book, conflict_id, "plot_responds")
+
+    # Nothing has happened yet: the goal stages the intent instead of answering a change.
+    assert _plan(Session, book.plans[2])[0] == [ONSTAGE_SLIP_RESPONSE_GOAL, "goal-2"]
+    assert "summary-slip" not in _plot_texts(Session, book, result)
+    engine.dispose()
+
+
+# Ruling P30: the resolution's changes are checked in the latest chapter's window
+
+
+def test_a_held_movement_within_the_chapter_still_resolves(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    start = book.chapter.story_time_start
+    walk = TickCandidate(
+        candidate_id="adjudication:walk", origin="adjudication", actor_id=book.world.hero, intent_id=book.later,
+        summary="summary-walk", effects=WorldEffects(movements=[EffectMovement(
+            entity_ref=book.world.hero, to_location_id=book.world.loc(2), travel_mode_id="mode-walk",
+            depart_at=start + 60, arrive_at=start + 180,
+        )]),
+        intent_status_changes={book.later: "resolved"}, impact_level="major",
+    )
+    conflict_id = _conflict(Session, book, proposed_change=walk.model_dump(mode="json"))
+
+    result = _resolve(Session, book, conflict_id, "plot_responds")
+
+    assert result.graph_delta_ids == (_delta_id(book, conflict_id),)
+    assert _runtime(Session, book).world.get_state(book.world.hero)["location_id"] == book.world.loc(2)
+    engine.dispose()
+
+
+def test_veto_reroll_window_starts_exactly_max_rerolls_chapters_back(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    hero = book.world.hero
+    policy = _policy(max_rerolls=1)
+    for number in (2, 3):
+        _commit(Session, book.world, _delta(Session, book.world, number, _time(1, "日")))
+
+    def rerolls_after_a_veto_detected_at(chapter: int) -> bool:
+        """Whether vetoing the hero now lets it act again, given one earlier veto detected after ``chapter``."""
+        earlier = _conflict(
+            Session, book, proposed_change=_slip(book, book.onstage), violated="onstage_slip", impact="minor",
+            actor_ref=hero, detected_after_chapter=chapter,
+        )
+        with Session.begin() as session:
+            repository = WorldConflictRepository(session)
+            repository.mark_resolved(repository.get(book.project_id, earlier, for_update=True),
+                                     decision=_decision("veto_world"), result_refs=[])
+        # Without an intent to stop, the veto changes the world only by giving the actor its turn back.
+        fresh = _conflict(
+            Session, book, proposed_change=_slip(book, book.later), violated="onstage_slip", impact="minor",
+            actor_ref=hero, detected_after_chapter=3,
+        )
+        result = _resolve(Session, book, fresh, "veto_world", policy=policy)
+        with Session.begin() as session:
+            # Each probe starts again from no counted vetoes.
+            for conflict_id in (earlier, fresh):
+                session.delete(WorldConflictRepository(session).get(book.project_id, conflict_id))
+        return bool(result.graph_delta_ids)
+
+    # The latest chapter is 3 and max_rerolls 1: a veto detected after chapter 2 (3 - 1) counts and spends
+    # the one reroll; one detected after chapter 1 is outside the window.
+    assert rerolls_after_a_veto_detected_at(1) is True
+    assert rerolls_after_a_veto_detected_at(2) is False
     engine.dispose()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -37,6 +38,7 @@ from forwin.world_engine.adjudicator import AdjudicationCall, WorldAdjudicator
 from forwin.world_engine.conflict_delegate import WorldConflictDelegate
 from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.world_engine.delta_builder import TickIssue, WorldTickDeltaBuilder, tick_event_fact_ref
+from forwin.world_engine import running_state
 from forwin.world_engine.propagation import chapter_events
 from forwin.world_engine.tick import WorldTickResult, WorldTickService
 from forwin.world_engine.tick_nodes import outcome_candidate
@@ -893,7 +895,8 @@ def test_codex_plot_response_runs_in_tick_or_escalates_without_an_unwritten_plan
         plan = session.scalars(select(ChapterPlan).where(
             ChapterPlan.project_id == world.project_id, ChapterPlan.chapter_number == 2,
         )).one()
-    assert load_goals_json(plan.goals_json) == [plot_response_goal("summary-ambush"), "goal-2"]
+    # The writer reads the change's public event, never the adjudicator's summary of it.
+    assert load_goals_json(plan.goals_json) == [plot_response_goal("event-ambush"), "goal-2"]
     [resolved] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_RESOLVED)
     payload = _payload(resolved)
     assert payload["plan_patch_id"] and payload["graph_delta_ids"] == [_delta_id(chapter)]
@@ -1117,8 +1120,11 @@ def test_canon_written_during_the_tick_makes_it_stale_and_a_retry_commits(monkey
 
 def _failing_build(monkeypatch: pytest.MonkeyPatch, candidate_prefix: str | None) -> None:
     """The tick's whole build reports an error on the first candidate whose id starts with ``candidate_prefix``;
-    with None, an error of the tick as a whole. Per-candidate builds of the checks are left alone."""
+    with None, an error of the tick as a whole. The running-state checks' builds are left alone."""
     original = WorldTickDeltaBuilder.build
+    monkeypatch.setattr(running_state, "WorldTickDeltaBuilder", type(
+        "_UnpatchedBuilder", (WorldTickDeltaBuilder,), {"build": original},
+    ))
 
     def build(self, *, context, candidates, news_in_transit, tick_id):  # noqa: ANN001
         result = original(
@@ -1243,24 +1249,27 @@ def test_adjudication_takes_the_twenty_earliest_due_intents(monkeypatch) -> None
     assert [intent["id"] for intent in asked["intents"]] == errands[:20]
     runtime = _runtime(Session, world)
     assert {runtime.world.get_state(ref)["status"] for ref in errands[:20]} == {"disrupted"}
-    # The rest stay due for the next tick, and none of them is dropped.
+    # The rest stay due for the next tick, and none of them is dropped; the result lists them as postponed.
     waiting = [*errands[20:], _later(world)]
     assert {runtime.world.get_state(ref)["status"] for ref in waiting} == {"planned"}
     assert result.dropped_candidate_ids == []
+    assert result.postponed_candidate_ids == [f"adjudication:{ref}" for ref in waiting]
     engine.dispose()
 
 
 class _GuardedAdjudicator:
-    """The real adjudicator, except that more than ``limit`` intents are over its prompt guard."""
+    """The real adjudicator, except that more than ``limit`` intents, or any of ``oversized``, are over its
+    prompt guard."""
 
-    def __init__(self, inner: WorldAdjudicator, limit: int) -> None:
+    def __init__(self, inner: WorldAdjudicator, limit: int, oversized: Sequence[str] = ()) -> None:
         self.inner = inner
         self.limit = limit
+        self.oversized = set(oversized)
         self.batches: list[int] = []
 
     def adjudicate(self, *, context, intents, **kwargs):  # noqa: ANN001, ANN003
         self.batches.append(len(intents))
-        if len(intents) <= self.limit:
+        if len(intents) <= self.limit and not self.oversized & {intent.id for intent in intents}:
             return self.inner.adjudicate(context=context, intents=intents, **kwargs)
         trace = {"trace_scope": "world_engine", "stage_key": "world.adjudicate",
                  "input_snapshot": context.model_dump(mode="json")}
@@ -1268,7 +1277,7 @@ class _GuardedAdjudicator:
         return AdjudicationCall(None, trace, ["prompt_too_large"], ids, "prompt_too_large")
 
 
-def test_oversized_adjudication_retries_with_half_the_batch(monkeypatch) -> None:
+def test_oversized_adjudication_falls_back_to_one_intent_per_call(monkeypatch) -> None:
     engine, Session = _session_factory()
     world = _seed_tick_world(Session, monkeypatch, errands=24)
     chapter = _chapter(Session, world, 1)
@@ -1278,13 +1287,39 @@ def test_oversized_adjudication_retries_with_half_the_batch(monkeypatch) -> None
     with Session.begin() as session:
         result = _service(Session, llm, adjudicator=adjudicator).run(session, _canon_commit(chapter), policy=POLICY)
 
-    # Twenty are over the guard; the earlier ten fit, and the later ten wait with the rest.
-    assert adjudicator.batches == [20, 10]
+    # Twenty are over the guard together, so each of the twenty earliest is asked alone.
+    assert adjudicator.batches == [20, *[1] * 20]
     errands = _errands(world, 24)
     runtime = _runtime(Session, world)
-    assert {runtime.world.get_state(ref)["status"] for ref in errands[:10]} == {"disrupted"}
-    assert {runtime.world.get_state(ref)["status"] for ref in [*errands[10:], _later(world)]} == {"planned"}
+    assert {runtime.world.get_state(ref)["status"] for ref in errands[:20]} == {"disrupted"}
+    waiting = [*errands[20:], _later(world)]
+    assert {runtime.world.get_state(ref)["status"] for ref in waiting} == {"planned"}
     assert result.dropped_candidate_ids == []
+    assert result.postponed_candidate_ids == [f"adjudication:{ref}" for ref in waiting]
+    engine.dispose()
+
+
+def test_an_intent_too_large_alone_gives_its_slot_to_the_next_due_intent(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch, errands=24)
+    chapter = _chapter(Session, world, 1)
+    errands = _errands(world, 24)
+    llm = _WorldLLM(adjudicate=_settle_every_intent, actor_turn=_quiet_turns)
+    # The earliest errand is over the guard even alone; it must not hold up the others.
+    adjudicator = _GuardedAdjudicator(WorldAdjudicator(llm), limit=20, oversized=[errands[0]])
+
+    with Session.begin() as session:
+        result = _service(Session, llm, adjudicator=adjudicator).run(session, _canon_commit(chapter), policy=POLICY)
+
+    assert adjudicator.batches == [20, *[1] * 21]
+    runtime = _runtime(Session, world)
+    assert {runtime.world.get_state(ref)["status"] for ref in errands[1:21]} == {"disrupted"}
+    assert runtime.world.get_state(errands[0])["status"] == "planned"
+    assert result.dropped_candidate_ids == [f"adjudication:{errands[0]}"]
+    [dropped] = _events(Session, world, DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED)
+    assert _payload(dropped)["reason"] == "prompt_too_large"
+    waiting = [*errands[21:], _later(world)]
+    assert result.postponed_candidate_ids == [f"adjudication:{ref}" for ref in waiting]
     engine.dispose()
 
 
@@ -1364,3 +1399,255 @@ def test_a_maintenance_service_built_without_the_container_keeps_the_tick_off_th
     )
 
     assert service._world_tick_service().llm_client is None
+
+
+# final fix wave
+
+
+def _strike(world: _World) -> str:
+    return world.node("intent", "opp-1/intent-strike")
+
+
+def test_two_outcomes_taking_one_item_commit_one_transfer(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch, rival_strikes=True)
+    chapter = _delta(Session, world, 1, {**_time(4, "日"), "item_transfers": [{
+        "new_item": {"name": "item-a", "kind": "item"}, "from_ref": "", "to_ref": world.hero, "evidence": "e",
+    }]})
+    _commit(Session, world, chapter)
+    item = chapter.metadata["item_transfers"][0]["item_id"]
+    recipients = {_later(world): world.faction, _strike(world): world.rival}
+    # Each outcome takes the same item from the hero; each holds alone, not both together.
+    llm = _WorldLLM(
+        adjudicate=_outcomes(*(
+            {"intent_id": intent_id, "result": "resolved", "summary": f"summary-take-{index}",
+             "effects": {"item_transfers": [{"item_ref": item, "from_ref": world.hero, "to_ref": recipient}]}}
+            for index, (intent_id, recipient) in enumerate(recipients.items())
+        )),
+        actor_turn=_quiet_turns,
+    )
+
+    result = _tick(Session, llm, chapter)
+
+    # The due intents are adjudicated in id order (same scheduled_at), so the first one's transfer stands.
+    first, second = sorted(recipients)
+    assert result.dropped_candidate_ids == [f"adjudication:{second}"]
+    [dropped] = _events(Session, world, DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED)
+    payload = _payload(dropped)
+    assert (payload["candidate_id"], payload["reason"]) == (f"adjudication:{second}", "constraint_violation")
+    assert "resource_not_held" in [issue["code"] for issue in payload["issues"]]
+    [delta] = _tick_deltas(Session, world)
+    transfers = json.loads(delta.metadata_json)["item_transfers"]
+    assert [(transfer["from_id"], transfer["to_id"]) for transfer in transfers] == [(world.hero, recipients[first])]
+    runtime = _runtime(Session, world)
+    assert runtime.world.get_state(item)["holder_id"] == recipients[first]
+    assert (runtime.world.get_state(first)["status"], runtime.world.get_state(second)["status"]) == (
+        "resolved", "planned",
+    )
+    engine.dispose()
+
+
+def _duel(world: _World, chapter: GraphDelta) -> _WorldLLM:
+    """The hero's later intent kills the rival; the rival's strike moves him to loc 1 and kills the hero."""
+    now = chapter.story_time_end
+    return _WorldLLM(
+        adjudicate=_outcomes(
+            {"intent_id": _later(world), "result": "resolved", "summary": "summary-hero-kills",
+             "effects": {"entity_changes": [{"ref": world.rival, "field": "alive_status", "new_value": "dead"}]}},
+            {"intent_id": _strike(world), "result": "resolved", "summary": "summary-rival-kills",
+             "effects": {
+                 "entity_changes": [{"ref": world.hero, "field": "alive_status", "new_value": "dead"}],
+                 "movements": [{"entity_ref": world.rival, "to_location_id": world.loc(1),
+                                "depart_at": now - 300, "arrive_at": now - 150}],
+             }},
+        ),
+        actor_turn=_quiet_turns,
+        review=_review("plot_responds"),
+    )
+
+
+def test_an_in_tick_resolution_that_no_longer_holds_goes_to_a_human(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch, later_impact="major", rival_strikes=True)
+    _plan(Session, world, 2)
+    chapter = _chapter(Session, world, 1)
+
+    # Both deaths are major; Codex lets the plot respond to both, but only one can happen.
+    result = _tick(Session, _duel(world, chapter), chapter, policy=_policy(max_major_events_per_tick=2))
+
+    first, second = sorted((_later(world), _strike(world)))
+    conflicts = {row.intent_ref: row for row in _conflicts(Session, world)}
+    assert sorted(conflicts) == [first, second]
+    assert (conflicts[first].status, conflicts[second].status) == ("resolved", "open")
+    assert conflicts[second].required_decider == "human"
+    [escalated] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_ESCALATED)
+    assert (_payload(escalated)["conflict_id"], _payload(escalated)["failure_reason"]) == (
+        conflicts[second].id, "conflict_stale",
+    )
+    assert "dead_owner_acts" in escalated.reason
+    assert f"adjudication:{second}" in result.dropped_candidate_ids
+    runtime = _runtime(Session, world)
+    killed = {_later(world): world.rival, _strike(world): world.hero}
+    assert {
+        actor: runtime.world.get_state(actor)["alive_status"] for actor in (world.hero, world.rival)
+    } == {killed[first]: "dead", killed[second]: "alive"}
+    assert runtime.world.get_state(second)["status"] == "planned"
+    engine.dispose()
+
+
+def test_resolving_a_held_change_that_canon_has_since_ruled_out_is_stale(monkeypatch) -> None:
+    from forwin.world_engine.conflict_resolution import ConflictResolutionService, ConflictStale
+    from forwin.world_engine.conflict_types import ConflictDecision
+
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch, later_impact="major", rival_strikes=True)
+    _plan(Session, world, 2)
+    chapter = _chapter(Session, world, 1)
+    policy = _policy(conflict_delegate="human", max_major_events_per_tick=2)
+    _tick(Session, _duel(world, chapter), chapter, policy=policy)
+    conflicts = {row.intent_ref: row.id for row in _conflicts(Session, world) if row.status == "open"}
+
+    def resolve(intent_id: str) -> None:
+        with Session.begin() as session:
+            ConflictResolutionService(session, admission=CanonAdmissionService(), policy=policy).resolve(
+                project_id=world.project_id, conflict_id=conflicts[intent_id],
+                decision=ConflictDecision(option="plot_responds", decided_by="human", actor_id="human",
+                                          rationale="r", decided_at=datetime.now(UTC)),
+            )
+
+    resolve(_later(world))
+    assert _runtime(Session, world).world.get_state(world.rival)["alive_status"] == "dead"
+
+    # The dead rival can no longer move or kill: the second held change is stale, and stays open.
+    with pytest.raises(ConflictStale, match="dead_owner_acts"):
+        resolve(_strike(world))
+
+    with Session() as session:
+        assert WorldConflictRepository(session).get(world.project_id, conflicts[_strike(world)]).status == "open"
+    runtime = _runtime(Session, world)
+    assert runtime.world.get_state(world.hero)["alive_status"] == "alive"
+    assert runtime.world.get_state(world.rival)["location_id"] == world.loc(2)
+    engine.dispose()
+
+
+def test_a_long_history_keeps_adjudication_under_the_prompt_guard(monkeypatch) -> None:
+    from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_EVENT_FACTS, MAX_ADJUDICATION_PROMPT_CHARS
+
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _chapter(Session, world, 1)
+    context = _context(world, chapter)
+    # Earlier ticks left 120 public events with the hero, at the hero's own place.
+    for batch in range(3):
+        _commit_tick(Session, world, _built(Session, context, [TickCandidate.model_validate({
+            "candidate_id": f"history-{batch}-{index}", "origin": "adjudication", "summary": "summary-history",
+            "effects": {"events": [{"summary": f"event-history-{batch}-{index}", "participant_refs": [world.hero],
+                                    "location_id": world.loc(1), "visibility": "public", "at": context.now}]},
+        }) for index in range(40)], tick_id=f"history-{batch}"), tick_id=f"history-{batch}")
+    llm = _WorldLLM(
+        adjudicate=_outcomes({"intent_id": _later(world), "result": "resolved", "summary": "summary-later",
+                              "effects": {}}),
+        actor_turn=_quiet_turns,
+    )
+
+    result = _tick(Session, llm, chapter)
+
+    [content] = [content for stage, content in llm.calls if stage == "world.adjudicate"]
+    assert len(content) < MAX_ADJUDICATION_PROMPT_CHARS
+    payload = json.JSONDecoder().raw_decode(content)[0]
+    assert {node["node_type"] for node in payload["world_nodes"]}.isdisjoint({"event", "intent"})
+    assert len([fact for fact in payload["facts"] if fact.get("fact_type") == "event"]) == MAX_ADJUDICATION_EVENT_FACTS
+    assert result.dropped_candidate_ids == []
+    assert _runtime(Session, world).world.get_state(_later(world))["status"] == "resolved"
+    engine.dispose()
+
+
+def test_a_tick_after_the_books_last_chapter_is_skipped(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    with Session.begin() as session:
+        session.get(Project, world.project_id).target_total_chapters = 1
+    chapter = _chapter(Session, world, 1)
+    llm = _WorldLLM(adjudicate=_outcomes(), actor_turn=_quiet_turns)
+
+    result = _tick(Session, llm, chapter)
+
+    assert result == WorldTickResult(
+        tick_id=_tick_id(chapter), graph_delta_ids=[], conflict_ids=[], dropped_candidate_ids=[],
+        postponed_candidate_ids=[], skipped_reason="book_complete",
+    )
+    assert llm.calls == []
+    assert _tick_deltas(Session, world) == []
+    engine.dispose()
+
+
+def test_a_quiet_tick_leaves_the_project_row_unlocked() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    chapter = _chapter(Session, world, 1, days=1)
+    far = chapter.story_time_end + 10 * DAY
+    _commit_tick(Session, world, _built(Session, _context(world, chapter), [TickCandidate(
+        candidate_id="setup", origin="actor_turn", summary="setup", effects=WorldEffects(),
+        next_turn_at={world.hero: far, world.rival: far, world.faction: far},
+    )], tick_id="setup"), tick_id="setup")
+
+    with Session.begin() as session:
+        result = _service(Session, _WorldLLM()).run(session, _canon_commit(chapter), policy=POLICY)
+        # While the tick's transaction is still open, another canon writer takes the project row at once.
+        with Session() as other:
+            other.execute(select(Project.id).where(Project.id == world.project_id).with_for_update(
+                key_share=True, nowait=True,
+            ))
+            other.rollback()
+
+    assert result.graph_delta_ids == []
+    engine.dispose()
+
+
+def test_actor_views_read_only_the_turned_actors_recent_vetoes(monkeypatch) -> None:
+    from forwin.world_engine.actor_turns import MAX_RECENT_VETOES, recent_vetoes
+    from forwin.world_engine.conflict_types import ConflictDecision, ConflictDraft
+
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _chapter(Session, world, 1, days=1)
+    with Session.begin() as session:
+        repository = WorldConflictRepository(session)
+        for index, (actor, option) in enumerate([
+            *[(world.hero, "veto_world")] * (MAX_RECENT_VETOES + 2), (world.hero, "plot_responds"),
+            (world.rival, "veto_world"),
+        ]):
+            row = repository.create(ConflictDraft(
+                project_id=world.project_id, source="world_tick", detected_after_chapter=1, story_time=index,
+                involved_refs=[actor], violated="impact_review", impact_level="major", summary=f"summary-{index}",
+                proposed_change={}, actor_ref=actor, blocks_from_chapter=2,
+            ), required_decider="human", options=[option])
+            repository.mark_resolved(row, decision=ConflictDecision(
+                option=option, decided_by="human", rationale="r", decided_at=datetime.now(UTC),
+            ), result_refs=[])
+
+    with Session() as session:
+        vetoes = recent_vetoes(session, world.project_id, actor_ids=[world.hero, world.faction])
+    # Newest first, at most MAX_RECENT_VETOES, vetoes only, and only for the actors asked.
+    assert sorted(vetoes) == sorted([world.hero, world.faction])
+    assert [row.summary for row in vetoes[world.hero]] == [
+        f"summary-{index}" for index in reversed(range(2, MAX_RECENT_VETOES + 2))
+    ]
+    assert vetoes[world.faction] == []
+
+    # The tick no longer reads every resolved conflict of the book.
+    original = WorldConflictRepository.list
+
+    def listing(self, project_id, *, status=None):  # noqa: ANN001
+        assert status != "resolved", "the tick listed every resolved conflict"
+        return original(self, project_id, status=status)
+
+    monkeypatch.setattr(WorldConflictRepository, "list", listing)
+    llm = _WorldLLM(adjudicate=_outcomes(), actor_turn=_quiet_turns)
+    _tick(Session, llm, chapter)
+    hero_view = next(
+        actor for stage, content in llm.calls if stage == "world.actor_turn"
+        for actor in json.JSONDecoder().raw_decode(content)[0]["actors"] if actor["actor_id"] == world.hero
+    )
+    assert len(hero_view["vetoes"]) == MAX_RECENT_VETOES
+    engine.dispose()

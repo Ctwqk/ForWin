@@ -11,10 +11,10 @@ from typing import TYPE_CHECKING, Any
 from forwin.book_state.knowledge import FACT_REF_PREFIX, KNOWLEDGE_CHANNELS, KNOWLEDGE_STATES
 from forwin.book_state.lexicon import BookLexicon, lexicon_to_payload
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
-from forwin.book_state.schema import AGENDA_STATUSES, IMPACT_LEVELS, INTENT_ACTION_TYPES
+from forwin.book_state.schema import ACTOR_NODE_TYPES, AGENDA_STATUSES, IMPACT_LEVELS, INTENT_ACTION_TYPES
 from forwin.book_state.story_clock import StoryCalendar, calendar_to_payload
 from forwin.protocol.book_state import WORLD_EDGE_TYPES, FactNode, MapNode, WorldEdge, WorldNode
-from forwin.world_engine.constraints import ConstraintIssue
+from forwin.world_engine.constraints import ENDED_STATUSES, ConstraintIssue
 from forwin.world_engine.types import (
     AGENDA_PRIORITY_MAX, AGENDA_PRIORITY_MIN, NEW_AGENDA_REF, NEW_FACT_REF_PREFIX, ActorTurnBatch,
     AdjudicationResult, TickContext,
@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
 
 MAX_ADJUDICATION_PROMPT_CHARS = 60000
+# The newest event facts an adjudication shows; older events stay in canon but out of the prompt.
+MAX_ADJUDICATION_EVENT_FACTS = 20
 MAX_ACTOR_TURN_PROMPT_CHARS = 60000
 MAX_CONFLICT_REVIEW_PROMPT_CHARS = 60000
 # What a chapter-plan goal keeps when the conflict review prompt is still over its guard.
@@ -50,8 +52,8 @@ ACTOR_TURN_INSTRUCTIONS = (
     "你为每个输入行动者各做一次回合决策，只依据该行动者自己的视图，返回 JSON 对象，不输出正文或 Markdown。",
     "视图只含该行动者知道或相信的内容：facts 按它持有的认知状态理解，public_facts 是它默认知道的公开事实，"
     "两者都可能与真相不符；不要假设视图之外的人物、地点或事实。",
-    "turns 中每个输入 actor_id 恰好一项，含 0 到 max_new_intents_per_actor 个 new_intents、agenda_changes 与 "
-    "next_turn_in；不得替其他行动者决策。",
+    "turns 中每个输入 actor_id 恰好一项，含 0 到 max_new_intents_per_actor 个 new_intents、至多 "
+    "max_agenda_changes_per_actor 个 agenda_changes 与 next_turn_in；不得替其他行动者决策。",
     "引用只能使用该行动者视图中的 id：自身、agendas、pending_intents、holdings、entities、clocks、facts 与 "
     "public_facts 的 ref；location_id 只能是当前位置或 reachable_places 中的地点。不得触碰 boundary_refs 中的引用，"
     "也不要重复 vetoes 中被否决的行动。pending_intents 是它已有的计划，不要再次提出与之相同或重复的意图。",
@@ -76,13 +78,30 @@ CONFLICT_REVIEW_INSTRUCTIONS = (
     "risk_level 表示所选选项对规划的风险。完整输出结构如下。",
 )
 
-# The chapter-plan goal plot_responds adds to the next unwritten chapter; the conflict summary follows it.
+# The chapter-plan goal plot_responds adds to the next unwritten chapter; the change's public events follow it.
 PLOT_RESPONSE_GOAL_PREFIX = "回应已经发生的世界变化："
+# The response to an accepted change with no public event: it names nothing the reader may not know yet.
+PLOT_RESPONSE_GENERIC_GOAL = (
+    "回应幕后已经发生的世界变化：只写人物能察觉到的后果，不点明尚未公开的人物、事件或真相。"
+)
+# The response to an accepted onstage slip: nothing has happened yet; the next chapter stages the due intent.
+ONSTAGE_SLIP_RESPONSE_GOAL = "让已经到期、必须在台前发生的人物行动在本章登场，不要再次推迟。"
 
 
 def plot_response_goal(summary: str) -> str:
-    """The goal that has the next unwritten chapter respond to an accepted world change."""
+    """The goal that has the next unwritten chapter respond to an accepted world change's public events."""
     return f"{PLOT_RESPONSE_GOAL_PREFIX}{summary.strip()}"
+
+
+def world_change_response(public_event_summaries: Sequence[str], *, onstage_slip: bool) -> str:
+    """The writer-visible text of an accepted world change: a plan goal, an obligation summary or payoff test.
+
+    Only the change's public event summaries reach the writer (Ruling P32); without one it gets a template.
+    """
+    if onstage_slip:
+        return ONSTAGE_SLIP_RESPONSE_GOAL
+    summaries = [text for summary in public_event_summaries if (text := summary.strip())]
+    return plot_response_goal(" ".join(summaries)) if summaries else PLOT_RESPONSE_GENERIC_GOAL
 
 
 # What an actor learns when the tick sends its turn back or vetoes its plan: the broken rule's code,
@@ -93,6 +112,13 @@ ACTOR_VETO_SUMMARY = "The world did not let this plan go ahead."
 
 # The BookState model each conflict-snapshot slice kind dumps, for dropping its default-valued fields.
 _SLICE_MODELS = {"world_node": WorldNode, "world_edge": WorldEdge, "map_node": MapNode, "fact": FactNode}
+# Live entities an adjudication shows in full when they stand where a due intent's owner or targets are.
+_COLOCATED_TYPES = frozenset({*ACTOR_NODE_TYPES, "item", "resource", "site_state"})
+# Records of what happened or was planned: an adjudication shows them only as a due intent.
+_RECORD_TYPES = frozenset({"event", "intent"})
+# The intents still to happen; the compact index lists these, not settled ones.
+_PENDING_INTENT_STATUSES = frozenset({"planned", "due", "held"})
+_EVENT_FACT_TYPE = "event"
 
 
 def _without_empty(value: Any) -> Any:
@@ -133,6 +159,10 @@ def build_adjudication_messages(
             "location_id": location_id(node),
         })
 
+    def record(node: WorldNode) -> bool:
+        """An event, or an intent other than the due ones: what happened or was planned, not who is there."""
+        return str(node.node_type) in _RECORD_TYPES and node.id not in intent_ids
+
     nodes = sorted(runtime.world.nodes_by_id.values(), key=lambda node: node.id)
     intent_ids = {node.id for node in intents}
     actor_refs = {ref for intent in intents
@@ -140,12 +170,24 @@ def build_adjudication_messages(
     locations = {location_id(node) for node in [*intents, *[node for node in nodes if node.id in actor_refs]]}
     locations.update(actor_refs & runtime.map.nodes_by_id.keys())
     locations.discard("")
-    full_ids = intent_ids | actor_refs | locations
-    full_ids.update(node.id for node in nodes if (
-        location_id(node) in locations
+    # Full bodies: the due intents, their owners and targets, what those hold and the live entities beside
+    # them. Past events and other intents grow with the book, so they never get a full body (Ruling P28).
+    full_ids = intent_ids | {node.id for node in nodes if not record(node) and (
+        node.id in actor_refs
+        or (node.is_active and str(node.node_type) in _COLOCATED_TYPES and location_id(node) in locations)
         or (node.node_type in {"item", "resource"} and runtime.world.get_state(node.id).get("holder_id") in actor_refs)
-        or node.node_type == "rule"
-    ))
+    )}
+
+    def indexed(node: WorldNode) -> bool:
+        """Every other live node, and the intents still to happen; events and settled intents stay out."""
+        if node.id in full_ids or node.node_type == "rule":
+            return False
+        if record(node):
+            return str(node.node_type) == "intent" and (
+                runtime.world.get_state(node.id).get("status") in _PENDING_INTENT_STATUSES
+            )
+        return True
+
     edges = [edge for edge in sorted(runtime.world.edges_by_id.values(), key=lambda edge: edge.id)
              if edge.source_id in full_ids or edge.target_id in full_ids]
     map_edges = [edge for edge in sorted(runtime.map.edges_by_id.values(), key=lambda edge: edge.id)
@@ -157,7 +199,7 @@ def build_adjudication_messages(
         "world_nodes": [node_payload(node) for node in nodes
                         if node.id in full_ids - intent_ids and node.node_type != "rule"],
         "world_node_index": [{"id": node.id, "node_type": node.node_type, "name": node.name}
-                             for node in nodes if node.id not in full_ids],
+                             for node in nodes if indexed(node)],
         "world_edges": [edge.model_dump(mode="json", exclude_defaults=True) for edge in edges],
         "rules": [{"id": node.id, "hardness": node.profile.get("hardness"),
                    "statement": node.profile.get("statement")} for node in nodes if node.node_type == "rule"],
@@ -183,11 +225,18 @@ def build_adjudication_messages(
             continue
         fact_payloads[ref] = {"ref": f"{FACT_REF_PREFIX}{ref}", **facts[ref].model_dump(mode="json", exclude_defaults=True)}
         pending.update(_fact_references(fact_payloads[ref]) - fact_payloads.keys())
-    payload["facts"] = [fact_payloads[ref] for ref in sorted(fact_payloads)]
+    # Every scoped standing fact, and only the newest scoped event facts: the book's events keep growing.
+    events = sorted((ref for ref in fact_payloads if facts[ref].fact_type == _EVENT_FACT_TYPE),
+                    key=lambda ref: (-facts[ref].created_at_chapter, ref))
+    shown = {ref for ref in fact_payloads if facts[ref].fact_type != _EVENT_FACT_TYPE}
+    shown.update(events[:MAX_ADJUDICATION_EVENT_FACTS])
+    payload["facts"] = [fact_payloads[ref] for ref in sorted(shown)]
     # Objective truth is sufficient for adjudication; no cognition overlay is serialized.
     allowed = {
         "knowledge_state": KNOWLEDGE_STATES, "knowledge_channel": KNOWLEDGE_CHANNELS,
         "edge_type": sorted(WORLD_EDGE_TYPES), "new_fact_ref_prefix": NEW_FACT_REF_PREFIX,
+        # The state.status values that end a faction, organization, group or site.
+        "ended_status": sorted(ENDED_STATUSES),
     }
     system = ("\n".join(ADJUDICATION_INSTRUCTIONS)
               + "\n" + json.dumps(AdjudicationResult.model_json_schema(), ensure_ascii=False)
@@ -209,7 +258,7 @@ def build_adjudication_messages(
 
 def build_actor_turn_messages(
     *, context: TickContext, views: Sequence[ActorView], calendar: StoryCalendar | None,
-    lexicon: BookLexicon, max_new_intents: int,
+    lexicon: BookLexicon, max_new_intents: int, max_agenda_changes: int,
     feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
     retry_feedback: Sequence[str] = (),
 ) -> list[dict]:
@@ -222,6 +271,7 @@ def build_actor_turn_messages(
     payload = {
         "context": context.model_dump(mode="json"),
         "max_new_intents_per_actor": max_new_intents,
+        "max_agenda_changes_per_actor": max_agenda_changes,
         "calendar": calendar_to_payload(calendar) if calendar is not None else None,
         "lexicon": lexicon_to_payload(lexicon),
         "actors": actors,

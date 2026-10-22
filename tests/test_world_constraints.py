@@ -12,6 +12,7 @@ from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
 from forwin.book_state.story_clock import CalendarUnit, StoryCalendar
 from forwin.protocol.book_state import CognitionOverlay, FactNode, MapEdge, MapNode, NarrativeNode, WorldNode
 from forwin.world_engine import constraints
+from forwin.world_engine.constraints import ENDED_STATUSES
 from forwin.world_engine.intents import apply_intent_interactions, onstage_bookkeeping
 from forwin.world_engine.types import TickCandidate, WorldEffects
 
@@ -107,11 +108,12 @@ def _protection(kind, ref="a", **kwargs):
     (_change("a", "alive_status", "dead"), "major"),
     (_change("b", "state.alive_status", "dead"), "major"),
     (_change("c", "alive_status", "dead"), "moderate"),
-    *[(_change(ref, "is_active", False), "major") for ref in ("f", "o", "g", "s")],
-    *[(_change(ref, "controlled_by_id", "b"), "major") for ref in ("f", "o", "g")],
-    *[(_change(f"fact:{ref}", "sensitivity_level", "public"), "major")
-      for ref in ("hidden", "secret", "protected")],
-    ({"events": [_event(participant_refs=["fact:secret"])]}, "major"),
+    *[(_change(ref, "status", status), "major") for ref in ("f", "o", "g", "s") for status in sorted(ENDED_STATUSES)],
+    *[(_change(ref, "state", {"status": "destroyed"}), "major") for ref in ("f", "s")],
+    *[(_change(ref, "leader_id", "b"), "major") for ref in ("f", "g")],
+    (_change("s", "controller_faction_id", "f"), "major"),
+    *[({"knowledge": [_knowledge(fact_ref=f"fact:{ref}", state=state)]}, "major")
+      for ref in ("hidden", "secret", "protected") for state in ("knows", "believes")],
     *[({"relation_changes": [{"source_ref": "a", "target_ref": "b", "edge_type": "ally_of", "change": op}]},
        "moderate") for op in ("create", "end", "set")],
     *[(_change(ref, "holder_id", "b"), "moderate") for ref in ("item", "resource")],
@@ -122,9 +124,18 @@ def _protection(kind, ref="a", **kwargs):
     (_change("a", "location_id", "l2"), "minor"),
     (_change("a", "next_turn_at", 1100), "minor"),
     (_change("a", "profile.fear", "f"), "minor"),
-    (_change("f", "controlled_by_id", "a"), "minor"),
-    ({"events": [_event(visibility="secret", participant_refs=["fact:secret"])]}, "minor"),
-    ({"events": [_event(participant_refs=["fact:public"])]}, "minor"),
+    *[(_change(ref, "status", "besieged"), "minor") for ref in ("f", "s")],
+    # Fields these node types do not have, which the builder refuses: no rule reads them.
+    *[(_change(ref, "is_active", False), "minor") for ref in ("f", "o", "g", "s")],
+    *[(_change(ref, "controlled_by_id", "b"), "minor") for ref in ("f", "o", "g")],
+    (_change("o", "leader_id", "b"), "minor"),
+    (_change("fact:secret", "sensitivity", "public"), "minor"),
+    # Ordinary news, weak knowledge and a secret's creators knowing it expose nothing.
+    ({"knowledge": [_knowledge(fact_ref="fact:public")]}, "minor"),
+    ({"knowledge": [_knowledge(state="suspects")]}, "minor"),
+    ({"new_facts": [{"key": "k", "proposition": "p", "truth_value": True, "sensitivity": "secret",
+                     "known_by": ["a"]}]}, "minor"),
+    ({"events": [_event(visibility="secret")]}, "minor"),
     ({}, "minor"),
 ])
 def test_impact_rows(checks, effects, expected):
@@ -221,7 +232,8 @@ def test_holder_checks_follow_transfer_order_and_allow_unknown_holder(checks):
 
 
 @pytest.mark.parametrize(("protection", "effects"), [
-    (_protection("must_exist", "s"), _change("s", "is_active", False)),
+    *[(_protection("must_exist", ref), _change(ref, "status", status))
+      for ref in ("f", "s") for status in sorted(ENDED_STATUSES)],
     (_protection("must_be_alive"), _change("a", "alive_status", "dead")),
     (_protection("must_hold_state", "item", field="holder_id", value="a"),
      {"item_transfers": [{"item_ref": "item", "from_ref": "a", "to_ref": "b"}]}),
@@ -537,8 +549,7 @@ def test_malformed_protection_payload_is_ignored(checks, payload):
 
 
 @pytest.mark.parametrize(("protection", "node", "effects"), [
-    (_protection("must_exist", "s"), _node("s", "site_state").model_copy(update={"is_active": False}),
-     _change("s", "is_active", False)),
+    (_protection("must_exist", "s"), _node("s", "site_state", status="destroyed"), _change("s", "status", "inactive")),
     (_protection("must_be_alive"), _node("a", alive_status="dead"), _change("a", "alive_status", "dead")),
 ])
 def test_already_inactive_or_dead_ref_does_not_violate_boundary(checks, protection, node, effects):
@@ -562,3 +573,81 @@ def test_invalid_state_does_not_hide_a_later_death_change(checks):
     assert checks.classify_impact(_runtime(), candidate) == "major"
     issues = checks.check_hard_rules(_runtime(), LEXICON, candidate, now=NOW, calendar=CALENDAR, window_start=800)
     assert [(issue.code, issue.ref) for issue in issues] == [("invalid_state", "a")]
+
+
+# Ruling P31: every deterministic rule reads a field the builder can write.
+
+
+def _build_alone(runtime, candidate):
+    from forwin.world_engine.delta_builder import _TickBuilder
+    from forwin.world_engine.types import TickContext
+
+    return _TickBuilder(
+        context=TickContext(project_id="p", chapter_number=3, now=NOW, window_start=800, seed=1),
+        tick_id="tick", runtime=runtime, calendar=CALENDAR, lexicon=LEXICON,
+    ).build([candidate], [])
+
+
+_NEW_SECRET = {"key": "k", "proposition": "p", "truth_value": True, "sensitivity": "secret", "known_by": ["a"]}
+
+
+@pytest.mark.parametrize(("effects", "expected"), [
+    (_change("a", "alive_status", "dead"), "major"),
+    *[(_change(ref, "status", "destroyed"), "major") for ref in ("f", "o", "g", "s")],
+    *[(_change(ref, "leader_id", "b"), "major") for ref in ("f", "g")],
+    (_change("s", "controller_faction_id", "f"), "major"),
+    ({"knowledge": [_knowledge()]}, "major"),
+    ({"new_facts": [_NEW_SECRET], "knowledge": [_knowledge(fact_ref="fact:new:k")]}, "major"),
+    (_change("event", "visibility_level", "public"), "major"),
+    ({"relation_changes": [{"source_ref": "a", "target_ref": "b", "edge_type": "ally_of", "change": "create"}]},
+     "moderate"),
+    ({"item_transfers": [{"item_ref": "item", "from_ref": "a", "to_ref": "b"}]}, "moderate"),
+    (_change("resource", "holder_id", "b"), "moderate"),
+    (_change("a", "restraint", {"state": "restrained"}), "moderate"),
+    (_change("a", "health", 0.5), "moderate"),
+])
+def test_every_impact_rule_builds_and_classifies(checks, effects, expected):
+    runtime = _runtime(_node("event", "event", visibility_level="secret", result_refs=["fact:hidden"]))
+    candidate = _candidate(effects)
+    assert [issue.code for issue in _build_alone(runtime, candidate).issues if issue.severity == "error"] == []
+    assert checks.classify_impact(runtime, candidate) == expected
+
+
+def test_changes_the_builder_refuses_are_not_major(checks):
+    """The final review's probe table: the old rules read fields no candidate can carry."""
+    runtime = _runtime()
+    refused = {
+        "faction_is_active": (_change("f", "is_active", False), "unknown_field"),
+        "faction_controlled_by": (_change("f", "controlled_by_id", "b"), "unknown_field"),
+        "fact_made_public": (_change("fact:secret", "sensitivity", "public"), "unresolved_ref"),
+    }
+    for effects, code in refused.values():
+        candidate = _candidate(effects)
+        assert checks.classify_impact(runtime, candidate) == "minor"
+        assert [issue.code for issue in _build_alone(runtime, candidate).issues] == [code]
+    collapse = _candidate({"entity_changes": [
+        {"ref": "f", "field": "leader_id", "new_value": "b"}, {"ref": "f", "field": "status", "new_value": "destroyed"},
+    ]})
+    assert checks.classify_impact(runtime, collapse) == "major"
+    assert _build_alone(runtime, collapse).issues == []
+
+
+def test_a_secret_an_observer_already_holds_is_not_exposed_again(checks):
+    runtime = _runtime()
+    runtime.cognition_by_observer[("character", "b")] = CognitionView(CognitionOverlay(
+        id="view-b", project_id="p", observer_type="character", observer_id="b",
+        knowledge_by_ref={"fact:secret": "knows", "fact:hidden": "suspects"},
+    ))
+    assert checks.classify_impact(runtime, _candidate({"knowledge": [_knowledge()]})) == "minor"
+    # A suspicion is not knowledge: being sure of it now exposes the secret.
+    assert checks.classify_impact(runtime, _candidate({"knowledge": [_knowledge(fact_ref="fact:hidden")]})) == "major"
+    # A new secret known only to the actors that made it exposes nothing.
+    assert checks.classify_impact(runtime, _candidate({
+        "new_facts": [_NEW_SECRET], "knowledge": [_knowledge(observer_ref="a", fact_ref="fact:new:k")],
+    })) == "minor"
+
+
+def test_must_exist_ignores_a_status_that_does_not_end_the_ref(checks):
+    protection = _protection("must_exist", "f")
+    assert checks.check_narrative_boundaries(_runtime(protections=[protection]),
+        _candidate(_change("f", "status", "besieged")), next_chapter=4) == []

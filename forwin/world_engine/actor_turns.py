@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from forwin.book_state.cognition import CognitionView
 from forwin.book_state.extraction.chapter_delta_schema import Duration
@@ -42,6 +44,9 @@ _PARSER_NAME = "ActorTurnRunner JSON parser"
 MAX_REACHABLE_PLACES = 12
 MAX_RECENT_VETOES = 5
 MAX_PENDING_INTENTS = 10
+# Active agendas a view shows, highest priority first; agenda changes one turn may make.
+MAX_ACTOR_AGENDAS = 8
+MAX_AGENDA_CHANGES_PER_TURN = 3
 # Newest first (recorded seed and static knowledge ahead of event news), so a long book's views
 # stay well under the prompt guard.
 MAX_KNOWN_FACTS = 60
@@ -52,6 +57,10 @@ _PENDING_INTENT_STATUSES = frozenset({"planned", "due", "held"})
 # News of an event reaches an actor only through propagation's recorded knowledge.
 _EVENT_FACT_TYPE = "event"
 _VETO_OPTION = "veto_world"
+# How ConflictDecision.model_dump_json writes a veto in decision_json, for matching it in SQL.
+_VETO_DECISION_PATTERN = f'%"option":"{_VETO_OPTION}"%'
+# The priority an agenda without one ranks at, as the tick's budget reads it.
+_DEFAULT_AGENDA_PRIORITY = 3
 # Travel minutes absorb float noise before rounding up.
 _MINUTE_EPSILON = 1e-6
 
@@ -72,7 +81,8 @@ class ActorView(BaseModel):
     restraint: dict[str, Any] = Field(default_factory=dict)
     # {id, node_type, name} of the items and resources it holds.
     holdings: list[dict[str, Any]] = Field(default_factory=list)
-    # {id, goal, motivation, horizon, status, priority, means_refs, constraints, secrecy_refs}: active agendas.
+    # {id, goal, motivation, horizon, status, priority, means_refs, constraints, secrecy_refs}: active agendas,
+    # highest priority first.
     agendas: list[dict[str, Any]] = Field(default_factory=list)
     # {id, summary, action_type, location_id, scheduled_at, status, target_refs}: its planned, due and held
     # intents, soonest first.
@@ -199,8 +209,8 @@ def build_actor_view(
         (node for node in world.nodes_by_id.values()
          if str(node.node_type) == "agenda" and node.is_active and node.profile.get("owner_ref") == actor_id
          and world.get_state(node.id).get("status") == "active"),
-        key=lambda node: node.id,
-    )
+        key=lambda node: (-_agenda_priority(world.get_state(node.id).get("priority")), node.id),
+    )[:MAX_ACTOR_AGENDAS]
     pending_intents = _pending_intents(runtime, actor_id)
     holdings = sorted(
         (node for node in world.nodes_by_id.values()
@@ -244,6 +254,10 @@ def build_actor_view(
         boundary_refs=sorted(set(boundary_refs)),
         vetoes=_recent_vetoes(runtime, actor_id, vetoes),
     )
+
+
+def _agenda_priority(value: Any) -> int:
+    return value if type(value) is int else _DEFAULT_AGENDA_PRIORITY
 
 
 def _strings(value: Any) -> list[str]:
@@ -391,6 +405,32 @@ def _known_clocks(runtime: BookStateRuntime, actor_id: str, now: int) -> list[di
     return [entry for *_key, entry in sorted(clocks, key=lambda item: item[:2])]
 
 
+def recent_vetoes(
+    session: Session, project_id: str, *, actor_ids: Sequence[str],
+) -> dict[str, list[WorldPlanConflictRow]]:
+    """Each actor's newest MAX_RECENT_VETOES resolved veto_world conflicts, newest first.
+
+    Read per actor in SQL, so a tick never loads the book's whole conflict history.
+    """
+    return {
+        actor_id: list(session.scalars(
+            select(WorldPlanConflictRow)
+            .where(
+                WorldPlanConflictRow.project_id == project_id,
+                WorldPlanConflictRow.actor_ref == actor_id,
+                WorldPlanConflictRow.status == "resolved",
+                WorldPlanConflictRow.decision_json.like(_VETO_DECISION_PATTERN),
+            )
+            .order_by(
+                WorldPlanConflictRow.story_time.desc(), WorldPlanConflictRow.detected_after_chapter.desc(),
+                WorldPlanConflictRow.id.desc(),
+            )
+            .limit(MAX_RECENT_VETOES)
+        ))
+        for actor_id in actor_ids
+    }
+
+
 def _recent_vetoes(
     runtime: BookStateRuntime, actor_id: str, vetoes: Sequence[WorldPlanConflictRow],
 ) -> list[dict[str, Any]]:
@@ -448,6 +488,11 @@ def _turn_issues(
     cap = policy.max_new_intents_per_actor
     if len(turn.new_intents) > cap:
         issues.append(f"too_many_intents: {len(turn.new_intents)} new_intents, at most {cap} allowed")
+    if len(turn.agenda_changes) > MAX_AGENDA_CHANGES_PER_TURN:
+        issues.append(
+            f"too_many_agenda_changes: {len(turn.agenda_changes)} agenda_changes, "
+            f"at most {MAX_AGENDA_CHANGES_PER_TURN} allowed"
+        )
 
     def duration(wait: Duration, path: str) -> None:
         try:
@@ -547,8 +592,8 @@ class ActorTurnRunner:
             # A retry asks again only for the actors still without a valid turn.
             messages = build_actor_turn_messages(
                 context=context, views=[by_actor[actor_id] for actor_id in pending], calendar=calendar,
-                lexicon=lexicon, max_new_intents=policy.max_new_intents_per_actor, feedback=feedback,
-                retry_feedback=retry_feedback,
+                lexicon=lexicon, max_new_intents=policy.max_new_intents_per_actor,
+                max_agenda_changes=MAX_AGENDA_CHANGES_PER_TURN, feedback=feedback, retry_feedback=retry_feedback,
             )
             if len(messages[-1]["content"]) > MAX_ACTOR_TURN_PROMPT_CHARS:
                 too_large = True
@@ -709,6 +754,8 @@ def turn_to_candidate(
 
 
 __all__ = [
+    "MAX_ACTOR_AGENDAS",
+    "MAX_AGENDA_CHANGES_PER_TURN",
     "MAX_REACHABLE_PLACES",
     "MAX_RECENT_VETOES",
     "ActorTurnCall",
@@ -716,5 +763,6 @@ __all__ = [
     "ActorView",
     "build_actor_view",
     "rank_actors",
+    "recent_vetoes",
     "turn_to_candidate",
 ]

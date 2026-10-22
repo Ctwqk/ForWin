@@ -32,6 +32,10 @@ NARRATIVE_EDGE_TYPES: set[str] = {
     "contradicts_plan",
 }
 
+# A review_constraint's payload.until_chapter while its protection is open; a missing one means the same.
+OPEN_PROTECTION_UNTIL = 0
+PROTECTION_UNTIL_PATH = "payload.until_chapter"
+
 # ReaderPromise fields that live in a promise node's ``payload``; ``promise_id``
 # is the node id, ``summary`` its title and ``status`` its status.
 PROMISE_PAYLOAD_FIELDS: tuple[str, ...] = (

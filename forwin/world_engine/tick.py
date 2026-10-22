@@ -10,7 +10,10 @@ chapter's story minutes from its start (``window_start``) to its end (``now``):
    is dropped with a WORLD_TICK_CANDIDATE_DROPPED event.
 3. Classify impacts and keep major events within the tick's budget.
 4. Hold back for review whatever breaks a narrative boundary or is major or above (tick_conflicts).
-5. Spread the news of what will commit, build one world_engine delta, and commit it through canon
+5. Check what will commit against the running state, the base candidates and then the in-tick
+   resolutions, each against the ones accepted before it (running_state): a candidate that contradicts
+   an earlier one is dropped, a resolution whose change no longer holds goes to a human.
+6. Spread the news of what will commit, build one world_engine delta, and commit it through canon
    admission together with the side effects of the conflicts decided in the tick.
 
 An LLM outage never fails the tick: the node is skipped and the deterministic rest still commits.
@@ -32,8 +35,7 @@ from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
-from forwin.book_state.reviewer import CHAPTER_EXTRACTION_SOURCE_TYPE, BookStateReviewGate
-from forwin.book_state.story_clock import StoryCalendar
+from forwin.book_state.reviewer import CHAPTER_EXTRACTION_SOURCE_TYPE
 from forwin.canon.admission import CanonAdmissionService, CanonStaleVersion
 from forwin.generation.gate_delegation import GateAuditWriter
 from forwin.models.audit import DecisionEvent
@@ -43,24 +45,32 @@ from forwin.models.project import Project
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta, WorldNode
 from forwin.runtime.policy import RuntimePolicy
 
-from .actor_turns import ActorTurnRunner, ActorView, build_actor_view, rank_actors
+from .actor_turns import ActorTurnRunner, ActorView, build_actor_view, rank_actors, recent_vetoes
 from .adjudicator import WorldAdjudicator
 from .clocks import expire_clocks
 from .conflict_delegate import WorldConflictDelegate
-from .conflict_repository import WorldConflictRepository
 from .conflict_resolution import PropagatedNews, propagation_candidate
 from .conflict_types import ConflictDraft
-from .constraints import ConstraintIssue, apply_budgets, check_hard_rules, check_narrative_boundaries, classify_impact
+from .constraints import ConstraintIssue, apply_budgets, check_narrative_boundaries, classify_impact
 from .delta_builder import WorldTickDeltaBuilder
 from .intents import apply_intent_interactions, due_onstage_intents, onstage_bookkeeping, select_due_intents
 from .propagation import chapter_events, latest_news_in_transit, tick_events
-from .tick_conflicts import BUILD_ERROR, OPTION_UNAVAILABLE, ResolutionUnavailable, TickConflicts, review_draft
+from .running_state import RunningStateCheck
+from .tick_conflicts import (
+    BUILD_ERROR,
+    CONFLICT_STALE,
+    OPTION_UNAVAILABLE,
+    ResolutionUnavailable,
+    TickConflicts,
+    review_draft,
+)
 from .tick_nodes import (
     PROMPT_TOO_LARGE,
     NodeResults,
     actor_safe_feedback,
     actor_safe_vetoes,
     adjudicate,
+    adjudication_candidate_id,
     protected_refs,
     take_turns,
     unavailable,
@@ -73,6 +83,7 @@ TICK_ID_PREFIX = "tick-"
 # The tick's one news candidate; it goes after every candidate whose events it spreads.
 NEWS_CANDIDATE_ID = "propagation"
 # Due offstage intents one tick adjudicates, earliest first; the rest stay due for the next tick.
+# An intent whose prompt is over the guard even alone gives its place to the next due intent.
 MAX_ADJUDICATION_INTENTS_PER_TICK = 20
 # Why a checked candidate left the tick: it broke a check, or an open conflict already holds such a change.
 CONSTRAINT_VIOLATION = "constraint_violation"
@@ -85,7 +96,8 @@ class WorldTickResult:
     graph_delta_ids: list[str]
     conflict_ids: list[str]
     dropped_candidate_ids: list[str]
-    # Over the major-event budget: their intents wait for a later tick, or they are simply not committed.
+    # Over the major-event budget, or due intents beyond the adjudication cap: their intents wait for a
+    # later tick, or they are simply not committed.
     postponed_candidate_ids: list[str]
     # The builder's warnings, {code, message, candidate_id}: parts of the tick that did not apply.
     warnings: list[dict[str, str]] = field(default_factory=list)
@@ -136,6 +148,11 @@ class WorldTickService:
         if not policy.world.enabled:
             return _skipped(tick_id, "world_disabled")
         number = int(commit.chapter_number or 0)
+        project = session.get(Project, commit.project_id)
+        total = int(project.target_total_chapters or 0) if project is not None else 0
+        if 0 < total <= number:
+            # The book's last chapter is written: nothing follows for the world to move towards.
+            return _skipped(tick_id, "book_complete")
         # A rewritten chapter's world step runs after later chapters landed: the world already moved on.
         latest = BookStateRepository(session).latest_canon_chapter(commit.project_id) or 0
         if number != latest:
@@ -179,8 +196,6 @@ class _Tick:
         # Every observer's overlay: a runtime filtered to some observers makes actors look overlay-less.
         self.runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=number)
         self.calendar = StoryCalendarRepository(session).get(project_id)
-        # Without a calendar only the lexicon's aliases name units, as in the builder and the actor runner.
-        self.rules_calendar = self.calendar if self.calendar is not None else StoryCalendar("", 0, ())
         self.lexicon = BookLexiconRepository(session).get(project_id)
         self.builder = WorldTickDeltaBuilder(session)
         self.conflicts = TickConflicts(
@@ -190,6 +205,8 @@ class _Tick:
         self.views: dict[str, ActorView] = {}
         self.slip_conflicts: list[ConflictDraft] = []
         self.dropped: list[str] = []
+        # Due offstage intents the tick did not ask about: beyond the cap, they wait for a later tick.
+        self.unasked: list[str] = []
 
     def run(self) -> WorldTickResult:
         checked = self._check(self._collect())
@@ -229,7 +246,7 @@ class _Tick:
             graph_delta_ids=graph_delta_ids,
             conflict_ids=list(self.conflicts.conflict_ids),
             dropped_candidate_ids=list(self.dropped),
-            postponed_candidate_ids=[*postponed, *deferred],
+            postponed_candidate_ids=[*postponed, *deferred, *self.unasked],
             warnings=warnings,
         )
 
@@ -270,16 +287,34 @@ class _Tick:
             return (at if type(at) is int and node.id not in named_ids else now, node.id)
 
         offstage = sorted(_unique([*due.offstage, *offstage_named], excluded=touched), key=scheduled)
-        adjudicated = self._settled(self._adjudicate_due(offstage[:MAX_ADJUDICATION_INTENTS_PER_TICK]))
+        results, unasked = self._adjudicate_within_guard(offstage, limit=MAX_ADJUDICATION_INTENTS_PER_TICK)
+        self.unasked = [adjudication_candidate_id(intent.id) for intent in unasked]
+        adjudicated = self._settled(results)
         turns = self._settled(self._take_turns())
         return [*applied, *clocks, *onstage.candidates, *adjudicated, *turns]
 
-    def _adjudicate_due(self, intents: Sequence[WorldNode]) -> NodeResults:
-        results = self._adjudicate(intents)
-        if len(intents) > 1 and any(failure.reason == PROMPT_TOO_LARGE for failure in results.failures):
-            # The earlier half may fit; the later half stays due for a later tick.
-            results = self._adjudicate(intents[:len(intents) // 2])
-        return results
+    def _adjudicate_within_guard(
+        self, intents: Sequence[WorldNode], *, limit: int,
+        feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
+    ) -> tuple[NodeResults, list[WorldNode]]:
+        """Up to ``limit`` of ``intents``, in order, in one call, and the intents left unasked.
+
+        When that call is over the prompt guard each intent is asked alone, so none holds up the others:
+        one still over the guard fails as PROMPT_TOO_LARGE and the next intent takes its place.
+        """
+        batch = list(intents[:limit])
+        results = self._adjudicate(batch, feedback=feedback)
+        if len(batch) < 2 or not any(failure.reason == PROMPT_TOO_LARGE for failure in results.failures):
+            return results, list(intents[limit:])
+        results, asked = NodeResults(), 0
+        for index, intent in enumerate(intents):
+            if asked == limit:
+                return results, list(intents[index:])
+            single = self._adjudicate([intent], feedback=feedback)
+            results.candidates.extend(single.candidates)
+            results.failures.extend(single.failures)
+            asked += not any(failure.reason == PROMPT_TOO_LARGE for failure in single.failures)
+        return results, []
 
     def _adjudicate(
         self, intents: Sequence[WorldNode], feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
@@ -300,12 +335,12 @@ class _Tick:
             return NodeResults()
         if self.service.llm_client is None:
             return unavailable(actor_ids=[actor.id for actor in actors])
-        vetoes = actor_safe_vetoes(WorldConflictRepository(self.session).list(context.project_id, status="resolved"))
+        vetoes = recent_vetoes(self.session, context.project_id, actor_ids=[actor.id for actor in actors])
         boundary_refs = protected_refs(self.runtime, next_chapter=context.chapter_number + 1)
         self.views = {
             actor.id: build_actor_view(
-                self.runtime, self.lexicon, actor_id=actor.id, now=context.now, vetoes=vetoes,
-                boundary_refs=boundary_refs,
+                self.runtime, self.lexicon, actor_id=actor.id, now=context.now,
+                vetoes=actor_safe_vetoes(vetoes[actor.id]), boundary_refs=boundary_refs,
             )
             for actor in actors
         }
@@ -357,7 +392,8 @@ class _Tick:
                 self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
         if outcome_issues:
             intents = [self.runtime.world.nodes_by_id[intent_id] for intent_id in outcome_issues]
-            passed.extend(self._recheck(self._adjudicate(intents, feedback=outcome_issues)))
+            retried, _unasked = self._adjudicate_within_guard(intents, limit=len(intents), feedback=outcome_issues)
+            passed.extend(self._recheck(retried))
         if turn_issues:
             views = [self.views[actor_id] for actor_id in turn_issues]
             passed.extend(self._recheck(self._turns(views, feedback=actor_safe_feedback(turn_issues, self.views))))
@@ -374,60 +410,59 @@ class _Tick:
         return passed
 
     def _issues(self, candidate: TickCandidate) -> list[ConstraintIssue]:
-        """Every hard-rule issue is an error; the world gate's errors count as well."""
-        context = self.context
-        issues: list[ConstraintIssue] = []
-        # An interaction mirrors chapter text the gate already passed (Ruling P13).
-        if candidate.origin != "intent_interaction":
-            issues.extend(check_hard_rules(
-                self.runtime, self.lexicon, candidate, now=context.now, calendar=self.rules_calendar,
-                window_start=context.window_start,
-            ))
-        # Bookkeeping alone gives the gate nothing to check; the tick's build still resolves its refs.
-        if candidate.effects != WorldEffects() or candidate.new_intents or candidate.agenda_changes:
-            issues.extend(self._gate_issues(candidate))
-        return issues
+        """The candidate's issues on its own: the running-state check with nothing accepted yet."""
+        return self._running_check().issues(candidate)
 
-    def _gate_issues(self, candidate: TickCandidate) -> list[ConstraintIssue]:
-        context = self.context
-        build = self.builder.build(context=context, candidates=[candidate], news_in_transit=(), tick_id=self.tick_id)
-        if build.delta is None:
-            return [
-                ConstraintIssue(issue.code, issue.message, "") for issue in build.issues if issue.severity == "error"
-            ]
-        verdict = BookStateReviewGate(self.session).review(
-            ApprovedGraphDeltaSet(
-                project_id=context.project_id, chapter_number=context.chapter_number, graph_deltas=[build.delta],
-            ),
-            # The tick builds on chapter N, as its delta will.
-            base_chapter=context.chapter_number,
-            travel_tolerance=self.policy.review.travel_tolerance,
+    def _running_check(self) -> RunningStateCheck:
+        return RunningStateCheck(
+            self.session, context=self.context, runtime=self.runtime, lexicon=self.lexicon, calendar=self.calendar,
+            tick_id=self.tick_id, travel_tolerance=self.policy.review.travel_tolerance,
         )
-        return [
-            ConstraintIssue(issue.code, issue.message, issue.target_ref)
-            for issue in verdict.issues if issue.severity == "error"
-        ]
+
+    def _admitted(self, base: Sequence[TickCandidate]) -> list[TickCandidate]:
+        """The base candidates that hold against the running state, in order (Ruling P29).
+
+        Each is checked against the ones accepted before it; one that fails is dropped. The in-tick
+        resolutions follow, each one's candidates together: a resolution whose change no longer holds
+        against the tick's canon goes to a human (Ruling P30).
+        """
+        check = self._running_check()
+        admitted = []
+        for candidate in base:
+            issues = check.admit(candidate)
+            if issues:
+                self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
+            else:
+                admitted.append(candidate)
+        for resolution in list(self.conflicts.resolutions):
+            mark = check.mark()
+            for candidate in resolution.candidates:
+                issues = check.admit(candidate)
+                if not issues:
+                    continue
+                check.reset(mark)
+                self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
+                self.conflicts.cancel(
+                    resolution.conflict_id, failure_reason=CONFLICT_STALE,
+                    detail="; ".join(f"{issue.code}: {issue.message}" for issue in issues),
+                )
+                break
+        return admitted
 
     # build and commit
 
     def _commit(self, base: list[TickCandidate]) -> tuple[list[str], list[dict[str, str]]]:
         """Build the tick's delta, dropping what does not build, and commit it with the in-tick resolutions.
 
-        Each retry drops a candidate or a resolution, so the loop ends.
+        Each pass checks what is left against the running state first. Each retry drops a candidate or a
+        resolution, so the loop ends.
         """
         context = self.context
-        # From here on no other canon writer can commit; the lock comes after the conflict rows' locks.
-        self.session.execute(
-            select(Project.id).where(Project.id == context.project_id).with_for_update(key_share=True)
-        )
-        if BookStateRepository(self.session).latest_world_snapshot_id(
-            context.project_id, context.chapter_number,
-        ) != self.snapshot_id:
-            # Canon changed while the tick was reasoning: its view is stale, so the step rolls back and retries.
-            raise CanonStaleVersion(f"Canon moved under world tick {self.tick_id}")
+        # Canon read before the project lock: a writer landing meanwhile changes the snapshot checked below.
         queue = latest_news_in_transit(self.session, context.project_id)
         spread_news = True
         while True:
+            base = self._admitted(base)
             candidates = [*base, *(item for resolution in self.conflicts.resolutions for item in resolution.candidates)]
             news = self._news(candidates, queue) if spread_news else PropagatedNews(candidate=None, in_transit=queue)
             built = [*candidates, news.candidate] if news.candidate is not None else candidates
@@ -465,7 +500,9 @@ class _Tick:
                 delta.narrative_patches,
             ))
             if not changes and not self.conflicts.resolutions:
+                # A quiet tick takes no lock and holds none through the rest of the world step.
                 return [], warnings
+            self._lock_fresh_canon()
             try:
                 with self.session.begin_nested():
                     graph_delta_ids = self._commit_delta(delta) if changes else ()
@@ -476,6 +513,21 @@ class _Tick:
                 self.conflicts.cancel(exc.conflict_id, failure_reason=OPTION_UNAVAILABLE, detail=str(exc))
                 continue
             return list(graph_delta_ids), warnings
+
+    def _lock_fresh_canon(self) -> None:
+        """Take the project lock and check the canon the tick reasoned on still stands (Ruling P27).
+
+        From here on no other canon writer can commit; the lock comes after the conflict rows' locks.
+        """
+        context = self.context
+        self.session.execute(
+            select(Project.id).where(Project.id == context.project_id).with_for_update(key_share=True)
+        )
+        if BookStateRepository(self.session).latest_world_snapshot_id(
+            context.project_id, context.chapter_number,
+        ) != self.snapshot_id:
+            # Canon changed while the tick was reasoning: its view is stale, so the step rolls back and retries.
+            raise CanonStaleVersion(f"Canon moved under world tick {self.tick_id}")
 
     def _news(self, candidates: Sequence[TickCandidate], queue: Sequence[NewsItem]) -> PropagatedNews:
         """One propagation of the chapter's events, the events that will commit, and the queue."""

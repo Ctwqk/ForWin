@@ -48,6 +48,7 @@ class ChapterExecutionStage:
         completed_chapters: list[int] = []
         failed_chapters: list[int] = []
         paused_chapters: list[int] = []
+        pause_reason = ""
         frozen_artifacts: list[str] = []
         system_block_chapters: list[int] = []
         last_requested_chapter = max(chapter_numbers, default=0)
@@ -130,6 +131,8 @@ class ChapterExecutionStage:
                 project_id, next_chapter=chapter_num
             )
             if conflict is not None:
+                paused_chapters.append(chapter_num)
+                pause_reason = "world_conflict"
                 self._emit_progress(
                     "stage_changed",
                     stage="paused_for_review",
@@ -142,7 +145,6 @@ class ChapterExecutionStage:
                     frozen_artifacts=frozen_artifacts,
                     payload={"reason": "world_conflict", "conflict_id": conflict.id},
                 )
-                paused_chapters.append(chapter_num)
                 break
 
             print(f"\n{'─' * 60}")
@@ -1046,6 +1048,7 @@ class ChapterExecutionStage:
             paused_chapters=paused_chapters,
             frozen_artifacts=frozen_artifacts,
             system_block_chapters=system_block_chapters,
+            pause_reason=pause_reason,
         )
 
 

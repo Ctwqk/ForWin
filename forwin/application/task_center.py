@@ -9,15 +9,14 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from forwin.application.read_models import (
+    WorldConflictBlockInfo,
+    _recent_rows_by_project,
     build_generation_control,
     load_next_planned_arc_starts,
-    _recent_rows_by_project,
+    load_open_world_conflicts,
+    load_open_world_conflicts_by_project,
 )
 from forwin.api_schema import TaskCenterItemResponse
-from forwin.application.read_models.generation import (
-    WorldConflictBlockInfo,
-    load_open_world_conflicts,
-)
 from forwin.models.planning_control import BandCheckpoint
 from forwin.models.audit import DecisionEvent
 from forwin.models.project import ChapterPlan, Project
@@ -164,6 +163,9 @@ class TaskCenterService:
             next_arc_start_map = load_next_planned_arc_starts(
                 session, [project.id for project in projects]
             )
+            open_world_conflicts_map = load_open_world_conflicts_by_project(
+                session, [project.id for project in projects]
+            )
             items: list[TaskCenterItemResponse] = []
             for project in projects:
                 if project.id in live_project_ids:
@@ -174,7 +176,7 @@ class TaskCenterService:
                         plans_by_project.get(project.id, []),
                         latest_band_checkpoint=latest_checkpoint_map.get(project.id),
                         decision_events=decision_timeline_map.get(project.id, []),
-                        open_world_conflicts=load_open_world_conflicts(session, project.id),
+                        open_world_conflicts=open_world_conflicts_map.get(project.id, []),
                         next_arc_chapter_start=next_arc_start_map.get(project.id, 0),
                     )
                 )

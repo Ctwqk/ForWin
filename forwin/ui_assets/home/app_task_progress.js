@@ -937,18 +937,31 @@
         };
       }
 
-      const worldConflictPending = control.blocking_reason?.code === 'world_conflict_pending';
+      const worldConflictPending = control.blocking_reason?.code === 'world_conflict_pending'
+        || project?.blocking_reason?.code === 'world_conflict_pending';
       if (worldConflictPending || reviewChapters.length || item.status === 'needs_review') {
         const first = reviewChapters[0];
         const chapterLabel = first?.chapter_number ? `第 ${first.chapter_number} 章` : '待 review 章节';
+        const copy = {
+          world_conflict: {
+            eyebrow: '世界冲突阻塞',
+            title: '世界与计划冲突需要处理',
+            description: '存在待人工决定的世界与计划冲突。继续生成会被拒绝，直到冲突处理完成。',
+            next: '查看世界冲突并作出决定',
+            safety: '处理冲突后可继续生成，尚未开始的章节计划保持原状态。',
+          },
+          review: {
+            eyebrow: '人工检查阻塞',
+            title: `${chapterLabel} 需要处理`,
+            description: '状态机要求先处理 needs_review。继续生成会被拒绝，直到人工查看 review、接受或修复该章。',
+            next: '查看 Review 并决定是否接受',
+            safety: '接受并继续会新建 continue task，不会重写已 accepted 章节。',
+          },
+        }[worldConflictPending ? 'world_conflict' : 'review'];
         return {
           tone: 'blocked',
-          eyebrow: worldConflictPending ? '世界冲突阻塞' : '人工检查阻塞',
-          title: worldConflictPending ? '世界与计划冲突需要处理' : `${chapterLabel} 需要处理`,
-          description: worldConflictPending ? '存在待人工决定的世界与计划冲突。继续生成会被拒绝，直到冲突处理完成。' : '状态机要求先处理 needs_review。继续生成会被拒绝，直到人工查看 review、接受或修复该章。',
-          next: worldConflictPending ? '查看世界冲突并作出决定' : '查看 Review 并决定是否接受',
-          safety: worldConflictPending ? '处理冲突后可继续生成，尚未开始的章节计划保持原状态。' : '接受并继续会新建 continue task，不会重写已 accepted 章节。',
-          reviewChapters,
+          ...copy,
+          reviewChapters: worldConflictPending ? [] : reviewChapters,
           failedChapters,
           completed: accepted,
           accepted,

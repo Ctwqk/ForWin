@@ -32,9 +32,9 @@ from .arc_snapshot import (
 )
 from .generation import (
     build_generation_control,
-    load_open_world_conflicts,
     effective_target_total_chapters,
     load_next_planned_arc_starts,
+    load_open_world_conflicts,
 )
 from .genesis import (
     _can_start_writing,

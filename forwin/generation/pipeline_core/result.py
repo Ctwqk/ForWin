@@ -16,6 +16,7 @@ class RunResult:
     system_block_chapters: list[int] = field(default_factory=list)
     cancelled: bool = False
     paused: bool = False
+    pause_reason: str = ""
 
     @property
     def status(self) -> str:

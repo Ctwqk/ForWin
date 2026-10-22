@@ -21,10 +21,13 @@ from .arc_snapshot import (
 )
 
 from .generation import (
+    WorldConflictBlockInfo,
     _derive_blocking_reason,
     _derive_next_gate,
     effective_target_total_chapters,
     load_next_planned_arc_starts,
+    load_open_world_conflicts,
+    load_open_world_conflicts_by_project,
     build_generation_control,
 )
 
@@ -54,6 +57,7 @@ from .project_detail import (
 )
 
 __all__ = [
+    'WorldConflictBlockInfo',
     '_deep_merge_dict',
     '_normalized_project_ids',
     '_recent_rows_by_project',
@@ -70,6 +74,8 @@ __all__ = [
     '_derive_next_gate',
     'effective_target_total_chapters',
     'load_next_planned_arc_starts',
+    'load_open_world_conflicts',
+    'load_open_world_conflicts_by_project',
     'build_generation_control',
     'load_recent_replan_events_by_project',
     '_load_latest_arc_structure_by_project',

@@ -66,6 +66,8 @@ def _paused_chapters_message(result, *, prefix: str = "") -> str:
     paused_str = ", ".join(
         str(chapter) for chapter in getattr(result, "paused_chapters", []) or []
     )
+    if getattr(result, "pause_reason", "") == "world_conflict":
+        return f"{prefix}第 {paused_str} 章因世界冲突暂停，请处理世界冲突后继续生成"
     if prefix:
         return f"{prefix}遇到质量门阻断，需自动修复或重试章节: {paused_str}"
     return f"质量门阻断，需自动修复或重试章节: {paused_str}"

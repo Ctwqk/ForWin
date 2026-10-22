@@ -22,6 +22,7 @@ from forwin.audit.events import (
 )
 from forwin.models.planning_control import BandCheckpoint
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.world_engine.conflict_repository import WorldConflictRepository
 from .arc_snapshot import _band_checkpoint_detail
 
@@ -34,6 +35,7 @@ class WorldConflictBlockInfo(BaseModel):
     conflict_id: str
     blocks_from_chapter: int
     summary: str
+    created_at: datetime = datetime.min
 
 
 def load_open_world_conflicts(
@@ -44,10 +46,49 @@ def load_open_world_conflicts(
             conflict_id=row.id,
             blocks_from_chapter=row.blocks_from_chapter,
             summary=row.summary,
+            created_at=row.created_at,
         )
         for row in WorldConflictRepository(session).list(project_id, status="open")
         if row.required_decider == "human"
     ]
+
+
+def load_open_world_conflicts_by_project(
+    session: Session, project_ids: list[str]
+) -> dict[str, list[WorldConflictBlockInfo]]:
+    if not project_ids:
+        return {}
+    rows = session.execute(
+        select(
+            WorldPlanConflictRow.id,
+            WorldPlanConflictRow.project_id,
+            WorldPlanConflictRow.blocks_from_chapter,
+            WorldPlanConflictRow.summary,
+            WorldPlanConflictRow.created_at,
+        )
+        .where(
+            WorldPlanConflictRow.project_id.in_(project_ids),
+            WorldPlanConflictRow.status == "open",
+            WorldPlanConflictRow.required_decider == "human",
+        )
+        .order_by(
+            WorldPlanConflictRow.blocks_from_chapter,
+            WorldPlanConflictRow.created_at,
+        )
+    ).all()
+    grouped: dict[str, list[WorldConflictBlockInfo]] = {
+        project_id: [] for project_id in project_ids
+    }
+    for row in rows:
+        grouped[row.project_id].append(
+            WorldConflictBlockInfo(
+                conflict_id=row.id,
+                blocks_from_chapter=row.blocks_from_chapter,
+                summary=row.summary,
+                created_at=row.created_at,
+            )
+        )
+    return grouped
 
 
 def _derive_blocking_reason(
@@ -57,6 +98,7 @@ def _derive_blocking_reason(
     decision_events: list[DecisionEventInfo] | None = None,
     future_constraints_enabled: bool = True,
     open_world_conflicts: Sequence[WorldConflictBlockInfo] = (),
+    next_chapter: int = 0,
 ) -> BlockingReasonInfo:
     blocking_plan = next(
         (
@@ -66,21 +108,24 @@ def _derive_blocking_reason(
         ),
         None,
     )
-    if blocking_plan is not None:
+    conflict_chapter = (
+        blocking_plan.chapter_number if blocking_plan is not None else next_chapter
+    )
+    if conflict_chapter > 0:
         conflict = min(
             (
                 item
                 for item in open_world_conflicts
-                if item.blocks_from_chapter <= blocking_plan.chapter_number
+                if item.blocks_from_chapter <= conflict_chapter
             ),
-            key=lambda item: item.blocks_from_chapter,
+            key=lambda item: (item.blocks_from_chapter, item.created_at),
             default=None,
         )
         if conflict is not None:
             return BlockingReasonInfo(
                 code="world_conflict_pending",
                 message=chapter_blocking_message("world_conflict_pending"),
-                chapter_number=blocking_plan.chapter_number,
+                chapter_number=conflict_chapter,
                 detail=f"conflict_id={conflict.conflict_id}: {conflict.summary}",
             )
 
@@ -391,9 +436,13 @@ def build_generation_control(
         decision_events=decision_events,
         future_constraints_enabled=future_constraints_enabled,
         open_world_conflicts=open_world_conflicts,
+        next_chapter=next_chapter,
     )
     can_resume = bool(
-        (next_candidates or resume_from_next_arc) and not pending_review and not drafted
+        (next_candidates or resume_from_next_arc)
+        and not pending_review
+        and not drafted
+        and blocking_reason.code != "world_conflict_pending"
     )
     next_gate = _derive_next_gate(plans=plans, blocking_reason=blocking_reason)
     if resume_from_next_arc and can_resume and next_gate in {"", "completed"}:
@@ -426,6 +475,7 @@ def build_generation_control(
 __all__ = [
     "WorldConflictBlockInfo",
     "load_open_world_conflicts",
+    "load_open_world_conflicts_by_project",
     "_derive_blocking_reason",
     "_derive_next_gate",
     "effective_target_total_chapters",

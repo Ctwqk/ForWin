@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any
 
 from forwin.book_state.knowledge import FACT_REF_PREFIX
@@ -11,10 +12,27 @@ from forwin.world_engine.types import NEW_FACT_REF_PREFIX, WorldEffects
 
 
 def effect_reference_issues(effects: WorldEffects, runtime: BookStateRuntime, lexicon: BookLexicon) -> list[str]:
-    allowed = (set(runtime.world.nodes_by_id) | set(runtime.map.nodes_by_id)
-               | {f"{FACT_REF_PREFIX}{ref}" for ref in runtime.world.facts_by_id}) - {"reader"}
+    return scoped_effect_reference_issues(
+        effects,
+        refs=(set(runtime.world.nodes_by_id) | set(runtime.map.nodes_by_id)
+              | {f"{FACT_REF_PREFIX}{ref}" for ref in runtime.world.facts_by_id}),
+        location_ids=set(runtime.map.nodes_by_id),
+        travel_mode_ids={mode.id for mode in lexicon.travel_modes},
+    )
+
+
+def scoped_effect_reference_issues(
+    effects: WorldEffects,
+    *,
+    refs: Collection[str],
+    location_ids: Collection[str],
+    travel_mode_ids: Collection[str],
+) -> list[str]:
+    """The same checks within given references: node, map node and ``fact:<id>`` refs, and movement destinations."""
+    allowed = set(refs) - {"reader"}
+    locations = set(location_ids)
     new_facts = {f"{NEW_FACT_REF_PREFIX}{fact.key}" for fact in effects.new_facts}
-    modes = {mode.id for mode in lexicon.travel_modes}
+    modes = set(travel_mode_ids)
     issues: list[str] = []
 
     def check(ref: str, path: str, *, refs: set[str] = allowed, optional: bool = False) -> None:
@@ -44,7 +62,7 @@ def effect_reference_issues(effects: WorldEffects, runtime: BookStateRuntime, le
                    is_ref=item.field.endswith(("_id", "_ids", "_ref", "_refs")))
     for index, item in enumerate(effects.movements):
         check(item.entity_ref, f"movements[{index}].entity_ref")
-        check(item.to_location_id, f"movements[{index}].to_location_id", refs=set(runtime.map.nodes_by_id))
+        check(item.to_location_id, f"movements[{index}].to_location_id", refs=locations)
         check(item.travel_mode_id, f"movements[{index}].travel_mode_id", refs=modes, optional=True)
     for index, item in enumerate(effects.item_transfers):
         check(item.item_ref, f"item_transfers[{index}].item_ref")
@@ -62,4 +80,3 @@ def effect_reference_issues(effects: WorldEffects, runtime: BookStateRuntime, le
         check(item.fact_ref, f"knowledge[{index}].fact_ref", refs=allowed | new_facts)
         check(item.source_ref, f"knowledge[{index}].source_ref", optional=True)
     return issues
-

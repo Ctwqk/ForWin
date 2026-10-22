@@ -5,18 +5,26 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from forwin.book_state.knowledge import FACT_REF_PREFIX, KNOWLEDGE_CHANNELS, KNOWLEDGE_STATES
 from forwin.book_state.lexicon import BookLexicon, lexicon_to_payload
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
+from forwin.book_state.schema import AGENDA_STATUSES, IMPACT_LEVELS, INTENT_ACTION_TYPES
 from forwin.book_state.story_clock import StoryCalendar, calendar_to_payload
 from forwin.protocol.book_state import WORLD_EDGE_TYPES, WorldNode
 from forwin.world_engine.constraints import ConstraintIssue
-from forwin.world_engine.types import AdjudicationResult, NEW_FACT_REF_PREFIX, TickContext
+from forwin.world_engine.types import (
+    AGENDA_PRIORITY_MAX, AGENDA_PRIORITY_MIN, NEW_AGENDA_REF, NEW_FACT_REF_PREFIX, ActorTurnBatch,
+    AdjudicationResult, TickContext,
+)
+
+if TYPE_CHECKING:
+    from forwin.world_engine.actor_turns import ActorView
 
 
 MAX_ADJUDICATION_PROMPT_CHARS = 60000
+MAX_ACTOR_TURN_PROMPT_CHARS = 60000
 
 
 ADJUDICATION_INSTRUCTIONS = (
@@ -31,6 +39,24 @@ ADJUDICATION_INSTRUCTIONS = (
     "地图 travel_time 的单位是小时。时长描述只使用本书日历单位或 lexicon 别名。",
     "使用 seed 使同一输入的裁决稳定。约束反馈按 intent_id 修正对应结果；所有空列表返回 []。"
     "完整输出结构如下，额外的允许值列表补充 schema 中未列出的枚举。",
+)
+
+
+ACTOR_TURN_INSTRUCTIONS = (
+    "你为每个输入行动者各做一次回合决策，只依据该行动者自己的视图，返回 JSON 对象，不输出正文或 Markdown。",
+    "视图只含该行动者知道或相信的内容：facts 按它持有的认知状态理解，public_facts 是它默认知道的公开事实，"
+    "两者都可能与真相不符；不要假设视图之外的人物、地点或事实。",
+    "turns 中每个输入 actor_id 恰好一项，含 0 到 max_new_intents_per_actor 个 new_intents、agenda_changes 与 "
+    "next_turn_in；不得替其他行动者决策。",
+    "引用只能使用该行动者视图中的 id：自身、agendas、holdings、entities、clocks、facts 与 public_facts 的 ref；"
+    "location_id 只能是当前位置或 reachable_places 中的地点。不得触碰 boundary_refs 中的引用，"
+    "也不要重复 vetoes 中被否决的行动。",
+    "agenda_ref 用自己的 agenda id，或留空；新建议程时 agenda_changes 中恰好一项的 agenda_ref 为允许值给出的新议程标记"
+    "并附 goal，意图的 agenda_ref 写同一标记即指向它。priority 只能取允许值给出的范围。",
+    "scheduled_in 与 next_turn_in 的 unit 只使用本书日历单位或 lexicon 别名；意图地点须在 scheduled_in 之内到达，"
+    "reachable_places 的 minutes 是到达所需分钟数。expected_effects 只是预期变化的预览，不得包含 reader 的认知变化。"
+    "约束反馈与重试反馈按 actor_id 修正对应结果；所有空列表返回 []。完整输出结构如下，额外的允许值列表补充 schema 中"
+    "未列出的枚举。",
 )
 
 
@@ -142,5 +168,47 @@ def build_adjudication_messages(
     if len(user) > MAX_ADJUDICATION_PROMPT_CHARS:
         payload.pop("world_node_index")
         payload.pop("map_node_index")
+        user = json.dumps(payload, ensure_ascii=False) + suffix
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def build_actor_turn_messages(
+    *, context: TickContext, views: Sequence[ActorView], calendar: StoryCalendar | None,
+    lexicon: BookLexicon, max_new_intents: int,
+    feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
+    retry_feedback: Sequence[str] = (),
+) -> list[dict]:
+    """One batch of actor turns: the shared calendar and lexicon, and each actor's own view only."""
+    actors = [_without_empty(view.model_dump(mode="json")) for view in views]
+    payload = {
+        "context": context.model_dump(mode="json"),
+        "max_new_intents_per_actor": max_new_intents,
+        "calendar": calendar_to_payload(calendar) if calendar is not None else None,
+        "lexicon": lexicon_to_payload(lexicon),
+        "actors": actors,
+    }
+    allowed = {
+        "action_type": INTENT_ACTION_TYPES, "impact_level": IMPACT_LEVELS, "agenda_status": AGENDA_STATUSES,
+        "agenda_priority": [AGENDA_PRIORITY_MIN, AGENDA_PRIORITY_MAX],
+        "knowledge_state": KNOWLEDGE_STATES, "knowledge_channel": KNOWLEDGE_CHANNELS,
+        "edge_type": sorted(WORLD_EDGE_TYPES), "new_agenda_ref": NEW_AGENDA_REF,
+        "new_fact_ref_prefix": NEW_FACT_REF_PREFIX,
+    }
+    system = ("\n".join(ACTOR_TURN_INSTRUCTIONS)
+              + "\n" + json.dumps(ActorTurnBatch.model_json_schema(), ensure_ascii=False)
+              + "\nAllowed values:\n" + json.dumps(allowed, ensure_ascii=False))
+    actor_ids = {view.actor_id for view in views}
+    feedback_payload = {ref: [asdict(issue) for issue in issues] for ref, issues in (feedback or {}).items()
+                        if ref in actor_ids and issues}
+    suffix = ""
+    if feedback_payload:
+        suffix += "\n\nConstraint feedback by actor:\n" + json.dumps(feedback_payload, ensure_ascii=False)
+    if retry_feedback:
+        suffix += "\n\nRetry validation feedback:\n" + "\n".join(retry_feedback)
+    user = json.dumps(payload, ensure_ascii=False) + suffix
+    if len(user) > MAX_ACTOR_TURN_PROMPT_CHARS:
+        # Public facts an actor holds no record of go first; what it learned stays.
+        for actor in actors:
+            actor.pop("public_facts", None)
         user = json.dumps(payload, ensure_ascii=False) + suffix
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]

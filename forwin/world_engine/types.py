@@ -20,6 +20,8 @@ WORLD_ENGINE_SOURCE_TYPE = "world_engine"
 NEW_FACT_REF_PREFIX = f"{FACT_REF_PREFIX}new:"
 # The agenda_ref of an agenda change that creates an agenda.
 NEW_AGENDA_REF = "new"
+# An agenda's priority range; AgendaChange leaves it unbounded, so consumers check it.
+AGENDA_PRIORITY_MIN, AGENDA_PRIORITY_MAX = 1, 5
 _SEED_MODULUS = 2_000_000_000
 
 
@@ -186,6 +188,10 @@ class ActorTurnResult(_ContractModel):
     new_intents: list[ProposedIntent] = Field(default_factory=list)
     agenda_changes: list[AgendaChange] = Field(default_factory=list)
     next_turn_in: Duration
+
+
+class ActorTurnBatch(_ContractModel):
+    turns: list[ActorTurnResult] = Field(default_factory=list)
 
 
 # tick internals

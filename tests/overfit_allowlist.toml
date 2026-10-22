@@ -29,7 +29,9 @@ allowed_values = ["main", "fact_type", "fact_id", "thread_id", "world_line_id", 
   # ChapterDeltaExtraction field name used in translator issue paths.
   "intent_interactions",
   # World tick candidate origin enum token (forwin/world_engine/types.py TickCandidate.origin).
-  "intent_interaction"]
+  "intent_interaction",
+  # ActorTurnResult field name used in actor-turn validation issue paths.
+  "agenda_changes"]
 
 [canary]
 seed_terms = [
@@ -983,8 +985,8 @@ max_literals = 20
 path = "forwin/writer/prompt_core/world_engine.py"
 checks = ["cjk_collection", "fixture_term"]
 category = "prompt_text"
-justification = "Structured world adjudication instructions; story facts come only from BookState inputs."
-max_literals = 7
+justification = "Structured world adjudication and actor-turn instructions; story facts come only from BookState inputs and actor views."
+max_literals = 13
 
 [[entry]]
 path = "forwin/writer/prompt_core/world_repair.py"

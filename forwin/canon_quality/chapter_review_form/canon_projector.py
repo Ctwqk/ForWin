@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from forwin.config import FormBlockingPolicy
 from forwin.canon_quality.signals import CanonQualitySignal, make_signal_id
 
-from .form_schema import ChapterReviewAnswers, FormAnswer
+from .form_schema import ChapterReviewAnswers, ChapterReviewForm, FormAnswer
 from .evidence_validator import RejectedAnswer, ValidationReport
 
 
@@ -20,6 +20,7 @@ def project_validated_answers(
     *,
     answers: ChapterReviewAnswers,
     validation_report: ValidationReport,
+    form: ChapterReviewForm | None = None,
     draft_id: str = "",
     min_blocking_confidence: float = 0.8,
     blocking_policy: FormBlockingPolicy | None = None,
@@ -27,6 +28,7 @@ def project_validated_answers(
     result = ProjectionResult()
     policy = blocking_policy or FormBlockingPolicy()
     blocking_paths = set(validation_report.blocking_paths)
+    countdowns_by_key = {item.key: item for item in form.countdowns} if form is not None else {}
     for index, rejected in enumerate(validation_report.rejected, start=1):
         result.signals.append(_rejection_signal(answers, rejected, draft_id=draft_id, index=index))
 
@@ -34,6 +36,10 @@ def project_validated_answers(
         status_path = f"countdowns[{index}].status_in_this_chapter"
         consistency_path = f"countdowns[{index}].consistent_with_prior"
         if consistency_path in blocking_paths or status_path in blocking_paths:
+            ask = countdowns_by_key.get(countdown.key)
+            description = "A countdown is inconsistent with prior canon."
+            if ask is not None and ask.scope == "public" and ask.label and ask.label != ask.key:
+                description = f"Countdown {ask.label} is inconsistent with prior canon."
             answer = countdown.consistent_with_prior if consistency_path in blocking_paths else countdown.status_in_this_chapter
             answer_path = consistency_path if consistency_path in blocking_paths else status_path
             signal = _blocking_signal(
@@ -42,7 +48,7 @@ def project_validated_answers(
                 subject_key=countdown.key,
                 answer=answer,
                 answer_path=answer_path,
-                description=f"Countdown {countdown.key} is inconsistent with prior canon.",
+                description=description,
                 draft_id=draft_id,
                 index=index + 1,
                 severity=_severity_for_answer(

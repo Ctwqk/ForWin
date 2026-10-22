@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import pytest
+
 from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.config import FormBlockingPolicy
 from forwin.canon_quality.chapter_review_form.canon_projector import project_validated_answers
 from forwin.canon_quality.chapter_review_form.evidence_validator import RejectedAnswer, ValidationReport
+from forwin.canon_quality.chapter_review_form.form_builder import build_form
 from forwin.canon_quality.chapter_review_form.form_schema import (
     CharacterReviewAnswer,
     ChapterReviewAnswers,
@@ -12,6 +15,8 @@ from forwin.canon_quality.chapter_review_form.form_schema import (
     NewObservations,
     ObligationReviewAnswer,
 )
+from forwin.canon_quality.chapter_review_form.service import review_chapter_with_form
+from forwin.protocol.writer import WriterOutput
 
 
 def test_projector_validated_character_answer_emits_nothing() -> None:
@@ -112,6 +117,7 @@ def test_projector_blocks_closed_countdown_regression_without_bridge() -> None:
     assert [signal.signal_type for signal in projection.signals] == ["form_countdown_inconsistency"]
     assert projection.signals[0].severity == "error"
     payload = projection.signals[0].payload
+    assert projection.signals[0].description == "A countdown is inconsistent with prior canon."
     assert (payload["plan_patchable"], payload["patch_kind"], payload["suppression_key"]) == (False, "", "")
     assert not {"generic_patch_kind", "generic_suppression_key", "invariant_key", "countdown_label"} & set(payload)
 
@@ -166,3 +172,67 @@ def _answers(
         open_signals=[],
         new_observations=NewObservations(),
     )
+
+
+def _clock_projection(scope: str):
+    form = build_form(
+        project_id="p1", chapter_number=2, chapter_text="",
+        countdown_rows=[{"countdown_key": "clock-node-123", "label": "Departure deadline", "scope": scope, "remaining_minutes": 10, "status": "active"}],
+    )
+    answers = _answers(countdowns=[CountdownReviewAnswer(
+        key="clock-node-123", mentioned_in_chapter=True,
+        status_in_this_chapter=FormAnswer(value="active"),
+        consistent_with_prior=FormAnswer(value="false", confidence=0.95),
+    )])
+    return project_validated_answers(
+        answers=answers, form=form,
+        validation_report=ValidationReport(blocking_paths=["countdowns[0].consistent_with_prior"]),
+    )
+
+
+def test_public_clock_signal_uses_label_not_node_id() -> None:
+    projection = _clock_projection("public")
+    signal = projection.signals[0]
+    assert signal.subject_key == "clock-node-123"
+    assert "Departure deadline" in signal.description
+    assert "clock-node-123" not in signal.description
+    assert projection.review_issues[0]["description"] == signal.description
+
+
+def test_secret_clock_signal_reveals_neither_label_nor_id() -> None:
+    projection = _clock_projection("secret")
+    signal = projection.signals[0]
+    assert signal.subject_key == "clock-node-123"
+    assert signal.description
+    assert "Departure deadline" not in signal.description
+    assert "clock-node-123" not in signal.description
+    assert projection.review_issues[0]["description"] == signal.description
+
+
+@pytest.mark.parametrize("scope", ["public", "secret"])
+def test_form_service_clock_signal_description_respects_scope(scope: str) -> None:
+    quote = "The deadline moved backwards."
+    answer = CountdownReviewAnswer(
+        key="clock-node-123", mentioned_in_chapter=True,
+        status_in_this_chapter=FormAnswer(value="active"),
+        consistent_with_prior=FormAnswer(value="false", evidence_quote=quote, confidence=0.95),
+    )
+
+    class Client:
+        def complete_json(self, **kwargs):
+            return _answers(countdowns=[answer]).model_dump(mode="json")
+
+    result = review_chapter_with_form(
+        session=None, project_id="p1", chapter_number=2,
+        writer_output=WriterOutput(project_id="p1", chapter_number=2, title="t", body=quote, end_of_chapter_summary=""),
+        llm_client=Client(),
+        countdown_rows=[{"countdown_key": answer.key, "label": "Departure deadline", "scope": scope, "remaining_minutes": 10, "status": "active"}],
+    )
+
+    assert [signal.signal_type for signal in result.signals] == ["form_countdown_inconsistency"]
+    signal = result.signals[0]
+    assert result.blocking is True
+    assert signal.subject_key == answer.key
+    assert answer.key not in signal.description
+    assert ("Departure deadline" in signal.description) is (scope == "public")
+    assert result.review_issues[0]["description"] == signal.description

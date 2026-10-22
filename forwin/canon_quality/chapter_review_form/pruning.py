@@ -20,7 +20,8 @@ COUNTDOWN_STATUS_PRIORITY = {
 }
 
 _PROTECTED_SIGNAL_SEVERITIES = {"blocker", "critical", "error"}
-_PROTECTED_COUNTDOWN_STATUSES = {"reopened", "active"}
+_PROTECTED_COUNTDOWN_STATUSES = {"active"}
+MAX_PROTECTED_COUNTDOWNS = 6
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -60,16 +61,35 @@ def select_characters_to_ask(*, rows: list[Any], chapter_text: str) -> list[Any]
 
 
 def select_countdowns_to_ask(*, rows: list[Any], chapter_text: str) -> list[Any]:
-    """Open countdowns, and closed ones the chapter names again."""
+    """The nearest running countdowns, other open ones, and mentioned closed ones."""
+    protected = sorted((row for row in rows if _is_protected_countdown(row)), key=_countdown_sort_key)
     selected: list[Any] = []
     for row in rows:
+        if _is_protected_countdown(row):
+            continue
         key = str(row_value(row, "countdown_key") or row_value(row, "key") or "").strip()
         label = str(row_value(row, "label") or key).strip()
-        status = str(row_value(row, "status") or "active").strip()
+        status = countdown_status(row)
         mentioned = bool(key and key in chapter_text) or bool(label and label in chapter_text)
         if status in OPEN_COUNTDOWN_STATUSES or mentioned:
             selected.append(row)
-    return selected
+    return protected[:MAX_PROTECTED_COUNTDOWNS] + selected
+
+
+def countdown_status(item: Any) -> str:
+    status = str(row_value(item, "prior_status", row_value(item, "status", "active")) or "active").strip().lower()
+    remaining = _countdown_remaining(item)
+    if status == "active" and remaining is not None and remaining <= 0:
+        return "closed"
+    return status
+
+
+def _countdown_remaining(item: Any) -> int | None:
+    remaining = row_value(item, "prior_value_minutes", row_value(item, "remaining_minutes", None))
+    try:
+        return int(remaining) if remaining is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def select_signals_to_ask(*, rows: list[Any], chapter_number: int) -> list[Any]:
@@ -162,9 +182,12 @@ def _obligation_sort_key(item: Any) -> tuple[bool, int, str]:
     )
 
 
-def _countdown_sort_key(item: Any) -> tuple[int, str]:
-    status = str(row_value(item, "prior_status", row_value(item, "status", "active")) or "active").strip().lower()
-    return (COUNTDOWN_STATUS_PRIORITY.get(status, COUNTDOWN_STATUS_PRIORITY["consistent"]), str(row_value(item, "key", "")))
+def _countdown_sort_key(item: Any) -> tuple[int, int, str]:
+    status = countdown_status(item)
+    key = str(row_value(item, "key", row_value(item, "countdown_key", "")))
+    if _is_protected_countdown(item):
+        return (0, _countdown_remaining(item) or 0, key)
+    return (1, COUNTDOWN_STATUS_PRIORITY.get(status, COUNTDOWN_STATUS_PRIORITY["consistent"]), key)
 
 
 def _character_sort_key(item: Any) -> tuple[bool, int, str]:
@@ -185,8 +208,8 @@ def _is_protected_obligation(item: Any) -> bool:
 
 
 def _is_protected_countdown(item: Any) -> bool:
-    status = str(row_value(item, "prior_status", row_value(item, "status", "active")) or "active").strip().lower()
-    return status in _PROTECTED_COUNTDOWN_STATUSES
+    remaining = _countdown_remaining(item)
+    return countdown_status(item) in _PROTECTED_COUNTDOWN_STATUSES and remaining is not None and remaining > 0
 
 
 def _is_protected_character(item: Any) -> bool:

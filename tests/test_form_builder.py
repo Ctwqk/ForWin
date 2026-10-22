@@ -211,6 +211,41 @@ def test_builder_keeps_active_countdown_before_consistent_under_pressure() -> No
     assert [item.key for item in form.countdowns] == ["z-active"]
 
 
+@pytest.mark.parametrize("remaining", [-10, 0])
+def test_overdue_running_clock_is_not_protected(remaining: int) -> None:
+    row = {"countdown_key": "clock-overdue", "label": "Overdue", "remaining_minutes": remaining, "status": "active"}
+    form = build_form(project_id="p1", chapter_number=2, chapter_text="No clocks here.", countdown_rows=[row])
+    assert form.countdowns == []
+
+    mentioned = build_form(project_id="p1", chapter_number=2, chapter_text="Overdue", countdown_rows=[row])
+    assert mentioned.countdowns[0].prior_status == "closed"
+    assert mentioned.countdowns[0].prior_value_minutes == remaining
+
+    row["label"] = "Overdue" + "x" * 1800
+    pruned = build_form(project_id="p1", chapter_number=2, chapter_text="clock-overdue", countdown_rows=[row], token_budget_chars=1000)
+    assert pruned.countdowns == []
+
+
+def test_protected_countdowns_are_capped_by_remaining() -> None:
+    rows = [
+        {"countdown_key": f"clock-{index}", "label": f"Clock {index}", "remaining_minutes": remaining, "status": "active"}
+        for index, remaining in enumerate([80, 10, 70, 20, 60, 30, 50, 40])
+    ]
+    form = build_form(project_id="p1", chapter_number=2, chapter_text="", countdown_rows=rows)
+    assert [item.prior_value_minutes for item in form.countdowns] == [10, 20, 30, 40, 50, 60]
+    assert [item.key for item in form.countdowns] == ["clock-1", "clock-3", "clock-5", "clock-7", "clock-6", "clock-4"]
+
+
+@pytest.mark.parametrize("status,remaining", [("active", None), ("paused", 5), ("reopened", 5)])
+def test_non_running_or_unknown_remaining_clock_can_be_pruned(status: str, remaining: int | None) -> None:
+    form = build_form(
+        project_id="p1", chapter_number=2, chapter_text="",
+        countdown_rows=[{"countdown_key": "clock", "label": "x" * 1800, "remaining_minutes": remaining, "status": status}],
+        token_budget_chars=1000,
+    )
+    assert form.countdowns == []
+
+
 def test_review_form_emits_budget_warning_and_blocks_when_required_answer_missing() -> None:
     writer_output = WriterOutput(
         project_id="p1",

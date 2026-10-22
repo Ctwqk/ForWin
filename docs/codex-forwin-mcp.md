@@ -76,6 +76,27 @@ If the MCP server is missing or unhealthy, stop and fix the operator environment
    Use `world_conflict_list(project_id, status="open")` and `world_conflict_get(project_id, conflict_id)` to inspect world–plan conflicts. After the user chooses an offered option, call `world_conflict_resolve(project_id, conflict_id, option, rationale, reason)`; reason is required. The decision is recorded as human/manual_ui. Closed or stale conflicts return 409, unavailable options return 400, and missing or cross-project conflicts return 404.
    World–plan conflicts use `/api/projects/{project_id}/world-conflicts`; legacy signals remain at `/api/projects/{project_id}/world-model/conflicts`.
 
+### World Conflict Decisions And Resume
+
+Post-Canon maintenance runs `("world", "planning", "arc", "feedback")`. The world step runs a tick before the legacy `WorldSimulator`; its result records tick/delta/conflict/drop/postponement ids, warnings and skip reason. A tick uses the accepted chapter's story-time window, checks candidates, applies budgets, holds review-worthy changes, propagates news once and submits through `CanonAdmissionService.commit_world_tick`. Disabled, non-latest and already-ticked chapters skip. LLM outages skip affected nodes. Historical rewrite replays tick deltas with CAS; failed deltas create human `replay_cas` conflicts.
+
+An open conflict requiring a human blocks generation from `blocks_from_chapter`. The task reports `needs_review` via `paused_for_review`, and the project exposes `blocking_reason.code="world_conflict_pending"`. Continue and review-approve with `continue_generation=true` return 409 while this block applies; approving a chapter review does not resolve a world conflict. The console task drawer exposes the same conflict decisions.
+
+Routing is automatic veto for minor conflicts, human for historical rewrites or critical conflicts, and Codex for moderate/major when `world.conflict_delegate="codex"` (otherwise human). `WorldConflictDelegate` uses `models.role_preferences["review.world_conflict"]`, default `gpt-6-astra`, through the same `run_codex_structured_call` as the Spark gate; audit records use independent transactions. `FORWIN_CODEX_MODELS` declares Codex models. Any delegate failure or an `amend_plan` choice escalates to a human.
+
+Use only the options returned by the existing inspection tools:
+
+| Option | Effect |
+| --- | --- |
+| `veto_world` | Rejects the held change, marks an unsettled intent vetoed, and lets the actor reroll within the recent-window `world.max_rerolls` budget. Historical rewrite offers only this option. |
+| `accept_with_obligation` | Commits the change and a `world_change_response` obligation due by `min(latest+6, target)`, bound to the next unaccepted plan. Available only at minor/moderate and outside narrative-boundary conflicts. |
+| `plot_responds` | Commits the change and adds a response goal to the next unaccepted chapter plan. |
+| `amend_plan` | Human only: commits the change and releases broken protections. The user adjusts the plan manually in P3. |
+
+Protection, milestone and reveal-schedule boundary conflicts offer only veto/amend; other non-historical conflicts offer veto/plot_responds/amend, with the lighter-level obligation option above. Resolution commits world changes through `commit_world_tick(tick_id="conflict-<id>")`; changes, obligations/plan effects and closure share one SAVEPOINT. After a successful resolution, reread the conflict and project, check for any remaining blocks, and follow Resume Writing's active-task check before explicitly continuing. Resolving a conflict does not enqueue generation.
+
+The code schema head is `0005_world_plan_conflicts` (parent `0004_drop_parallel_ledgers`); this is not evidence that a running server has deployed it. Explicit P4 deferrals are protection producers, critical/milestone producers, `rewrite_chapter` (never offered in P3), `world.drift`, and `checkable` evaluation. P3 also defers a delta-only re-tick of a rewritten latest chapter, builder `runtime=` reuse and re-queuing forbidden news deliveries; an already-ticked rewrite receives no new tick news for its own events. See [current architecture](../Design-docs/CURRENT_ARCHITECTURE.md) for the full P4 list.
+
 ### Safe Stop
 
 1. Call `task_get` or `task_list` to identify the active generation task.

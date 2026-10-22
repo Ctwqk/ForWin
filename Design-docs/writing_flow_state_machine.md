@@ -1,6 +1,6 @@
 # 写作流程状态机
 
-更新时间：2026-10-21
+更新时间：2026-10-22
 
 本文档描述当前代码里的**写作任务**状态机。范围包括 HTTP 入队、durable worker、`start-writing` 后的章节主流程、五层 review、暂停/终止，以及 LLM retry/fallback。
 
@@ -19,7 +19,7 @@ stateDiagram-v2
 
     running --> paused: POST /pause requested\nsafe checkpoint reached
     running --> cancelled: POST /terminate requested\ncancel checkpoint reached
-    running --> needs_review: chapter/status needs_review\nprovisional/manual checkpoint
+    running --> needs_review: chapter/status needs_review\nmanual checkpoint / world_conflict_pending
     running --> completed: all requested chapters accepted
     running --> partial_failed: some accepted + some failed
     running --> failed: no accepted chapter + failed
@@ -27,7 +27,7 @@ stateDiagram-v2
     queued --> cancelled: terminate before claim
     queued --> paused: pause before claim
 
-    needs_review --> queued: approve review\ncontinue_generation=true
+    needs_review --> queued: resolve blocking conflicts / approve review\nexplicit continue, no active task
     paused --> queued: POST /continue-generation
     partial_failed --> queued: POST /continue-generation\nretry failed chapters
     failed --> queued: POST /continue-generation\nretry failed/planned chapters
@@ -53,6 +53,8 @@ stateDiagram-v2
     continue_project --> resolving_arc_envelope: planned/failed chapters remain
     continue_project --> completed: no remaining planned/failed chapters
 
+    chapter_loop --> world_conflict_review: open human conflict blocks next chapter
+    world_conflict_review --> needs_review: paused_for_review / world_conflict_pending
     chapter_loop --> completed: all selected chapters accepted
     chapter_loop --> needs_review: manual checkpoint/review failure/frozen canon/review interval
     chapter_loop --> partial_failed: accepted chapters + failed chapters
@@ -69,7 +71,9 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     [*] --> check_cancel_pause
-    check_cancel_pause --> assembling_context
+    check_cancel_pause --> check_world_conflict
+    check_world_conflict --> paused_for_review: open human conflict at blocks_from_chapter
+    check_world_conflict --> assembling_context
     check_cancel_pause --> paused: pause_requested
     check_cancel_pause --> cancelled: cancel_requested
 
@@ -100,7 +104,13 @@ stateDiagram-v2
     CanonAdmission --> running_post_acceptance: atomic Canon commit succeeded
     CanonAdmission --> paused_for_review: stale/system/Canon commit block
 
-    running_post_acceptance --> accepted: memory index + phase3/phase4 done
+    running_post_acceptance --> world_tick: post-Canon world step
+    world_tick --> world_simulator: tick completed
+    world_simulator --> planning: world result_json persisted
+    planning --> arc
+    arc --> feedback
+    feedback --> order_controls
+    order_controls --> accepted: maintenance barrier complete
     running_post_acceptance --> paused: safe pause
     accepted --> [*]
     failed --> [*]
@@ -148,7 +158,7 @@ worker 已 claim lease 并开始推进。`GenerationApplicationService` 根据 p
 
 `needs_review`
 
-人工 review checkpoint。触发来源包括 checkpoint 模式、copilot 模式非 pass、blackbox fail 且未 force accept、canon 写入冻结、周期性 `review_interval_chapters`。存在 `needs_review` 章节时，continue API 会拒绝继续，要求先 approve review。
+人工 review checkpoint。P3 还会在 open human world conflict 的 `blocks_from_chapter` 起、写下一章前发出 `paused_for_review`，任务进入 `needs_review`；派生阻断为 `world_conflict_pending`，不要求把已接受章节改成 needs_review。continue / review-approve（`continue_generation=true`） 在该阻断仍有效时返回 409；解决冲突后仍需显式继续。
 
 `cancelled`
 
@@ -181,7 +191,7 @@ worker 已 claim lease 并开始推进。`GenerationApplicationService` 根据 p
 2. `assembling_context` 组装章节上下文。
 3. `writing_chapter` 调 writer。writer 内部会按单模型 retry，必要时由 LLMClient 做跨 profile fallback。
 4. writer 失败后尝试 preview fallback；仍失败则章节标为 failed。
-5. `continuity_review` 调 `DraftReviewService`/`ContinuityChecker`，保存 draft 和 review；`world_consistency` 信号复用候选的 chapter delta，经 `ChapterDeltaTranslator` 与 `BookStateReviewGate` v6 检查时间、已知路径、移动速度、角色状态、物品与揭示。旧 `MapMovementReviewer` 已删除；access rules、team speed、edge multipliers 与 false routes 留到 P3。
+5. `continuity_review` 调 `DraftReviewService`/`ContinuityChecker`，保存 draft 和 review；`world_consistency` 信号复用候选的 chapter delta，经 `ChapterDeltaTranslator` 与 `BookStateReviewGate` v6 检查时间、已知路径、移动速度、角色状态、物品与揭示。旧 `MapMovementReviewer` 已删除；移动时间现共用 `estimate_travel` 与本书 travel modes；独立的 access rules、team speed、edge multipliers 检查明确推迟到 P4；认知图的 `false_edges` 已参与路径查询。
 6. 根据 operation mode 和 verdict 判断：
    - `checkpoint`：总是 `needs_review`。
    - `copilot`：`pass` 才继续，`warn/fail` 进入 `needs_review`。
@@ -190,8 +200,10 @@ worker 已 claim lease 并开始推进。`GenerationApplicationService` 根据 p
 8. `CanonPreparationService` 在事务外冻结 eligibility、quality、EntityAdmissionPlan 与经 `BookStateReviewGate` 批准的 GraphDelta。
 9. 配置 gate delegation 时，`GateDelegationService` 产生独立批准/阻断事件；没有 delegation 时明确记录为未委托，而不是伪造通过。
 10. `CanonAdmissionService.commit_plan` 在单事务内重验 candidate、提交 BookState/GraphDelta/snapshot、实体身份、审计和 outbox；只有事务成功才将章节标记为 `accepted`。
-11. `running_post_acceptance` 消费可重试 outbox，更新 Knowledge Projection、memory index 和发布侧投影；失败不回滚已提交 Canon。
-12. accepted 章节加入 `completed_chapters`，worker 继续当前 workset。
+11. `running_post_acceptance` 触发可重试维护 / outbox。`POST_CANON_STEP_NAMES = ("world", "planning", "arc", "feedback")`；world 先 `WorldTickService.run` 后旧 `WorldSimulator`，四步之后执行 order controls。Knowledge Projection、memory index 与发布侧投影仍从 Canon 派生，失败不回滚已提交 Canon。
+12. accepted 章节加入 `completed_chapters`；下一章运行前读取 open human conflicts。`blocks_from_chapter <= next_chapter` 时停止 chapter loop、发出 `paused_for_review`，不开始该章正文生成。
+
+world tick 使用 `tick-<commit id>` 与本章故事时间窗口，经过候选收集、逐候选 gate / 一次重试、影响 / 预算、冲突审查、新闻传播与 `WorldTickDeltaBuilder`，最后经 `CanonAdmissionService.commit_world_tick` 写入。LLM 不可用跳过节点；非最新章或已 tick 章跳过，历史重写则 CAS 重放 tick deltas，失败产生 `replay_cas` 人工冲突。step `result_json` 保存 tick 身份、提交 / 冲突 / 丢弃 / 顺延 ids、warnings、skipped_reason，另附模拟器 pressure_level。
 
 ### Pause / Continue
 
@@ -205,16 +217,17 @@ Pause 是安全暂停：
 Continue 的规则：
 
 1. `POST /api/projects/{project_id}/continue-generation` 从已有 project 继续。
-2. 如果存在真实 `needs_review`，返回 409，要求先人工处理。
+2. 如果派生阻断为 `world_conflict_pending` 或存在真实 `needs_review`，返回 409，要求先处理。冲突读取 `world_plan_conflicts`，任务 / 章节不新增 reason 列。
 3. 只运行 `planned` 和 `failed` 章节。
 4. 已 `accepted` 章节不会重写。
-5. 入队时冻结 RuntimePolicy snapshot；worker claim 后构造 execution context，运行中修改项目策略不影响已启动任务。
+5. 入队前确认无 active generation task；入队时冻结 RuntimePolicy snapshot，worker claim 后构造 execution context，运行中修改项目策略不影响已启动任务。
+6. 冲突恢复使用 `world_conflict_list` / `world_conflict_get` 读状态，经 `world_conflict_resolve` 按提供的选项解决；HTTP 为 `/api/projects/{id}/world-conflicts[/{cid}[/resolve]]`，控制台 task drawer 同样接入。重读项目并确认无阻断 / active task 后显式 continue，resolve 本身不启动任务。旧 CanonQualitySignal 使用 `world_model_signal_list`。
 
 ### Review / Approve
 
 1. `GET /api/projects/{project_id}/chapters/{chapter_number}/review` 读取最新 draft 对应 review。
 2. Review 详情分别显示 `draft_review`、`repair`、`residual_eligibility`、`gate_delegation`、`canon`；前四层通过不等于 Canon 已提交。
-3. `POST /review/approve` 进入受控接受路径，只有 `CanonAdmissionService.commit_plan` 成功后章节才成为 `accepted`。
+3. `POST /review/approve` 请求 `continue_generation=true` 时先检查派生阻断，有效 `world_conflict_pending` 返回 409；接受路径仍要求 `CanonAdmissionService.commit_plan` 成功后章节才成为 `accepted`。
 4. 如果请求 `continue_generation=true`，approve 后创建 continue task，继续剩余 `planned/failed` 章节。
 
 ### 状态来源
@@ -228,3 +241,4 @@ Continue 的规则：
 5. draft review/repair/residual：`forwin/review/`
 6. Canon 准备与原子提交：`forwin/canon/`
 7. LLM retry/fallback：`forwin/writer/llm/`
+8. 世界 tick / 冲突 / 维护顺序：`forwin/world_engine/`、`forwin/maintenance/events.py`、`forwin/maintenance/post_canon.py`

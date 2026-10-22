@@ -9,10 +9,48 @@ import httpx
 
 from forwin.protocol.experience import ArcPayoffMap, ReaderPromise, RevelationLayer
 from forwin.planning.arc_envelope_resolver import _coerce_unit_float
+from forwin.config import InfrastructureConfig
+from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
 from forwin.writer.llm import LLMClient
 
 
 class LLMClientRetryTests(unittest.TestCase):
+    def test_runtime_passes_registry_to_profile_routing_and_options(self) -> None:
+        config = InfrastructureConfig(
+            codex_enabled=False,
+            codex_models=("custom-review",),
+            llm_env_profiles=[
+                {"id": "ordinary", "name": "Ordinary", "api_key": "test",
+                 "base_url": "https://openai.example/v1", "model": "gpt-ordinary"},
+                {"id": "review", "name": "Review", "api_key": "test",
+                 "base_url": "https://minimax.example/v1", "model": "custom-review"},
+            ],
+        )
+        client = RuntimeContainer._build_llm_client(
+            config, RuntimePolicy.for_profile("standard").with_user_settings(model_profile_id="ordinary"),
+        )
+        response = httpx.Response(
+            200, json={"choices": [{"message": {"content": "reviewed"}}]},
+            request=httpx.Request("POST", "https://minimax.example/v1/chat/completions"),
+        )
+        try:
+            with patch.object(client, "_post_with_wall_timeout", return_value=response) as post:
+                result = client.chat(
+                    [{"role": "developer", "content": "review"}], task_family="review",
+                    response_format={"type": "json_object"}, max_tokens=4096, temperature=1.2,
+                )
+            self.assertEqual(result, "reviewed")
+            payload = post.call_args.kwargs["json"]
+            self.assertEqual(payload["model"], "custom-review")
+            self.assertEqual(payload["max_tokens"], 4096)
+            self.assertEqual(payload["temperature"], 1.2)
+            self.assertEqual(payload["messages"][0]["role"], "developer")
+            self.assertEqual(payload["response_format"], {"type": "json_object"})
+            self.assertEqual(client.llm_attempt_events[0]["candidate_chain"][1]["provider_kind"], "spark")
+        finally:
+            client.close()
+
     def test_chapter_delta_extraction_routes_to_canon_extraction(self) -> None:
         self.assertEqual(LLMClient._llm_task_route(
             task_family="writer", stage_key="chapter_delta_extraction",

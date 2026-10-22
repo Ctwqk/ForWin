@@ -437,23 +437,32 @@ class CodexBridgeTests(unittest.TestCase):
         self.assertEqual(request_json["output_schema"], schema)
 
     def test_codex_client_sends_requested_model(self) -> None:
-        fake_http = FakeHttpClient()
-        with patch("forwin.llm.codex_client.httpx.Client", return_value=fake_http):
-            client = CodexBridgeClient(bridge_url="http://bridge")
-            client.chat(
-                [{"role": "user", "content": "review"}],
-                intent=LLMCallIntent(task_family="reviewer", stage_key="chapter_review"),
-                model="gpt-5.3-codex-spark",
-            )
+        for model in ("gpt-5.3-codex-spark", "gpt-6-astra"):
+            with self.subTest(model=model):
+                fake_http = FakeHttpClient(FakeHttpResponse({
+                    "ok": True,
+                    "content": '{"ok":true}',
+                    "raw_events": [{"type": "turn.completed"}],
+                    "returncode": 0,
+                    "actual_model": model,
+                    "thread_id": "thread-success",
+                }))
+                with patch("forwin.llm.codex_client.httpx.Client", return_value=fake_http):
+                    client = CodexBridgeClient(bridge_url="http://bridge")
+                    client.chat(
+                        [{"role": "user", "content": "review"}],
+                        intent=LLMCallIntent(task_family="reviewer", stage_key="chapter_review"),
+                        model=model,
+                    )
 
-        request_json = fake_http.posts[0]["json"]
-        self.assertIsInstance(request_json, dict)
-        self.assertEqual(request_json["model"], "gpt-5.3-codex-spark")
-        self.assertEqual(client.last_call_trace["model"], "gpt-5.3-codex-spark")
-        self.assertEqual(client.last_call_trace["actual_model"], "gpt-5.3-codex-spark")
-        self.assertEqual(client.last_call_trace["raw_events"][0]["type"], "turn.completed")
-        self.assertEqual(client.last_call_trace["returncode"], 0)
-        self.assertNotIn("Authorization", json.dumps(client.last_call_trace))
+                request_json = fake_http.posts[0]["json"]
+                self.assertIsInstance(request_json, dict)
+                self.assertEqual(request_json["model"], model)
+                self.assertEqual(client.last_call_trace["model"], model)
+                self.assertEqual(client.last_call_trace["actual_model"], model)
+                self.assertEqual(client.last_call_trace["raw_events"][0]["type"], "turn.completed")
+                self.assertEqual(client.last_call_trace["returncode"], 0)
+                self.assertNotIn("Authorization", json.dumps(client.last_call_trace))
 
     def test_codex_client_enforces_configured_timeout_floor(self) -> None:
         fake_http = FakeHttpClient()

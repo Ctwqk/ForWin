@@ -5,6 +5,7 @@ import logging
 
 import httpx
 
+from forwin.config import DEFAULT_CODEX_MODELS
 
 logger = logging.getLogger(__name__)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
@@ -23,10 +24,12 @@ class ProfileOptionsMixin:
         cls,
         profile: dict[str, str],
         requested_temperature: float,
+        *,
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
     ) -> float:
         if cls._is_kimi_k25_profile(profile):
             return 0.6
-        if cls._is_minimax_profile(profile):
+        if cls._is_minimax_profile(profile, codex_models=codex_models):
             return min(1.0, max(0.1, float(requested_temperature)))
         return float(requested_temperature)
 
@@ -45,8 +48,10 @@ class ProfileOptionsMixin:
         cls,
         profile: dict[str, str],
         messages: list[dict],
+        *,
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
     ) -> list[dict]:
-        if not cls._is_minimax_profile(profile):
+        if not cls._is_minimax_profile(profile, codex_models=codex_models):
             return list(messages)
 
         system_parts: list[str] = []
@@ -75,10 +80,12 @@ class ProfileOptionsMixin:
         cls,
         profile: dict[str, str],
         requested_max_tokens: int,
+        *,
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
     ) -> int:
         if cls._is_kimi_k25_profile(profile):
             return max(int(requested_max_tokens), 1800)
-        if cls._is_minimax_profile(profile):
+        if cls._is_minimax_profile(profile, codex_models=codex_models):
             raw_cap = profile.get("max_output_tokens")
             try:
                 if raw_cap is None or str(raw_cap).strip() == "":
@@ -103,8 +110,13 @@ class ProfileOptionsMixin:
         return int(requested_max_tokens)
 
     @classmethod
-    def _max_tokens_payload_key_for_profile(cls, profile: dict[str, str]) -> str:
-        if cls._is_minimax_profile(profile):
+    def _max_tokens_payload_key_for_profile(
+        cls,
+        profile: dict[str, str],
+        *,
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
+    ) -> str:
+        if cls._is_minimax_profile(profile, codex_models=codex_models):
             return "max_completion_tokens"
         return "max_tokens"
 
@@ -113,8 +125,10 @@ class ProfileOptionsMixin:
         cls,
         profile: dict[str, str],
         response_format: dict | None,
+        *,
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
     ) -> dict | None:
-        if cls._is_minimax_profile(profile):
+        if cls._is_minimax_profile(profile, codex_models=codex_models):
             return None
         return response_format
 
@@ -157,8 +171,13 @@ class ProfileOptionsMixin:
         return "deepseek" in text
 
     @classmethod
-    def _is_minimax_profile(cls, profile: dict[str, str]) -> bool:
-        return cls._profile_kind(profile) == "minimax"
+    def _is_minimax_profile(
+        cls,
+        profile: dict[str, str],
+        *,
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
+    ) -> bool:
+        return cls._profile_kind(profile, codex_models=codex_models) == "minimax"
 
 
 __all__ = [

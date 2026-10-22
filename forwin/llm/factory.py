@@ -23,5 +23,6 @@ def maybe_wrap_with_codex_router(ordinary_adapter, config: InfrastructureConfig)
             codex_client=codex_client,
             codex_enabled=True,
             codex_default_model=str(getattr(config, "codex_default_model", "") or ""),
-        )
+        ),
+        codex_models=config.codex_models,
     )

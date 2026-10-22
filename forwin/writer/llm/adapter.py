@@ -7,7 +7,11 @@ import uuid
 
 import httpx
 
-from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
+from forwin.config import (
+    DEFAULT_CODEX_MODELS,
+    DEFAULT_MINIMAX_BASE_URL,
+    DEFAULT_MINIMAX_MODEL,
+)
 from forwin.model_adapter import ModelCapabilities
 from .embeddings import EmbeddingsMixin
 from .errors import ErrorsMixin
@@ -81,11 +85,13 @@ class OpenAICompatibleAdapter(
         retry_max_delay_seconds: float = 15.0,
         fallback_profiles: list[dict[str, str]] | None = None,
         max_output_tokens: str = "",
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
     ) -> None:
         self.provider = "openai_compatible"
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.codex_models = tuple(codex_models)
         self.profile_id = ""
         self.profile_name = ""
         self.max_output_tokens = str(max_output_tokens or "").strip()
@@ -166,6 +172,7 @@ class OpenAICompatibleAdapter(
             output_schema=output_schema,
             preferred_provider_kind=preferred_provider_kind,
             preferred_model=preferred_model,
+            codex_models=self.codex_models,
         )
         profiles = route_result["profiles"]
         candidate_chain = route_result["candidate_chain"]
@@ -291,12 +298,14 @@ class OpenAICompatibleAdapter(
         effective_temperature = self._effective_temperature_for_profile(
             profile,
             requested_temperature,
+            codex_models=self.codex_models,
         )
         send_temperature = self._should_send_temperature(profile)
         requested_max_tokens = int(max_tokens)
         effective_max_tokens = self._effective_max_tokens_for_profile(
             profile,
             requested_max_tokens,
+            codex_models=self.codex_models,
         )
         effective_request_timeout = self._effective_timeout_for_profile(
             profile,
@@ -306,15 +315,19 @@ class OpenAICompatibleAdapter(
         effective_response_format = self._effective_response_format_for_profile(
             profile,
             response_format,
+            codex_models=self.codex_models,
         )
-        effective_messages = self._effective_messages_for_profile(profile, messages)
+        effective_messages = self._effective_messages_for_profile(
+            profile, messages, codex_models=self.codex_models,
+        )
         payload = {
             "model": profile["model"],
             "messages": effective_messages,
         }
-        payload[self._max_tokens_payload_key_for_profile(profile)] = (
-            effective_max_tokens
+        max_tokens_key = self._max_tokens_payload_key_for_profile(
+            profile, codex_models=self.codex_models,
         )
+        payload[max_tokens_key] = effective_max_tokens
         if send_temperature:
             payload["temperature"] = effective_temperature
         thinking = self._thinking_payload_for_profile(profile)

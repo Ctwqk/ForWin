@@ -42,12 +42,24 @@ FORWIN_CODEX_ENABLED=true
 FORWIN_CODEX_BRIDGE_URL=http://host.docker.internal:8897
 FORWIN_CODEX_BRIDGE_TOKEN=change-me
 FORWIN_CODEX_DEFAULT_MODEL=gpt-5.3-codex-spark
+FORWIN_CODEX_MODELS=gpt-5.3-codex-spark,gpt-6-astra
 FORWIN_CODEX_MAX_CONCURRENT=1
 FORWIN_CODEX_SYNC_TIMEOUT_SECONDS=90
 FORWIN_CODEX_JOB_TIMEOUT_SECONDS=900
 ```
 
 `docker-compose.yml` maps `host.docker.internal` to the host gateway for the `forwin` service.
+
+`FORWIN_CODEX_MODELS` declares the comma-separated model names recognized as
+Codex preferences. Matching trims whitespace and ignores case, but requires the
+entire model name. The default list is `gpt-5.3-codex-spark,gpt-6-astra`; setting
+the variable replaces that list, and an empty value clears it. Profile routing
+classifies listed models as `spark` regardless of the profile's name or URL.
+Explicit provider kinds `spark`, `codex`, and `codex_bridge` still request the
+bridge even for an unlisted model. All requests remain subject to Codex being
+enabled and the existing allowed task families. `FORWIN_CODEX_DEFAULT_MODEL`
+selects the model when a bridge call has no explicit model preference; changing
+that default does not add it to the declared list.
 
 For production Swarm on 126/150, point app and generation services at the 150
 bridge explicitly:
@@ -63,7 +75,7 @@ Routing policy:
 | Genesis, structured planning, arc planning, reviewer, chapter review form, review, Phase 4 feedback, world model, writer state extraction, thread-time extraction, lore-timeline extraction, scene breakdown | Codex 5.3 bridge | ordinary OpenAI-compatible profiles |
 | Writer prose such as `chapter_draft`, `scene_generation`, `scene_stitch`, `chapter_rewrite`, and repair generation | ordinary OpenAI-compatible profiles | Codex 5.3 bridge when the ordinary chain fails |
 | `chapter_plan_materialization` | ordinary OpenAI-compatible profiles | no Codex bridge route |
-| Explicit `spark`, `codex`, `codex_bridge`, `gpt-5.3`, or `codex` model preference | Codex 5.3 bridge | ordinary profiles only if the explicit Codex call fails |
+| Explicit `spark`, `codex`, or `codex_bridge` provider kind, or a model listed in `FORWIN_CODEX_MODELS` | Codex bridge with the requested model | ordinary profiles only if the explicit Codex call fails |
 
 Each bridge or ordinary fallback records model fallback metadata.
 

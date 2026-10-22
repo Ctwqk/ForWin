@@ -6,6 +6,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from forwin.config import DEFAULT_CODEX_MODELS
+from forwin.llm.codex_models import is_codex_model
 from forwin.model_adapter import ModelCapabilities, adapter_capabilities
 
 
@@ -520,8 +522,14 @@ class LLMCallRouter:
 class RoutedModelAdapter:
     provider = "routed"
 
-    def __init__(self, router: LLMCallRouter) -> None:
+    def __init__(
+        self,
+        router: LLMCallRouter,
+        *,
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
+    ) -> None:
         self.router = router
+        self.codex_models = tuple(codex_models)
         self.ordinary_adapter = router.ordinary_adapter
         self.codex_enabled = router.codex_enabled
         self.model = getattr(self.ordinary_adapter, "model", "")
@@ -556,8 +564,7 @@ class RoutedModelAdapter:
         deterministic_route_requested = bool(preferred_kind or preferred_model_text)
         preferred_codex_requested = (
             preferred_kind in {"codex", "codex_bridge", "spark"}
-            or "codex" in preferred_model_text.lower()
-            or "gpt-5.3" in preferred_model_text.lower()
+            or is_codex_model(preferred_model_text, self.codex_models)
         )
         self.last_call_result = None
         try:

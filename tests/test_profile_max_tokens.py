@@ -10,18 +10,8 @@ from forwin.writer.llm.profile_options import ProfileOptionsMixin
 from forwin.writer.llm.routing import RoutingMixin
 
 
-class _ProfileOptionsHarness(ProfileOptionsMixin):
-    @classmethod
-    def _profile_kind(cls, profile: dict[str, str]) -> str:
-        text = " ".join(
-            str(profile.get(key) or "").strip().lower()
-            for key in ("id", "name", "base_url", "model")
-        )
-        if "minimax" in text or "minimaxi" in text:
-            return "minimax"
-        if "kimi" in text or "moonshot" in text:
-            return "kimi"
-        return "other"
+class _ProfileOptionsHarness(ProfileOptionsMixin, RoutingMixin):
+    pass
 
 
 class _RoutingHarness(RoutingMixin):

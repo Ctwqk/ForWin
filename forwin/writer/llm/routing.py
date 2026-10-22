@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from urllib.parse import urlparse
 
+from forwin.config import DEFAULT_CODEX_MODELS
+from forwin.llm.codex_models import is_codex_model
 
 
 logger = logging.getLogger(__name__)
@@ -67,6 +69,7 @@ class RoutingMixin:
         output_schema: dict | None = None,
         preferred_provider_kind: str = "",
         preferred_model: str = "",
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
     ) -> list[dict[str, str]]:
         return cls._route_profiles_with_metadata(
             profiles,
@@ -76,6 +79,7 @@ class RoutingMixin:
             output_schema=output_schema,
             preferred_provider_kind=preferred_provider_kind,
             preferred_model=preferred_model,
+            codex_models=codex_models,
         )["profiles"]
 
     @classmethod
@@ -89,6 +93,7 @@ class RoutingMixin:
         output_schema: dict | None = None,
         preferred_provider_kind: str = "",
         preferred_model: str = "",
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
     ) -> dict[str, list[dict[str, str]]]:
         route = cls._llm_task_route(
             task_family=task_family,
@@ -96,16 +101,24 @@ class RoutingMixin:
             response_format=response_format,
             output_schema=output_schema,
         )
-        candidate_chain = [cls._profile_public_info(profile) for profile in profiles]
+        candidate_chain = [
+            cls._profile_public_info(profile, codex_models=codex_models)
+            for profile in profiles
+        ]
         skipped_profiles: list[dict[str, str]] = []
-        kinds = {cls._profile_kind(profile) for profile in profiles}
+        kinds = {
+            cls._profile_kind(profile, codex_models=codex_models)
+            for profile in profiles
+        }
         has_kimi = "kimi" in kinds
-        primary_kind = cls._profile_kind(profiles[0]) if profiles else ""
+        primary_kind = (
+            cls._profile_kind(profiles[0], codex_models=codex_models) if profiles else ""
+        )
         has_deepseek_or_kimi = has_kimi or "deepseek" in kinds
         indexed = list(enumerate(profiles))
         replacement_filtered: list[tuple[int, dict[str, str]]] = []
         for index, profile in indexed:
-            kind = cls._profile_kind(profile)
+            kind = cls._profile_kind(profile, codex_models=codex_models)
             reason = ""
             if kind == "kimi" and primary_kind == "deepseek":
                 reason = "primary_deepseek_no_kimi_fallback"
@@ -114,7 +127,7 @@ class RoutingMixin:
             if reason:
                 skipped_profiles.append(
                     {
-                        **cls._profile_public_info(profile),
+                        **cls._profile_public_info(profile, codex_models=codex_models),
                         "reason": reason,
                         "llm_task_route": route,
                     }
@@ -124,13 +137,13 @@ class RoutingMixin:
         suitable = [
             (index, profile)
             for index, profile in replacement_filtered
-            if cls._profile_suitable_for_route(profile, route)
+            if cls._profile_suitable_for_route(profile, route, codex_models=codex_models)
         ]
         for index, profile in replacement_filtered:
             if (index, profile) not in suitable:
                 skipped_profiles.append(
                     {
-                        **cls._profile_public_info(profile),
+                        **cls._profile_public_info(profile, codex_models=codex_models),
                         "reason": "route_not_allowed",
                         "llm_task_route": route,
                     }
@@ -146,6 +159,7 @@ class RoutingMixin:
                     item[1],
                     preferred_provider_kind=preferred_kind,
                     preferred_model=preferred_model_text,
+                    codex_models=codex_models,
                 )
                 < 99
             ]
@@ -156,8 +170,11 @@ class RoutingMixin:
                             item[1],
                             preferred_provider_kind=preferred_kind,
                             preferred_model=preferred_model_text,
+                            codex_models=codex_models,
                         ),
-                        cls._profile_route_priority(item[1], route),
+                        cls._profile_route_priority(
+                            item[1], route, codex_models=codex_models,
+                        ),
                         item[0],
                     )
                 )
@@ -175,7 +192,7 @@ class RoutingMixin:
             rest = [item for item in routed if item[0] != 0]
             rest.sort(
                 key=lambda item: (
-                    cls._profile_route_priority(item[1], route),
+                    cls._profile_route_priority(item[1], route, codex_models=codex_models),
                     item[0],
                 )
             )
@@ -183,7 +200,7 @@ class RoutingMixin:
         else:
             routed.sort(
                 key=lambda item: (
-                    cls._profile_route_priority(item[1], route),
+                    cls._profile_route_priority(item[1], route, codex_models=codex_models),
                     item[0],
                 )
             )
@@ -200,9 +217,10 @@ class RoutingMixin:
         *,
         preferred_provider_kind: str = "",
         preferred_model: str = "",
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
     ) -> int:
         model = str(profile.get("model") or "").strip().lower()
-        kind = cls._profile_kind(profile)
+        kind = cls._profile_kind(profile, codex_models=codex_models)
         if preferred_model:
             if model == preferred_model:
                 return 0
@@ -279,8 +297,14 @@ class RoutingMixin:
         return "general"
 
     @classmethod
-    def _profile_suitable_for_route(cls, profile: dict[str, str], route: str) -> bool:
-        kind = cls._profile_kind(profile)
+    def _profile_suitable_for_route(
+        cls,
+        profile: dict[str, str],
+        route: str,
+        *,
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
+    ) -> bool:
+        kind = cls._profile_kind(profile, codex_models=codex_models)
         if kind == "gemini":
             return False
         if kind == "minimax" and route in {
@@ -294,8 +318,14 @@ class RoutingMixin:
         return True
 
     @classmethod
-    def _profile_route_priority(cls, profile: dict[str, str], route: str) -> int:
-        kind = cls._profile_kind(profile)
+    def _profile_route_priority(
+        cls,
+        profile: dict[str, str],
+        route: str,
+        *,
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
+    ) -> int:
+        kind = cls._profile_kind(profile, codex_models=codex_models)
         priorities = {
             "prose_generation": {
                 "spark": 0,
@@ -382,13 +412,17 @@ class RoutingMixin:
         return int(route_priorities.get(kind, route_priorities.get("other", 50)))
 
     @staticmethod
-    def _profile_kind(profile: dict[str, str]) -> str:
+    def _profile_kind(
+        profile: dict[str, str],
+        *,
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
+    ) -> str:
+        if is_codex_model(str(profile.get("model") or ""), codex_models):
+            return "spark"
         text = " ".join(
             str(profile.get(key) or "").strip().lower()
             for key in ("id", "name", "base_url", "model")
         )
-        if "codex-spark" in text or "gpt-5.3-codex-spark" in text:
-            return "spark"
         if "minimax" in text or "minimaxi" in text:
             return "minimax"
         if "kimi" in text or "moonshot" in text:
@@ -402,14 +436,19 @@ class RoutingMixin:
         return "other"
 
     @classmethod
-    def _profile_public_info(cls, profile: dict[str, str]) -> dict[str, str]:
+    def _profile_public_info(
+        cls,
+        profile: dict[str, str],
+        *,
+        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
+    ) -> dict[str, str]:
         base_url = str(profile.get("base_url") or "")
         return {
             "profile_id": str(profile.get("id") or ""),
             "profile_name": str(profile.get("name") or ""),
             "model": str(profile.get("model") or ""),
             "base_url_host": urlparse(base_url).netloc or base_url,
-            "provider_kind": cls._profile_kind(profile),
+            "provider_kind": cls._profile_kind(profile, codex_models=codex_models),
         }
 
 

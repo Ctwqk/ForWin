@@ -214,11 +214,21 @@ S4-S8 的读者留存、多样性、认知/张力及完整体验度量仍是未�
 
 `POST_CANON_STEP_NAMES = ("world", "planning", "arc", "feedback")`；world 先 tick 再旧 `WorldSimulator`。`WorldTickService.run` 的结果以 `tick_id`、`graph_delta_ids`、`conflict_ids`、`dropped_candidate_ids`、`postponed_candidate_ids`、`warnings`、`skipped_reason` 写入 step `result_json`，并附 `pressure_level`。
 
-1. 用 `tick-<commit id>`、本章 `story_time_start..story_time_end` 整数分钟窗口与确定性 seed 建上下文。world disabled、非最新章、同 tick 已提交或该章已有 tick 都跳过；最新章重写也不重复推进世界。
-2. 从本章 intent interactions、clock 到期、due intents、onstage bookkeeping 与 actor turns 收集候选。`WorldAdjudicator` 每 tick 最多裁定 20 个 due offstage intents；`ActorTurnRunner` 按 actor 视图行动。已 due 的 onstage intent 若未出现在本章 interactions，顺延至当前时间并增加 slip_count，超过 `world.max_onstage_slips` 产生 `onstage_slip` 冲突；这是 P3 临时规则，由 P4 band 规划器替换。
+1. 用 `tick-<commit id>`、本章 `story_time_start..story_time_end` 整数分钟窗口与确定性 seed 建上下文。world disabled、非最新章、同 tick 已提交或该章已有 tick 都跳过；最新章重写也不重复推进世界。`target_total_chapters > 0` 且本章达到或超过目标时，以 `skipped_reason="book_complete"` 跳过。
+2. 从本章 intent interactions、clock 到期、due intents、onstage bookkeeping 与 actor turns 收集候选。`WorldAdjudicator` 每 tick 先尝试一批最多 20 个 due offstage intents；超 prompt guard 后逐 intent 调用，单个仍超限则 DROPPED `prompt_too_large`，后续 due intent 补位；超 cap 未询问者以 `adjudication:<intent>` 进入 `postponed_candidate_ids`。`ActorTurnRunner` 按 actor 视图行动。已 due 的 onstage intent 若未出现在本章 interactions，顺延至当前时间并增加 slip_count，超过 `world.max_onstage_slips` 产生 `onstage_slip` 冲突；这是 P3 临时规则，由 P4 band 规划器替换。
 3. hard rules 和逐候选 `BookStateReviewGate` 拒绝非法变化；LLM 候选最多再请求一次，actor feedback 只含自身视图可知引用，仍失败则丢弃并记 `WORLD_TICK_CANDIDATE_DROPPED`。impact 分级与预算决定保留 / 顺延，narrative boundaries 或 major 及以上变化进入冲突审查。本章 interactions 仅镜像已接纳正文，不再被扣留待审。
 4. 对可提交事件和在途消息做一轮新闻传播，`WorldTickDeltaBuilder` 生成 `source_type="world_engine"` delta，`metadata["news_in_transit"]` 保存未到消息。tick 不产生 reader 认知；gate 的 `world_engine_reader_knowledge` 禁止这一写入。LLM 故障跳过节点，确定性部分继续。
-5. tick 在 `FOR NO KEY UPDATE` 项目锁内复核 world snapshot；若 tick 期间 canon 已变，抛 stale 并回滚 step 后重试。`CanonAdmissionService.commit_world_tick` 再校验最新章与 source / tick identity，以 tick_id 幂等提交。历史重写按 CAS 重放登记的 tick deltas：失败者退役并产生 `replay_cas` 冲突；依赖它的 tick 级联丢弃，非 tick 依赖则拒绝重写。
+5. 提交前 `RunningStateCheck`（`world_engine/running_state.py`）依次检查每个 base candidate，再按组检查 in-tick resolutions；hard rules 读取前序已接受变化留下的 runtime，world gate 检查累计 delta。base candidate 失效以 `constraint_violation` 丢弃；resolution 失效撤回该组，以 `failure_reason="conflict_stale"` 升级人工并保持冲突 open。无补丁且无 resolution 的 quiet tick 不取项目锁；其他 tick 在 commit SAVEPOINT 前取 `FOR NO KEY UPDATE` 项目锁并复核 world snapshot（P27），canon 已变则抛 stale、回滚 step 后重试。`CanonAdmissionService.commit_world_tick` 再校验最新章与 source / tick identity，以 tick_id 幂等提交。
+
+裁定 prompt 的完整正文只包含本次 due intents、其 owner / targets、它们持有的 items / resources，以及同地 active 的 actors / items / resources / site_states。event 和非本次 due intent 从不提供完整正文；compact index 排除 event 与已结 intent，保留 planned / due / held intents。facts 包含全部 scoped standing facts，事件事实按 `created_at_chapter` 降序、id 升序选最新 `MAX_ADJUDICATION_EVENT_FACTS = 20` 条；allowed values 含 `ended_status`。
+
+actor 视图按 priority 降序、id 升序保留最多 `MAX_ACTOR_AGENDAS = 8` 条 active agendas。一次回合超过 `MAX_AGENDA_CHANGES_PER_TURN = 3` 项 agenda_changes，以 `too_many_agenda_changes` 反馈重试；prompt 带 `max_agenda_changes_per_actor`。每个实际回合 actor 的最新五条 `veto_world` resolutions 在 SQL 中限量读取，不加载整本已解决冲突。
+
+major 影响包括 faction / organization / group / site_state 的 `state.status` 从未结束进入 `destroyed` / `dissolved` / `disbanded` / `inactive`，faction / group 的 `leader_id` 或 site_state 的 `controller_faction_id` 变化，以及 `knows` / `believes` 将 hidden / secret / must_not_reveal 事实给予此前没有该认知的 observer；新隐藏事实的 `known_by` 不算再次暴露。`must_exist` protection 也以进入上述 ended status 判定。解除 protection 时缺省 `until_chapter` 写 `old_value = 0`（open）；compiler 的 CAS 对缺省 `review_constraint.payload.until_chapter` 同样读作 0。
+
+历史重写按 CAS 重放登记的 world_engine deltas（tick 或直接 `conflict-<id>` resolve）：失败者退役并产生 `replay_cas` 冲突；依赖它创建引用的 tick 级联丢弃，非 tick 依赖则拒绝整次重写。同一事务内 supersede 被丢弃 delta 承载的 resolutions，原冲突保持 `resolved`；其未结义务经 `NarrativeObligationRepository.cancel_obligation` 置为终态 `cancelled`，记录 `metadata.cancel_reason`，退出 open 列表、预算和 gate。目标为 `planned` / `failed` 的 ChapterPlan 补丁经 `FuturePlanPatchMixin.revert_plan_patch` 回撤，追加 `plan_patch_revert` 记录；accepted 等其他状态计划不改。
+
+回撤移除义务补丁的 goals、`obligations_to_resolve`、`progress_markers` / `rule_anchors`，或 form instruction 的 goals / progress markers；五项上限曾挤出的旧条目无法恢复。P34 要求保留同计划其他有效 resolution 补丁仍贡献的目标或标记：该补丁已应用、未被 revert，所属冲突仍为 resolved、未被本次 supersede 且 result_refs 包含它。`replay_cas.proposed_change` 总含 `superseded_conflict_ids`、`cancelled_obligation_ids`、`reverted_plan_patch_ids`；有 supersede 时摘要给出三项数量，检测事件携带相同 proposed_change。
 
 当前迁移头为 `0005_world_plan_conflicts`（父为 `0004_drop_parallel_ledgers`）。`world_plan_conflicts` 是世界–计划冲突事实源，记录来源、被违反边界、影响、待提交变化、可选项、决定者、阻塞起章与决定 / 结果引用。P3 来源只有 `world_tick` / `historical_rewrite`；`impact_review` 表示未破坏边界但达到需审查的影响，`replay_cas` 表示重放失败。
 
@@ -226,12 +236,14 @@ historical_rewrite 或 critical 交人工；minor 自动 veto；moderate / major
 
 | 选项 | 当前执行语义 |
 | --- | --- |
-| `veto_world` | 不提交被扣留的变化；将未结 intent 标为 vetoed，把 veto 注入下一次 actor turn，并从 `latest - world.max_rerolls` 章起（含该章）检测到的冲突中，统计该 actor 的 `veto_world` 决定次数；次数小于 `world.max_rerolls` 时安排重新行动。历史重写冲突只提供此选项。 |
+| `veto_world` | 不提交被扣留的变化；将未结 intent 标为 vetoed，把 veto 注入下一次 actor turn，并在 `[latest - world.max_rerolls, latest]`（两端均含）检测到的冲突中，统计该 actor 的 `veto_world` 决定次数；次数小于 `world.max_rerolls` 时安排重新行动。历史重写冲突只提供此选项。 |
 | `accept_with_obligation` | 提交变化，经 `DeferAcceptanceTransaction` 写 `world_change_response` 义务，deadline 为 `min(latest+6, target)`（`latest` 为最新 canon 章，`target` 为 `project.target_total_chapters`），绑定下一个未接受计划。只在非叙事边界的 minor / moderate 冲突提供。 |
 | `plot_responds` | 提交变化，为下一个未接受 ChapterPlan 追加回应目标。 |
 | `amend_plan` | 仅人工选择；提交变化并解除被破坏的 protections。P3 计划由用户手动调整，Codex 的该选择只升级人工。 |
 
-protection / milestone / reveal_schedule 边界冲突只提供 `veto_world` / `amend_plan`；其他非历史冲突提供 veto / plot_responds / amend，轻等级再增加义务选项。直接 resolve 通过 `commit_world_tick(tick_id="conflict-<id>")` 写变化，与义务 / 计划副作用、关闭冲突同在一个 SAVEPOINT；失败整体回滚并保留 open。
+protection / milestone / reveal_schedule 边界冲突只提供 `veto_world` / `amend_plan`；其他非历史冲突提供 veto / plot_responds / amend，轻等级再增加义务选项。直接 resolve 紧随冲突行锁取得 `FOR NO KEY UPDATE` 项目锁，在锁内读取 canon 和 news queue，再用同一 running-state 检查复核选项变化；hard-rule / gate error 抛 `ConflictStale`（HTTP/MCP 409）并保持 open，veto 不受 held change 失效影响。Canon 拒绝写入同样返回 409。context 与 delta 的 `story_time_start` 使用最新章 extraction 起点至当前故事分钟的窗口。变化经 `commit_world_tick(tick_id="conflict-<id>")` 写入，与义务 / 计划副作用、关闭冲突同在一个 SAVEPOINT；失败整体回滚。
+
+`plot_responds` / `accept_with_obligation` 的目标、progress marker、义务 summary / payoff_test、plan-patch contract 和 writer / reviewer injections 只来自 held change 的 public event summaries；无公开事件使用 `PLOT_RESPONSE_GENERIC_GOAL`，onstage_slip 使用 `ONSTAGE_SLIP_RESPONSE_GOAL`。冲突摘要不进入这些写作文本。
 
 open human conflict 从 `blocks_from_chapter` 起阻止下一章运行；progress 为 `paused_for_review`、任务状态为 `needs_review`，派生阻断为 `world_conflict_pending`，任务 / 章节无 reason 列。continue / review-approve（`continue_generation=true`）在阻断仍有效时返回 409。解决后读项目和任务状态，确认无 active generation 再显式继续。HTTP `/api/projects/{id}/world-conflicts[/{cid}[/resolve]]`、MCP `world_conflict_list` / `world_conflict_get` / `world_conflict_resolve` 和 task drawer 均已接入；旧 CanonQualitySignal 使用 `world_model_signal_list`，HTTP `/world-model/conflicts` 保留。
 
@@ -242,7 +254,8 @@ P3 的确定性地图物化使用 `sha256(f"{project_id}|{subworld_id}")`，Gene
 - **protection 生产者与 critical / 里程碑**：P3 读取 narrative `review_constraint` 的 `{ref, kind, until_chapter, source, observer_ref?, fact_ref?, field?, value?}`，遵守已有 protection；节拍表 / band 规划器尚不生产它们，正常项目通常为空。影响分级接收 `milestone_refs`，当前 tick 使用空集合，尚无里程碑驱动的 critical 生产者。`amend_plan` 已可由用户选择。
 - **冲突来源与改章**：P3 生产 `world_tick` / `historical_rewrite` 冲突；`chapter_extraction` / `plan_feasibility` / `band_planning` 冲突生产者及 `rewrite_chapter` 推迟到 P4，P3 从不提供该选项。tick 不写 reader 认知，因此不触发 reveal_schedule 冲突；读者揭示仍由正文抽取推进。
 - **世界变量与规则谓词**：`world.drift` 无 institution / resource_economy 世界变量节点；rule 的 `checkable` 尚无 Genesis 谓词 kind，当前不求值，也不因此报错。
-- **重写后的补 tick**：最新章重写后若已有 tick，跳过第二次 tick，避免世界重复推进；代价是重写正文自己的事件没有本次 tick 的新闻传播。delta-only re-tick 推迟到 P4。
+- **重写后的补 tick**：最新章重写后若已有 tick，跳过第二次 tick，避免世界重复推进；代价是重写正文自己的事件没有本次 tick 的新闻传播。delta-only re-tick 及对保留 tick 的 open conflicts 重新推理一并推迟到 P4。
+- **历史引用与冲突卡片**：M7（P10 扩展）留待 P4：保留 tick 对被替换章节所创建 refs 的引用尚无 CAS 检查。M10 留待 P4：控制台冲突卡片尚不展示 held change，需经 `world_conflict_get` 查看 `proposed_change`。
 - **性能与消息重排**：`WorldTickDeltaBuilder` 的 `runtime=` 复用尚未实现，仍有 BookState 重载成本；`_unprotected` 当前丢弃 protection 禁止的投递，改为重新排队留到 P4。
 - **writer 世界视图与规划**：writer prompt 不携带 clock / restraint state；替代物是设计 §5.1 的 `ChapterWorldView`。writer 的 `<<FORWIN_LOCATION>>` 标记与 `reveal_directives` 留到 P4 调整；`task_contract_json`、ArcDirector / band 规划、`launch_arc_N`、`finalization._seed_state`、`RunControlStage.run`、`SubWorldManager.apply_initial_arc_plan`、`sub_world_roster_items` / `plan_band_activation` 留待 band `onstage_refs` 与新规划器替换。最终 post-Canon `("world", "plan", "feedback")` 顺序也在 P4 随规划器重写落地。
 - **其余未闭环能力**：`director_setup_without_delivery` / `form_invariant_drift` 仍无 producer；`ledger_state_drift_pre_write` patches 持久化但未应用；独立的地图 access rules、team speed、edge multipliers 检查尚未接入；认知图的 `false_edges` 已参与路径查询。意图引出新行动者也留到 P4，P3 tick 只引用已有行动者。

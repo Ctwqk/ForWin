@@ -203,7 +203,11 @@ worker 已 claim lease 并开始推进。`GenerationApplicationService` 根据 p
 11. `running_post_acceptance` 触发可重试维护 / outbox。`POST_CANON_STEP_NAMES = ("world", "planning", "arc", "feedback")`；world 先 `WorldTickService.run` 后旧 `WorldSimulator`，四步之后执行 order controls。Knowledge Projection、memory index 与发布侧投影仍从 Canon 派生，失败不回滚已提交 Canon。
 12. accepted 章节加入 `completed_chapters`；下一章运行前读取 open human conflicts。`blocks_from_chapter <= next_chapter` 时停止 chapter loop、发出 `paused_for_review`，不开始该章正文生成。
 
-world tick 使用 `tick-<commit id>` 与本章故事时间窗口，经过候选收集、逐候选 gate / 一次重试、影响 / 预算、冲突审查、新闻传播与 `WorldTickDeltaBuilder`，最后经 `CanonAdmissionService.commit_world_tick` 写入。LLM 不可用跳过节点；非最新章或已 tick 章跳过，历史重写则 CAS 重放 tick deltas，失败产生 `replay_cas` 人工冲突。step `result_json` 保存 tick 身份、提交 / 冲突 / 丢弃 / 顺延 ids、warnings、skipped_reason，另附模拟器 pressure_level。
+world tick 使用 `tick-<commit id>` 与本章故事时间窗口，经过候选收集、逐候选 gate / 一次重试、影响 / 预算、冲突审查、新闻传播与 `WorldTickDeltaBuilder`。提交前按 base candidates → in-tick resolutions 的顺序，在前序已接受变化留下的 runtime / 累计 delta 上复核 hard rules / gate；base 失效以 `constraint_violation` 丢弃，resolution 失效以 `failure_reason="conflict_stale"` 升级人工并保持 open。无补丁且无 resolution 的 quiet tick 不取项目锁；其余在 commit SAVEPOINT 前取项目锁、复核 snapshot，再经 `CanonAdmissionService.commit_world_tick` 写入。LLM 不可用跳过节点；非最新章或已 tick 章跳过；`target_total_chapters > 0` 且本章达到或超过目标时以 `skipped_reason="book_complete"` 跳过。step `result_json` 保存 tick 身份、提交 / 冲突 / 丢弃 / 顺延 ids、warnings、skipped_reason，另附模拟器 pressure_level。
+
+历史重写 CAS 重放 world_engine deltas（含直接 `conflict-<id>` resolve），失败产生 `replay_cas` 人工冲突并 supersede 该 delta 承载的 resolutions。原冲突仍为 `resolved`，其未结义务变为终态 `cancelled`（`metadata.cancel_reason`），退出 open 列表、预算和 gate；`planned` / `failed` 计划的关联补丁回撤并记 `plan_patch_revert`，accepted 等其他状态计划不变。同计划其他有效 resolution 仍贡献的目标 / 标记保留，五项上限挤出的旧条目无法恢复。replay_cas 的 `proposed_change` 总含 `superseded_conflict_ids`、`cancelled_obligation_ids`、`reverted_plan_patch_ids`，有 supersede 时摘要给出三项数量。
+
+P4 延后项沿用[当前架构的清单](CURRENT_ARCHITECTURE.md)：最新章重写后的 delta-only re-tick 与保留 tick 的 open conflicts 重新推理；M7（P10 扩展）的保留 tick 对被替换章节创建 refs 的引用检查；M10 的控制台冲突卡片展示 held change。
 
 ### Pause / Continue
 
@@ -221,7 +225,7 @@ Continue 的规则：
 3. 只运行 `planned` 和 `failed` 章节。
 4. 已 `accepted` 章节不会重写。
 5. 入队前确认无 active generation task；入队时冻结 RuntimePolicy snapshot，worker claim 后构造 execution context，运行中修改项目策略不影响已启动任务。
-6. 冲突恢复使用 `world_conflict_list` / `world_conflict_get` 读状态，经 `world_conflict_resolve` 按提供的选项解决；HTTP 为 `/api/projects/{id}/world-conflicts[/{cid}[/resolve]]`，控制台 task drawer 同样接入。重读项目并确认无阻断 / active task 后显式 continue，resolve 本身不启动任务。旧 CanonQualitySignal 使用 `world_model_signal_list`。
+6. 冲突恢复使用 `world_conflict_list` / `world_conflict_get` 读状态，经 `world_conflict_resolve` 按提供的选项解决；HTTP 为 `/api/projects/{id}/world-conflicts[/{cid}[/resolve]]`，控制台 task drawer 同样接入。重读项目并确认无阻断 / active task 后显式 continue，resolve 本身不启动任务。直接 resolve 在冲突行锁后取得项目锁，锁内读取 canon / news queue 并重查选项；变化不再成立返回 `ConflictStale`（HTTP/MCP 409），Canon 拒绝写入也返回 409，事务不关闭冲突。veto 不受 held change 失效影响；其他选项失败后应重读冲突与当前 canon 再决定。旧 CanonQualitySignal 使用 `world_model_signal_list`。
 
 ### Review / Approve
 

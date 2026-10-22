@@ -220,9 +220,43 @@ def test_hard_floor_counts_events_from_chapter_delta() -> None:
     }])
     assert _hard_floor(movement_only).checks["at_least_one_event"] is True
     assert _hard_floor(_output()).checks["at_least_one_event"] is False
-    missing = _hard_floor(_output().model_copy(update={"chapter_delta": None}))
-    assert missing.checks["at_least_one_event"] is False
-    assert "at_least_one_event" in missing.fail_reasons
+
+
+def _dropped(path: str) -> dict[str, Any]:
+    return {"severity": "warning", "code": "evidence_not_in_body", "path": path, "message": "m"}
+
+
+def test_hard_floor_does_not_fail_a_chapter_it_cannot_assess() -> None:
+    missing = _output().model_copy(update={"chapter_delta": None})
+    every_fact_dropped = _output(entity_mentions=[{"name": "甲", "kind": "character", "evidence": "甲乙二人"}])
+    every_fact_dropped = every_fact_dropped.model_copy(update={"generation_meta": {
+        "chapter_delta_issues": [_dropped("events[0]"), _dropped("movements[1]")],
+    }})
+
+    for output in (missing, every_fact_dropped):
+        result = _hard_floor(output)
+
+        assert result.passed, result.fail_reasons
+        assert result.checks["chapter_delta_available"] is False
+        assert "at_least_one_event" not in result.checks
+        assert "chapter_delta_unavailable" in result.warning_reasons
+
+
+def test_hard_floor_still_fails_an_extraction_without_events() -> None:
+    # Dropped mentions or fulfillment entries are not facts; the extraction found no events.
+    output = _output().model_copy(update={"generation_meta": {
+        "chapter_delta_issues": [_dropped("entity_mentions[0]"), _dropped("plan_fulfillment[0]")],
+    }})
+    kept_event = _output(events=[_event("char-a")]).model_copy(update={"generation_meta": {
+        "chapter_delta_issues": [_dropped("events[1]")],
+    }})
+
+    result = _hard_floor(output)
+
+    assert result.checks["chapter_delta_available"] is True
+    assert result.checks["at_least_one_event"] is False
+    assert "at_least_one_event" in result.fail_reasons
+    assert _hard_floor(kept_event).checks["at_least_one_event"] is True
 
 
 def test_pulp_payoff_from_plan_fulfillment_reward_targets() -> None:

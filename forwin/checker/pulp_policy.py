@@ -28,7 +28,9 @@ def evaluate_pulp_beat_policy(
 ) -> PulpBeatPolicyDecision:
     threshold = 2
     current_missing = _visible_payoff_missing(_pulp_beat_payload(hard_floor_result))
-    if not current_missing:
+    checks = getattr(hard_floor_result, "checks", {}) or {}
+    # Rewards the chapter delivers come from its extraction; without one a miss is unknown.
+    if not current_missing or checks.get("chapter_delta_available") is False:
         return PulpBeatPolicyDecision(threshold=threshold)
     if policy.quality_profile != "pulp":
         return PulpBeatPolicyDecision(

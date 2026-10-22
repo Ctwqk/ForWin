@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import unicodedata
-from collections.abc import Iterable
-from typing import get_origin
+from collections.abc import Iterable, Mapping
+from typing import Any, get_origin
 
 from .chapter_delta_schema import ChapterDeltaExtraction, ExtractionIssue
 
@@ -10,6 +10,11 @@ from .chapter_delta_schema import ChapterDeltaExtraction, ExtractionIssue
 _ITEM_FIELDS = tuple(
     name for name, field in ChapterDeltaExtraction.model_fields.items()
     if get_origin(field.annotation) is list
+)
+# The lists that say what happened in the chapter; the hard floor counts them as events.
+FACT_FIELDS = (
+    "events", "entity_changes", "relation_changes", "knowledge_events",
+    "movements", "item_transfers", "thread_beats",
 )
 
 
@@ -63,6 +68,25 @@ def validate_evidence(
                 message="Time evidence is not a passage from the chapter body.",
             ))
     return result, issues
+
+
+def has_facts(extraction: ChapterDeltaExtraction) -> bool:
+    return any(getattr(extraction, field) for field in FACT_FIELDS)
+
+
+def every_fact_dropped(
+    extraction: ChapterDeltaExtraction, issues: Iterable[Mapping[str, Any]],
+) -> bool:
+    """The extractor reported facts and evidence validation dropped every one of them.
+
+    ``issues`` are the extraction's issues as stored in ``chapter_delta_issues``.
+    """
+    return not has_facts(extraction) and any(
+        isinstance(issue, Mapping)
+        and issue.get("code") == "evidence_not_in_body"
+        and str(issue.get("path") or "").partition("[")[0] in FACT_FIELDS
+        for issue in issues
+    )
 
 
 def dropped_ratio(

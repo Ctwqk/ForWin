@@ -7,6 +7,7 @@ from typing import Any, NamedTuple
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+from forwin.book_state.extraction.evidence import every_fact_dropped
 from forwin.book_state.extraction.world_review import review_chapter_extraction
 from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
@@ -35,8 +36,9 @@ class WorldConsistencyReviewer:
 
     The candidate's chapter delta goes through the same translation and gate that canon
     preparation runs. Translator and gate issues keep their severity; extraction issues
-    are warnings, and a candidate with no chapter delta is an error. Issue text names
-    entities, sites and facts the way the writer knows them, not by their ids.
+    are warnings. A candidate with no chapter delta, or one whose every fact lost its
+    evidence, is an error. Issue text names entities, sites and facts the way the writer
+    knows them, not by their ids.
     """
 
     name = "world_consistency"
@@ -51,6 +53,9 @@ class WorldConsistencyReviewer:
         travel_tolerance: float,
     ) -> ReviewVerdict:
         generation_meta = writer_output.generation_meta if isinstance(writer_output.generation_meta, dict) else {}
+        extraction_issues = [
+            item for item in generation_meta.get("chapter_delta_issues") or [] if isinstance(item, dict)
+        ]
         findings = [
             _Finding(
                 "warning",
@@ -59,8 +64,7 @@ class WorldConsistencyReviewer:
                 _path_ref(item.get("path")),
                 "ChapterDeltaExtractor",
             )
-            for item in generation_meta.get("chapter_delta_issues") or []
-            if isinstance(item, dict)
+            for item in extraction_issues
         ]
         names: Mapping[str, str] = {}
         extraction = writer_output.chapter_delta
@@ -69,6 +73,14 @@ class WorldConsistencyReviewer:
                 "error",
                 "chapter_delta_missing",
                 "本章缺少章节 delta 抽取，无法核验世界一致性。",
+                f"chapter:{chapter_number}",
+                "ChapterDeltaExtractor",
+            ))
+        elif every_fact_dropped(extraction, extraction_issues):
+            findings.append(_Finding(
+                "error",
+                "chapter_delta_unverified",
+                "章节 delta 抽取到的事实都没有正文证据，无法核验世界一致性。",
                 f"chapter:{chapter_number}",
                 "ChapterDeltaExtractor",
             ))

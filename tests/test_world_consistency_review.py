@@ -194,6 +194,32 @@ def test_missing_chapter_delta_is_error() -> None:
     engine.dispose()
 
 
+def test_extraction_whose_every_fact_lost_its_evidence_is_error() -> None:
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    dropped = {
+        "severity": "warning", "code": "evidence_not_in_body", "path": "movements[0]",
+        "message": "Evidence is not a passage from the chapter body.",
+    }
+    output = _output(world, meta={"chapter_delta_issues": [dropped]})
+
+    verdict = _draft_review(Session, world, output)
+    kept = _world_review(Session, world, _output(world, _hero_walks(world, 2, "时"), meta={
+        "chapter_delta_issues": [{**dropped, "path": "movements[1]"}],
+    }))
+
+    assert verdict.verdict == "fail"
+    assert _codes(verdict) == [("evidence_not_in_body", "warning"), ("chapter_delta_unverified", "error")]
+    issue = verdict.issues[-1]
+    assert (issue.target_scope, issue.blocking) == ("draft", True)
+    assert issue.suggested_fix == WORLD_REPAIR_FIXES["chapter_delta_unverified"]
+    decision = _repair_decision(verdict)
+    assert (decision.outcome, decision.sub_action["scope"]) == ("local_repair", "draft")
+    # A fact that kept its evidence leaves the extraction usable.
+    assert "chapter_delta_unverified" not in [code for code, _severity in _codes(kept)]
+    engine.dispose()
+
+
 def test_translation_errors_fail_and_translation_warnings_warn() -> None:
     engine, Session = _session_factory()
     world = _seed_world(Session)
@@ -313,7 +339,7 @@ def test_every_gate_error_code_has_a_repair_fix() -> None:
     assert "movement_unreachable" in codes and "movement_total_too_fast" in codes
     assert codes - set(WORLD_REPAIR_FIXES) == _DEFAULT_FIX_GATE_CODES
     # The table names no code the gate has stopped emitting.
-    assert set(WORLD_REPAIR_FIXES) - codes == {"chapter_delta_missing"}
+    assert set(WORLD_REPAIR_FIXES) - codes == {"chapter_delta_missing", "chapter_delta_unverified"}
 
 
 def test_world_issue_type_is_registered_for_routing() -> None:

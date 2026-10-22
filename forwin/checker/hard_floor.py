@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from forwin.book_state.extraction.evidence import every_fact_dropped, has_facts
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
@@ -66,20 +67,19 @@ def run_hard_floor(
         fail_reasons.append("no_garbage")
 
     delta = writer_output.chapter_delta
-    # Without an extraction the chapter has no extracted facts.
-    checks["at_least_one_event"] = delta is not None and any(
-        (
-            delta.events,
-            delta.entity_changes,
-            delta.relation_changes,
-            delta.knowledge_events,
-            delta.movements,
-            delta.item_transfers,
-            delta.thread_beats,
-        )
+    generation_meta = writer_output.generation_meta if isinstance(writer_output.generation_meta, dict) else {}
+    # Without an extraction, or when every fact it found lost its evidence, the floor cannot
+    # tell whether the chapter has events. Draft review or canon preparation blocks such a
+    # chapter for manual review, so the floor does not fail it.
+    checks["chapter_delta_available"] = delta is not None and not every_fact_dropped(
+        delta, generation_meta.get("chapter_delta_issues") or [],
     )
-    if not checks["at_least_one_event"]:
-        fail_reasons.append("at_least_one_event")
+    if not checks["chapter_delta_available"]:
+        warning_reasons.append("chapter_delta_unavailable")
+    else:
+        checks["at_least_one_event"] = has_facts(delta)
+        if not checks["at_least_one_event"]:
+            fail_reasons.append("at_least_one_event")
 
     hidden_hits = _must_not_reveal_hits(body, context_pack.must_not_reveal)
     checks["must_not_reveal"] = not hidden_hits

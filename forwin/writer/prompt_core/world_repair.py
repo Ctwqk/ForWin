@@ -20,6 +20,7 @@ WORLD_REPAIR_FIXES: dict[str, str] = {
     "premature_reveal": "本章不要向读者揭示这一秘密，保留悬念，只留暗示。",
     "immutable_rule_definition_conflict": "不要改写既定世界规则的定义，按现有规则写作。",
     "chapter_delta_missing": "重写正文后会重新抽取章节 delta。",
+    "chapter_delta_unverified": "重写正文后会重新抽取章节 delta。",
 }
 
 

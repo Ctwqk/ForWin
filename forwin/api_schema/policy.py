@@ -8,6 +8,7 @@ from forwin.runtime.policy import (
     GateDelegate,
     QualityProfile,
     RuntimePolicy,
+    WorldConflictDelegate,
 )
 
 from .llm import ModelProfile
@@ -26,6 +27,7 @@ class RuntimePolicyUpdateRequest(BaseModel):
     manual_checkpoints: bool
     band_checkpoint_action: BandCheckpointAction
     gate_delegate: GateDelegate
+    world_conflict_delegate: WorldConflictDelegate | None = None
     reason: str = Field(min_length=1)
 
 

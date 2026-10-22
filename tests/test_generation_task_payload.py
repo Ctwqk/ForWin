@@ -44,6 +44,22 @@ def test_execution_payload_serializes_exact_non_secret_policy() -> None:
     assert "api_key" not in json.dumps(raw)
 
 
+def test_legacy_policy_snapshot_loads_world_and_models_defaults() -> None:
+    payload = execution_payload(
+        mode="continue", policy=RuntimePolicy.for_profile("standard"),
+        policy_version=1, root_event_id="root-legacy",
+    ).model_dump(mode="json")
+    payload["policy_snapshot"].pop("world", None)
+    payload["policy_snapshot"].pop("models", None)
+
+    restored = payload_from_json(json.dumps(payload))
+
+    assert restored.policy_snapshot.world.conflict_delegate == "codex"
+    assert restored.policy_snapshot.models.role_preferences == {
+        "review.world_conflict": ("gpt-6-astra",),
+    }
+
+
 def test_worker_context_resolves_credentials_without_mutating_policy() -> None:
     infrastructure = InfrastructureConfig(llm_env_profiles=[ENV_PROFILE])
     payload = GenerationTaskExecutionPayload(

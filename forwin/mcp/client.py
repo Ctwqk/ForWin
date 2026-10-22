@@ -400,6 +400,59 @@ class ForWinAPIClient:
             project=await self.project_get(project_id),
         )
 
+    async def project_set_world_conflict_delegate(
+        self,
+        *,
+        project_id: str,
+        delegate: Literal["codex", "human"],
+        reason: str,
+    ) -> MutationResult:
+        normalized_reason = str(reason or "").strip()
+        if not normalized_reason:
+            raise ValueError("reason is required")
+        if delegate not in {"codex", "human"}:
+            raise ValueError("delegate must be codex or human")
+        current = await self._request_json(
+            "GET",
+            f"/api/projects/{project_id}/policy",
+        )
+        policy = current.get("policy") if isinstance(current, dict) else None
+        if not isinstance(policy, dict):
+            raise RuntimeError("Expected project runtime policy from ForWin API.")
+        chapter_length = policy.get("chapter_length") or {}
+        pause = policy.get("pause") or {}
+        if not isinstance(chapter_length, dict) or not isinstance(pause, dict):
+            raise RuntimeError("Project runtime policy is malformed.")
+        payload = await self._request_json(
+            "PUT",
+            f"/api/projects/{project_id}/policy",
+            json={
+                "expected_version": int(current.get("version", 0) or 0),
+                "quality_profile": str(policy.get("quality_profile", "standard")),
+                "model_profile_id": str(policy.get("model_profile_id", "")),
+                "min_chapter_chars": int(chapter_length.get("min_chars", 0) or 0),
+                "target_chapter_chars": int(chapter_length.get("target_chars", 0) or 0),
+                "max_chapter_chars": int(chapter_length.get("max_chars", 0) or 0),
+                "review_interval_chapters": int(
+                    pause.get("review_interval_chapters", 0) or 0
+                ),
+                "manual_checkpoints": bool(pause.get("manual_checkpoints", True)),
+                "band_checkpoint_action": str(
+                    pause.get("band_checkpoint_action", "pause_on_warn")
+                ),
+                "gate_delegate": str(pause.get("gate_delegate", "human")),
+                "world_conflict_delegate": delegate,
+                "reason": normalized_reason,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Expected project runtime policy payload from ForWin API.")
+        return MutationResult(
+            ok=bool(payload.get("ok", True)),
+            message=str(payload.get("message", "")),
+            project=await self.project_get(project_id),
+        )
+
     async def project_extend_generation(
         self,
         *,
@@ -695,6 +748,9 @@ class ForWinAPIClient:
         pause_policy = runtime_policy.get("pause") or {}
         if not isinstance(pause_policy, dict):
             pause_policy = {}
+        world_policy = runtime_policy.get("world") or {}
+        if not isinstance(world_policy, dict):
+            world_policy = {}
         return ProjectView(
             id=str(raw.get("id", "")),
             title=str(raw.get("title", "")),
@@ -713,6 +769,7 @@ class ForWinAPIClient:
             accepted_chapter_count=int(raw.get("accepted_chapter_count", 0) or 0),
             needs_review_chapter_count=int(raw.get("needs_review_chapter_count", 0) or 0),
             gate_delegate=str(pause_policy.get("gate_delegate", "human") or "human"),
+            world_conflict_delegate=str(world_policy.get("conflict_delegate", "codex") or "codex"),
             runtime_policy_version=int(raw.get("runtime_policy_version", 0) or 0),
             latest_stage=str(raw.get("latest_stage", "")),
             next_gate=str(raw.get("next_gate", "")),

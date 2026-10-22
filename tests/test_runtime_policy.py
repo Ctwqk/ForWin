@@ -3,7 +3,55 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from forwin.runtime.policy import CanonPolicy, ReviewPolicy, RuntimePolicy
+from forwin.runtime.policy import CanonPolicy, ReviewPolicy, RuntimePolicy, role_models
+
+
+@pytest.mark.parametrize("profile, actor_turns", [("standard", 6), ("pulp", 3)])
+def test_world_and_models_defaults_per_profile(profile, actor_turns) -> None:
+    policy = RuntimePolicy.for_profile(profile)
+    assert policy.world.model_dump() == {
+        "enabled": True,
+        "max_actor_turns_per_tick": actor_turns,
+        "actor_turn_batch_size": 1,
+        "max_new_intents_per_actor": 2,
+        "max_major_events_per_tick": 1,
+        "max_onstage_slips": 2,
+        "max_rerolls": 2,
+        "conflict_delegate": "codex",
+    }
+    assert policy.models.role_preferences == {"review.world_conflict": ("gpt-6-astra",)}
+    assert role_models(policy, "review.world_conflict") == ("gpt-6-astra",)
+    assert role_models(policy, "unknown.role") == ()
+
+
+@pytest.mark.parametrize("profile", ["standard", "pulp"])
+def test_stored_policy_without_world_section_loads_defaults(profile) -> None:
+    stored = json.loads(RuntimePolicy.for_profile(profile).model_dump_json())
+    stored.pop("world", None)
+    stored.pop("models", None)
+    policy = RuntimePolicy.model_validate_json(json.dumps(stored))
+    assert policy.schema_version == 2
+    assert policy.world.conflict_delegate == "codex"
+    assert policy.world.max_actor_turns_per_tick == 6
+    assert policy.models.role_preferences == {"review.world_conflict": ("gpt-6-astra",)}
+
+
+def test_world_conflict_delegate_survives_other_settings_and_profile_changes() -> None:
+    policy = RuntimePolicy.for_profile("standard").with_user_settings(
+        world_conflict_delegate="human"
+    )
+    policy = policy.with_user_settings(gate_delegate="spark")
+    assert policy.world.conflict_delegate == "human"
+    policy = policy.with_user_settings(quality_profile="pulp")
+    assert policy.world.conflict_delegate == "human"
+    assert policy.world.max_actor_turns_per_tick == 3
+    policy = policy.with_user_settings(
+        quality_profile="standard", world_conflict_delegate="codex"
+    )
+    assert policy.world.conflict_delegate == "codex"
+    assert policy.world.max_actor_turns_per_tick == 6
+    with pytest.raises(ValidationError):
+        policy.with_user_settings(world_conflict_delegate="spark")
 
 
 def test_canon_policy_has_no_layer_switch() -> None:

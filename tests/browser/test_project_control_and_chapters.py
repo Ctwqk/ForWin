@@ -12,6 +12,35 @@ def _submit_project_control_reason(page, reason: str = "浏览器测试审计原
     page.locator("#project_control_action_modal_submit").click()
 
 
+def test_runtime_policy_world_conflict_switch_saves(
+    page, browser_test_base_url: str
+) -> None:
+    backend = MockForWinBackend()
+    goto_home(page, browser_test_base_url, backend)
+    switch_home_tab(page, "task")
+    page.get_by_role("button", name="查看详情").first.click()
+    expect(page.locator("#runtime_policy_world_conflict_codex")).to_have_attribute(
+        "aria-pressed", "true"
+    )
+    page.locator("#runtime_policy_world_conflict_human").click()
+    expect(page.locator("#runtime_policy_world_conflict_codex")).to_have_attribute(
+        "aria-pressed", "false"
+    )
+    expect(page.locator("#runtime_policy_world_conflict_human")).to_have_attribute(
+        "aria-pressed", "true"
+    )
+    page.get_by_role("button", name="保存运行策略").click()
+    _submit_project_control_reason(page)
+    expect(page.locator("#global_status")).to_contain_text("项目运行策略已保存")
+    payload = backend.captured_payloads("/api/projects/project-1/policy", method="PUT")[-1]
+    assert payload["world_conflict_delegate"] == "human"
+    assert payload["gate_delegate"] == "human"
+    expect(page.locator("#drawer_body")).to_contain_text("RuntimePolicy v2")
+    expect(page.locator("#runtime_policy_world_conflict_human")).to_have_attribute(
+        "aria-pressed", "true"
+    )
+
+
 def test_project_control_actions_review_and_chapter_operations(
     page, browser_test_base_url: str
 ) -> None:

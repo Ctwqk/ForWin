@@ -272,6 +272,21 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
         )
 
     @register_write_tool(
+        "project_set_world_conflict_delegate",
+        "Choose whether world conflicts are reviewed by Codex or a human. Use this when the user wants to change who resolves world engine conflicts.",
+    )
+    async def project_set_world_conflict_delegate(
+        project_id: str,
+        delegate: Literal["codex", "human"],
+        reason: str,
+    ) -> MutationResult:
+        return await client.project_set_world_conflict_delegate(
+            project_id=project_id,
+            delegate=delegate,
+            reason=reason,
+        )
+
+    @register_write_tool(
         "project_extend_generation",
         "Append one planned arc covering additional_chapters new chapters to an existing writing project and raise its target chapter count. Use this when the user asks to extend the target chapter count; no chapter plans are created here, the new arc's chapters are planned from the book state when continue generation activates it. Existing planned chapters are allowed, but active, review, drafted, or failed gates must be handled first.",
     )

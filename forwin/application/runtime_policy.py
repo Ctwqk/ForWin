@@ -70,6 +70,7 @@ def update_project_policy(
                 manual_checkpoints=request.manual_checkpoints,
                 band_checkpoint_action=request.band_checkpoint_action,
                 gate_delegate=request.gate_delegate,
+                world_conflict_delegate=request.world_conflict_delegate,
             )
             try:
                 saved = store.save(

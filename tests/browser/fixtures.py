@@ -564,6 +564,8 @@ class MockForWinBackend:
                     "band_checkpoint_action": payload["band_checkpoint_action"],
                     "gate_delegate": payload["gate_delegate"],
                 }
+                if payload.get("world_conflict_delegate") is not None:
+                    policy["world"]["conflict_delegate"] = payload["world_conflict_delegate"]
                 json_reply(
                     route,
                     {
@@ -1068,6 +1070,17 @@ def sample_runtime_policy() -> dict[str, Any]:
             "quality_gate": "strict",
         },
         "writer_attention_retries": 3,
+        "world": {
+            "enabled": True,
+            "max_actor_turns_per_tick": 6,
+            "actor_turn_batch_size": 1,
+            "max_new_intents_per_actor": 2,
+            "max_major_events_per_tick": 1,
+            "max_onstage_slips": 2,
+            "max_rerolls": 2,
+            "conflict_delegate": "codex",
+        },
+        "models": {"role_preferences": {"review.world_conflict": ["gpt-6-astra"]}},
     }
 
 

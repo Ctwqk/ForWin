@@ -689,6 +689,32 @@
       syncGateDelegate();
       form.appendChild(createLabeledField('Gate 委托', gateControl));
 
+      let worldConflictDelegate = policy.world?.conflict_delegate === 'human' ? 'human' : 'codex';
+      const worldConflictControl = createNode('div', '', 'pill-switch');
+      const worldConflictButtons = {};
+      const syncWorldConflictDelegate = () => {
+        Object.entries(worldConflictButtons).forEach(([value, button]) => {
+          const active = value === worldConflictDelegate;
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-pressed', String(active));
+        });
+      };
+      [
+        ['codex', 'Codex'],
+        ['human', '人工'],
+      ].forEach(([value, label]) => {
+        const button = createButton(label, () => {
+          worldConflictDelegate = value;
+          syncWorldConflictDelegate();
+        }, 'ghost');
+        button.type = 'button';
+        button.id = `runtime_policy_world_conflict_${value}`;
+        worldConflictButtons[value] = button;
+        worldConflictControl.appendChild(button);
+      });
+      syncWorldConflictDelegate();
+      form.appendChild(createLabeledField('世界冲突委托', worldConflictControl));
+
       card.appendChild(form);
 
       const actions = createNode('div', '', 'action-row');
@@ -714,6 +740,7 @@
           manual_checkpoints: manualCheckpoint.checked,
           band_checkpoint_action: bandCheckpointAction.value,
           gate_delegate: gateDelegate,
+          world_conflict_delegate: worldConflictDelegate,
         });
       }, 'primary'));
       actions.appendChild(createButton('插入 Manual Checkpoint', () => createManualCheckpointFromDrawer(item.project_id, {

@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 QualityProfile = Literal["standard", "pulp"]
 GateDelegate = Literal["human", "spark"]
+WorldConflictDelegate = Literal["codex", "human"]
 BandCheckpointAction = Literal["continue", "pause_on_warn", "pause_always"]
 
 
@@ -75,6 +76,23 @@ class CanonPolicy(FrozenPolicyModel):
     quality_gate: Literal["strict", "pulp_fatal"] = "strict"
 
 
+class WorldPolicy(FrozenPolicyModel):
+    enabled: bool = True
+    max_actor_turns_per_tick: int = 6
+    actor_turn_batch_size: int = 1
+    max_new_intents_per_actor: int = 2
+    max_major_events_per_tick: int = 1
+    max_onstage_slips: int = 2
+    max_rerolls: int = 2
+    conflict_delegate: WorldConflictDelegate = "codex"
+
+
+class ModelsPolicy(FrozenPolicyModel):
+    role_preferences: dict[str, tuple[str, ...]] = Field(
+        default_factory=lambda: {"review.world_conflict": ("gpt-6-astra",)}
+    )
+
+
 class RuntimePolicy(FrozenPolicyModel):
     schema_version: Literal[2] = 2
     quality_profile: QualityProfile = "standard"
@@ -84,6 +102,8 @@ class RuntimePolicy(FrozenPolicyModel):
     review: ReviewPolicy
     planning: PlanningPolicy
     canon: CanonPolicy
+    world: WorldPolicy = Field(default_factory=WorldPolicy)
+    models: ModelsPolicy = Field(default_factory=ModelsPolicy)
     writer_attention_retries: int = Field(ge=0, le=12)
 
     @classmethod
@@ -103,6 +123,7 @@ class RuntimePolicy(FrozenPolicyModel):
                 ),
                 planning=PlanningPolicy(future_constraints=False, plan_health=False, use_llm_simulation=False, context_recency_window=50),
                 canon=CanonPolicy(quality_gate="pulp_fatal"),
+                world=WorldPolicy(max_actor_turns_per_tick=3),
                 writer_attention_retries=1,
             )
         return cls(
@@ -133,6 +154,7 @@ class RuntimePolicy(FrozenPolicyModel):
         manual_checkpoints: bool | None = None,
         band_checkpoint_action: BandCheckpointAction | None = None,
         gate_delegate: GateDelegate | None = None,
+        world_conflict_delegate: WorldConflictDelegate | None = None,
     ) -> Self:
         selected_profile = quality_profile or self.quality_profile
         selected_model = self.model_profile_id if model_profile_id is None else model_profile_id.strip()
@@ -166,10 +188,25 @@ class RuntimePolicy(FrozenPolicyModel):
         next_pause = PausePolicy.model_validate(
             {**base.pause.model_dump(mode="python"), **pause_updates}
         )
+        next_world = WorldPolicy.model_validate(
+            {
+                **base.world.model_dump(mode="python"),
+                "conflict_delegate": (
+                    self.world.conflict_delegate
+                    if world_conflict_delegate is None
+                    else world_conflict_delegate
+                ),
+            }
+        )
         return type(self).model_validate(
             {
                 **base.model_dump(mode="python"),
                 "chapter_length": next_length,
                 "pause": next_pause,
+                "world": next_world,
             }
         )
+
+
+def role_models(policy: RuntimePolicy, role: str) -> tuple[str, ...]:
+    return policy.models.role_preferences.get(role, ())

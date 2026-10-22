@@ -190,9 +190,11 @@ def _review_codes(pipeline, book: _Book) -> list[list[str]]:
 
 
 def _committed_source(pipeline, book: _Book) -> list[str]:
+    """The source of chapter 1's committed chapter delta; the world tick that follows it has its own."""
     with pipeline._SessionFactory() as session:  # noqa: SLF001
         return list(session.scalars(select(GraphDeltaRow.source_id).where(
             GraphDeltaRow.project_id == book.project_id, GraphDeltaRow.chapter_number == 1,
+            GraphDeltaRow.source_type == "chapter_extraction",
         )))
 
 

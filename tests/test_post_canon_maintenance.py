@@ -178,11 +178,13 @@ def test_durable_runs_materialize_once_execute_in_order_and_skip_on_replay() -> 
 def test_expired_run_is_reclaimed_and_old_epoch_cannot_complete() -> None:
     service, sessions, _calls = _durable_service()
     service._ensure_runs("canon-1")
+    # The first step: nothing ahead of it has to succeed before it can be claimed.
+    first_step = POST_CANON_STEP_NAMES[0]
     with sessions.begin() as session:
         row = session.execute(
             select(PostCanonMaintenanceRun).where(
                 PostCanonMaintenanceRun.canon_commit_id == "canon-1",
-                PostCanonMaintenanceRun.step_name == "planning",
+                PostCanonMaintenanceRun.step_name == first_step,
             )
         ).scalar_one()
         row.status = "running"
@@ -193,7 +195,7 @@ def test_expired_run_is_reclaimed_and_old_epoch_cannot_complete() -> None:
 
     claim, _run_id = service._claim_step(
         canon_commit_id="canon-1",
-        step_name="planning",
+        step_name=first_step,
         worker_id="new-worker",
     )
 
@@ -790,7 +792,7 @@ def test_canon_admission_rejects_failed_previous_checkpoint() -> None:
 def test_expired_running_lease_is_reported_reclaimable() -> None:
     rows = [
         _run(
-            "planning",
+            POST_CANON_STEP_NAMES[0],
             status="running",
             lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
         ),

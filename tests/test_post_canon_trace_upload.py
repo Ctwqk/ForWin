@@ -301,7 +301,7 @@ def test_upload_acknowledgement_crash_reclaims_same_frozen_payload(
         row = session.scalars(select(OutboxEvent)).one()
         assert row.payload_json == payload
         assert row.attempts == 2 and row.lease_epoch == 2
-    assert calls == ["planning", "arc", "world", "feedback"]
+    assert calls == ["world", "planning", "arc", "feedback"]
     assert len(list(tmp_path.rglob("*.json"))) == 1
 
 

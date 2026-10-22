@@ -221,6 +221,29 @@ def test_expired_secret_clock_event_is_secret() -> None:
     ]
 
 
+def test_clock_event_happens_when_the_clock_ran_out_within_the_window() -> None:
+    runtime = _runtime(
+        _actor("actor-1", location=_site(1)),
+        _clock("clock-in-window", due_at=NOW - 30, scope="public", on_expire="on-expire in window"),
+        _clock("clock-before-window", due_at=NOW - 500, scope="public", on_expire="on-expire before window"),
+        _clock("clock-named", due_at=NOW - 20, on_expire="intent-1"),
+        _intent("intent-1", "actor-1", at=NOW + 600),
+    )
+
+    candidates = expire_clocks(runtime, now=NOW, window_start=NOW - 100)
+
+    # A clock that ran out inside the window happens then; one left running from before it lands at its start.
+    assert [(candidate.candidate_id, [event.at for event in candidate.effects.events]) for candidate in candidates] == [
+        ("clock:clock-before-window", [NOW - 100]),
+        ("clock:clock-in-window", [NOW - 30]),
+        ("clock:clock-named", []),
+    ]
+    # A named intent is still brought forward to now.
+    assert candidates[2].effects.entity_changes[1] == EffectEntityChange(
+        ref="intent-1", field="scheduled_at", new_value=NOW,
+    )
+
+
 # intents
 
 

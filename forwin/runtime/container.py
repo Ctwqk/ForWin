@@ -490,7 +490,10 @@ class RuntimeContainer:
         core: CoreRuntimeServices,
         generation: GenerationRuntimeServices,
     ) -> PostCanonMaintenanceService:
-        from forwin.maintenance.post_canon import PostCanonMaintenanceService
+        from forwin.maintenance.post_canon import (
+            PostCanonMaintenanceService,
+            build_world_tick_service,
+        )
 
         service = self._post_canon_maintenance
         if service is None:
@@ -503,6 +506,13 @@ class RuntimeContainer:
                 world_simulator=generation.world_simulator,
                 artifact_store=core.artifact_store,
                 llm_client=generation.llm_client,
+                world_tick=build_world_tick_service(
+                    llm_client=generation.llm_client,
+                    session_factory=core.session_factory,
+                    artifact_store=core.artifact_store,
+                    llm_available=_llm_available(core.infrastructure, core.policy),
+                    admission=generation.canon_admission,
+                ),
             )
             self._post_canon_maintenance = service
         return service
@@ -532,11 +542,13 @@ class RuntimeContainer:
         self,
         core: CoreRuntimeServices,
     ) -> PostCanonMaintenanceService:
-        from forwin.maintenance.post_canon import PostCanonMaintenanceService
+        from forwin.maintenance.post_canon import (
+            PostCanonMaintenanceService,
+            build_world_tick_service,
+        )
 
         infrastructure = core.infrastructure
         policy = core.policy
-        model_profile = infrastructure.resolve_model_profile(policy.model_profile_id)
         llm_client = self._build_llm_client(infrastructure, policy)
         try:
             arc_director = ArcDirector(
@@ -557,7 +569,7 @@ class RuntimeContainer:
                 director=arc_director,
                 subworld_manager=subworld_manager,
             )
-            llm_available = bool(model_profile.api_key) or infrastructure.codex_enabled
+            llm_available = _llm_available(infrastructure, policy)
             world_simulator = WorldSimulator(
                 llm_client=(
                     llm_client
@@ -585,6 +597,12 @@ class RuntimeContainer:
                 world_simulator=world_simulator,
                 artifact_store=core.artifact_store,
                 llm_client=llm_client,
+                world_tick=build_world_tick_service(
+                    llm_client=llm_client,
+                    session_factory=core.session_factory,
+                    artifact_store=core.artifact_store,
+                    llm_available=llm_available,
+                ),
             )
         except Exception:
             llm_client.close()
@@ -727,6 +745,12 @@ def _validate_runtime_role(role: str) -> RuntimeRole:
     if normalized not in _RUNTIME_ROLES:
         raise ValueError(f"Unsupported runtime role: {role}")
     return cast(RuntimeRole, normalized)
+
+
+def _llm_available(infrastructure: InfrastructureConfig, policy: RuntimePolicy) -> bool:
+    """A model profile with a key, or the Codex bridge, can answer LLM calls."""
+    profile = infrastructure.resolve_model_profile(policy.model_profile_id)
+    return bool(profile.api_key) or infrastructure.codex_enabled
 
 
 def _close_resource(resource: object, label: str) -> None:

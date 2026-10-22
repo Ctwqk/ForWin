@@ -85,6 +85,12 @@ def plot_response_goal(summary: str) -> str:
     return f"{PLOT_RESPONSE_GOAL_PREFIX}{summary.strip()}"
 
 
+# What an actor learns when the tick sends its turn back or vetoes its plan: the broken rule's code,
+# never the reason behind it or anything the actor does not know.
+ACTOR_CONSTRAINT_FEEDBACK = "The last proposal broke the world rule {code}; propose a different action."
+ACTOR_VETO_SUMMARY = "The world did not let this plan go ahead."
+
+
 # The BookState model each conflict-snapshot slice kind dumps, for dropping its default-valued fields.
 _SLICE_MODELS = {"world_node": WorldNode, "world_edge": WorldEdge, "map_node": MapNode, "fact": FactNode}
 

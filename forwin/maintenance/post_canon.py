@@ -6,12 +6,14 @@ from datetime import datetime, timedelta, timezone
 import json
 import math
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from forwin.audience.feedback import run_feedback_aggregation_pass
+from forwin.audit.events import DecisionEventInfo, DecisionEventType
+from forwin.generation.gate_delegation import GateAuditWriter
 from forwin.models.base import new_id
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord
@@ -28,10 +30,16 @@ from forwin.maintenance.state import (
     post_canon_phase3_complete,
 )
 from forwin.maintenance.trace_upload import enqueue_trace_upload
+from forwin.observability.llm_trace import build_llm_decision_event_payloads, prepare_prompt_trace_payload
 from forwin.observability.payloads import safe_error_summary
 from forwin.planning.stage_analysis import save_stage_analysis
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.simulation.world import save_world_turn
+from forwin.state.updater import StateUpdater
+
+if TYPE_CHECKING:
+    from forwin.canon.admission import CanonAdmissionService
+    from forwin.world_engine.tick import WorldTickService
 
 
 MAX_ERROR_LENGTH = 4000
@@ -144,6 +152,7 @@ class PostCanonMaintenanceService:
         world_simulator: Any,
         artifact_store: Any,
         llm_client: Any,
+        world_tick: WorldTickService | None = None,
         lease_seconds: float = 300.0,
         heartbeat_interval_seconds: float | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -156,6 +165,8 @@ class PostCanonMaintenanceService:
         self.world_simulator = world_simulator
         self.artifact_store = artifact_store
         self.llm_client = llm_client
+        # Built from llm_client on the first world step when not given.
+        self.world_tick = world_tick
         self.lease_seconds = _positive_seconds(lease_seconds, "lease_seconds")
         default_heartbeat = min(30.0, self.lease_seconds / 3.0)
         resolved_heartbeat = (
@@ -173,9 +184,9 @@ class PostCanonMaintenanceService:
             )
         self._clock = clock or utcnow
         self._step_runners: dict[str, StepRunner] = {
+            "world": self._run_world_step,
             "planning": self._run_planning_step,
             "arc": self._run_arc_step,
-            "world": self._run_world_step,
             "feedback": self._run_feedback_step,
         }
 
@@ -928,6 +939,15 @@ class PostCanonMaintenanceService:
         session: Session,
         commit: CanonCommitRecord,
     ) -> Mapping[str, Any]:
+        project = session.get(Project, commit.project_id)
+        if project is None:
+            raise ValueError(f"Project not found: {commit.project_id}")
+        # The world tick runs first; the world simulator still reports the pressure level.
+        tick = self._world_tick_service().run(
+            session,
+            commit,
+            policy=ProjectPolicyStore(session).load(project).policy,
+        )
         turn = self.world_simulator.simulate(
             session=session,
             project_id=commit.project_id,
@@ -940,8 +960,18 @@ class PostCanonMaintenanceService:
             turn=turn,
         )
         return {
+            **tick.step_result(),
             "pressure_level": turn.pressure_level,
         }
+
+    def _world_tick_service(self) -> WorldTickService:
+        if self.world_tick is None:
+            self.world_tick = build_world_tick_service(
+                llm_client=self.llm_client,
+                session_factory=self.session_factory,
+                artifact_store=self.artifact_store,
+            )
+        return self.world_tick
 
     def _run_feedback_step(
         self,
@@ -992,6 +1022,113 @@ class PostCanonMaintenanceService:
                 "attempts": _safe_attempts(attempts),
             },
         )
+
+
+def build_world_tick_service(
+    *,
+    llm_client: Any,
+    session_factory: Callable[[], Session],
+    artifact_store: Any,
+    llm_available: bool = True,
+    admission: CanonAdmissionService | None = None,
+) -> WorldTickService:
+    """The world tick with its model roles on ``llm_client``; without a usable model its LLM nodes are skipped."""
+    from forwin.canon.admission import CanonAdmissionService
+    from forwin.world_engine.actor_turns import ActorTurnRunner
+    from forwin.world_engine.adjudicator import WorldAdjudicator
+    from forwin.world_engine.conflict_delegate import WorldConflictDelegate
+    from forwin.world_engine.tick import WorldTickService
+
+    def save_prompt_trace(session: Session, prompt_trace: dict) -> str:
+        return save_world_prompt_trace(session, prompt_trace, artifact_store=artifact_store)
+
+    return WorldTickService(
+        llm_client=llm_client if llm_available else None,
+        admission=admission or CanonAdmissionService(session_factory=session_factory),
+        adjudicator=WorldAdjudicator(llm_client),
+        actor_runner=ActorTurnRunner(llm_client),
+        # A failed Codex call escalates the conflict, so the delegate keeps the client either way.
+        conflict_delegate=WorldConflictDelegate(llm_client),
+        audit_writer_factory=own_transaction_audit_writer(session_factory),
+        save_prompt_trace=save_prompt_trace,
+    )
+
+
+def own_transaction_audit_writer(
+    session_factory: Callable[[], Session],
+) -> Callable[[], GateAuditWriter]:
+    """Audit writers whose every write commits on its own, so it outlives a world step that rolls back."""
+
+    def save_decision_event(info: DecisionEventInfo) -> Any:
+        with session_factory.begin() as session:
+            return StateUpdater(session).save_decision_event(info)
+
+    def save_prompt_trace(**payload: Any) -> Any:
+        with session_factory.begin() as session:
+            return StateUpdater(session).save_prompt_trace(**payload)
+
+    def factory() -> GateAuditWriter:
+        return GateAuditWriter(
+            save_decision_event=save_decision_event,
+            save_prompt_trace=save_prompt_trace,
+        )
+
+    return factory
+
+
+def save_world_prompt_trace(
+    session: Session,
+    prompt_trace: Mapping[str, Any],
+    *,
+    artifact_store: Any = None,
+) -> str:
+    """Save a world role's PromptTrace and its LLM DecisionEvents in ``session``; returns the trace id."""
+    snapshot = prompt_trace.get("input_snapshot")
+    snapshot = snapshot if isinstance(snapshot, Mapping) else {}
+    project_id = str(snapshot.get("project_id") or "")
+    chapter_number = int(snapshot.get("chapter_number") or 0)
+    payload = prepare_prompt_trace_payload(
+        dict(prompt_trace),
+        artifact_store=artifact_store,
+        project_id=project_id,
+        chapter_number=chapter_number,
+    )
+    project = session.get(Project, project_id)
+    updater = StateUpdater(session)
+    row = updater.save_prompt_trace(
+        project_id=project_id,
+        genesis_revision_id=str(getattr(project, "active_genesis_revision_id", "") or ""),
+        trace_scope=str(payload.get("trace_scope") or "world_engine"),
+        stage_key=str(payload.get("stage_key") or ""),
+        template_id=str(payload.get("template_id") or ""),
+        template_version=str(payload.get("template_version") or "v1"),
+        effective_system_prompt=str(payload.get("effective_system_prompt") or ""),
+        prompt_layers_json=json.dumps(payload.get("prompt_layers", []), ensure_ascii=False),
+        input_snapshot_json=json.dumps(payload.get("input_snapshot", {}), ensure_ascii=False),
+        model_profile_json=json.dumps(payload.get("model_profile", {}), ensure_ascii=False),
+        attempts_json=json.dumps(payload.get("attempts", []), ensure_ascii=False),
+        output_summary_json=json.dumps(payload.get("output_summary", {}), ensure_ascii=False),
+        backend=str(payload.get("backend") or ""),
+        codex_job_id=str(payload.get("codex_job_id") or ""),
+        permission_profile=str(payload.get("permission_profile") or ""),
+        fallback_used=bool(payload.get("fallback_used", False)),
+    )
+    for event in build_llm_decision_event_payloads(payload, prompt_trace_id=row.id):
+        updater.save_decision_event(
+            DecisionEventInfo(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                scope="chapter" if chapter_number else "project",
+                event_family=str(event.get("event_family") or "runtime_observation"),
+                event_type=str(event.get("event_type") or DecisionEventType.LLM_REQUEST_FAILED),
+                actor_type="system",
+                summary=str(event.get("summary") or "World engine LLM trace event."),
+                payload=event.get("payload") if isinstance(event.get("payload"), dict) else {},
+                related_object_type="prompt_trace",
+                related_object_id=row.id,
+            )
+        )
+    return row.id
 
 
 def post_canon_idempotency_key(
@@ -1111,5 +1248,8 @@ __all__ = [
     "PostCanonMaintenanceError",
     "PostCanonMaintenanceService",
     "PostCanonRunClaim",
+    "build_world_tick_service",
+    "own_transaction_audit_writer",
     "post_canon_idempotency_key",
+    "save_world_prompt_trace",
 ]

@@ -10,7 +10,8 @@ from forwin.canon.outbox_events import (
 )
 from forwin.outbox.worker import OutboxClaim
 
-POST_CANON_STEP_NAMES = ("planning", "arc", "world", "feedback")
+# The world tick goes first, so planning and the arc see the world it moved on.
+POST_CANON_STEP_NAMES = ("world", "planning", "arc", "feedback")
 ORDER_CONTROLS_KEY = "order_controls"
 
 

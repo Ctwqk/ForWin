@@ -28,7 +28,7 @@ RECOVERY_TABLES = {
 }
 # Schema added by migrations after 0001. The baseline comparison below only
 # checks what 0001 itself creates, so these are removed from the ORM side.
-TABLES_ADDED_AFTER_BASELINE = {"story_calendars", "book_lexicons"}
+TABLES_ADDED_AFTER_BASELINE = {"story_calendars", "book_lexicons", "world_plan_conflicts"}
 COLUMNS_ADDED_AFTER_BASELINE = {
     "graph_deltas": {"story_time_start", "story_time_end"},
     "world_node_states": {"name", "aliases_json", "profile_json", "is_active"},
@@ -593,6 +593,7 @@ def test_baseline_revision_is_rotated_and_followed_only_by_later_migrations() ->
         "0002_drop_dead_tables.py",
         "0003_book_state_v6.py",
         "0004_drop_parallel_ledgers.py",
+        "0005_world_plan_conflicts.py",
     ]
     assert migration.revision == "0001_v5_recovery"
     assert migration.down_revision is None
@@ -652,3 +653,34 @@ def test_parallel_ledger_downgrade_recreates_the_0001_tables(monkeypatch: pytest
         assert _column_shape(table) == _column_shape(baseline_tables[name])
         assert _foreign_keys(table) == _foreign_keys(baseline_tables[name])
         assert recreated_indexes[name] == baseline_indexes[name]
+
+
+def test_world_conflict_table_matches_migration_0005(monkeypatch: pytest.MonkeyPatch) -> None:
+    migration = import_module("forwin.migrations.versions.0005_world_plan_conflicts")
+    tables, indexes = _created_schema(monkeypatch, migration.upgrade)
+    assert migration.revision == "0005_world_plan_conflicts"
+    assert len(migration.revision) <= 32
+    assert migration.down_revision == "0004_drop_parallel_ledgers"
+    assert set(tables) == {"world_plan_conflicts"}
+    assert hasattr(models, "WorldPlanConflictRow")
+    orm = _table("world_plan_conflicts")
+    assert set(orm.c.keys()) == {
+        "id", "project_id", "source", "detected_after_chapter", "story_time",
+        "involved_refs_json", "violated", "proposed_change_json", "impact_level",
+        "options_json", "required_decider", "blocks_from_chapter", "status",
+        "decision_json", "result_refs_json", "summary", "intent_ref", "actor_ref",
+        "created_at", "updated_at",
+    }
+    assert _column_shape(tables[orm.name]) == _column_shape(orm)
+    assert _foreign_keys(tables[orm.name]) == _foreign_keys(orm)
+    assert indexes[orm.name] == {
+        (index.name, tuple(column.name for column in index.columns), index.unique)
+        for index in orm.indexes
+    } == {
+        ("ix_world_plan_conflicts_project_status", ("project_id", "status"), False),
+        ("ix_world_plan_conflicts_project_blocks", ("project_id", "blocks_from_chapter"), False),
+    }
+    dropped = []
+    monkeypatch.setattr(migration.op, "drop_table", lambda name: dropped.append(name))
+    migration.downgrade()
+    assert dropped == ["world_plan_conflicts"]

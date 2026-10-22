@@ -33,6 +33,11 @@ class DecisionEventType:
     START_WRITING_REQUESTED = "start_writing_requested"
     WORLD_SEED_COMMITTED = "world_seed_committed"
     WORLD_SEED_COMMIT_FAILED = "world_seed_commit_failed"
+    WORLD_TICK_COMMITTED = "world_tick_committed"
+    WORLD_TICK_CANDIDATE_DROPPED = "world_tick_candidate_dropped"
+    WORLD_CONFLICT_DETECTED = "world_conflict_detected"
+    WORLD_CONFLICT_ESCALATED = "world_conflict_escalated"
+    WORLD_CONFLICT_RESOLVED = "world_conflict_resolved"
     PROMPT_TRACE_RECORDED = "prompt_trace_recorded"
 
     RUNTIME_POLICY_UPDATED = "runtime_policy_updated"
@@ -188,6 +193,11 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.START_WRITING_REQUESTED,
     DecisionEventType.WORLD_SEED_COMMITTED,
     DecisionEventType.WORLD_SEED_COMMIT_FAILED,
+    DecisionEventType.WORLD_TICK_COMMITTED,
+    DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED,
+    DecisionEventType.WORLD_CONFLICT_DETECTED,
+    DecisionEventType.WORLD_CONFLICT_ESCALATED,
+    DecisionEventType.WORLD_CONFLICT_RESOLVED,
     DecisionEventType.PROMPT_TRACE_RECORDED,
     DecisionEventType.RUNTIME_POLICY_UPDATED,
     DecisionEventType.MANUAL_CHECKPOINT_CREATED,

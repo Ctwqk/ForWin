@@ -65,3 +65,16 @@ def test_rule_decision_event_type_is_registered() -> None:
         ensure_decision_event_type(DecisionEventType.RULE_DECISION_EVALUATED)
         == DecisionEventType.RULE_DECISION_EVALUATED
     )
+
+
+def test_world_event_types_registered() -> None:
+    for name, value in (
+        ("WORLD_TICK_COMMITTED", "world_tick_committed"),
+        ("WORLD_TICK_CANDIDATE_DROPPED", "world_tick_candidate_dropped"),
+        ("WORLD_CONFLICT_DETECTED", "world_conflict_detected"),
+        ("WORLD_CONFLICT_ESCALATED", "world_conflict_escalated"),
+        ("WORLD_CONFLICT_RESOLVED", "world_conflict_resolved"),
+    ):
+        assert getattr(DecisionEventType, name) == value
+        assert value in KNOWN_DECISION_EVENT_TYPES
+        assert ensure_decision_event_type(value) == value

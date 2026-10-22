@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sqlalchemy import func, select
@@ -13,7 +13,14 @@ from forwin.book_state.extraction.chapter_delta_extractor import (
     chapter_delta_is_current,
     ensure_chapter_delta,
 )
-from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction
+from forwin.book_state.extraction.chapter_delta_schema import (
+    ChapterDeltaExtraction,
+    ExtractionIssue,
+)
+from forwin.book_state.extraction.evidence import (
+    CHAPTER_DELTA_UNVERIFIED,
+    every_fact_dropped,
+)
 from forwin.book_state.extraction.world_review import review_chapter_extraction
 from forwin.book_state.reviewer import BookStateReviewVerdict
 from forwin.candidate_drafts import (
@@ -21,7 +28,10 @@ from forwin.candidate_drafts import (
     candidate_body_hash,
     candidate_writer_output_admission_fingerprint,
 )
-from forwin.canon.eligibility import candidate_ineligibility_reason
+from forwin.canon.eligibility import (
+    candidate_ineligibility_reason,
+    extraction_error_override,
+)
 from forwin.model_adapter import ModelAdapter
 from forwin.models.audit import DecisionEvent
 from forwin.models.book_state import GraphDeltaRow
@@ -120,6 +130,40 @@ class BookStateCanonPreparer:
             )
             return BookStatePreparationOutcome(
                 blocked_path="chapter-delta-extraction-blocked",
+            )
+        generation_meta = (
+            writer_output.generation_meta
+            if isinstance(writer_output.generation_meta, dict)
+            else {}
+        )
+        extraction_issues = [
+            item
+            for item in generation_meta.get("chapter_delta_issues") or []
+            if isinstance(item, dict)
+        ]
+        if every_fact_dropped(extraction, extraction_issues):
+            # Every fact lost its evidence: committing the rest would drop what the chapter did.
+            _record_book_state_block(
+                context=context,
+                session=session,
+                candidate_id=candidate_id,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                gate_id="chapter_delta_extraction",
+                blocked_path="chapter-delta-unverified-blocked",
+                issues=[
+                    ExtractionIssue(
+                        severity="error", code=CHAPTER_DELTA_UNVERIFIED, path="",
+                        message="Every fact the extraction reported lost its evidence.",
+                    ),
+                    *(ExtractionIssue.model_validate(item) for item in extraction_issues),
+                ],
+                related_object_type="candidate_draft",
+                related_object_id=candidate_id,
+            )
+            return BookStatePreparationOutcome(
+                blocked_path="chapter-delta-unverified-blocked",
+                extraction=extraction,
             )
         world = review_chapter_extraction(
             session,
@@ -319,7 +363,12 @@ class CanonPreparationService:
             ),
         )
         ineligible_reason = candidate_ineligibility_reason(verdict)
-        if ineligible_reason:
+        override = (
+            extraction_error_override(verdict)
+            if ineligible_reason and acceptance_mode == "human_approved"
+            else None
+        )
+        if ineligible_reason and override is None:
             _mark_candidate_needs_review(
                 CandidateDraftRepository(session),
                 candidate.id,
@@ -332,7 +381,7 @@ class CanonPreparationService:
 
         entity_admission_plan: EntityAdmissionPlan | None = None
         book_state_outcome: BookStatePreparationOutcome | None = None
-        if not chapter_delta_is_current(writer_output):
+        if override is not None or not chapter_delta_is_current(writer_output):
             # BookState preparation redoes a missing or stale extraction. It runs before the
             # quality gate here, which judges due obligations on the extraction canon
             # commits. Admission is still verified first; the re-extraction keeps that plan.
@@ -345,6 +394,12 @@ class CanonPreparationService:
             if isinstance(admission, CanonPreparationOutcome):
                 return admission
             entity_admission_plan = admission
+            if override is not None:
+                # A person accepted a review that failed only for want of a usable
+                # extraction: canon extracts the chapter again, and translation, the world
+                # gate and the quality gate judge it on the review without those errors.
+                writer_output = writer_output.model_copy(update={"chapter_delta": None})
+                verdict = override.review
             prepared = self._prepare_book_state(
                 context=context,
                 session=session,
@@ -449,7 +504,7 @@ class CanonPreparationService:
             if isinstance(prepared, CanonPreparationOutcome):
                 return prepared
             book_state_outcome = prepared
-        return self.prepare_from_approved(
+        prepared_plan = self.prepare_from_approved(
             session=session,
             candidate_id=candidate_id,
             approved_book_state_changes=book_state_outcome.approved_changes,
@@ -459,6 +514,9 @@ class CanonPreparationService:
             residual_review_issues=residual_review_issues,
             canon_risk_level=canon_risk_level,
         )
+        if override is None or prepared_plan.blocked:
+            return prepared_plan
+        return replace(prepared_plan, accepted_past_extraction_errors=override.codes)
 
     def _prepare_book_state(
         self,

@@ -7,7 +7,11 @@ from typing import Any, NamedTuple
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from forwin.book_state.extraction.evidence import every_fact_dropped
+from forwin.book_state.extraction.evidence import (
+    CHAPTER_DELTA_MISSING,
+    CHAPTER_DELTA_UNVERIFIED,
+    every_fact_dropped,
+)
 from forwin.book_state.extraction.world_review import review_chapter_extraction
 from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
@@ -71,7 +75,7 @@ class WorldConsistencyReviewer:
         if extraction is None:
             findings.append(_Finding(
                 "error",
-                "chapter_delta_missing",
+                CHAPTER_DELTA_MISSING,
                 "本章缺少章节 delta 抽取，无法核验世界一致性。",
                 f"chapter:{chapter_number}",
                 "ChapterDeltaExtractor",
@@ -79,7 +83,7 @@ class WorldConsistencyReviewer:
         elif every_fact_dropped(extraction, extraction_issues):
             findings.append(_Finding(
                 "error",
-                "chapter_delta_unverified",
+                CHAPTER_DELTA_UNVERIFIED,
                 "章节 delta 抽取到的事实都没有正文证据，无法核验世界一致性。",
                 f"chapter:{chapter_number}",
                 "ChapterDeltaExtractor",

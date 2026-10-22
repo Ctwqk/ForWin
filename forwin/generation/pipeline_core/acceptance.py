@@ -178,6 +178,15 @@ class AcceptanceStage:
                     "verdict": verdict.verdict,
                     "canon_commit_id": canon_outcome.commit_id,
                     "source": str(source or ""),
+                    **(
+                        {
+                            "accepted_past_extraction_errors": list(
+                                preparation.accepted_past_extraction_errors
+                            )
+                        }
+                        if preparation.accepted_past_extraction_errors
+                        else {}
+                    ),
                 },
             )
             session.commit()

@@ -29,6 +29,8 @@ class CanonPreparationOutcome:
     blocked_path: str = ""
     block_kind: str = ""
     canon_gate_result: CanonAdmissionGateResult | None = None
+    # Review error codes a human accept passed because canon extracted the chapter again.
+    accepted_past_extraction_errors: tuple[str, ...] = ()
 
     @property
     def blocked(self) -> bool:

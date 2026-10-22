@@ -141,7 +141,9 @@ def _review_candidate(pipeline, session, chapter: ChapterPlan, writer_output: Wr
     )
 
 
-def _persist_candidate(session, chapter: ChapterPlan, output: WriterOutput) -> tuple[WriterOutput, str]:
+def _persist_candidate(
+    session, chapter: ChapterPlan, output: WriterOutput, verdict: ReviewVerdict | None = None,
+) -> tuple[WriterOutput, str]:
     planned = EntityRegistrar(session=session, classifier=AdmitAll()).plan_writer_output(
         project_id=chapter.project_id, chapter_number=chapter.chapter_number, writer_output=output,
     ).writer_output
@@ -151,8 +153,12 @@ def _persist_candidate(session, chapter: ChapterPlan, output: WriterOutput) -> t
     )
     session.add(draft)
     session.flush()
-    verdict = ReviewVerdict(verdict="pass", issues=[])
-    review = ChapterReview(draft_id=draft.id, verdict="pass", issues_json="[]", review_meta_json=verdict.model_dump_json())
+    verdict = verdict or ReviewVerdict(verdict="pass", issues=[])
+    review = ChapterReview(
+        draft_id=draft.id, verdict=verdict.verdict,
+        issues_json=json.dumps([issue.model_dump(mode="json") for issue in verdict.issues], ensure_ascii=False),
+        review_meta_json=verdict.model_dump_json(exclude={"verdict", "issues"}),
+    )
     session.add(review)
     session.flush()
     candidate = CandidateDraftRepository(session).create_reviewed_version(
@@ -370,9 +376,18 @@ def test_off_stage_new_characters_in_relations_and_knowledge_are_admitted_and_co
     assert {"王五", "赵六"} <= names
 
 
-def test_valid_empty_extraction_commits_patchless_delta(runtime) -> None:
+def _dropped(path: str) -> dict[str, Any]:
+    return {"severity": "warning", "code": "evidence_not_in_body", "path": path, "message": "Evidence is not in the body."}
+
+
+# Mentions or fulfillment entries that lost their evidence are not facts the chapter did.
+@pytest.mark.parametrize("dropped", [[], [_dropped("entity_mentions[0]")]])
+def test_valid_empty_extraction_commits_patchless_delta(runtime, dropped) -> None:
     pipeline, session, chapter = runtime
-    output = _output(chapter, chapter_delta=ChapterDeltaExtraction.model_validate(_payload(body_sha256=_sha(BODY))))
+    output = _output(
+        chapter, chapter_delta=ChapterDeltaExtraction.model_validate(_payload(body_sha256=_sha(BODY))),
+        generation_meta={"chapter_delta_issues": dropped},
+    )
 
     _planned, rows = _commit(pipeline, session, chapter, output)
 
@@ -381,6 +396,55 @@ def test_valid_empty_extraction_commits_patchless_delta(runtime) -> None:
     ]
     patches = session.scalars(select(GraphDeltaPatchRow).where(GraphDeltaPatchRow.delta_id == rows[0].id)).all()
     assert patches == []
+
+
+def test_extraction_whose_every_fact_lost_its_evidence_blocks_canon(runtime) -> None:
+    pipeline, session, chapter = runtime
+    output = _output(
+        chapter, chapter_delta=ChapterDeltaExtraction.model_validate(_payload(body_sha256=_sha(BODY))),
+        generation_meta={"chapter_delta_issues": [_dropped("events[0]"), _dropped("movements[0]")]},
+    )
+    planned, candidate_id = _persist_candidate(session, chapter, output)
+    client = ExtractionClient()
+
+    preparation = _prepare(pipeline, session, chapter, planned, candidate_id, llm_client=client)
+
+    assert (preparation.block_kind, preparation.blocked_path) == ("book_state", "chapter-delta-unverified-blocked")
+    assert client.extraction_calls() == 0
+    payload = _blocked_payloads(session, chapter.project_id)[-1]
+    assert [issue["code"] for issue in payload["issues"]] == [
+        "chapter_delta_unverified", "evidence_not_in_body", "evidence_not_in_body",
+    ]
+    gate = parse_gate_outcome(payload)
+    assert gate is not None and gate.gate_id == "chapter_delta_extraction" and gate.blocked
+    assert session.scalars(select(GraphDeltaRow)).all() == []
+
+
+def test_human_accept_keeps_rejecting_a_review_with_another_error_beside_the_missing_extraction(
+    runtime, monkeypatch,
+) -> None:
+    pipeline, session, chapter = runtime
+    missing = ContinuityIssue(
+        rule_name="chapter_delta_missing", severity="error", description="本章缺少章节 delta 抽取，无法核验世界一致性。",
+        issue_type="world_consistency", reviewer="world_consistency",
+    )
+    other = ContinuityIssue(
+        rule_name="body_duplicate_span", severity="error", description="正文重复。", issue_type="body_duplicate_span",
+    )
+    verdict = ReviewVerdict(verdict="fail", issues=[missing, other], residual_review_issues=[missing, other])
+    planned, _candidate_id = _persist_candidate(session, chapter, _output(chapter), verdict)
+    chapter.status = "needs_review"
+    session.add(chapter)
+    session.commit()
+    client = ExtractionClient(_payload())
+    pipeline.canon_preparation_context = replace(pipeline.canon_preparation_context, llm_client=client)
+    monkeypatch.setattr(pipeline, "_load_writer_output_from_meta", lambda _meta: planned)
+
+    result = pipeline.accept_review(chapter.project_id, 1)
+
+    assert (result["status"], result["frozen_artifact"]) == ("needs_review", "review verdict fail is not Canon-eligible")
+    assert client.extraction_calls() == 0
+    assert session.scalars(select(GraphDeltaRow)).all() == []
 
 
 def test_canon_records_translation_warnings_on_the_delta(runtime) -> None:

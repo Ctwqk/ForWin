@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -19,6 +20,7 @@ from sqlalchemy import select
 
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.book_frame_repository import StoryCalendarRepository
+from forwin.book_state.extraction.evidence import FACT_FIELDS
 from forwin.config import InfrastructureConfig
 from forwin.models import DecisionEvent
 from forwin.models.book_state import GraphDeltaRow
@@ -59,10 +61,11 @@ _BODY_HASH = re.compile(r"body_sha256: ([0-9a-f]{64})")
 def make_pipeline(tmp_path):
     pipelines = []
 
-    def make(profile: str = "standard"):
+    def make(profile: str = "standard", *, without_signals: tuple[str, ...] = ()):
         policy = RuntimePolicy.for_profile(profile)
         # The chapter review form needs a live LLM; only extraction is stubbed here.
-        signals = tuple(signal for signal in policy.review.signals if signal != "canon_quality")
+        dropped = {"canon_quality", *without_signals}
+        signals = tuple(signal for signal in policy.review.signals if signal not in dropped)
         policy = policy.model_copy(update={
             "review": policy.review.model_copy(update={"signals": signals}),
             "canon": policy.canon.model_copy(update={"quality_gate": "pulp_fatal"}),
@@ -190,29 +193,34 @@ def _committed_source(pipeline, book: _Book) -> list[str]:
         )))
 
 
-def _unquoted(extraction: dict[str, Any]) -> dict[str, Any]:
-    """``extraction`` with every evidence quote replaced by text the body does not contain."""
+def _unquoted_facts(extraction: dict[str, Any]) -> dict[str, Any]:
+    """``extraction`` with every fact's evidence replaced by text the body does not contain."""
     return {
-        key: [{**item, "evidence": "invented quote"} for item in value] if isinstance(value, list) else value
+        key: [{**item, "evidence": "invented quote"} for item in value] if key in FACT_FIELDS else value
         for key, value in extraction.items()
     }
 
 
-@pytest.mark.parametrize("outage,blocking_code", [
-    ("provider_down", "chapter_delta_missing"),
-    ("every_quote_invented", "chapter_delta_unverified"),
-])
-def test_extraction_outage_ends_in_manual_review_not_failure(make_pipeline, outage: str, blocking_code: str) -> None:
-    pipeline = make_pipeline()
+OUTAGES = [("provider_down", "chapter_delta_missing"), ("every_fact_quote_invented", "chapter_delta_unverified")]
+
+
+def _outage(pipeline, outage: str) -> tuple[_Book, _Writer, _Extraction]:
+    """A book whose every draft gets no usable extraction: the provider fails, or every fact's quote is invented."""
     book = _start_book(pipeline, GENRE)
     drafts = [_draft(book, index) for index in range(len(ENDINGS))]
-    writer = _Writer(book, drafts)
     client = _Extraction()
-    if outage == "every_quote_invented":
+    if outage == "every_fact_quote_invented":
         client.answers.update(
-            (body_hash, _unquoted(extraction))
+            (body_hash, _unquoted_facts(extraction))
             for body_hash, extraction in (_answer(book, body) for body in drafts)
         )
+    return book, _Writer(book, drafts), client
+
+
+@pytest.mark.parametrize("outage,blocking_code", OUTAGES)
+def test_extraction_outage_ends_in_manual_review_not_failure(make_pipeline, outage: str, blocking_code: str) -> None:
+    pipeline = make_pipeline()
+    book, writer, client = _outage(pipeline, outage)
 
     result = _run(pipeline, book, writer, client)
 
@@ -229,6 +237,66 @@ def test_extraction_outage_ends_in_manual_review_not_failure(make_pipeline, outa
     assert "chapter_delta_unavailable" in payload["warning_reasons"]
     assert payload["gate_outcome"]["blocked"] is False
     assert _committed_source(pipeline, book) == []
+
+
+def _accept(pipeline, book: _Book, client: _Extraction) -> dict[str, str]:
+    """The operator's accept of chapter one, with canon extracting through ``client``."""
+    pipeline.canon_preparation_context = replace(pipeline.canon_preparation_context, llm_client=client)
+    return pipeline.accept_review(book.project_id, 1)
+
+
+@pytest.mark.parametrize("outage,blocking_code", OUTAGES)
+def test_human_accept_after_the_extractor_recovers_commits_past_the_extraction_errors(
+    make_pipeline, outage: str, blocking_code: str,
+) -> None:
+    pipeline = make_pipeline()
+    book, writer, client = _outage(pipeline, outage)
+    _run(pipeline, book, writer, client)
+    reviewed = writer.bodies[len(writer.stage_keys) - 1]
+    client.answers.update([_answer(book, reviewed)])
+    extracted_before = len(client.extracted)
+
+    result = _accept(pipeline, book, client)
+
+    assert result["status"] in {"accepted", "maintenance_pending"}, result
+    # Canon extracted the reviewed body again and committed that extraction.
+    assert client.extracted[extracted_before:] == [body_sha256(reviewed)]
+    assert _chapter_status(pipeline, book) == "accepted"
+    assert _committed_source(pipeline, book) == [f"chapter:1:{body_sha256(reviewed)}"]
+    (approved,) = _events(pipeline, book, DecisionEventType.REVIEW_APPROVED)
+    assert json.loads(approved.payload_json)["accepted_past_extraction_errors"] == [blocking_code]
+
+
+def test_human_accept_while_the_extractor_is_down_blocks_at_canon(make_pipeline) -> None:
+    pipeline = make_pipeline()
+    book, writer, client = _outage(pipeline, "provider_down")
+    _run(pipeline, book, writer, client)
+
+    result = _accept(pipeline, book, client)
+
+    assert (result["status"], result["frozen_artifact"]) == ("needs_review", "chapter-delta-extraction-blocked")
+    assert _chapter_status(pipeline, book) == "needs_review"
+    assert _committed_source(pipeline, book) == []
+    assert _events(pipeline, book, DecisionEventType.REVIEW_APPROVED) == []
+
+
+def test_extraction_whose_every_fact_lost_its_evidence_blocks_at_canon_without_world_review(make_pipeline) -> None:
+    pipeline = make_pipeline("pulp", without_signals=("world_consistency",))
+    book = _start_book(pipeline, GENRE)
+    draft = _draft(book, 0)
+    body_hash, extraction = _answer(book, draft)
+    # Every fact loses its quote; the goal's fulfillment keeps one, so draft review passes.
+    client = _Extraction({body_hash: _unquoted_facts(extraction)})
+
+    result = _run(pipeline, book, _Writer(book, [draft]), client)
+
+    assert (result.failed_chapters, result.paused_chapters) == ([], [1])
+    assert _chapter_status(pipeline, book) == "needs_review"
+    assert _committed_source(pipeline, book) == []
+    blocked = [
+        json.loads(event.payload_json) for event in _events(pipeline, book, DecisionEventType.CANON_COMMIT_BLOCKED)
+    ]
+    assert [payload.get("blocked_path") for payload in blocked] == ["chapter-delta-unverified-blocked"]
 
 
 @pytest.mark.parametrize("profile", ["standard", "pulp"])

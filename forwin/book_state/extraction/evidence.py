@@ -11,6 +11,10 @@ _ITEM_FIELDS = tuple(
     name for name, field in ChapterDeltaExtraction.model_fields.items()
     if get_origin(field.annotation) is list
 )
+# world_consistency errors that say the chapter has no usable extraction, not a world problem.
+CHAPTER_DELTA_MISSING = "chapter_delta_missing"
+CHAPTER_DELTA_UNVERIFIED = "chapter_delta_unverified"
+UNUSABLE_EXTRACTION_CODES = (CHAPTER_DELTA_MISSING, CHAPTER_DELTA_UNVERIFIED)
 # The lists that say what happened in the chapter; the hard floor counts them as events.
 FACT_FIELDS = (
     "events", "entity_changes", "relation_changes", "knowledge_events",

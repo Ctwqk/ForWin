@@ -7,14 +7,14 @@ from forwin.world_engine.conflict_routing import AUTO_OPTION, available_options,
 from forwin.world_engine.conflict_types import ConflictDraft
 
 
-def _draft(*, source: str = "world_tick", impact_level: str = "major") -> ConflictDraft:
+def _draft(*, source: str = "world_tick", impact_level: str = "major", violated: str = "") -> ConflictDraft:
     return ConflictDraft(
         project_id="project-1",
         source=source,
         detected_after_chapter=3,
         story_time=3_000,
         involved_refs=["actor-1"],
-        violated="replay_cas" if source == "historical_rewrite" else "protection",
+        violated=violated or ("replay_cas" if source == "historical_rewrite" else "impact_review"),
         impact_level=impact_level,
         summary="A protected state would change.",
         proposed_change={},
@@ -70,3 +70,16 @@ def test_available_options_by_source_and_impact(
 
     assert options == expected
     assert "rewrite_chapter" not in options
+
+
+@pytest.mark.parametrize("violated", ["protection", "milestone", "reveal_schedule"])
+@pytest.mark.parametrize("impact_level", ["minor", "moderate", "major", "critical"])
+def test_broken_boundary_offers_only_veto_or_amend(violated: str, impact_level: str) -> None:
+    assert available_options(_draft(impact_level=impact_level, violated=violated)) == ("veto_world", "amend_plan")
+
+
+@pytest.mark.parametrize("violated", ["onstage_slip", "feasibility", "impact_review"])
+def test_other_violations_keep_the_impact_options(violated: str) -> None:
+    assert available_options(_draft(impact_level="minor", violated=violated)) == (
+        "veto_world", "plot_responds", "amend_plan", "accept_with_obligation",
+    )

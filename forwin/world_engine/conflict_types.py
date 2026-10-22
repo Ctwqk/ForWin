@@ -48,4 +48,6 @@ class ConflictDecision(BaseModel):
     decided_by: ConflictDecider
     actor_id: str = ""
     rationale: str
+    # Why the decider chose it, as the operator states it; empty for codex and auto decisions.
+    reason: str = ""
     decided_at: datetime

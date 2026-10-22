@@ -15,12 +15,14 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from forwin.audit.events import DecisionEventType
+from forwin.book_state.book_frame_repository import BookLexiconRepository
+from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.book_state.schema import ACTOR_NODE_TYPES
-from forwin.canon.admission import CanonAdmissionService, CanonStaleVersion
+from forwin.canon.admission import CanonAdmissionService, CanonStaleVersion, CanonWriteFailure
 from forwin.models.audit import DecisionEvent
 from forwin.models.base import new_id
 from forwin.models.project import ChapterPlan, Project
@@ -38,8 +40,8 @@ from .conflict_repository import ConflictNotOpen, WorldConflictRepository
 from .conflict_types import ConflictDecision
 from .constraints import check_narrative_boundaries
 from .delta_builder import WorldTickDeltaBuilder
-from .propagation import latest_news_in_transit
-from .types import TickCandidate, TickContext, WorldEffects, tick_seed
+from .propagation import latest_news_in_transit, propagate_news, tick_events
+from .types import EffectEvent, NewsItem, TickCandidate, TickContext, WorldEffects, tick_seed
 
 
 # An accepted world change owes the plot a response within this many chapters of the latest one.
@@ -64,12 +66,22 @@ class ConflictResolutionResult:
     graph_delta_ids: tuple[str, ...]
     obligation_id: str
     plan_patch_id: str
+    # The builder's warnings, {code, message}: parts of the change that did not apply.
+    warnings: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
 class OptionSideEffects:
     obligation_id: str
     plan_patch_id: str
+
+
+@dataclass(frozen=True)
+class PropagatedNews:
+    # What the news delivers by now, as one candidate; None when nobody learns anything.
+    candidate: TickCandidate | None
+    # The queue the delta carries forward as its news_in_transit.
+    in_transit: list[NewsItem]
 
 
 def _check_decision(conflict: WorldPlanConflictRow, decision: ConflictDecision) -> None:
@@ -95,14 +107,23 @@ def option_candidates(
 
     ``runtime`` is the latest canon chapter's. veto_world stops the conflict's intent and, while
     ``reroll_count`` is under ``world.max_rerolls``, has its actor act again at ``now``. The other
-    options commit the held change; amend_plan also ends the protections it breaks with that chapter.
+    options commit the held change; amend_plan also ends the protections it breaks with that chapter,
+    and the other two refuse a change that still breaks one (ConflictOptionUnavailable). A held
+    change that sets the status of an intent canon has since settled is stale (ConflictStale).
     """
     _check_decision(conflict, decision)
     if decision.option == "veto_world":
         veto = _veto_candidate(conflict, runtime, policy=policy, reroll_count=reroll_count, now=now)
         return [veto] if veto is not None else []
     held = _held_change(conflict)
-    release = _release_candidate(conflict, held, runtime) if decision.option == "amend_plan" else None
+    _check_intents_unsettled(conflict, held, runtime)
+    if decision.option != "amend_plan":
+        if _broken_protections(held, runtime):
+            raise ConflictOptionUnavailable(
+                f"Conflict {conflict.id}: the held change breaks an active protection; veto it or amend the plan"
+            )
+        return [held]
+    release = _release_candidate(conflict, held, runtime)
     return [held, release] if release is not None else [held]
 
 
@@ -132,7 +153,7 @@ def _veto_candidate(
         origin="conflict_resolution",
         actor_id=actor_ref,
         intent_id=intent_ref,
-        summary=f"Vetoed: {conflict.summary}",
+        summary=conflict.summary,
         effects=WorldEffects(),
         intent_status_changes=statuses,
         next_turn_at=turns,
@@ -147,24 +168,77 @@ def _held_change(conflict: WorldPlanConflictRow) -> TickCandidate:
         raise ConflictOptionUnavailable(f"Conflict {conflict.id} holds no world change to commit: {exc}") from exc
 
 
+def _check_intents_unsettled(conflict: WorldPlanConflictRow, held: TickCandidate, runtime: BookStateRuntime) -> None:
+    """The held change may not set the status of an intent canon settled after it was held."""
+    world = runtime.world
+    targets = {ref.strip() for ref in held.intent_status_changes} | {
+        change.ref.strip() for change in held.effects.entity_changes
+        if change.field.strip().removeprefix("state.") == "status"
+    }
+    settled = sorted(
+        ref for ref in targets
+        if (node := world.get_node(ref)) is not None and str(node.node_type) == "intent"
+        and world.get_state(ref).get("status") in _SETTLED_INTENT_STATUSES
+    )
+    if settled:
+        raise ConflictStale(f"Conflict {conflict.id}: the held change sets the status of settled intents {settled}")
+
+
+def _broken_protections(held: TickCandidate, runtime: BookStateRuntime) -> list[str]:
+    """The active protections the held change breaks in the chapter after the latest one."""
+    return sorted({
+        violation.constraint_node_id
+        for violation in check_narrative_boundaries(runtime, held, next_chapter=runtime.as_of_chapter + 1)
+    })
+
+
 def _release_candidate(
     conflict: WorldPlanConflictRow, held: TickCandidate, runtime: BookStateRuntime,
 ) -> TickCandidate | None:
     """Every protection the held change breaks in the next chapter ends with the latest one."""
-    latest = runtime.as_of_chapter
-    broken = sorted({
-        violation.constraint_node_id
-        for violation in check_narrative_boundaries(runtime, held, next_chapter=latest + 1)
-    })
+    broken = _broken_protections(held, runtime)
     if not broken:
         return None
     return TickCandidate(
         candidate_id=f"conflict:{conflict.id}:release",
         origin="conflict_resolution",
-        summary=f"Plan amended for: {conflict.summary}",
+        summary=conflict.summary,
         effects=WorldEffects(),
-        protection_releases={node_id: latest for node_id in broken},
+        protection_releases={node_id: runtime.as_of_chapter for node_id in broken},
     )
+
+
+def propagation_candidate(
+    runtime: BookStateRuntime,
+    lexicon: BookLexicon,
+    *,
+    events: Sequence[tuple[EffectEvent, str]],
+    in_transit: Sequence[NewsItem],
+    now: int,
+    candidate_id: str,
+    summary: str,
+) -> PropagatedNews:
+    """The news of ``events`` (each with its ``fact:<id>``) and of the queue, as the tick spreads it.
+
+    For a delta's own candidates the pairs come from ``propagation.tick_events``. The candidate
+    goes after the ones that create the events' facts, and ``in_transit`` becomes the builder's
+    news_in_transit.
+    """
+    news = propagate_news(
+        runtime, lexicon,
+        events=[event for event, _fact_ref in events],
+        in_transit=in_transit,
+        now=now,
+        fact_ref_for_event={position: fact_ref for position, (_event, fact_ref) in enumerate(events)},
+    )
+    candidate = (
+        TickCandidate(
+            candidate_id=candidate_id, origin="propagation", summary=summary,
+            effects=WorldEffects(knowledge=news.knowledge),
+        )
+        if news.knowledge else None
+    )
+    return PropagatedNews(candidate=candidate, in_transit=news.in_transit)
 
 
 def record_option_side_effects(
@@ -200,8 +274,11 @@ def _next_unaccepted_plan(session: Session, project_id: str, *, latest_chapter: 
 def _record_obligation(
     session: Session, conflict: WorldPlanConflictRow, decision: ConflictDecision, *, latest_chapter: int,
 ) -> OptionSideEffects:
-    plan = _next_unaccepted_plan(session, conflict.project_id, latest_chapter=latest_chapter)
     project = session.get(Project, conflict.project_id)
+    total = int(project.target_total_chapters or 0) if project is not None else 0
+    if total <= latest_chapter:
+        raise ConflictOptionUnavailable(f"No chapter follows chapter {latest_chapter} within the book's {total}")
+    plan = _next_unaccepted_plan(session, conflict.project_id, latest_chapter=latest_chapter)
     obligation_id = new_id()
     summary = conflict.summary
     obligation = NarrativeObligation(
@@ -213,7 +290,7 @@ def _record_obligation(
         deferral_reason=decision.rationale,
         subject_refs=json.loads(conflict.involved_refs_json or "[]"),
         evidence_refs=[f"world_conflict:{conflict.id}"],
-        deadline_chapter=latest_chapter + OBLIGATION_DEADLINE_CHAPTERS,
+        deadline_chapter=min(latest_chapter + OBLIGATION_DEADLINE_CHAPTERS, total),
         payoff_test=summary,
         created_by=decision.decided_by,
         metadata={"conflict_id": conflict.id},
@@ -247,7 +324,7 @@ def _record_obligation(
         obligation=obligation,
         plan_patch=plan_patch,
         current_chapter=latest_chapter,
-        target_total_chapters=int(project.target_total_chapters or 0) if project is not None else 0,
+        target_total_chapters=total,
     )
     if not result.success or result.obligation is None or result.plan_patch is None:
         raise ConflictOptionUnavailable(f"The obligation ledger refused the obligation: {', '.join(result.errors)}")
@@ -277,7 +354,7 @@ def _record_plot_response(session: Session, conflict: WorldPlanConflictRow, *, l
         applied=True,
         metadata={"conflict_id": conflict.id},
     )
-    FuturePlanPatchMixin._apply_form_plan_patch(plan, patch)
+    FuturePlanPatchMixin.apply_form_plan_patch(plan, patch)
     session.add(plan)
     return NarrativeObligationRepository(session).create_plan_patch(patch).id
 
@@ -308,7 +385,7 @@ def conflict_resolved_event(
         actor_type=_EVENT_ACTOR_TYPES.get(decided_by, "system"),
         actor_id=str(decision.get("actor_id") or decided_by),
         summary=f"World conflict {row.id} resolved: {payload['option']}.",
-        reason=str(decision.get("rationale") or ""),
+        reason=str(decision.get("reason") or decision.get("rationale") or ""),
         payload_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
         related_object_type="world_conflict",
         related_object_id=row.id,
@@ -326,8 +403,9 @@ class ConflictResolutionService:
     def resolve(self, *, project_id: str, conflict_id: str, decision: ConflictDecision) -> ConflictResolutionResult:
         """Carry out ``decision``: commit its world changes, record its side effects and close the conflict.
 
-        Everything lands in one SAVEPOINT. ConflictStale (canon moved under the change) and
-        ConflictOptionUnavailable roll it back whole, leaving the conflict open and the session usable.
+        Everything lands in one SAVEPOINT. ConflictStale (canon moved under the change, or a newer
+        chapter landed) and ConflictOptionUnavailable roll it back whole, leaving the conflict open
+        and the session usable; any other CanonWriteFailure propagates after the same rollback.
         """
         session = self.session
         repo = WorldConflictRepository(session)
@@ -338,8 +416,13 @@ class ConflictResolutionService:
             raise ConflictNotOpen(f"Conflict {row.id} is {row.status}")
         _check_decision(row, decision)
         latest = BookStateRepository(session).latest_canon_chapter(project_id) or 0
-        # Count the actor's earlier vetoes before this one closes.
-        reroll_count = repo.reroll_count(project_id, actor_ref=row.actor_ref) if row.actor_ref.strip() else 0
+        # Count the actor's recent vetoes before this one closes; older ones no longer cap its rerolls.
+        reroll_count = (
+            repo.reroll_count(
+                project_id, actor_ref=row.actor_ref, since_chapter=max(0, latest - self.policy.world.max_rerolls),
+            )
+            if row.actor_ref.strip() else 0
+        )
         runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=latest)
         story_end = BookStateQuery(session).current_story_minute(project_id, as_of_chapter=latest)
         now = story_end if story_end is not None else row.story_time
@@ -347,12 +430,14 @@ class ConflictResolutionService:
             row, decision, runtime=runtime, policy=self.policy, reroll_count=reroll_count, now=now,
         )
         tick_id = f"conflict-{row.id}"
+        graph_delta_ids: tuple[str, ...] = ()
+        warnings: tuple[dict[str, str], ...] = ()
         try:
             with session.begin_nested():
-                graph_delta_ids = (
-                    self._commit(project_id, candidates, tick_id=tick_id, chapter_number=latest, now=now)
-                    if candidates else ()
-                )
+                if candidates:
+                    graph_delta_ids, warnings = self._commit(
+                        row, decision, candidates, runtime=runtime, tick_id=tick_id, chapter_number=latest, now=now,
+                    )
                 effects = record_option_side_effects(session, row, decision, latest_chapter=latest)
                 refs = [*graph_delta_ids, effects.obligation_id, effects.plan_patch_id]
                 repo.mark_resolved(row, decision=decision, result_refs=[ref for ref in refs if ref])
@@ -361,20 +446,47 @@ class ConflictResolutionService:
                     "graph_delta_ids": list(graph_delta_ids),
                     "obligation_id": effects.obligation_id,
                     "plan_patch_id": effects.plan_patch_id,
+                    "warnings": [dict(warning) for warning in warnings],
                 }))
                 session.flush()
         except CanonStaleVersion as exc:
             raise ConflictStale(f"Conflict {row.id}: canon moved under the held change: {exc}") from exc
+        except CanonWriteFailure as exc:
+            if (BookStateRepository(session).latest_canon_chapter(project_id) or 0) != latest:
+                raise ConflictStale(
+                    f"Conflict {row.id}: chapter {latest} is no longer the latest canon chapter"
+                ) from exc
+            raise
         return ConflictResolutionResult(
             graph_delta_ids=graph_delta_ids,
             obligation_id=effects.obligation_id,
             plan_patch_id=effects.plan_patch_id,
+            warnings=warnings,
         )
 
     def _commit(
-        self, project_id: str, candidates: Sequence[TickCandidate], *, tick_id: str, chapter_number: int, now: int,
-    ) -> tuple[str, ...]:
-        """Build the candidates into one world_engine delta on the latest canon chapter and commit it."""
+        self,
+        conflict: WorldPlanConflictRow,
+        decision: ConflictDecision,
+        candidates: Sequence[TickCandidate],
+        *,
+        runtime: BookStateRuntime,
+        tick_id: str,
+        chapter_number: int,
+        now: int,
+    ) -> tuple[tuple[str, ...], tuple[dict[str, str], ...]]:
+        """Build the candidates and their news into one world_engine delta on the latest canon chapter,
+        commit it, and return its ids with the builder's warnings."""
+        project_id = conflict.project_id
+        news = propagation_candidate(
+            runtime,
+            BookLexiconRepository(self.session).get(project_id),
+            events=tick_events(project_id, tick_id, candidates),
+            in_transit=latest_news_in_transit(self.session, project_id),
+            now=now,
+            candidate_id=f"conflict:{conflict.id}:news",
+            summary=conflict.summary,
+        )
         # The resolution happens at the latest chapter's end: its window is that one minute.
         context = TickContext(
             project_id=project_id,
@@ -385,23 +497,29 @@ class ConflictResolutionService:
         )
         build = WorldTickDeltaBuilder(self.session).build(
             context=context,
-            candidates=candidates,
-            news_in_transit=latest_news_in_transit(self.session, project_id),
+            candidates=[*candidates, news.candidate] if news.candidate is not None else candidates,
+            news_in_transit=news.in_transit,
             tick_id=tick_id,
         )
         if build.delta is None:
             errors = "; ".join(issue.message for issue in build.issues if issue.severity == "error")
             raise ConflictStale(f"The held change no longer builds against canon: {errors}")
+        delta = build.delta.model_copy(update={"metadata": {
+            **build.delta.metadata, "conflict_id": conflict.id, "conflict_option": decision.option,
+        }})
         outcome = self.admission.commit_world_tick(
             session=self.session,
             project_id=project_id,
             chapter_number=chapter_number,
             approved_changes=ApprovedGraphDeltaSet(
-                project_id=project_id, chapter_number=chapter_number, graph_deltas=[build.delta],
+                project_id=project_id, chapter_number=chapter_number, graph_deltas=[delta],
             ),
             tick_id=tick_id,
         )
-        return outcome.graph_delta_ids
+        warnings = tuple(
+            {"code": issue.code, "message": issue.message} for issue in build.issues if issue.severity == "warning"
+        )
+        return outcome.graph_delta_ids, warnings
 
 
 __all__ = [
@@ -413,7 +531,9 @@ __all__ = [
     "ConflictResolutionService",
     "ConflictStale",
     "OptionSideEffects",
+    "PropagatedNews",
     "conflict_resolved_event",
     "option_candidates",
+    "propagation_candidate",
     "record_option_side_effects",
 ]

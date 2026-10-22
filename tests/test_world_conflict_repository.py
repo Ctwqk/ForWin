@@ -157,6 +157,20 @@ def test_reroll_count_counts_veto_decisions_per_actor(session):
     assert repo.reroll_count("project-1", actor_ref="actor-2") == 1
     assert repo.reroll_count("project-2", actor_ref="actor-1") == 1
     assert repo.reroll_count("project-1", actor_ref="missing") == 0
+    # The default window starts at chapter 0: every veto the actor ever had counts.
+    assert repo.reroll_count("project-1", actor_ref="actor-1", since_chapter=0) == 2
+
+
+def test_reroll_count_counts_only_vetoes_detected_since_the_window_start(session):
+    from forwin.world_engine.conflict_repository import WorldConflictRepository
+
+    repo = WorldConflictRepository(session)
+    for chapter in (1, 4, 5, 8):
+        row = repo.create(_draft(detected_after_chapter=chapter), required_decider="human", options=["veto_world"])
+        repo.mark_resolved(row, decision=_decision("veto_world"), result_refs=[])
+    assert repo.reroll_count("project-1", actor_ref="actor-1") == 4
+    assert repo.reroll_count("project-1", actor_ref="actor-1", since_chapter=5) == 2
+    assert repo.reroll_count("project-1", actor_ref="actor-1", since_chapter=9) == 0
 
 
 def test_escalate_persists_and_repository_leaves_commit_to_caller(session):

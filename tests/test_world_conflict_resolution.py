@@ -13,7 +13,7 @@ from forwin.audit.events import DecisionEventType
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.runtime import BookStateRuntime
-from forwin.canon import CanonAdmissionService
+from forwin.canon import CanonAdmissionService, CanonWriteFailure
 from forwin.models import ArcPlanVersion, ChapterPlan, NarrativeObligationRow, NarrativePlanPatchRow, Project
 from forwin.models.audit import DecisionEvent
 from forwin.models.book_state import GraphDeltaRow
@@ -30,18 +30,20 @@ from forwin.world_engine.conflict_resolution import (
 )
 from forwin.world_engine.conflict_types import ConflictDecision, ConflictDraft
 from forwin.world_engine.constraints import check_narrative_boundaries
+from forwin.world_engine.delta_builder import tick_event_fact_ref
 from forwin.world_engine.propagation import latest_news_in_transit
 from forwin.world_engine.types import (
     WORLD_ENGINE_SOURCE_TYPE,
     EffectEntityChange,
     EffectEvent,
+    EffectRelationChange,
     NewsItem,
     TickCandidate,
     WorldEffects,
 )
 from forwin.writer.prompt_core.world_engine import plot_response_goal
 from tests.test_world_gate_v6 import _commit, _delta, _session_factory, _time, _World
-from tests.test_world_tick_delta import _built, _commit_tick, _context, _patches
+from tests.test_world_tick_delta import _build, _built, _commit_tick, _context, _issues, _patches
 from tests.test_world_tick_steps import _seed_steps_world
 
 
@@ -114,19 +116,21 @@ def _book(
     return _Book(world, chapter, plans)
 
 
-def _held(book: _Book) -> TickCandidate:
-    """An adjudicated outcome held for review: the later intent resolves with a public event."""
+def _held(book: _Book, intent_id: str = "") -> TickCandidate:
+    """An adjudicated outcome held for review: an intent (the later one by default) resolves with a
+    public event at loc 1, where the hero and the faction are; the rival is two hours away at loc 2."""
+    intent_id = intent_id or book.later
     return TickCandidate(
         candidate_id="adjudication:held",
         origin="adjudication",
         actor_id=book.world.hero,
-        intent_id=book.later,
+        intent_id=intent_id,
         summary="summary-held",
         effects=WorldEffects(events=[EffectEvent(
             summary="event-held", participant_refs=[book.world.hero], location_id=book.world.loc(1),
             visibility="public", at=book.now,
         )]),
-        intent_status_changes={book.later: "resolved"},
+        intent_status_changes={intent_id: "resolved"},
         impact_level="major",
     )
 
@@ -150,11 +154,13 @@ def _conflict(
     impact: str = "moderate",
     intent_ref: str = "",
     actor_ref: str = "",
+    detected_after_chapter: int = 1,
 ) -> str:
     with Session.begin() as session:
         row = WorldConflictRepository(session).create(
             ConflictDraft(
-                project_id=book.project_id, source=source, detected_after_chapter=1, story_time=book.now,
+                project_id=book.project_id, source=source, detected_after_chapter=detected_after_chapter,
+                story_time=book.now,
                 involved_refs=[ref for ref in (intent_ref, actor_ref) if ref], violated=violated,
                 impact_level=impact, summary=SUMMARY, proposed_change=proposed_change, intent_ref=intent_ref,
                 actor_ref=actor_ref, blocks_from_chapter=2,
@@ -165,9 +171,9 @@ def _conflict(
         return row.id
 
 
-def _decision(option: str, decided_by: str = "human") -> ConflictDecision:
+def _decision(option: str, decided_by: str = "human", reason: str = "") -> ConflictDecision:
     return ConflictDecision(
-        option=option, decided_by=decided_by, actor_id="reviewer-1", rationale="rationale-1",
+        option=option, decided_by=decided_by, actor_id="reviewer-1", rationale="rationale-1", reason=reason,
         decided_at=datetime(2026, 10, 22, tzinfo=UTC),
     )
 
@@ -181,11 +187,18 @@ def _service(session, *, policy: RuntimePolicy = POLICY, admission: CanonAdmissi
 
 
 def _resolve(
-    Session, book: _Book, conflict_id: str, option: str, *, decided_by: str = "human", policy: RuntimePolicy = POLICY,
+    Session,
+    book: _Book,
+    conflict_id: str,
+    option: str,
+    *,
+    decided_by: str = "human",
+    reason: str = "",
+    policy: RuntimePolicy = POLICY,
 ) -> ConflictResolutionResult:
     with Session.begin() as session:
         return _service(session, policy=policy).resolve(
-            project_id=book.project_id, conflict_id=conflict_id, decision=_decision(option, decided_by),
+            project_id=book.project_id, conflict_id=conflict_id, decision=_decision(option, decided_by, reason),
         )
 
 
@@ -248,6 +261,15 @@ def _resolved_events(Session, book: _Book, conflict_id: str) -> list[tuple[str, 
         return [(row.actor_type, json.loads(row.payload_json)) for row in rows]
 
 
+def _resolved_reasons(Session, book: _Book, conflict_id: str) -> list[str]:
+    with Session() as session:
+        return list(session.scalars(select(DecisionEvent.reason).where(
+            DecisionEvent.project_id == book.project_id,
+            DecisionEvent.event_type == DecisionEventType.WORLD_CONFLICT_RESOLVED,
+            DecisionEvent.related_object_id == conflict_id,
+        )))
+
+
 def _plan(Session, plan_id: str) -> tuple[list[str], dict[str, Any]]:
     with Session() as session:
         plan = session.get(ChapterPlan, plan_id)
@@ -308,9 +330,15 @@ def test_veto_marks_intent_vetoed_and_reschedules_actor_turn_within_reroll_cap(m
 
     result = _resolve(Session, book, first, "veto_world", policy=policy)
 
-    assert result == ConflictResolutionResult(graph_delta_ids=(_delta_id(book, first),), obligation_id="", plan_patch_id="")
+    assert result == ConflictResolutionResult(
+        graph_delta_ids=(_delta_id(book, first),), obligation_id="", plan_patch_id="",
+    )
     [delta] = _resolution_deltas(Session, book, first)
     assert delta.id == _delta_id(book, first)
+    # Summaries carry the conflict's own text; the option is structured metadata only.
+    assert delta.summary == SUMMARY
+    assert {patch.reason for patch in delta.node_patches} == {SUMMARY}
+    assert (delta.metadata["conflict_id"], delta.metadata["conflict_option"]) == (first, "veto_world")
     # The held slip is not committed: only the veto's patches land.
     assert _patches(delta) == [
         (book.onstage, "set", "state.status", "planned", "vetoed"),
@@ -327,6 +355,7 @@ def test_veto_marks_intent_vetoed_and_reschedules_actor_turn_within_reroll_cap(m
     assert _row(Session, book, first) == ("resolved", [_delta_id(book, first)], "veto_world")
     [(actor_type, payload)] = _resolved_events(Session, book, first)
     assert actor_type == "manual_ui"
+    assert _resolved_reasons(Session, book, first) == ["rationale-1"]
     assert {key: payload[key] for key in ("conflict_id", "option", "decided_by", "graph_delta_ids")} == {
         "conflict_id": first, "option": "veto_world", "decided_by": "human",
         "graph_delta_ids": [_delta_id(book, first)],
@@ -384,6 +413,18 @@ def test_accept_with_obligation_commits_change_and_records_obligation(monkeypatc
     runtime = _runtime(Session, book)
     assert runtime.world.get_state(book.later)["status"] == "resolved"
     assert len(_event_nodes(runtime, "adjudication:held")) == 1
+    # The accepted event's news spreads in the same delta: the hero and the co-located faction
+    # witness it now, and it reaches the rival at loc 2 after the two-hour road.
+    fact_ref = tick_event_fact_ref(book.project_id, f"conflict-{conflict_id}", "adjudication:held", 0)
+    [delta] = _resolution_deltas(Session, book, conflict_id)
+    assert sorted((patch.observer_id, patch.new_value) for patch in delta.cognition_patches) == sorted([
+        (book.world.hero, {fact_ref: "knows"}), (book.world.faction, {fact_ref: "knows"}),
+    ])
+    assert delta.metadata["news_in_transit"] == [
+        NewsItem(fact_ref=fact_ref, observer_ref=book.world.rival, arrive_at=book.now + 120).model_dump(mode="json"),
+    ]
+    faction = runtime.cognition_by_observer[("faction", book.world.faction)]
+    assert faction.knowledge_by_ref[fact_ref] == "knows"
     with Session() as session:
         obligation = session.get(NarrativeObligationRow, result.obligation_id)
         assert (
@@ -440,12 +481,51 @@ def test_obligation_budget_rejection_keeps_conflict_open(monkeypatch) -> None:
     engine.dispose()
 
 
-def test_plot_responds_adds_goal_to_next_unwritten_plan(monkeypatch) -> None:
+def test_obligation_deadline_stops_at_the_book_target(monkeypatch) -> None:
     engine, Session = _session_factory()
     book = _book(Session, monkeypatch)
     conflict_id = _conflict(Session, book, proposed_change=_held(book).model_dump(mode="json"))
 
-    result = _resolve(Session, book, conflict_id, "plot_responds")
+    def target(total: int) -> None:
+        with Session.begin() as session:
+            session.get(Project, book.project_id).target_total_chapters = total
+
+    # No chapter follows chapter 1 within a one-chapter book.
+    target(1)
+    _resolve_failing(Session, book, conflict_id, "accept_with_obligation", ConflictOptionUnavailable)
+    assert _resolution_deltas(Session, book, conflict_id) == []
+
+    # Two chapters remain: the obligation falls due at the last one, not six chapters on.
+    target(3)
+    result = _resolve(Session, book, conflict_id, "accept_with_obligation")
+
+    with Session() as session:
+        assert session.get(NarrativeObligationRow, result.obligation_id).deadline_chapter == 3
+    engine.dispose()
+
+
+def test_plot_responds_adds_goal_to_next_unwritten_plan(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    held = _held(book)
+    # Ending a relation that does not exist only warns; the rest of the change still lands.
+    held = held.model_copy(update={"effects": held.effects.model_copy(update={"relation_changes": [
+        EffectRelationChange(
+            source_ref=book.world.hero, target_ref=book.world.rival, edge_type="ally_of", change="end",
+        ),
+    ]})})
+    conflict_id = _conflict(Session, book, proposed_change=held.model_dump(mode="json"))
+
+    result = _resolve(Session, book, conflict_id, "plot_responds", reason="reason-1")
+
+    assert _resolved_reasons(Session, book, conflict_id) == ["reason-1"]
+    with Session() as session:
+        row = WorldConflictRepository(session).get(book.project_id, conflict_id)
+        assert json.loads(row.decision_json)["reason"] == "reason-1"
+    assert [warning["code"] for warning in result.warnings] == ["relation_missing"]
+    [(_actor_type, payload)] = _resolved_events(Session, book, conflict_id)
+    assert payload["warnings"] == [dict(warning) for warning in result.warnings]
+    assert set(payload["warnings"][0]) == {"code", "message"}
 
     delta_id = _delta_id(book, conflict_id)
     goal = plot_response_goal(SUMMARY)
@@ -493,8 +573,8 @@ def test_amend_plan_releases_protections_and_requires_human(monkeypatch) -> None
         impact_level="major",
     )
     conflict_id = _conflict(
-        Session, book, proposed_change=held.model_dump(mode="json"), options=["veto_world", "plot_responds", "amend_plan"],
-        violated="protection", impact="major", actor_ref=hero,
+        Session, book, proposed_change=held.model_dump(mode="json"),
+        options=["veto_world", "plot_responds", "amend_plan"], violated="protection", impact="major", actor_ref=hero,
     )
 
     _resolve_failing(Session, book, conflict_id, "amend_plan", ValueError, decided_by="codex")
@@ -601,4 +681,162 @@ def test_rewrite_chapter_unavailable_in_p3(monkeypatch) -> None:
 
     assert _row(Session, book, conflict_id) == ("open", [], "")
     assert _world_engine_delta_count(Session, book) == 0
+    engine.dispose()
+
+
+def test_plot_responds_cannot_commit_a_change_that_breaks_an_active_protection(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch, protections=lambda world: [
+        ("protect-rival", {"ref": world.rival, "kind": "must_be_alive", "until_chapter": 0, "source": "test"}),
+    ])
+    held = TickCandidate(
+        candidate_id="adjudication:kill", origin="adjudication", actor_id=book.world.hero, summary="summary-kill",
+        effects=WorldEffects(entity_changes=[
+            EffectEntityChange(ref=book.world.rival, field="alive_status", new_value="dead"),
+        ]),
+        impact_level="minor",
+    )
+    # An older row may still offer every option; the protection keeps the commit options closed anyway.
+    conflict_id = _conflict(Session, book, proposed_change=held.model_dump(mode="json"), violated="protection")
+
+    _resolve_failing(Session, book, conflict_id, "plot_responds", ConflictOptionUnavailable)
+    _resolve_failing(Session, book, conflict_id, "accept_with_obligation", ConflictOptionUnavailable)
+
+    assert _row(Session, book, conflict_id) == ("open", [], "")
+    assert _runtime(Session, book).world.get_state(book.world.rival).get("alive_status") != "dead"
+    assert _resolution_deltas(Session, book, conflict_id) == []
+    engine.dispose()
+
+
+def test_accepting_a_change_to_a_settled_intent_is_stale(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    vetoed = _conflict(
+        Session, book, proposed_change=_slip(book, book.later), violated="onstage_slip", impact="minor",
+        intent_ref=book.later, actor_ref=book.world.hero,
+    )
+    accepted = _conflict(Session, book, proposed_change=_held(book).model_dump(mode="json"))
+    _resolve(Session, book, vetoed, "veto_world")
+
+    # The held change would resolve the intent the veto just settled.
+    _resolve_failing(Session, book, accepted, "accept_with_obligation", ConflictStale)
+
+    assert _row(Session, book, accepted) == ("open", [], "")
+    assert _runtime(Session, book).world.get_state(book.later)["status"] == "vetoed"
+    assert _resolution_deltas(Session, book, accepted) == []
+    engine.dispose()
+
+
+def test_veto_reroll_cap_counts_only_recent_vetoes(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    hero = book.world.hero
+    policy = _policy(max_rerolls=1)
+    old = _conflict(
+        Session, book, proposed_change=_slip(book, book.onstage), violated="onstage_slip", impact="minor",
+        intent_ref=book.onstage, actor_ref=hero,
+    )
+    _resolve(Session, book, old, "veto_world", policy=policy)
+    for number in (2, 3):
+        _commit(Session, book.world, _delta(Session, book.world, number, _time(1, "日")))
+    recent = _conflict(
+        Session, book, proposed_change=_slip(book, book.later), violated="onstage_slip", impact="minor",
+        intent_ref=book.later, actor_ref=hero, detected_after_chapter=3,
+    )
+    with Session() as session:
+        chapter_three_end = session.scalar(select(GraphDeltaRow.story_time_end).where(
+            GraphDeltaRow.project_id == book.project_id, GraphDeltaRow.chapter_number == 3,
+        ))
+
+    _resolve(Session, book, recent, "veto_world", policy=policy)
+
+    # The chapter-1 veto is outside the window (chapters 2 to 3), so the actor rerolls again.
+    with Session() as session:
+        deltas = BookStateRepository(session).list_graph_deltas(book.project_id, after_chapter=2, through_chapter=3)
+    [delta] = [item for item in deltas if item.metadata.get("tick_id") == f"conflict-{recent}"]
+    assert [(node_id, field_path, new) for node_id, _op, field_path, _old, new in _patches(delta)] == [
+        (book.later, "state.status", "vetoed"), (hero, "state.next_turn_at", chapter_three_end),
+    ]
+    engine.dispose()
+
+
+def test_a_chapter_committed_under_the_resolution_makes_it_stale(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    conflict_id = _conflict(Session, book, proposed_change=_held(book).model_dump(mode="json"))
+    chapter_two = _delta(Session, book.world, 2, _time(1, "日"))
+
+    def race() -> None:
+        _commit(Session, book.world, chapter_two)
+
+    _resolve_failing(Session, book, conflict_id, "plot_responds", ConflictStale, admission=_RacingAdmission(race))
+    assert _row(Session, book, conflict_id) == ("open", [], "")
+    engine.dispose()
+
+
+class _RefusingAdmission(CanonAdmissionService):
+    def commit_world_tick(self, **kwargs: Any):
+        raise CanonWriteFailure("compiler refused the tick")
+
+
+def test_other_canon_write_failures_propagate(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    conflict_id = _conflict(Session, book, proposed_change=_held(book).model_dump(mode="json"))
+
+    _resolve_failing(
+        Session, book, conflict_id, "plot_responds", CanonWriteFailure, admission=_RefusingAdmission(),
+        match="compiler refused",
+    )
+    engine.dispose()
+
+
+def test_missing_conflict_raises_lookup_error(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+
+    with Session.begin() as session:
+        with pytest.raises(LookupError):
+            _service(session).resolve(
+                project_id=book.project_id, conflict_id="missing-conflict", decision=_decision("veto_world"),
+            )
+    engine.dispose()
+
+
+def test_veto_with_an_unknown_actor_only_stops_the_intent(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    conflict_id = _conflict(
+        Session, book, proposed_change=_slip(book, book.onstage), violated="onstage_slip", impact="minor",
+        intent_ref=book.onstage, actor_ref="actor-not-in-book-state",
+    )
+
+    _resolve(Session, book, conflict_id, "veto_world")
+
+    [delta] = _resolution_deltas(Session, book, conflict_id)
+    assert _patches(delta) == [(book.onstage, "set", "state.status", "planned", "vetoed")]
+    engine.dispose()
+
+
+def test_builder_releases_only_review_constraints_and_keeps_an_absent_until_chapter(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch, protections=lambda world: [
+        ("protect-open", {"ref": world.rival, "kind": "must_be_alive", "source": "test"}),
+    ])
+    context = _context(book.world, book.chapter)
+
+    def release(ref: str) -> TickCandidate:
+        return TickCandidate(
+            candidate_id="c-release", origin="conflict_resolution", summary=SUMMARY, effects=WorldEffects(),
+            protection_releases={ref: 1},
+        )
+
+    unknown = _build(Session, context, [release("not-a-protection")], tick_id="tick-release")
+    assert unknown.delta is None
+    assert _issues(unknown) == [("error", "unresolved_ref", "c-release")]
+    built = _built(Session, context, [release("protect-open")], tick_id="tick-release")
+    assert [(patch.target_ref, patch.field_path, patch.old_value, patch.new_value)
+            for patch in built.narrative_patches] == [
+        ("review_constraint:protect-open", "payload.until_chapter", None, 1),
+    ]
     engine.dispose()

@@ -11,14 +11,20 @@ from .conflict_types import ConflictDecider, ConflictDraft, ConflictOption
 AUTO_OPTION: ConflictOption = "veto_world"
 # P3 has no chapter-extraction source, so rewrite_chapter is never offered.
 _PLAN_OPTIONS: tuple[ConflictOption, ...] = ("veto_world", "plot_responds", "amend_plan")
+# A change that breaks a narrative boundary lands only once the user amends the plan around it.
+_BOUNDARY_VIOLATIONS = frozenset({"protection", "milestone", "reveal_schedule"})
+_BOUNDARY_OPTIONS: tuple[ConflictOption, ...] = ("veto_world", "amend_plan")
 _OBLIGATION_IMPACTS = frozenset({"minor", "moderate"})
 _CODEX_IMPACTS = frozenset({"moderate", "major"})
 
 
 def available_options(draft: ConflictDraft) -> tuple[ConflictOption, ...]:
-    """A rewrite can only undo what the world did; lighter conflicts may also leave an obligation."""
+    """A rewrite can only undo what the world did, a broken boundary is vetoed or amended around,
+    and lighter conflicts may also leave an obligation."""
     if draft.source == "historical_rewrite":
         return ("veto_world",)
+    if draft.violated in _BOUNDARY_VIOLATIONS:
+        return _BOUNDARY_OPTIONS
     if draft.impact_level in _OBLIGATION_IMPACTS:
         return (*_PLAN_OPTIONS, "accept_with_obligation")
     return _PLAN_OPTIONS

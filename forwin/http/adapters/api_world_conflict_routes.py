@@ -5,13 +5,10 @@ from collections.abc import Callable
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import select
 
 from forwin.api_schema.world_conflicts import WorldConflictInfo, WorldConflictResolveRequest
-from forwin.audit.events import DecisionEventType
 from forwin.canon.admission import CanonAdmissionService
 from forwin.http.request_support import _utcnow, require_project
-from forwin.models.audit import DecisionEvent
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.world_engine.conflict_repository import ConflictNotOpen, WorldConflictRepository
@@ -64,7 +61,7 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
             try:
                 decision = ConflictDecision(
                     option=request.option, decided_by="human", actor_id="human",
-                    rationale=request.rationale, decided_at=_utcnow(),
+                    rationale=request.rationale, reason=request.reason, decided_at=_utcnow(),
                 )
                 ConflictResolutionService(
                     session, admission=CanonAdmissionService(), policy=policy,
@@ -75,15 +72,6 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             except LookupError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
-            # The service records the manual_ui event; keep the operator reason distinct from its rationale.
-            event = session.scalar(select(DecisionEvent).where(
-                DecisionEvent.project_id == project_id,
-                DecisionEvent.event_type == DecisionEventType.WORLD_CONFLICT_RESOLVED,
-                DecisionEvent.related_object_type == "world_conflict",
-                DecisionEvent.related_object_id == conflict_id,
-            ))
-            if event is not None:
-                event.reason = request.reason
             session.commit()
             return _conflict_info(row)
 

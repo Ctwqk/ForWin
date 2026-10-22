@@ -72,6 +72,7 @@ def test_resolve_route_applies_option_and_records_human_decision(conflict_api):
     assert result["decision"]["decided_by"] == "human"
     assert result["decision"]["option"] == "veto_world"
     assert result["decision"]["rationale"] == "preserve plan"
+    assert result["decision"]["reason"] == "human review"
     assert result["decision"]["decided_at"]
     assert result["result_refs"]
     assert client.post(path, json=payload).status_code == 409
@@ -80,11 +81,13 @@ def test_resolve_route_applies_option_and_records_human_decision(conflict_api):
         assert row.status == "resolved"
         runtime = BookStateProjection(session).load_runtime_as_of(book.project_id, as_of_chapter=1)
         assert runtime.world.get_state(book.onstage)["status"] == "vetoed"
-        event = session.scalar(select(DecisionEvent).where(
+        events = session.scalars(select(DecisionEvent).where(
             DecisionEvent.project_id == book.project_id,
             DecisionEvent.event_type == DecisionEventType.WORLD_CONFLICT_RESOLVED,
             DecisionEvent.related_object_id == conflict_id,
-        ))
+        )).all()
+        assert len(events) == 1
+        [event] = events
         assert event.actor_type == "manual_ui"
         assert event.reason == "human review"
         assert json.loads(event.payload_json)["rationale"] == "preserve plan"

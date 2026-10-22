@@ -15,7 +15,7 @@ class FuturePlanPatchMixin:
             self._apply_obligation_patch(plan, patch)
             return
         if patch.patch_type == "signal_pre_write":
-            self._apply_form_plan_patch(plan, patch)
+            self.apply_form_plan_patch(plan, patch)
 
     @staticmethod
     def _apply_invariant_plan_binding(
@@ -88,7 +88,8 @@ class FuturePlanPatchMixin:
 
 
     @staticmethod
-    def _apply_form_plan_patch(plan: ChapterPlan, patch: NarrativePlanPatch) -> None:
+    def apply_form_plan_patch(plan: ChapterPlan, patch: NarrativePlanPatch) -> None:
+        """Put the patch's form instruction first in the plan's goals and progress markers."""
         instruction = str(patch.new_contract.get("form_instruction") or patch.diff_summary or "").strip()
         if not instruction:
             return

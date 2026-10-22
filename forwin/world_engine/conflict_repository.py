@@ -95,12 +95,14 @@ class WorldConflictRepository:
         row.required_decider = "human"
         self.session.flush()
 
-    def reroll_count(self, project_id: str, *, actor_ref: str) -> int:
+    def reroll_count(self, project_id: str, *, actor_ref: str, since_chapter: int = 0) -> int:
+        """The actor's veto_world resolutions on conflicts whose detected_after_chapter >= ``since_chapter``."""
         decisions = self.session.scalars(
             select(WorldPlanConflictRow.decision_json).where(
                 WorldPlanConflictRow.project_id == project_id,
                 WorldPlanConflictRow.actor_ref == actor_ref,
                 WorldPlanConflictRow.status == "resolved",
+                WorldPlanConflictRow.detected_after_chapter >= since_chapter,
             )
         )
         return sum(json.loads(decision).get("option") == "veto_world" for decision in decisions)

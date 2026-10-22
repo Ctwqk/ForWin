@@ -131,6 +131,23 @@ def test_location_change_of_a_mover_is_left_to_its_movement() -> None:
     ) == []
 
 
+def test_an_intent_is_an_entity_ref_but_not_an_observer() -> None:
+    assert _paths(
+        entity_changes=[{"ref": "intent-1", "field": "status", "new_value": "due", "evidence": "e"}],
+        knowledge_events=[
+            {"observer_ref": "intent-1", "fact_ref": "fact:secret-1", "state": "knows", "channel": "told", "evidence": "e"},
+        ],
+    ) == [("knowledge_events[0].observer_ref", "intent-1")]
+
+
+def test_a_new_location_named_like_a_listed_site_points_at_its_id() -> None:
+    (unknown,) = unknown_refs(_extraction(movements=[
+        {"entity_ref": "person-1", "from_ref": "", "to_ref": "new:Tower", "evidence": "e"},
+    ]), INPUT)
+
+    assert (unknown.ref, unknown.suggestion) == ("new:Tower", "site-2")
+
+
 def test_a_name_used_as_a_ref_points_at_the_id_of_its_kind() -> None:
     refs = unknown_refs(_extraction(events=[{
         "summary": "s", "participant_refs": ["Ari", "A", "Gate", "Nobody"], "location_ref": "Gate",

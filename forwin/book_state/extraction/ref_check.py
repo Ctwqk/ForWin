@@ -40,7 +40,11 @@ def unknown_refs(
 class _RefCheck:
     def __init__(self, extraction: ChapterDeltaExtraction, extraction_input: ChapterExtractionInput) -> None:
         self.extraction = extraction
-        self.kinds = {row.id: row.kind for row in extraction_input.entities}
+        # Intents are world nodes too; the translator resolves them wherever an entity goes.
+        self.kinds = {
+            **{row.id: "intent" for row in extraction_input.intents},
+            **{row.id: row.kind for row in extraction_input.entities},
+        }
         self.entity_labels = _labels((row.id, (row.name, *row.aliases)) for row in extraction_input.entities)
         self.locations = {row.id for row in extraction_input.locations}
         self.location_labels = _labels((row.id, (row.name,)) for row in extraction_input.locations)
@@ -152,7 +156,7 @@ class _RefCheck:
             "is not declared in new_sites" if text.startswith(NEW_REF_PREFIX)
             else "is not an id in the location table"
         )
-        self.report(path, text, reason, self.location_labels.get(text, ""))
+        self.report(path, text, reason, self.location_labels.get(text.removeprefix(NEW_REF_PREFIX).strip(), ""))
         return False
 
     def holder(self, ref: str, path: str) -> None:

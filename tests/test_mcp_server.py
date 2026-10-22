@@ -56,6 +56,18 @@ api_module: HttpRuntimeHarness
 
 
 class ForWinAPIClientUnitTests(unittest.TestCase):
+    def test_world_conflict_get_rejects_non_object_payload(self) -> None:
+        for payload in ([], ["unexpected"]):
+            with self.subTest(payload=payload):
+                client = ForWinAPIClient(
+                    base_url="http://forwin.invalid",
+                    transport=httpx.MockTransport(lambda request: httpx.Response(
+                        200, content=json.dumps(payload), headers={"Content-Type": "application/json"},
+                    )),
+                )
+                with self.assertRaisesRegex(RuntimeError, "Expected WorldConflict payload from ForWin API"):
+                    asyncio.run(client.world_conflict_get(project_id="p1", conflict_id="c1"))
+
     def test_mcp_world_conflict_tools_and_signal_list(self) -> None:
         calls = []
         conflict = {

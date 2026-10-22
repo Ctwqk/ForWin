@@ -5,12 +5,13 @@ from collections.abc import Callable
 from typing import Any
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from forwin.api_schema.world_conflicts import WorldConflictInfo, WorldConflictResolveRequest
 from forwin.canon.admission import CanonAdmissionService
 from forwin.http.request_support import _utcnow, require_project
 from forwin.models.world_conflict import WorldPlanConflictRow
-from forwin.runtime.policy_store import ProjectPolicyStore
+from forwin.runtime.policy_store import ProjectPolicyMissing, ProjectPolicyStore
 from forwin.world_engine.conflict_repository import ConflictNotOpen, WorldConflictRepository
 from forwin.world_engine.conflict_resolution import (
     ConflictOptionUnavailable,
@@ -38,6 +39,8 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
     def list_project_world_conflicts(project_id: str, status: str | None = None) -> list[WorldConflictInfo]:
         with get_session() as session:
             require_project(session, project_id)
+            if status is not None and status not in {"open", "resolved"}:
+                raise HTTPException(status_code=400, detail="status must be open or resolved")
             return [_conflict_info(row) for row in WorldConflictRepository(session).list(project_id, status=status)]
 
     def get_project_world_conflict(project_id: str, conflict_id: str) -> WorldConflictInfo:
@@ -57,21 +60,27 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
             row = repo.get(project_id, conflict_id)
             if row is None:
                 raise HTTPException(status_code=404, detail="world conflict not found")
-            policy = ProjectPolicyStore(session).load(project).policy
+            try:
+                policy = ProjectPolicyStore(session).load(project).policy
+            except ProjectPolicyMissing as exc:
+                raise HTTPException(status_code=500, detail="project runtime policy is missing") from exc
             try:
                 decision = ConflictDecision(
                     option=request.option, decided_by="human", actor_id="human",
                     rationale=request.rationale, reason=request.reason, decided_at=_utcnow(),
                 )
+            except (ValidationError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            try:
                 ConflictResolutionService(
                     session, admission=CanonAdmissionService(), policy=policy,
                 ).resolve(project_id=project_id, conflict_id=conflict_id, decision=decision)
             except (ConflictNotOpen, ConflictStale) as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except (ValidationError, json.JSONDecodeError):
+                raise
             except (ValueError, ConflictOptionUnavailable) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except LookupError as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
             session.commit()
             return _conflict_info(row)
 

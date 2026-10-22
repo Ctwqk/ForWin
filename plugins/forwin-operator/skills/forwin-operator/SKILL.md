@@ -46,7 +46,9 @@ The repository defaults to the Swarm manager endpoints at `ccttww-lap.local`. Us
 1. Call `project_get` or `chapter_list`.
 2. Choose a chapter number from `chapter_list`.
 3. Call `chapter_get` for body text, summary, and review state.
-4. Use `world_model_get`, `world_page_get`, and `world_conflict_list` for canonical world-state reads.
+4. Use `world_model_get`, `world_page_get`, and `world_model_signal_list` for canonical world-state and legacy CanonQualitySignal inspection.
+   Use `world_conflict_list(project_id, status="open")` and `world_conflict_get(project_id, conflict_id)` to inspect world–plan conflicts. After the user chooses an offered option, call `world_conflict_resolve(project_id, conflict_id, option, rationale, reason)`; reason is required. The decision is recorded as human/manual_ui. Closed or stale conflicts return 409, unavailable options return 400, and missing or cross-project conflicts return 404.
+   World–plan conflicts use `/api/projects/{project_id}/world-conflicts`; legacy signals remain at `/api/projects/{project_id}/world-model/conflicts`.
 
 ### Safe Stop
 

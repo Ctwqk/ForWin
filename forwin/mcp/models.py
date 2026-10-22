@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from forwin.api_schema.world_conflicts import WorldConflictInfo
 
 StageKey = Literal[
     "brief",
@@ -412,8 +411,27 @@ class WorldModelPageView(BaseModel):
     updated_at: str = ""
 
 
-class WorldConflictView(WorldConflictInfo):
-    pass
+class WorldConflictView(BaseModel):
+    id: str
+    project_id: str
+    source: str
+    detected_after_chapter: int
+    story_time: int
+    involved_refs: list[str] = Field(default_factory=list)
+    violated: str
+    proposed_change: dict[str, Any] = Field(default_factory=dict)
+    impact_level: str
+    options: list[str] = Field(default_factory=list)
+    required_decider: str
+    blocks_from_chapter: int
+    status: str
+    summary: str
+    decision: dict[str, Any] = Field(default_factory=dict)
+    result_refs: list[str] = Field(default_factory=list)
+    intent_ref: str = ""
+    actor_ref: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class WorldConflictListView(BaseModel):

@@ -654,6 +654,8 @@ class ForWinAPIClient:
 
     async def world_conflict_get(self, *, project_id: str, conflict_id: str) -> WorldConflictView:
         payload = await self._request_json("GET", f"/api/projects/{project_id}/world-conflicts/{conflict_id}")
+        if not isinstance(payload, dict):
+            raise RuntimeError("Expected WorldConflict payload from ForWin API.")
         return WorldConflictView.model_validate(payload)
 
     async def world_conflict_resolve(

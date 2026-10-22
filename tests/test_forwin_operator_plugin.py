@@ -56,3 +56,5 @@ def test_forwin_operator_plugin_skill_keeps_mcp_safety_rules() -> None:
     assert "Use the `forwin` MCP server as the authoritative interface" in skill
     assert "Do not inspect SQLite directly" in skill
     assert "task_active_generation_check" in skill
+    assert "world_model_signal_list" in skill
+    assert "world_conflict_resolve" in skill

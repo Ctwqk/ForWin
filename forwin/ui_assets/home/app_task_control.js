@@ -569,10 +569,15 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ option, reason, rationale }),
           });
+          closeProjectControlActionModal();
           setGlobalStatus('世界冲突已处理。', '世界冲突');
-          await loadBooks();
-          if (currentDrawerTask?.project_id === projectId) {
-            await openTaskDrawer(currentDrawerTask.task_kind, currentDrawerTask.task_id);
+          try {
+            await loadBooks();
+            if (currentDrawerTask?.project_id === projectId) {
+              await openTaskDrawer(currentDrawerTask.task_kind, currentDrawerTask.task_id);
+            }
+          } catch (error) {
+            setGlobalStatus(error.message || String(error), '世界冲突已处理，刷新失败');
           }
         },
       });

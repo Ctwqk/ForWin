@@ -5,7 +5,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-ObligationStatus = Literal["proposed", "planned", "active", "resolved", "expired", "waived", "blocked"]
+ObligationStatus = Literal[
+    "proposed", "planned", "active", "resolved", "expired", "waived", "blocked", "cancelled"
+]
 ObligationPriority = Literal["P0", "P1", "P2", "P3"]
 ObligationHardness = Literal["soft_gap", "design_debt", "canon_risk", "hard_blocker"]
 PlanPatchScope = Literal["chapter", "band", "arc", "book"]

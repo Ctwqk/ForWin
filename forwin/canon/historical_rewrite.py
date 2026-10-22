@@ -46,6 +46,7 @@ from forwin.world_engine.conflict_events import (
     replay_cas_conflict_draft,
 )
 from forwin.world_engine.conflict_repository import WorldConflictRepository
+from forwin.world_engine.superseded_resolutions import supersede_resolutions
 from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE
 
 from .plan import CanonCommitPlan
@@ -676,13 +677,23 @@ class HistoricalCanonReplacement:
 
         The range rewind already undid its rows, so leaving it out of the replay
         is enough; removing it from the ledger keeps any later replay or rewrite
-        from finding it again.
+        from finding it again. What the conflicts it resolved left in the plan
+        and the obligation ledger goes with it.
         """
         BookStateRepository(self.session).retire_chapter_deltas(
             self.plan.project_id, delta.chapter_number, delta_ids=[delta.id]
         )
         for ref in _created_refs(delta):
             self.dropped_tick_refs[ref] = delta.id
+        superseded = supersede_resolutions(
+            self.session,
+            project_id=self.plan.project_id,
+            graph_delta_id=delta.id,
+            reason=(
+                f"Rewriting chapter {self.plan.chapter_number} dropped "
+                f"world_engine delta {delta.id}."
+            ),
+        )
         reasons = [label for label, _, _ in mismatches]
         involved_refs = [_patch_ref(patch) for _, patch, _ in mismatches]
         if dependency is not None:
@@ -696,6 +707,9 @@ class HistoricalCanonReplacement:
                 reasons=reasons,
                 involved_refs=involved_refs,
                 blocks_from_chapter=self.through_chapter + 1,
+                superseded_conflict_ids=superseded.conflict_ids,
+                cancelled_obligation_ids=superseded.cancelled_obligation_ids,
+                reverted_plan_patch_ids=superseded.reverted_plan_patch_ids,
             ),
             required_decider=REPLAY_CAS_DECIDER,
             options=REPLAY_CAS_OPTIONS,

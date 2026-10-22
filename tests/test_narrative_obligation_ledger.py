@@ -195,3 +195,40 @@ def test_waive_obligation_rejects_missing_or_system_actor() -> None:
                     raise AssertionError(f"actor={actor!r} should be rejected")
     finally:
         engine.dispose()
+
+
+def test_cancel_obligation_closes_only_open_obligations() -> None:
+    engine = get_engine(postgres_test_url("narrative_obligation_cancel"))
+    init_db(engine)
+    session_factory = get_session_factory(engine)
+    try:
+        with session_factory() as session:
+            project = Project(title="义务状态", premise="测试", genre="悬疑", target_total_chapters=20)
+            session.add(project)
+            session.flush()
+            repo = NarrativeObligationRepository(session)
+            active = repo.create_obligation(_active_obligation(project.id))
+            expired = repo.create_obligation(_active_obligation(project.id))
+            repo.expire_obligation(expired.id, reason="deadline passed")
+            resolved = repo.create_obligation(_active_obligation(project.id))
+            repo.mark_obligation_resolved(resolved.id, verifier_result={}, evidence_refs=[])
+            waived = repo.create_obligation(_active_obligation(project.id))
+            repo.waive_obligation(waived.id, reason="human exception", actor="operator")
+
+            cancelled = [repo.cancel_obligation(item.id, reason="cause dropped") for item in (active, expired)]
+            # A paid, waived or already cancelled obligation keeps its status; a missing one is None.
+            closed = [
+                repo.cancel_obligation(obligation_id, reason="again")
+                for obligation_id in (resolved.id, waived.id, active.id, "missing-obligation")
+            ]
+            session.commit()
+
+        assert [(item.status, item.metadata["cancel_reason"]) for item in cancelled] == [
+            ("cancelled", "cause dropped"), ("cancelled", "cause dropped"),
+        ]
+        assert closed == [None, None, None, None]
+        with session_factory() as session:
+            repo = NarrativeObligationRepository(session)
+            assert repo.list_active_for_context(project.id, chapter_number=11) == []
+    finally:
+        engine.dispose()

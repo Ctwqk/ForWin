@@ -13,6 +13,10 @@ from forwin.models.narrative_obligation import NarrativeObligationRow, Narrative
 from .types import NarrativeObligation, NarrativePlanPatch
 
 
+# Statuses an obligation does not leave: paid, waived by a human, or cancelled with its cause.
+_CLOSED_STATUSES = frozenset({"resolved", "waived", "cancelled"})
+
+
 class NarrativeObligationRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -184,6 +188,19 @@ class NarrativeObligationRepository:
         row.waive_reason = str(reason or "").strip()
         metadata = _loads(row.metadata_json, {})
         metadata["waived_by"] = normalized_actor
+        row.metadata_json = _json(metadata)
+        self.session.add(row)
+        self.session.flush()
+        return self._obligation_from_row(row)
+
+    def cancel_obligation(self, obligation_id: str, *, reason: str) -> NarrativeObligation | None:
+        """Close an open obligation whose cause left canon; None when no open obligation has the id."""
+        row = self.session.get(NarrativeObligationRow, obligation_id)
+        if row is None or row.status in _CLOSED_STATUSES:
+            return None
+        row.status = "cancelled"
+        metadata = _loads(row.metadata_json, {})
+        metadata["cancel_reason"] = str(reason or "")
         row.metadata_json = _json(metadata)
         self.session.add(row)
         self.session.flush()

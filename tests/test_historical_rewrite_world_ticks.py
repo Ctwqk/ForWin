@@ -20,15 +20,19 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow, WorldEdgeRow, WorldNodeRow, WorldSnapshotRow
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.maintenance import PostCanonMaintenanceRun
+from forwin.models.narrative_obligation import NarrativeObligationRow, NarrativePlanPatchRow
 from forwin.models.project import ChapterPlan
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.models.draft import CandidateDraftRecord
+from forwin.planning.goals import load_goals_json
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, CognitionPatch, EdgePatch, GraphDelta, NodePatch
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from forwin.world_engine.conflict_repository import WorldConflictRepository
-from forwin.world_engine.conflict_types import ConflictDecision, ConflictDraft
+from forwin.world_engine.conflict_resolution import conflict_resolved_event, record_option_side_effects
+from forwin.world_engine.conflict_types import ConflictDecision, ConflictDraft, ConflictOption
 from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE
+from forwin.writer.prompt_core.world_engine import plot_response_goal
 from tests.postgres import postgres_test_url
 from tests.test_canon_atomic_transaction import _prepare_chapter_candidate
 
@@ -49,6 +53,8 @@ class _Book:
     commit_ids: dict[int, str]
     tick_2: str
     tick_3: str
+    # The conflicts each chapter's tick resolved in-tick, by the option decided.
+    resolved: dict[int, dict[str, str]]
 
 
 @pytest.fixture
@@ -169,31 +175,66 @@ def _tick_three(project_id: str, *patches: NodePatch) -> GraphDelta:
     )
 
 
+def _resolve_in_tick(
+    Session, project_id: str, chapter: int, delta_id: str, options: tuple[ConflictOption, ...],
+) -> dict[str, str]:
+    """Conflicts the chapter's tick decided in-tick, recorded the way its close_resolutions records them."""
+    resolved: dict[str, str] = {}
+    with Session.begin() as session:
+        repository = WorldConflictRepository(session)
+        for option in options:
+            row = repository.create(
+                ConflictDraft(
+                    project_id=project_id, source="world_tick", detected_after_chapter=chapter, story_time=0,
+                    involved_refs=[CAMP], violated="impact_review", impact_level="major",
+                    summary=f"world change {chapter} {option}", proposed_change={}, blocks_from_chapter=chapter + 1,
+                ),
+                required_decider="codex",
+                options=(option,),
+            )
+            decision = ConflictDecision(
+                option=option, decided_by="codex", rationale="decided in tick", decided_at=datetime.now(UTC),
+            )
+            effects = record_option_side_effects(session, row, decision, latest_chapter=chapter)
+            refs = [delta_id, effects.obligation_id, effects.plan_patch_id]
+            repository.mark_resolved(row, decision=decision, result_refs=[ref for ref in refs if ref])
+            session.add(conflict_resolved_event(row, chapter_number=chapter, extra={
+                "graph_delta_ids": [delta_id],
+                "obligation_id": effects.obligation_id,
+                "plan_patch_id": effects.plan_patch_id,
+            }))
+            resolved[option] = row.id
+    return resolved
+
+
 def _book(
     Session,
     *,
     list_chapter_two_tick: bool = True,
     chapter_three: tuple[NodePatch | EdgePatch, ...] = (),
     tick_three: tuple[NodePatch, ...] = (),
+    tick_two_resolutions: tuple[ConflictOption, ...] = (),
+    tick_three_resolutions: tuple[ConflictOption, ...] = (),
 ) -> _Book:
-    """Chapters 1-3 are Canon; a world tick ran after chapter 2 and after chapter 3.
+    """Chapters 1-3 are Canon and chapter 4 is still to write; a world tick ran after chapter 2 and after chapter 3.
 
     The chapter 2 tick opens the gate, renames it, convenes a meeting and tells the scout a
     secret; the chapter 3 tick angers the camp. ``chapter_three`` and ``tick_three`` add
-    patches to chapter 3's own delta and to its tick.
+    patches to chapter 3's own delta and to its tick. Each tick also decides one conflict per
+    option in its ``*_resolutions``, whose side effects bind to the next chapter's plan.
     """
     with Session.begin() as session:
         updater = StateUpdater(session)
         project = updater.create_project(
             title="Ticking world", premise="The world moves between chapters.", genre="test",
-            runtime_policy=RuntimePolicy.for_profile("standard"),
+            runtime_policy=RuntimePolicy.for_profile("standard"), target_total_chapters=10,
         )
         arc = updater.create_arc_plan(project.id, "Tick arc")
         chapter_ids = {
             number: updater.create_chapter_plan(
                 project.id, arc.id, number, f"Chapter {number}", f"Chapter {number} event", [f"Commit chapter {number}"],
             ).id
-            for number in (1, 2, 3)
+            for number in (1, 2, 3, 4)
         }
         project_id = project.id
     commits = {1: _accept(Session, project_id, 1, version=1, deltas=[_chapter_delta(
@@ -216,6 +257,7 @@ def _book(
         )],
         impacts={"c-1": "minor", "c-2": "major", "c-3": "moderate"},
     )).graph_delta_ids
+    resolved = {2: _resolve_in_tick(Session, project_id, 2, tick_2[0], tick_two_resolutions)}
     _complete_post_canon(
         Session, project_id, 2, commits[2], world_delta_ids=tick_2 if list_chapter_two_tick else (),
     )
@@ -229,6 +271,7 @@ def _book(
         _chapter_delta(project_id, 3, "delta-ch3", _create(project_id, "event-later"), *chapter_three),
     ])
     tick_3 = _commit_tick(Session, _tick_three(project_id, *tick_three)).graph_delta_ids
+    resolved[3] = _resolve_in_tick(Session, project_id, 3, tick_3[0], tick_three_resolutions)
     _complete_post_canon(Session, project_id, 3, commits[3], world_delta_ids=tick_3)
     return _Book(
         Session=Session,
@@ -237,6 +280,7 @@ def _book(
         commit_ids={number: commit_id for number, (commit_id, _) in commits.items()},
         tick_2=tick_2[0],
         tick_3=tick_3[0],
+        resolved=resolved,
     )
 
 
@@ -289,6 +333,59 @@ def _knowledge(book: _Book, chapter: int) -> tuple[dict, dict]:
 def _conflicts(book: _Book) -> list[WorldPlanConflictRow]:
     with book.Session() as session:
         return WorldConflictRepository(session).list(book.project_id)
+
+
+def _replay_change(
+    delta_id: str,
+    tick_id: str,
+    *,
+    superseded_conflict_ids: list[str] | None = None,
+    cancelled_obligation_ids: list[str] | None = None,
+    reverted_plan_patch_ids: list[str] | None = None,
+) -> dict:
+    """A replay_cas conflict's proposed_change."""
+    return {
+        "graph_delta_id": delta_id,
+        "tick_id": tick_id,
+        "superseded_conflict_ids": superseded_conflict_ids or [],
+        "cancelled_obligation_ids": cancelled_obligation_ids or [],
+        "reverted_plan_patch_ids": reverted_plan_patch_ids or [],
+    }
+
+
+def _replay_conflict(book: _Book) -> WorldPlanConflictRow:
+    [conflict] = [conflict for conflict in _conflicts(book) if conflict.source == "historical_rewrite"]
+    return conflict
+
+
+def _side_effects(book: _Book, conflict_id: str) -> tuple[str, str]:
+    """The obligation (or "") and plan patch an in-tick resolution recorded, from its RESOLVED event."""
+    with book.Session() as session:
+        payload = json.loads(session.scalar(select(DecisionEvent.payload_json).where(
+            DecisionEvent.related_object_id == conflict_id,
+            DecisionEvent.event_type == DecisionEventType.WORLD_CONFLICT_RESOLVED,
+        )))
+    return payload["obligation_id"], payload["plan_patch_id"]
+
+
+def _plan(book: _Book, chapter: int) -> tuple[str, list[str], dict]:
+    with book.Session() as session:
+        plan = session.get(ChapterPlan, book.chapter_ids[chapter])
+        return plan.status, load_goals_json(plan.goals_json), json.loads(plan.experience_plan_json)
+
+
+def _obligation(book: _Book, obligation_id: str) -> tuple[str, dict]:
+    with book.Session() as session:
+        row = session.get(NarrativeObligationRow, obligation_id)
+        return row.status, json.loads(row.metadata_json)
+
+
+def _revert_patches(book: _Book) -> list[NarrativePlanPatchRow]:
+    with book.Session() as session:
+        return list(session.scalars(select(NarrativePlanPatchRow).where(
+            NarrativePlanPatchRow.project_id == book.project_id,
+            NarrativePlanPatchRow.patch_type == "plan_patch_revert",
+        )))
 
 
 def _delta_ids(book: _Book) -> set[str]:
@@ -354,7 +451,7 @@ def test_rewrite_replays_tick_deltas_and_turns_cas_failure_into_conflict(Session
     assert (
         conflict.status, conflict.source, conflict.violated, conflict.required_decider, conflict.impact_level,
     ) == ("open", "historical_rewrite", "replay_cas", "human", "major")
-    assert json.loads(conflict.proposed_change_json) == {"graph_delta_id": book.tick_2, "tick_id": "tick-2"}
+    assert json.loads(conflict.proposed_change_json) == _replay_change(book.tick_2, "tick-2")
     assert json.loads(conflict.options_json) == ["veto_world"]
     assert (conflict.detected_after_chapter, conflict.story_time, conflict.blocks_from_chapter) == (2, 2060, 4)
     assert json.loads(conflict.involved_refs_json) == [GATE]
@@ -380,7 +477,7 @@ def test_rewrite_replays_tick_deltas_and_turns_cas_failure_into_conflict(Session
         "impact_level": "major",
         "required_decider": "human",
         "blocks_from_chapter": 4,
-        "proposed_change": {"graph_delta_id": book.tick_2, "tick_id": "tick-2"},
+        "proposed_change": _replay_change(book.tick_2, "tick-2"),
         "rewritten_chapter": 2,
         "dropped_dependency": None,
     }
@@ -588,10 +685,122 @@ def test_rewrite_drops_a_successor_chapter_tick_whose_reads_changed(Session) -> 
     assert _state(book, 3, CAMP)["mood"] == "wary"
     assert _state(book, 3, GATE)["phase"] == "open"
     [conflict] = _conflicts(book)
-    assert json.loads(conflict.proposed_change_json) == {"graph_delta_id": book.tick_3, "tick_id": "tick-3"}
+    assert json.loads(conflict.proposed_change_json) == _replay_change(book.tick_3, "tick-3")
     assert (conflict.detected_after_chapter, conflict.story_time, conflict.blocks_from_chapter) == (3, 3060, 4)
     assert (conflict.impact_level, json.loads(conflict.involved_refs_json)) == ("minor", [CAMP])
     with Session() as session:
         commit = session.get(CanonCommitRecord, book.commit_ids[3])
         snapshot = session.get(WorldSnapshotRow, commit.world_snapshot_id)
     assert json.loads(snapshot.source_delta_ids_json) == ["delta-ch3"]
+
+
+# the side effects of resolutions a dropped tick carried
+
+
+def _wary_rewrite(book: _Book) -> CanonAdmissionOutcome:
+    """A chapter 2 rewrite that already moves the camp the chapter 3 tick angers."""
+    return _rewrite_chapter_two(book, version=2, delta=_chapter_delta(
+        book.project_id, 2, "delta-ch2-v2", _set(CAMP, "state.mood", "calm", "wary"),
+    ))
+
+
+def test_dropping_a_tick_supersedes_its_resolutions_on_the_unwritten_plan(Session) -> None:
+    book = _book(Session, tick_three_resolutions=("plot_responds", "accept_with_obligation"))
+    responds, obliges = book.resolved[3]["plot_responds"], book.resolved[3]["accept_with_obligation"]
+    _no_obligation, response_patch = _side_effects(book, responds)
+    obligation_id, obligation_patch = _side_effects(book, obliges)
+    response_goal = plot_response_goal("world change 3 plot_responds")
+    status, goals, experience = _plan(book, 4)
+    assert status == "planned"
+    assert response_goal in goals and any(obligation_id in goal for goal in goals)
+    assert experience["obligations_to_resolve"] == [obligation_id]
+    assert _obligation(book, obligation_id)[0] == "planned"
+
+    outcome = _wary_rewrite(book)
+
+    assert outcome.blocked is False, outcome.failure_reason
+    assert book.tick_3 not in _delta_ids(book)
+    # The world change the plot was to respond to is gone, and so is what it owed the plot.
+    status, metadata = _obligation(book, obligation_id)
+    assert status == "cancelled"
+    assert book.tick_3 in metadata["cancel_reason"]
+    status, goals, experience = _plan(book, 4)
+    assert (status, goals) == ("planned", ["Commit chapter 4"])
+    assert experience["obligations_to_resolve"] == []
+    assert response_goal not in experience["progress_markers"]
+    assert not any(obligation_id in marker for marker in experience["progress_markers"])
+    reverts = _revert_patches(book)
+    assert sorted(json.loads(row.metadata_json)["reverted_plan_patch_id"] for row in reverts) == sorted(
+        [response_patch, obligation_patch],
+    )
+    assert {(row.target_plan_id, row.target_scope, row.applied) for row in reverts} == {
+        (book.chapter_ids[4], "chapter", True),
+    }
+    # The decided conflicts keep their record; the replay conflict lists what it superseded.
+    with Session() as session:
+        repository = WorldConflictRepository(session)
+        assert {repository.get(book.project_id, conflict_id).status for conflict_id in (responds, obliges)} == {
+            "resolved",
+        }
+    replay = _replay_conflict(book)
+    change = json.loads(replay.proposed_change_json)
+    assert change == _replay_change(
+        book.tick_3, "tick-3",
+        superseded_conflict_ids=change["superseded_conflict_ids"],
+        cancelled_obligation_ids=[obligation_id],
+        reverted_plan_patch_ids=change["reverted_plan_patch_ids"],
+    )
+    assert sorted(change["superseded_conflict_ids"]) == sorted([responds, obliges])
+    assert sorted(change["reverted_plan_patch_ids"]) == sorted([response_patch, obligation_patch])
+    assert replay.summary.endswith(
+        " It supersedes 2 resolved conflict(s): 1 obligation(s) cancelled, 2 plan patch(es) reverted.",
+    )
+    with Session() as session:
+        payload = json.loads(session.scalar(select(DecisionEvent.payload_json).where(
+            DecisionEvent.related_object_id == replay.id,
+            DecisionEvent.event_type == DecisionEventType.WORLD_CONFLICT_DETECTED,
+        )))
+    assert payload["proposed_change"] == change
+
+
+def test_dropping_a_tick_leaves_an_accepted_plan_alone(Session) -> None:
+    # The chapter 2 tick's resolutions bound to chapter 3, which has since been written.
+    book = _book(Session, tick_two_resolutions=("plot_responds", "accept_with_obligation"))
+    responds, obliges = book.resolved[2]["plot_responds"], book.resolved[2]["accept_with_obligation"]
+    obligation_id, _obligation_patch = _side_effects(book, obliges)
+    before = _plan(book, 3)
+    assert before[0] == "accepted"
+    assert plot_response_goal("world change 2 plot_responds") in before[1]
+
+    outcome = _sealing_rewrite(book, 2)
+
+    assert outcome.blocked is False, outcome.failure_reason
+    assert book.tick_2 not in _delta_ids(book)
+    assert _plan(book, 3) == before
+    assert _revert_patches(book) == []
+    # The obligation was still open, so it goes with the change it answered.
+    assert _obligation(book, obligation_id)[0] == "cancelled"
+    replay = _replay_conflict(book)
+    change = json.loads(replay.proposed_change_json)
+    assert sorted(change["superseded_conflict_ids"]) == sorted([responds, obliges])
+    assert (change["cancelled_obligation_ids"], change["reverted_plan_patch_ids"]) == ([obligation_id], [])
+    assert replay.summary.endswith(
+        " It supersedes 2 resolved conflict(s): 1 obligation(s) cancelled, 0 plan patch(es) reverted.",
+    )
+
+
+def test_an_aborted_rewrite_keeps_what_the_dropped_tick_resolved(Session) -> None:
+    # Chapter 3 acts on the meeting the chapter 2 tick convened, so dropping that tick aborts the rewrite.
+    book = _book(
+        Session,
+        chapter_three=(_set(MEETING, "state.phase", "convened", "adjourned"),),
+        tick_two_resolutions=("accept_with_obligation",),
+    )
+    obliges = book.resolved[2]["accept_with_obligation"]
+    obligation_id, _obligation_patch = _side_effects(book, obliges)
+
+    outcome = _sealing_rewrite(book, 2)
+
+    assert outcome.stale is True
+    assert _obligation(book, obligation_id)[0] == "planned"
+    assert [(conflict.id, conflict.status) for conflict in _conflicts(book)] == [(obliges, "resolved")]

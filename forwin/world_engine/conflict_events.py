@@ -41,9 +41,26 @@ def replay_cas_conflict_draft(
     reasons: Sequence[str],
     involved_refs: Sequence[str],
     blocks_from_chapter: int,
+    superseded_conflict_ids: Sequence[str] = (),
+    cancelled_obligation_ids: Sequence[str] = (),
+    reverted_plan_patch_ids: Sequence[str] = (),
 ) -> ConflictDraft:
-    """The conflict for a tick delta a historical rewrite could no longer replay."""
+    """The conflict for a tick delta a historical rewrite could no longer replay.
+
+    The ``superseded_conflict_ids`` are the resolved conflicts the delta carried; the obligations
+    and plan patches are their side effects the rewrite cancelled and reverted.
+    """
     tick_id = str(delta.metadata.get("tick_id") or "")
+    summary = (
+        f"Rewriting chapter {rewritten_chapter} changed what world tick {tick_id} read "
+        f"({'; '.join(reasons)}); its delta {delta.id} no longer applies."
+    )
+    if superseded_conflict_ids:
+        summary += (
+            f" It supersedes {len(superseded_conflict_ids)} resolved conflict(s): "
+            f"{len(cancelled_obligation_ids)} obligation(s) cancelled, "
+            f"{len(reverted_plan_patch_ids)} plan patch(es) reverted."
+        )
     return ConflictDraft(
         project_id=delta.project_id,
         source="historical_rewrite",
@@ -52,11 +69,14 @@ def replay_cas_conflict_draft(
         involved_refs=list(dict.fromkeys(involved_refs)),
         violated="replay_cas",
         impact_level=highest_candidate_impact(delta),
-        summary=(
-            f"Rewriting chapter {rewritten_chapter} changed what world tick {tick_id} read "
-            f"({'; '.join(reasons)}); its delta {delta.id} no longer applies."
-        ),
-        proposed_change={"graph_delta_id": delta.id, "tick_id": tick_id},
+        summary=summary,
+        proposed_change={
+            "graph_delta_id": delta.id,
+            "tick_id": tick_id,
+            "superseded_conflict_ids": list(superseded_conflict_ids),
+            "cancelled_obligation_ids": list(cancelled_obligation_ids),
+            "reverted_plan_patch_ids": list(reverted_plan_patch_ids),
+        },
         blocks_from_chapter=blocks_from_chapter,
     )
 

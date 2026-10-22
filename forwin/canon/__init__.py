@@ -13,6 +13,7 @@ from .types import (
     CanonPreparationOutcome,
     CanonQualityGateOutcome,
     CanonWorldEditOutcome,
+    CanonWorldTickOutcome,
 )
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "CanonStaleVersion",
     "CanonWriteFailure",
     "CanonWorldEditOutcome",
+    "CanonWorldTickOutcome",
     "CanonPreparationOutcome",
     "CanonPreparationContext",
     "CanonPreparationService",

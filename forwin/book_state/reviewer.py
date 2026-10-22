@@ -27,8 +27,13 @@ from forwin.protocol.book_state import (
 )
 
 
-# The source_type ChapterDeltaTranslator gives the chapter's delta; only it carries the v6 metadata.
+# The source_type ChapterDeltaTranslator gives the chapter's delta.
 CHAPTER_EXTRACTION_SOURCE_TYPE = "chapter_extraction"
+# The source_type of a world tick's delta, forwin.world_engine.types.WORLD_ENGINE_SOURCE_TYPE; owned
+# here because importing the world engine types at module level cycles back into this module.
+WORLD_ENGINE_SOURCE_TYPE = "world_engine"
+# Deltas carrying the v6 movement, item transfer and knowledge metadata.
+_V6_SOURCE_TYPES = frozenset({CHAPTER_EXTRACTION_SOURCE_TYPE, WORLD_ENGINE_SOURCE_TYPE})
 DEFAULT_TRAVEL_TOLERANCE = 0.2
 _AWARE_STATES = frozenset({"knows", "believes"})
 _MINUTE_EPSILON = 1e-6
@@ -77,7 +82,9 @@ class BookStateReviewGate:
             issues.extend(_canon_permission_issues(delta))
             issues.extend(_schema_issues(delta))
             issues.extend(_immutable_rule_definition_issues(runtime, delta))
-            if delta.source_type == CHAPTER_EXTRACTION_SOURCE_TYPE:
+            if delta.source_type == WORLD_ENGINE_SOURCE_TYPE:
+                issues.extend(_reader_knowledge_issues(delta))
+            if delta.source_type in _V6_SOURCE_TYPES:
                 issues.extend(
                     _ChapterExtractionChecks(
                         self.session, runtime, delta, travel_tolerance=travel_tolerance
@@ -154,8 +161,9 @@ def _immutable_rule_definition_issues(
 
 
 def _is_writer_delta(delta: GraphDelta) -> bool:
+    """Deltas from the prose or the world tick, which may not rewrite a rule's definition."""
     return str(delta.source_type or "") in {
-        "writer", "writer_output", "writing", CHAPTER_EXTRACTION_SOURCE_TYPE,
+        "writer", "writer_output", "writing", CHAPTER_EXTRACTION_SOURCE_TYPE, WORLD_ENGINE_SOURCE_TYPE,
     }
 
 
@@ -190,6 +198,20 @@ def _world_node_field_value(
 
 def _same_value(left, right) -> bool:
     return left == right
+
+
+def _reader_knowledge_issues(delta: GraphDelta) -> list[BookStateReviewIssue]:
+    """A world tick never writes reader cognition; only chapter extraction advances the reader."""
+    return [
+        BookStateReviewIssue(
+            severity="error",
+            code="world_engine_reader_knowledge",
+            target_ref=f"cognition:{patch.observer_type}:{patch.observer_id}:{patch.field_path}",
+            message=f"world_engine delta {delta.id} writes reader cognition at {patch.field_path}",
+        )
+        for patch in delta.cognition_patches
+        if str(patch.observer_type) == ObserverType.READER.value
+    ]
 
 
 def _location_patch_issues(map_graph: MapGraph, patches: Iterable[NodePatch]) -> list[BookStateReviewIssue]:
@@ -233,8 +255,10 @@ def _is_location_patch(patch: NodePatch) -> bool:
 
 
 class _ChapterExtractionChecks:
-    """World gate v6: one chapter_extraction delta against the runtime before the chapter.
+    """World gate v6: one chapter_extraction or world_engine delta against the runtime it builds on.
 
+    A chapter's delta builds on the runtime before the chapter (as-of N−1); a world tick's builds
+    on the committed chapter (as-of N), so an entity that died in the chapter is dead for its tick.
     Movements, knowledge tags and item transfers are read from the delta's metadata in
     extraction order; the matching location and holder patches carry the same moves.
     """
@@ -341,8 +365,11 @@ class _ChapterExtractionChecks:
             self._total_time_issues(required, chapter_minutes)
 
     def _chapter_end(self) -> int | None:
-        """The chapter's last minute; unknown when the extraction gave no elapsed time."""
-        if self.delta.metadata.get("time_elapsed_minutes") is None:
+        """The delta's last minute; a chapter's is unknown when the extraction gave no elapsed time."""
+        if (
+            self.delta.source_type == CHAPTER_EXTRACTION_SOURCE_TYPE
+            and self.delta.metadata.get("time_elapsed_minutes") is None
+        ):
             return None
         return self.delta.story_time_end
 

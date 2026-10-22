@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
+from forwin.audit.events import DecisionEventType
 from forwin.book_state.compiler import BookStateCompiler
 from forwin.book_state.repository import BookStateRepository
 from forwin.candidate_drafts import (
@@ -30,16 +31,19 @@ from forwin.narrative_obligations.repository import NarrativeObligationRepositor
 from forwin.outbox.store import enqueue_outbox_event
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, BookStateCompileResult
 from forwin.runtime.policy_store import ProjectPolicyStore
+from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE
 
 from .entity_admission import EntityAdmissionCommitter
 from .historical_rewrite import HistoricalCanonRewriteService, HistoricalRewriteInvalid
 from .plan import CanonCommitPlan
-from .types import CanonAdmissionOutcome, CanonWorldEditOutcome
+from .types import CanonAdmissionOutcome, CanonWorldEditOutcome, CanonWorldTickOutcome
 
 
 logger = logging.getLogger(__name__)
 
 GENESIS_SEED_SOURCE_TYPE = "genesis_seed"
+# How BookStateCompiler reports a patch whose old_value no longer matches: a failed CAS.
+_COMPILER_CAS_MISMATCH = "old_value mismatch"
 
 
 class CanonStaleVersion(RuntimeError):
@@ -586,6 +590,104 @@ class CanonAdmissionService:
         session.flush()
         return compile_result
 
+    def commit_world_tick(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+        chapter_number: int,
+        approved_changes: ApprovedGraphDeltaSet,
+        tick_id: str,
+    ) -> CanonWorldTickOutcome:
+        """Compile a world tick into the latest canon chapter; the caller owns the transaction.
+
+        The tick extends the chapter it ran after, so it lands after that chapter's own delta.
+        """
+        # FOR NO KEY UPDATE, as the world seed takes: serializes canon writers.
+        project = session.execute(
+            select(Project).where(Project.id == project_id).with_for_update(key_share=True)
+        ).scalar_one_or_none()
+        if project is None:
+            raise CanonStaleVersion("project no longer exists")
+        if approved_changes.project_id != project_id or approved_changes.chapter_number != chapter_number:
+            raise CanonWriteFailure(
+                f"world tick changes target project {approved_changes.project_id} chapter "
+                f"{approved_changes.chapter_number}, not project {project_id} chapter {chapter_number}"
+            )
+        latest_chapter = BookStateRepository(session).latest_canon_chapter(project_id)
+        if chapter_number != latest_chapter:
+            raise CanonWriteFailure(
+                f"world tick targets chapter {chapter_number} but BookState is at chapter {latest_chapter}"
+            )
+        if not approved_changes.graph_deltas:
+            raise CanonWriteFailure("world tick has no deltas to commit")
+        for delta in approved_changes.graph_deltas:
+            if delta.source_type != WORLD_ENGINE_SOURCE_TYPE:
+                raise CanonWriteFailure(
+                    f"world tick delta {delta.id} has source_type {delta.source_type!r}, "
+                    f"expected {WORLD_ENGINE_SOURCE_TYPE!r}"
+                )
+            # The tick id in metadata is what makes a retry find this commit.
+            if delta.metadata.get("tick_id") != tick_id:
+                raise CanonWriteFailure(f"world tick delta {delta.id} belongs to another tick")
+        committed_ids = _world_tick_delta_ids(session, project_id, tick_id)
+        if committed_ids:
+            return CanonWorldTickOutcome(graph_delta_ids=committed_ids, idempotent=True)
+
+        compile_result = BookStateCompiler(session).compile(
+            approved_changes,
+            compiler_run_id=f"canon-world-tick-{tick_id}",
+            base_chapter=chapter_number,
+        )
+        if not compile_result.committed:
+            reasons = "; ".join(compile_result.blocked_reasons) or "BookState compiler rejected the world tick"
+            if any(_COMPILER_CAS_MISMATCH in reason for reason in compile_result.blocked_reasons):
+                raise CanonStaleVersion(reasons)
+            raise CanonWriteFailure(reasons)
+        if compile_result.metadata.get("idempotent"):
+            raise CanonStaleVersion("world tick delta already exists under another tick")
+
+        graph_delta_ids = tuple(compile_result.graph_delta_ids)
+        session.add(
+            DecisionEvent(
+                id=new_id(),
+                project_id=project_id,
+                chapter_number=chapter_number,
+                scope="chapter",
+                event_family="business_event",
+                event_type=DecisionEventType.WORLD_TICK_COMMITTED,
+                actor_type="system",
+                summary=(
+                    f"World tick {tick_id} committed {len(graph_delta_ids)} BookState "
+                    f"delta(s) into chapter {chapter_number}."
+                ),
+                payload_json=json.dumps(
+                    {"tick_id": tick_id, "graph_delta_ids": list(graph_delta_ids)},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                related_object_type="world_tick",
+                related_object_id=tick_id,
+            )
+        )
+        for delta_id in graph_delta_ids:
+            enqueue_outbox_event(
+                session,
+                aggregate_type="project",
+                aggregate_id=project_id,
+                event_type="knowledge.projection.refresh_requested",
+                event_id=f"canon-world-tick:{tick_id}:{delta_id}:projection",
+                payload={
+                    "project_id": project_id,
+                    "projection_kind": "all",
+                    "as_of_chapter": compile_result.chapter_number,
+                    "trigger": WORLD_ENGINE_SOURCE_TYPE,
+                    "tick_id": tick_id,
+                },
+            )
+        session.flush()
+        return CanonWorldTickOutcome(graph_delta_ids=graph_delta_ids, idempotent=False)
+
     def _return_candidate_to_ready(self, candidate_id: str) -> None:
         if self.session_factory is None:
             return
@@ -627,6 +729,34 @@ class CanonAdmissionService:
 
 def _ignore_failure_stage(_stage: str) -> None:
     return None
+
+
+def _world_tick_delta_ids(session: Session, project_id: str, tick_id: str) -> tuple[str, ...]:
+    """Ids of the world_engine deltas a tick committed, in commit order."""
+    # metadata_json is the repository's json.dumps(ensure_ascii=False), so the tick id
+    # appears in it as its JSON escape; the parsed metadata then decides.
+    escaped = json.dumps(tick_id, ensure_ascii=False)[1:-1]
+    rows = session.execute(
+        select(GraphDeltaRow.id, GraphDeltaRow.metadata_json)
+        .where(
+            GraphDeltaRow.project_id == project_id,
+            GraphDeltaRow.source_type == WORLD_ENGINE_SOURCE_TYPE,
+            GraphDeltaRow.metadata_json.contains(escaped, autoescape=True),
+        )
+        .order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
+    ).all()
+    return tuple(
+        delta_id for delta_id, metadata_json in rows
+        if _json_object(metadata_json).get("tick_id") == tick_id
+    )
+
+
+def _json_object(raw: str | None) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _outcome_from_record(

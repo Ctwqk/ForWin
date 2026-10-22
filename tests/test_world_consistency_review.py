@@ -309,8 +309,9 @@ def test_refs_before_trailing_punctuation_get_their_names() -> None:
     assert _named("unknown-1: kept", names) == ("unknown-1: kept", [])
 
 
-# Gate errors the writer cannot fix by rewriting prose keep the generic fix.
-_DEFAULT_FIX_GATE_CODES = {"delta_not_allowed_for_canon"}
+# Gate errors the writer cannot fix by rewriting prose keep the generic fix; the reader check
+# applies only to world tick deltas, which never reach the writer.
+_DEFAULT_FIX_GATE_CODES = {"delta_not_allowed_for_canon", "world_engine_reader_knowledge"}
 
 
 def _gate_error_codes() -> set[str]:

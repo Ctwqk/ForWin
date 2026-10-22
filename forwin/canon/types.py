@@ -69,3 +69,10 @@ class CanonAdmissionOutcome:
 class CanonWorldEditOutcome:
     compile_result: BookStateCompileResult
     outbox_event_id: str
+
+
+@dataclass(frozen=True)
+class CanonWorldTickOutcome:
+    graph_delta_ids: tuple[str, ...]
+    # The tick had already committed these deltas; nothing was written this time.
+    idempotent: bool = False

@@ -61,6 +61,9 @@ class PlanContractReviewer:
                     issue_group=issue_group,
                     evidence_refs=evidence_refs,
                     suggested_fix=f"补足计划目标：{goal}",
+                    # Blocking buys a missed goal the profile's blocking rewrites (pulp has
+                    # no others) before manual review; standard's own budget is larger.
+                    blocking=not partial,
                 )
             )
         issues.extend(

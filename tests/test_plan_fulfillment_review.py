@@ -19,6 +19,7 @@ from forwin.planning.contracts import PlanTaskItem
 from forwin.protocol.context import ReviewContextPack
 from forwin.protocol.writer import WriterOutput
 from forwin.review.plan_reviewer import PlanContractReviewer
+from forwin.runtime.policy import RuntimePolicy
 
 
 def _context(goals: list[str]) -> ReviewContextPack:
@@ -57,6 +58,18 @@ def test_missing_goal_is_error_partial_is_warning() -> None:
         assert issue.issue_type == "plan_task_fulfillment"
         assert issue.target_scope == "chapter"
         assert goal in issue.suggested_fix
+    assert [issue.blocking for issue in review.issues] == [True, False]
+
+
+@pytest.mark.parametrize("profile,rewrites", [("standard", 3), ("pulp", 1)])
+def test_missing_goal_gets_the_profile_rewrites_and_leaves_other_budgets_alone(profile, rewrites) -> None:
+    review = PlanContractReviewer().review(_context(["Deliver the packet"]), _output(("goal:1", "missing")))
+    policy = RuntimePolicy.for_profile(profile).review
+
+    assert policy.effective_rewrite_limit(has_blocking_issue=any(issue.blocking for issue in review.issues)) == rewrites
+    # Standard does not pause any sooner; a chapter without a blocking issue keeps max_rewrites.
+    assert policy.effective_rewrite_limit(has_blocking_issue=False) == policy.max_rewrites
+    assert rewrites >= policy.max_rewrites
 
 
 def test_goal_absent_from_extraction_counts_as_missing() -> None:

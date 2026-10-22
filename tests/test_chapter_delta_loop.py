@@ -231,3 +231,43 @@ def test_extraction_outage_ends_in_manual_review_not_failure(make_pipeline, outa
     assert "chapter_delta_unavailable" in payload["warning_reasons"]
     assert payload["gate_outcome"]["blocked"] is False
     assert _committed_source(pipeline, book) == []
+
+
+@pytest.mark.parametrize("profile", ["standard", "pulp"])
+def test_missed_goal_is_rewritten_and_the_delivering_rewrite_commits(make_pipeline, profile: str) -> None:
+    pipeline = make_pipeline(profile)
+    book = _start_book(pipeline, GENRE)
+    missed, delivered = _draft(book, 0), _draft(book, 1)
+    writer = _Writer(book, [missed, delivered])
+    client = _Extraction(dict([
+        _answer(book, missed, plan_fulfillment=[_goal("missing", book)]),
+        _answer(book, delivered),
+    ]))
+
+    result = _run(pipeline, book, writer, client)
+
+    assert result.completed_chapters == [1], result
+    assert writer.stage_keys == ["chapter_draft", "chapter_rewrite"]
+    first, rewrite = _review_codes(pipeline, book)
+    assert "plan_goal_missing" in first and "plan_goal_missing" not in rewrite
+    assert _chapter_status(pipeline, book) == "accepted"
+    assert _committed_source(pipeline, book) == [f"chapter:1:{body_sha256(delivered)}"]
+
+
+@pytest.mark.parametrize("profile,rewrites", [("standard", 3), ("pulp", 1)])
+def test_persistent_goal_miss_ends_in_manual_review_after_its_rewrites(
+    make_pipeline, profile: str, rewrites: int,
+) -> None:
+    pipeline = make_pipeline(profile)
+    book = _start_book(pipeline, GENRE)
+    drafts = [_draft(book, index) for index in range(len(ENDINGS))]
+    writer = _Writer(book, drafts)
+    client = _Extraction(dict(_answer(book, body, plan_fulfillment=[_goal("missing", book)]) for body in drafts))
+
+    result = _run(pipeline, book, writer, client)
+
+    assert (result.failed_chapters, result.paused_chapters) == ([], [1])
+    assert writer.stage_keys == ["chapter_draft", *["chapter_rewrite"] * rewrites]
+    assert all("plan_goal_missing" in codes for codes in _review_codes(pipeline, book))
+    assert _chapter_status(pipeline, book) == "needs_review"
+    assert _committed_source(pipeline, book) == []

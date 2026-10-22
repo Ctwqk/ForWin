@@ -741,6 +741,42 @@ def test_pulp_policy_does_not_block_a_chapter_without_a_usable_extraction() -> N
         engine.dispose()
 
 
+def test_pulp_policy_does_not_count_a_prior_miss_recorded_without_an_extraction() -> None:
+    engine = get_engine(postgres_test_url("pulp-policy-prior-no-extraction"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    try:
+        with Session.begin() as session:
+            session.add(Project(id="project-1", title="P", premise="p", genre="都市"))
+            session.flush()
+            session.add(DecisionEvent(
+                project_id="project-1", chapter_number=1, event_type=DecisionEventType.PULP_BEAT_EVALUATED,
+                payload_json=json.dumps({
+                    "warning_reasons": ["chapter_delta_unavailable", "pulp_visible_payoff"],
+                    "pulp_beat": {"visible_payoff_present": False},
+                }),
+            ))
+
+        with Session.begin() as session:
+            decision = evaluate_pulp_beat_policy(
+                session=session,
+                project_id="project-1",
+                chapter_number=2,
+                hard_floor_result=HardFloorResult(
+                    passed=True,
+                    warning_reasons=["pulp_visible_payoff"],
+                    checks={"chapter_delta_available": True},
+                    metadata={"pulp_beat": {"visible_payoff_present": False}},
+                ),
+                policy=RuntimePolicy.for_profile("pulp"),
+            )
+
+        assert decision.fatal is False
+        assert decision.consecutive_missing_payoff == 1
+    finally:
+        engine.dispose()
+
+
 def test_pulp_policy_is_warning_only_for_standard_profile() -> None:
     decision = evaluate_pulp_beat_policy(
         session=object(),

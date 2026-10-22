@@ -102,6 +102,9 @@ def _prior_consecutive_missing(
         beat = payload.get("pulp_beat") if isinstance(payload, dict) else {}
         if not isinstance(beat, dict) or not _visible_payoff_missing(beat):
             break
+        # That floor ran without a usable extraction, so its miss is unknown and ends the run.
+        if "chapter_delta_unavailable" in (payload.get("warning_reasons") or []):
+            break
         consecutive += 1
         expected -= 1
     return consecutive

@@ -40,7 +40,8 @@ def supersede_resolutions(
     Those are the resolved conflicts whose result_refs list the delta; they stay resolved. The open
     obligations their plan patches bind are cancelled with ``reason``. A patch on a plan still to
     write is reverted and the revert recorded as a ``plan_patch_revert`` patch; a patch on a plan
-    already accepted stays.
+    already accepted stays. A goal or marker another still-active resolution also put into the plan
+    stays with it (Ruling P34).
     """
     rows = [
         row
@@ -56,6 +57,7 @@ def supersede_resolutions(
         if graph_delta_id in _result_refs(row)
     ]
     ledger = NarrativeObligationRepository(session)
+    superseded_ids = {row.id for row in rows}
     cancelled: list[str] = []
     reverted: list[str] = []
     for row in rows:
@@ -71,7 +73,9 @@ def supersede_resolutions(
             )
             if plan is None or plan.status not in _UNACCEPTED_PLAN_STATUSES:
                 continue
-            FuturePlanPatchMixin.revert_plan_patch(plan, patch)
+            FuturePlanPatchMixin.revert_plan_patch(plan, patch, still_applied=_active_resolution_patches(
+                session, ledger, project_id=project_id, plan_id=plan.id, superseded_conflict_ids=superseded_ids,
+            ))
             session.add(plan)
             ledger.create_plan_patch(NarrativePlanPatch(
                 project_id=project_id,
@@ -93,6 +97,45 @@ def supersede_resolutions(
         cancelled_obligation_ids=tuple(cancelled),
         reverted_plan_patch_ids=tuple(reverted),
     )
+
+
+def _active_resolution_patches(
+    session: Session,
+    ledger: NarrativeObligationRepository,
+    *,
+    project_id: str,
+    plan_id: str,
+    superseded_conflict_ids: set[str],
+) -> list[NarrativePlanPatch]:
+    """The plan's patches that still answer a resolved conflict: the conflict's own (its result_refs list
+    the patch), not reverted, and the conflict not among those being superseded."""
+    patches = ledger.list_patches_for_plan(project_id, target_plan_id=plan_id)
+    reverted = {
+        str(patch.metadata.get("reverted_plan_patch_id") or "")
+        for patch in patches
+        if patch.patch_type == PLAN_PATCH_REVERT_TYPE
+    }
+    conflict_by_patch = {
+        patch.id: conflict_id
+        for patch in patches
+        if patch.patch_type != PLAN_PATCH_REVERT_TYPE and patch.id not in reverted
+        and (conflict_id := str(patch.metadata.get("conflict_id") or ""))
+        and conflict_id not in superseded_conflict_ids
+    }
+    if not conflict_by_patch:
+        return []
+    refs_by_conflict = {
+        row.id: _result_refs(row)
+        for row in session.scalars(select(WorldPlanConflictRow).where(
+            WorldPlanConflictRow.project_id == project_id,
+            WorldPlanConflictRow.status == "resolved",
+            WorldPlanConflictRow.id.in_(sorted(set(conflict_by_patch.values()))),
+        ))
+    }
+    return [
+        patch for patch in patches
+        if patch.id in conflict_by_patch and patch.id in refs_by_conflict.get(conflict_by_patch[patch.id], ())
+    ]
 
 
 def _result_refs(row: WorldPlanConflictRow) -> list[str]:

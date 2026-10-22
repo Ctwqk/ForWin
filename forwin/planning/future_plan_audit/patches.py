@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.types import NarrativePlanPatch
 
@@ -20,30 +22,22 @@ class FuturePlanPatchMixin:
         if patch.patch_type == "signal_pre_write":
             self.apply_form_plan_patch(plan, patch)
 
-    @classmethod
-    def revert_plan_patch(cls, plan: ChapterPlan, patch: NarrativePlanPatch) -> None:
-        """Take back out of the plan what applying the patch put in.
+    @staticmethod
+    def revert_plan_patch(
+        plan: ChapterPlan, patch: NarrativePlanPatch, *, still_applied: Sequence[NarrativePlanPatch] = (),
+    ) -> None:
+        """Take back out of the plan what applying the patch put in, except what a ``still_applied`` patch
+        also puts there: applying dedupes, so an item two patches contribute stays while either applies.
 
         An obligation patch loses its goals, its obligations_to_resolve entries and its payoff
         markers; any other patch loses its form instruction. What the five-item caps pushed out
         when the patch applied does not come back.
         """
-        if patch.patch_type in _OBLIGATION_PATCH_TYPES:
-            obligation_ids = list(patch.source_obligation_ids or [])
-            payoff_tests = _obligation_payoff_tests(patch)
-            _remove_from_plan(
-                plan,
-                goals=set(_obligation_goals(obligation_ids, payoff_tests)),
-                experience_items={
-                    "obligations_to_resolve": set(obligation_ids),
-                    "progress_markers": set(payoff_tests),
-                    "rule_anchors": set(payoff_tests),
-                },
-            )
-            return
-        instruction = _form_instruction(patch)
-        if instruction:
-            _remove_from_plan(plan, goals={instruction}, experience_items={"progress_markers": {instruction}})
+        kept = [_contributions(other) for other in still_applied]
+        _remove_from_plan(plan, {
+            key: items - set().union(*(other.get(key, set()) for other in kept))
+            for key, items in _contributions(patch).items()
+        })
 
     @staticmethod
     def _apply_invariant_plan_binding(
@@ -150,16 +144,32 @@ def _form_instruction(patch: NarrativePlanPatch) -> str:
     return str(patch.new_contract.get("form_instruction") or patch.diff_summary or "").strip()
 
 
-def _remove_from_plan(plan: ChapterPlan, *, goals: set[str], experience_items: dict[str, set[str]]) -> None:
-    """Drop ``goals`` from the plan's goals and each key's items from its experience plan list."""
+def _contributions(patch: NarrativePlanPatch) -> dict[str, set[str]]:
+    """What applying the patch puts into a plan: "goals", then experience plan lists by key."""
+    if patch.patch_type in _OBLIGATION_PATCH_TYPES:
+        obligation_ids = list(patch.source_obligation_ids or [])
+        payoff_tests = _obligation_payoff_tests(patch)
+        return {
+            "goals": set(_obligation_goals(obligation_ids, payoff_tests)),
+            "obligations_to_resolve": set(obligation_ids),
+            "progress_markers": set(payoff_tests),
+            "rule_anchors": set(payoff_tests),
+        }
+    instruction = _form_instruction(patch)
+    return {"goals": {instruction}, "progress_markers": {instruction}} if instruction else {}
+
+
+def _remove_from_plan(plan: ChapterPlan, removed: Mapping[str, set[str]]) -> None:
+    """Drop removed["goals"] from the plan's goals and each other key's items from that experience plan list."""
+    goals = removed.get("goals", set())
     plan.goals_json = _json([
         goal for item in _loads(plan.goals_json, []) if (goal := str(item).strip()) and goal not in goals
     ])
     experience = _loads(plan.experience_plan_json, {})
     if not isinstance(experience, dict):
         return
-    for key, items in experience_items.items():
-        if isinstance(experience.get(key), list):
+    for key, items in removed.items():
+        if key != "goals" and isinstance(experience.get(key), list):
             experience[key] = [item for item in experience[key] if str(item).strip() not in items]
     plan.experience_plan_json = _json(experience)
 

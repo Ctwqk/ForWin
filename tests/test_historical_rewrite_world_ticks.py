@@ -32,7 +32,7 @@ from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.world_engine.conflict_resolution import conflict_resolved_event, record_option_side_effects
 from forwin.world_engine.conflict_types import ConflictDecision, ConflictDraft, ConflictOption
 from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE
-from forwin.writer.prompt_core.world_engine import plot_response_goal
+from forwin.writer.prompt_core.world_engine import world_change_response
 from tests.postgres import postgres_test_url
 from tests.test_canon_atomic_transaction import _prepare_chapter_candidate
 
@@ -43,6 +43,8 @@ MEETING = "event-tick-meeting"
 OBSERVER = ("character", "observer-scout")
 FACT = "fact:fact-gate-secret"
 TICK_2_EVIDENCE = "world_tick:tick-2"
+# The writer-visible goal of an accepted change with no public event, as these held changes are.
+RESPONSE_GOAL = world_change_response([], onstage_slip=False)
 
 
 @dataclass(frozen=True)
@@ -709,10 +711,9 @@ def test_dropping_a_tick_supersedes_its_resolutions_on_the_unwritten_plan(Sessio
     responds, obliges = book.resolved[3]["plot_responds"], book.resolved[3]["accept_with_obligation"]
     _no_obligation, response_patch = _side_effects(book, responds)
     obligation_id, obligation_patch = _side_effects(book, obliges)
-    response_goal = plot_response_goal("world change 3 plot_responds")
     status, goals, experience = _plan(book, 4)
     assert status == "planned"
-    assert response_goal in goals and any(obligation_id in goal for goal in goals)
+    assert RESPONSE_GOAL in goals and any(obligation_id in goal for goal in goals)
     assert experience["obligations_to_resolve"] == [obligation_id]
     assert _obligation(book, obligation_id)[0] == "planned"
 
@@ -727,7 +728,7 @@ def test_dropping_a_tick_supersedes_its_resolutions_on_the_unwritten_plan(Sessio
     status, goals, experience = _plan(book, 4)
     assert (status, goals) == ("planned", ["Commit chapter 4"])
     assert experience["obligations_to_resolve"] == []
-    assert response_goal not in experience["progress_markers"]
+    assert RESPONSE_GOAL not in experience["progress_markers"]
     assert not any(obligation_id in marker for marker in experience["progress_markers"])
     reverts = _revert_patches(book)
     assert sorted(json.loads(row.metadata_json)["reverted_plan_patch_id"] for row in reverts) == sorted(
@@ -770,7 +771,7 @@ def test_dropping_a_tick_leaves_an_accepted_plan_alone(Session) -> None:
     obligation_id, _obligation_patch = _side_effects(book, obliges)
     before = _plan(book, 3)
     assert before[0] == "accepted"
-    assert plot_response_goal("world change 2 plot_responds") in before[1]
+    assert RESPONSE_GOAL in before[1]
 
     outcome = _sealing_rewrite(book, 2)
 
@@ -804,3 +805,47 @@ def test_an_aborted_rewrite_keeps_what_the_dropped_tick_resolved(Session) -> Non
     assert outcome.stale is True
     assert _obligation(book, obligation_id)[0] == "planned"
     assert [(conflict.id, conflict.status) for conflict in _conflicts(book)] == [(obliges, "resolved")]
+
+
+@pytest.mark.parametrize(
+    ("first_option", "both_dropped"),
+    [("plot_responds", False), ("plot_responds", True), ("accept_with_obligation", False)],
+    ids=["one_dropped", "both_dropped", "obligation_dropped"],
+)
+def test_a_shared_response_goal_stays_while_another_resolution_holds_it(
+    Session, first_option: ConflictOption, both_dropped: bool,
+) -> None:
+    # The chapter 3 tick and a later direct resolve each answer a conflict on chapter 4 with the same
+    # generic text: the plot_responds goal and marker, or the obligation's payoff markers.
+    book = _book(Session, tick_three_resolutions=(first_option,))
+    first = book.resolved[3][first_option]
+    obligation_id, first_patch = _side_effects(book, first)
+    direct_change = (
+        _set(CAMP, "state.mood", "angry", "restless") if both_dropped else _create(book.project_id, "event-direct")
+    )
+    [direct] = _commit_tick(Session, _tick_delta(book.project_id, 3, "conflict-direct", direct_change)).graph_delta_ids
+    second = _resolve_in_tick(Session, book.project_id, 3, direct, ("plot_responds",))["plot_responds"]
+    _no_obligation, second_patch = _side_effects(book, second)
+    _status, goals, experience = _plan(book, 4)
+    assert goals.count(RESPONSE_GOAL) == 1 and experience["progress_markers"].count(RESPONSE_GOAL) == 1
+
+    # The rewritten camp is wary: the tick's delta, which angered a calm camp, no longer applies.
+    outcome = _wary_rewrite(book)
+
+    assert outcome.blocked is False, outcome.failure_reason
+    assert book.tick_3 not in _delta_ids(book)
+    assert (direct in _delta_ids(book)) is not both_dropped
+    reverted = sorted(json.loads(row.metadata_json)["reverted_plan_patch_id"] for row in _revert_patches(book))
+    _status, goals, experience = _plan(book, 4)
+    if both_dropped:
+        assert reverted == sorted([first_patch, second_patch])
+        assert (goals, experience["progress_markers"]) == (["Commit chapter 4"], [])
+        return
+    # The second resolution still holds the text it shares with the superseded one.
+    assert reverted == [first_patch]
+    assert goals == [RESPONSE_GOAL, "Commit chapter 4"]
+    assert experience["progress_markers"] == [RESPONSE_GOAL]
+    if first_option == "accept_with_obligation":
+        # The obligation's own goal, contract entry and anchor go; nothing else holds them.
+        assert _obligation(book, obligation_id)[0] == "cancelled"
+        assert (experience["obligations_to_resolve"], experience["rule_anchors"]) == ([], [])

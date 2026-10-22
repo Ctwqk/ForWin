@@ -232,6 +232,19 @@ class NarrativeObligationRepository:
         ).scalars().all()
         return [self._patch_from_row(row) for row in rows]
 
+    def list_patches_for_plan(self, project_id: str, *, target_plan_id: str) -> list[NarrativePlanPatch]:
+        """The applied patches that target one chapter plan, oldest first."""
+        rows = self.session.execute(
+            select(NarrativePlanPatchRow)
+            .where(
+                NarrativePlanPatchRow.project_id == project_id,
+                NarrativePlanPatchRow.target_plan_id == target_plan_id,
+                NarrativePlanPatchRow.applied.is_(True),
+            )
+            .order_by(NarrativePlanPatchRow.created_at.asc(), NarrativePlanPatchRow.id.asc())
+        ).scalars().all()
+        return [self._patch_from_row(row) for row in rows]
+
     def list_active_structural_patches(
         self,
         project_id: str,

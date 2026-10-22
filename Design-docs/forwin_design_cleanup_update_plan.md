@@ -1,5 +1,7 @@
 # ForWin 设计文档收束与冗余模块更新计划
 
+> 状态：historical-plan。下文是 V4 迁移期的设计与模块盘点；`map movement` / `HistoricalReviewHub` 等描述为历史记录。当前章节审查由 `forwin.review.DraftReviewService` 聚合，世界一致性信号为 `world_consistency`；当前入口见 [CURRENT_ARCHITECTURE.md](CURRENT_ARCHITECTURE.md)。
+
 > 结论：`reviewer/reviewer_v4`、`world_model/world_model_v4` 不是最新目标态下应继续扩张的“双主链设计”。它们的形成原因是 V4 迁移期的 side-by-side 过渡；在最新设计中应被解释为“主链 + 兼容/迁移/投影层”。目标态的唯一 canon 主路径是 `BookState + GraphDelta + Snapshot`，旧 `world_model_v4` 是 compatibility projection / migration source，旧 `world_model` 是 legacy projection / export / wiki 兼容层。
 
 ---

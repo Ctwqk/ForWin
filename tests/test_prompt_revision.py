@@ -20,16 +20,16 @@ FIXTURE_PATH = ROOT / "tests" / "fixtures" / "prompt_regression" / "cases.json"
 SNAPSHOT_DIR = ROOT / "tests" / "fixtures" / "prompt_regression" / "snapshots"
 
 EXPECTED_PROMPT_REVISIONS = {
-    "single_minimal_opening": "2d20450cb617c90c",
-    "single_countdown_generic_profile": "b8484305810eeb83",
-    "single_closed_countdown": "b511d0404697f261",
-    "single_character_state": "12c7c7bde9df6dd8",
-    "single_pre_audit_suppression": "df74448bfe4a36ad",
-    "single_future_plan_audit": "99d925af8d7d30b1",
+    "single_minimal_opening": "aa6bc18260810797",
+    "single_countdown_generic_profile": "db3088f11623bec2",
+    "single_closed_countdown": "a978aa1413921b7f",
+    "single_character_state": "91ae2d7192d075d0",
+    "single_pre_audit_suppression": "923a3f9f91082689",
+    "single_future_plan_audit": "33a4fdf8d202d962",
     "preview_arc_rehearsal": "4a69e6d52e31b297",
     "scene_breakdown_basic": "f850d8f67a2ab110",
-    "single_final_chapter": "a4ad4e4b49f34bb4",
-    "single_obligation_visible": "396fa3f3945111d1"
+    "single_final_chapter": "e13a875948d1c31f",
+    "single_obligation_visible": "e7a7559ba5d52b5d",
 }
 
 

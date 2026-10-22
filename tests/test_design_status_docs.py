@@ -165,5 +165,8 @@ def test_p2_docs_describe_current_extraction_and_schema() -> None:
         for marker in (
             "ChapterDeltaExtractor", "ChapterDeltaTranslator", "world_consistency",
             "plan_fulfillment", "0004_drop_parallel_ledgers", "ChapterWorldView",
+            "确定性地图物化", "clock producers", "access rules",
+            "writer prompt 不携带 clock / restraint state；替代物是设计 §5.1 的 `ChapterWorldView`",
+            "director_setup_without_delivery",
         ):
             assert marker in text, (name, marker)

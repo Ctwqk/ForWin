@@ -81,10 +81,10 @@ stateDiagram-v2
     writing_chapter --> failed: writer failed after retry/fallback
     writing_chapter --> paused: safe pause after output
 
-    continuity_review --> world_consistency: shared chapter delta translation and gate v6
+    continuity_review --> world_consistency: world_consistency_review_enabled and session available
     world_consistency --> drafted: no hard world issue
     world_consistency --> paused_for_review: world consistency issue
-    continuity_review --> drafted: no map graph
+    continuity_review --> drafted: world_consistency disabled or session unavailable
     drafted --> paused_for_review: operation_mode=checkpoint
     drafted --> paused_for_review: copilot verdict != pass
     drafted --> paused_for_review: blackbox fail without force accept

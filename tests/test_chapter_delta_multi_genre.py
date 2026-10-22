@@ -188,6 +188,7 @@ def _start_book(pipeline, genre: str) -> _Book:
         # A project from project_create carries a runtime policy, which chapter context reads.
         ProjectPolicyStore(session).initialize(project, pipeline.policy)
         session.refresh(project)
+        # Genesis revision ids vary; seed 15 keeps all three genres' travel paths stable.
         with (
             patch("forwin.map.genesis_adapter._stable_seed", return_value=15),
             patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=_planning_with(chapter["plan"])),
@@ -367,6 +368,7 @@ def test_too_fast_travel_is_caught_per_genre(pipeline, genre: str) -> None:
         # Stay clearly below the shortest allowed time, in whole minutes and the book's own unit.
         allowed_minimum = shortest * (1 - pipeline.policy.review.travel_tolerance)
         claimed_minutes = max(0, math.floor(allowed_minimum / 2))
+        assert 0 < claimed_minutes < allowed_minimum
         movement["depart_offset"] = {"amount": 0, "unit": unit.name}
         movement["arrive_offset"] = {"amount": claimed_minutes / unit.minutes, "unit": unit.name}
         pipeline.llm_client = _ExtractionClient(extraction)

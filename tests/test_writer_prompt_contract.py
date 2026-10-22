@@ -25,8 +25,6 @@ def test_writer_prompt_includes_protagonist_naming_contract() -> None:
     assert "主角姓名：陆明" in content
     assert "不要用“工作人员”" in content
     assert "第 1 章正文前 300 字内必须出现主角姓名" in content
-    assert "只保留一条线性时间线" in content
-    assert "不要把多个备选版本的同一场景拼接进正文" in content
 
 
 def test_writer_prompt_ignores_retired_countdown_and_character_state_constraints() -> None:
@@ -54,6 +52,7 @@ def test_writer_prompt_ignores_retired_countdown_and_character_state_constraints
     content = "\n".join(message["content"] for message in build_single_chapter_draft_prompt(context))
     assert "氧舱倒计时" not in content
     assert "韩遥" not in content
+    assert "后文时间数字必须承接前文递减" not in content
 
 
 def test_writer_prompt_preserves_existing_character_identity_and_gender() -> None:

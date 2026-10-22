@@ -69,7 +69,8 @@ RuntimePolicy v2 是冻结的类型模型，拒绝未知字段。用户维度只
 | 默认策略 | standard | pulp |
 | --- | --- | --- |
 | 章节长度 min/target/max | 2500 / 2800 / 3200 | 1800 / 2400 / 3000 |
-| review signals | experience、lint、map movement、personality、canon quality、publisher | lint、publisher |
+| review signals | experience、lint、world_consistency、personality、canon_quality、publisher | lint、world_consistency、publisher |
+| review.travel_tolerance | 0.2 | 0.2 |
 | 常规重写预算 | 3 | 0 |
 | blocking 重写预算 | 使用常规预算 | 1 |
 | repair scope | local/chapter/band/arc/book/obligation | 常规scope为空，严重阻断仍有受限恢复路径 |
@@ -92,15 +93,15 @@ story_engine 的实体有 id，缺省生成 `cast-n` / `opp-n` / `faction-n`；`
 
 PlanningService 组织 Arc/Band/Chapter 的创建、激活和修订。PlanningQuery 是读侧；PlanHealthService 的实际职责是把 future-plan audit 转成 typed health 结果，供生成控制决定是否阻断。Patch validation 由现有计划修订流程执行，没有经过一个统一健康聚合器。FuturePlanAuditor 可以对未来计划提出并应用合法修正，不能改已接纳章节来抹平历史。
 
-Writer 目前保留 Scene 分解、场景生成、stitch 和结构化抽取。这能组织长文本和场景目标，但引入了多个叙述表示。最终 body、scene 原稿、摘要、事件和时间候选不一定天然一致，必须明示优先级，不能让 reviewer 混读新旧稿。
+Writer 目前保留 Scene 分解、场景生成和 stitch，用于组织长文本和场景目标。最终 body 是审查的正文依据，scene 原稿和摘要是写作产物，不能让 reviewer 混读新旧稿。结构化事实由 writer 之后的单一 `chapter_delta_extraction` stage 从最终 body 抽取，供 checkers、`world_consistency` 和 canon preparation 共用。
 
-本轮已删除主 LLM review 和 repair escalation 的旧 scene 正文输入，改为完整最终 body；结构化状态/事件/时间和 Canon invariants 仍用于核验。场景原始产物没有被销毁，地图检查仍可使用位置等结构化数据。
+主 LLM review 和 repair escalation 使用完整最终 body，场景原始产物仍作为写作档案保留。核验使用共享章节 delta 与 Canon invariants；`world_consistency` 通过 `ChapterDeltaTranslator` 与 `BookStateReviewGate` v6 检查抽取事实。
 
 上下文由 Genesis、当前运行计划、BookState、BookMap、accepted 摘要、检索投影、人物技能及项目规则组装。Skill Runtime 是指令层，可影响 prompt 并留下 trace，但不拥有 Canon 写权限。
 
 ## 6. Review、修复和接纳资格
 
-DraftReviewService 聚合不同职责的信号：文本/体验、计划契约、地图移动、人物行为、lint、Canon quality、publisher 约束。多个检查器共存的合理性来自职责不同；“都能发现某种连续性问题”仍可能产生重复成本，是下一轮消融要检验的部分。
+DraftReviewService 聚合不同职责的信号：文本/体验、计划契约、`world_consistency`（共享 translator + gate v6）、人物行为、lint、Canon quality、publisher 约束。多个检查器共存的合理性来自职责不同；“都能发现某种连续性问题”仍可能产生重复成本，是下一轮消融要检验的部分。
 
 界面/API 固定展示五层，不能把其中一层的成功当另一层成功：
 
@@ -199,7 +200,7 @@ S4-S8 的读者留存、多样性、认知/张力及完整体验度量仍是未�
 
 设计见[世界引擎大修](../docs/designs/2026-10-20-world-engine-overhaul.md)。P0–P2 已落地；Canon 写入统一经过 `CanonAdmissionService`。
 
-- **单次抽取与翻译**：每个候选正文由 `ChapterDeltaExtractor` 在 `chapter_delta_extraction` stage 完成一次统一抽取（校验失败可重试）；`ensure_chapter_delta` 按 `body_sha256` 复用结果，正文改变才重抽。输入是 BookState as-of N−1 的最小实体表、地点表、计划目标和义务，不是 ChapterWorldView。`ChapterDeltaTranslator` 将 `WriterOutput.chapter_delta` 翻译为 `source_type="chapter_extraction"` 的 GraphDelta，再经 `BookStateReviewGate` v6；draft review 和 canon preparation 共用这份抽取，最终仍由 `CanonAdmissionService.commit_plan` 原子提交。
+- **单次抽取与翻译**：每个候选正文由 `ChapterDeltaExtractor` 在 `chapter_delta_extraction` stage 完成一次统一抽取（校验失败可重试）；`ensure_chapter_delta` 按 `body_sha256` 复用结果，正文改变才重抽。输入包括 BookState as-of N−1 的最小实体表、地点表、计划目标 / 义务 / reward targets、intents、secrets、calendar units、time aliases 和 travel modes，不是 ChapterWorldView。`ChapterDeltaTranslator` 将 `WriterOutput.chapter_delta` 翻译为 `source_type="chapter_extraction"` 的 GraphDelta，再经 `BookStateReviewGate` v6；draft review 和 canon preparation 共用这份抽取，最终仍由 `CanonAdmissionService.commit_plan` 原子提交。
 - **世界审查**：`WorldConsistencyReviewer` 的 `world_consistency` draft-review 信号运行相同 translator 与 gate，把错误送进 repair；它替代已删除的 `MapMovementReviewer` / `forwin/review/map_movement.py`。v6 检查时间跨度、移动偏移、已知路径可达性、`review.travel_tolerance` 下的速度、受限角色移动、章前已死亡实体行动、物品持有者、告知来源和读者揭示时间表。地图边 `travel_time` 为小时，乘 60 换成整数分钟；本书时间单位统一经 `duration_to_minutes` 换算。
 - **结构合同**：移动存于 delta `metadata["movements"]`；物品只认 item 的 `state.holder_id`。条目级 `flashback: bool` 加 `time.evidence` 表示闪回；闪回只产生事实与知识事件，不改变当前 state。非 create 结构补丁带 `old_value` 与 `field_path`。计划 goals 与 narrative obligations 由有正文证据的结构化 `plan_fulfillment` 判定，已删除关键词子串检查。
 - **删除与 schema**：`WriterContractDeltaBuilder`、`BookStateGraphDeltaExtractor`、`pulp_light` 正则兜底、旧分阶段 extraction、倒计时/羁押 future-plan audits 和 canon_quality 的 countdown / character-state ledgers 已删除。当前 Alembic head 为 `0004_drop_parallel_ledgers`（父为 `0003_book_state_v6`），删除 `countdown_ledgers` / `character_state_transitions`。chapter review form 继续作为 LLM 信号，其行来自 BookState，回答只产出 quality signals，不再写任何平行账本。

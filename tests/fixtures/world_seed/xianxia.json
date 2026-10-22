@@ -806,5 +806,165 @@
         }
       ]
     }
+  },
+  "world_tick": {
+    "adjudicate": {
+      "outcomes": [
+        {
+          "intent_id": "@node:赶往半山坊市打听母亲的旧事",
+          "result": "resolved",
+          "summary": "祁长烬下了断剑崖，赶到半山坊市向掌柜打听母亲当年守剑冢的旧事。",
+          "effects": {
+            "movements": [
+              {
+                "entity_ref": "@node:祁长烬",
+                "to_location_id": "@site:半山坊市",
+                "depart_at": {
+                  "before_now": {
+                    "amount": 8,
+                    "unit": "时辰"
+                  }
+                },
+                "arrive_at": {
+                  "before_now": {
+                    "amount": 3,
+                    "unit": "时辰"
+                  }
+                }
+              }
+            ],
+            "events": [
+              {
+                "summary": "祁长烬在半山坊市当众打听母亲的旧事",
+                "participant_refs": [
+                  "@node:祁长烬"
+                ],
+                "location_id": "@site:半山坊市",
+                "visibility": "public",
+                "at": {
+                  "before_now": {
+                    "amount": 2,
+                    "unit": "时辰"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "intent_id": "@node:召集三位长老加固封印",
+          "result": "resolved",
+          "summary": "三位长老迟迟未到，景沧澜独自加固封印，耗尽寿元坐化于镇脉石殿。",
+          "effects": {
+            "entity_changes": [
+              {
+                "ref": "@node:景沧澜",
+                "field": "alive_status",
+                "new_value": "dead"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "actor_turn": {
+      "turns": [
+        {
+          "actor_id": "@node:景沧澜",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "日"
+          }
+        },
+        {
+          "actor_id": "@node:祁长烬",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "日"
+          }
+        },
+        {
+          "actor_id": "@node:薛应棠",
+          "new_intents": [
+            {
+              "agenda_ref": "@node:夺取魔脉之力向盟主交差",
+              "action_type": "recruit",
+              "summary": "去半山坊市收买掌柜，盯住剑阁废脉弟子的动静",
+              "target_refs": [
+                "@node:祁长烬"
+              ],
+              "location_id": "@site:半山坊市",
+              "scheduled_in": {
+                "amount": 3,
+                "unit": "日"
+              },
+              "requires_onstage": false,
+              "impact_level": "minor",
+              "expected_effects": {}
+            }
+          ],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 2,
+            "unit": "日"
+          }
+        },
+        {
+          "actor_id": "@node:栖云剑阁",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "日"
+          }
+        },
+        {
+          "actor_id": "@node:九曜盟",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "日"
+          }
+        }
+      ]
+    },
+    "conflict_review": {
+      "option": "veto_world",
+      "rationale": "景沧澜守着第一卷的封印线，他在幕后坐化会提前改写母亲之死的真相，否决这次变化。",
+      "risk_level": "low",
+      "evidence": [
+        "@node:景沧澜"
+      ]
+    },
+    "chapter_2": {
+      "body": "祁长烬在半山坊市的客栈里住下。坊市掌柜说，母亲当年常来铺子里买剑穗，每回都只挑红绳。\n\n他把那截褪色的剑穗摊在桌上看了很久。一日后，他才起身，把剑穗重新收进怀里。\n\n他决定先不回山门，在坊市里再打听几日。",
+      "summary": "祁长烬在半山坊市住下，从掌柜口中听到母亲买剑穗的旧事。",
+      "chapter_delta_extraction": {
+        "time": {
+          "elapsed": {
+            "amount": 1,
+            "unit": "日"
+          },
+          "evidence": "一日后，他才起身"
+        },
+        "plan_fulfillment": [
+          {
+            "target_id": "goal:1",
+            "status": "done",
+            "evidence": "他把那截褪色的剑穗摊在桌上看了很久"
+          },
+          {
+            "target_id": "goal:2",
+            "status": "done",
+            "evidence": "他决定先不回山门，在坊市里再打听几日"
+          }
+        ]
+      }
+    }
   }
 }

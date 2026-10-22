@@ -793,5 +793,181 @@
         }
       ]
     }
+  },
+  "world_tick": {
+    "adjudicate": {
+      "outcomes": [
+        {
+          "intent_id": "@node:赶末班地铁到旧港站见线人",
+          "result": "resolved",
+          "summary": "蒲念安赶上末班地铁到了旧港站，在站台上拦住了约好的线人。",
+          "effects": {
+            "movements": [
+              {
+                "entity_ref": "@node:蒲念安",
+                "to_location_id": "@site:旧港站",
+                "travel_mode_id": "mode-subway",
+                "depart_at": {
+                  "before_now": {
+                    "amount": 16,
+                    "unit": "小时"
+                  }
+                },
+                "arrive_at": {
+                  "before_now": {
+                    "amount": 10,
+                    "unit": "小时"
+                  }
+                }
+              }
+            ],
+            "events": [
+              {
+                "summary": "蒲念安在旧港站的站台上当众追问线人姐姐的下落",
+                "participant_refs": [
+                  "@node:蒲念安"
+                ],
+                "location_id": "@site:旧港站",
+                "visibility": "public",
+                "at": {
+                  "before_now": {
+                    "amount": 8,
+                    "unit": "小时"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "intent_id": "@node:约谈诊所院长核对当年的口供",
+          "result": "resolved",
+          "summary": "韦清和到回春诊所约谈殷鹤年，殷鹤年当夜从诊所楼顶坠落身亡。",
+          "effects": {
+            "entity_changes": [
+              {
+                "ref": "@node:殷鹤年",
+                "field": "alive_status",
+                "new_value": "dead"
+              }
+            ]
+          }
+        },
+        {
+          "intent_id": "@node:趁夜把病历搬出诊所并粉碎",
+          "result": "disrupted",
+          "summary": "诊所夜班加派了人手，殷鹤年没能把病历搬出诊所。",
+          "effects": {}
+        }
+      ]
+    },
+    "actor_turn": {
+      "turns": [
+        {
+          "actor_id": "@node:韦清和",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "天"
+          }
+        },
+        {
+          "actor_id": "@node:蒲念安",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "天"
+          }
+        },
+        {
+          "actor_id": "@node:殷鹤年",
+          "new_intents": [
+            {
+              "agenda_ref": "@node:销毁夜间病历并转移病人",
+              "action_type": "hide",
+              "summary": "把剩下的夜间病历转移到旧港片区的地下病房",
+              "target_refs": [
+                "@node:回春医疗集团"
+              ],
+              "location_id": "@site:旧港片区枢纽",
+              "scheduled_in": {
+                "amount": 2,
+                "unit": "天"
+              },
+              "requires_onstage": false,
+              "impact_level": "moderate",
+              "expected_effects": {}
+            }
+          ],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 2,
+            "unit": "天"
+          }
+        },
+        {
+          "actor_id": "@node:蒲念平",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "天"
+          }
+        },
+        {
+          "actor_id": "@node:三分局",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "天"
+          }
+        },
+        {
+          "actor_id": "@node:回春医疗集团",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "天"
+          }
+        }
+      ]
+    },
+    "conflict_review": {
+      "option": "veto_world",
+      "rationale": "殷鹤年是诊所这条线的主要对手，他现在坠楼会让本卷的对抗失去对象，否决这次变化。",
+      "risk_level": "low",
+      "evidence": [
+        "@node:殷鹤年"
+      ]
+    },
+    "chapter_2": {
+      "body": "蒲念安没有回档案馆。她在旧港站对面的小旅馆里开了间房，把线人塞给她的纸条压在台灯底下。\n\n纸条上只有一个地址，写在旧港片区。她守着窗口看了一天，直到第二天傍晚，才看见有人从那栋楼里搬出几只纸箱。\n\n她把地址抄进笔记本，决定先去那栋楼附近看看。",
+      "summary": "蒲念安守在旧港站附近，盯上线人纸条上的地址。",
+      "chapter_delta_extraction": {
+        "time": {
+          "elapsed": {
+            "amount": 1,
+            "unit": "天"
+          },
+          "evidence": "她守着窗口看了一天"
+        },
+        "plan_fulfillment": [
+          {
+            "target_id": "goal:1",
+            "status": "done",
+            "evidence": "把线人塞给她的纸条压在台灯底下"
+          },
+          {
+            "target_id": "goal:2",
+            "status": "done",
+            "evidence": "她把地址抄进笔记本，决定先去那栋楼附近看看"
+          }
+        ]
+      }
+    }
   }
 }

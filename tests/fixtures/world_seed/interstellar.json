@@ -466,6 +466,22 @@
               },
               "requires_onstage": false,
               "impact_level": "major"
+            },
+            {
+              "id": "intent-broadcast",
+              "agenda_id": "agenda-bury",
+              "action_type": "spread_info",
+              "summary": "让曙光轨道站重播云梯号全员殉职的通告",
+              "target_refs": [
+                "fact-wreck-official"
+              ],
+              "location_ref": "node-station",
+              "scheduled_in": {
+                "amount": 1,
+                "unit": "值班轮次"
+              },
+              "requires_onstage": false,
+              "impact_level": "minor"
             }
           ]
         },
@@ -764,6 +780,148 @@
           "evidence": "才等到监察官钟离曜的接见"
         }
       ]
+    }
+  },
+  "world_tick": {
+    "adjudicate": {
+      "outcomes": [
+        {
+          "intent_id": "@node:让曙光轨道站重播云梯号全员殉职的通告",
+          "result": "resolved",
+          "summary": "钟离曜让第七舰队在曙光轨道站重播云梯号全员殉职的通告。",
+          "effects": {
+            "events": [
+              {
+                "summary": "曙光轨道站重播云梯号全员殉职的通告",
+                "participant_refs": [
+                  "@node:第七舰队"
+                ],
+                "location_id": "@site:曙光轨道站",
+                "visibility": "public",
+                "at": {
+                  "before_now": {
+                    "amount": 2,
+                    "unit": "标准时"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "intent_id": "@node:清扫曙光轨道站里与云梯号相关的航行日志",
+          "result": "resolved",
+          "summary": "钟离曜清扫了曙光轨道站里的航行日志，又派人到沉船墓场灭口应怀远。",
+          "effects": {
+            "entity_changes": [
+              {
+                "ref": "@node:应怀远",
+                "field": "alive_status",
+                "new_value": "dead"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "actor_turn": {
+      "turns": [
+        {
+          "actor_id": "@node:钟离曜",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "标准日"
+          }
+        },
+        {
+          "actor_id": "@node:应潮生",
+          "new_intents": [
+            {
+              "agenda_ref": "@node:弄清云梯号沉没的真相",
+              "action_type": "investigate",
+              "summary": "回曙光轨道站调取云梯号最后一次出港的记录",
+              "target_refs": [
+                "@node:钟离曜"
+              ],
+              "location_id": "@site:曙光轨道站",
+              "scheduled_in": {
+                "amount": 2,
+                "unit": "标准日"
+              },
+              "requires_onstage": false,
+              "impact_level": "minor",
+              "expected_effects": {}
+            }
+          ],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 2,
+            "unit": "标准日"
+          }
+        },
+        {
+          "actor_id": "@node:应怀远",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "标准日"
+          }
+        },
+        {
+          "actor_id": "@node:第七舰队",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "标准日"
+          }
+        },
+        {
+          "actor_id": "@node:灰烬矿盟",
+          "new_intents": [],
+          "agenda_changes": [],
+          "next_turn_in": {
+            "amount": 1,
+            "unit": "标准日"
+          }
+        }
+      ]
+    },
+    "conflict_review": {
+      "option": "veto_world",
+      "rationale": "应怀远是否生还是后面要揭开的悬念，现在把他灭口会提前关掉这条线，否决这次变化。",
+      "risk_level": "low",
+      "evidence": [
+        "@node:应怀远"
+      ]
+    },
+    "chapter_2": {
+      "body": "应潮生没有离开法庭。他在候审区的长椅上摊开那枚旧领航员徽章，一遍遍回想钟离曜说过的每一个字。\n\n轨道站的广播隔着隧道传过来，还在念云梯号全员殉职的通告。又过了一个标准日，他才在徽章背面摸到一道新刻的划痕。\n\n他把徽章别回胸前，决定去查云梯号最后一次出港的记录。",
+      "summary": "应潮生守在法庭，在旧徽章背面发现一道新刻的划痕。",
+      "chapter_delta_extraction": {
+        "time": {
+          "elapsed": {
+            "amount": 1,
+            "unit": "标准日"
+          },
+          "evidence": "又过了一个标准日"
+        },
+        "plan_fulfillment": [
+          {
+            "target_id": "goal:1",
+            "status": "done",
+            "evidence": "一遍遍回想钟离曜说过的每一个字"
+          },
+          {
+            "target_id": "goal:2",
+            "status": "done",
+            "evidence": "他把徽章别回胸前，决定去查云梯号最后一次出港的记录"
+          }
+        ]
+      }
     }
   }
 }

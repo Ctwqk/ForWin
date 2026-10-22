@@ -35,6 +35,7 @@ class BoundaryViolation:
 class BudgetResult:
     kept: list[TickCandidate]
     postponed: list[TickCandidate]
+    deferred_without_intent: list[TickCandidate]
 
 
 def _path(runtime: BookStateRuntime, ref: str, field: str) -> str:
@@ -92,7 +93,9 @@ def _transitions(runtime: BookStateRuntime, candidate: TickCandidate):
         after = deepcopy(before)
         path = _path(runtime, ref, field)
         apply_path_patch(after, path, deepcopy(value))
-        payloads[ref] = after
+        # Report malformed state without letting it corrupt subsequent transitions.
+        if isinstance(after.get("state", {}), dict):
+            payloads[ref] = after
         yield ref, path, before, after
 
 
@@ -126,14 +129,15 @@ def classify_impact(
         return "critical"
     if candidate.effects.relation_changes:
         level = max(level, IMPACT_LEVELS.index("moderate"))
-    for ref, path, before, after in _transitions(runtime, candidate):
+    transitions = list(_transitions(runtime, candidate))
+    for ref, path, before, after in transitions:
         if before == after:
             continue
         node = runtime.world.get_node(ref)
         kind = str(node.node_type) if node else ""
         old, new = before.get("state", {}), after.get("state", {})
-        old = old if isinstance(old, dict) else {}
-        new = new if isinstance(new, dict) else {}
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            continue
         changed = {field for field in old.keys() | new.keys() if old.get(field) != new.get(field)}
         major = (
             (kind == "character" and "alive_status" in changed and new.get("alive_status") == "dead"
@@ -157,9 +161,11 @@ def classify_impact(
         for fact in runtime.world.facts_by_id.values() if fact.sensitivity_level in HIDDEN_SENSITIVITY
     }
     hidden.update(f"fact:new:{fact.key}" for fact in candidate.effects.new_facts if fact.sensitivity in HIDDEN_SENSITIVITY)
-    for ref, path, before, after in _transitions(runtime, candidate):
+    for ref, path, before, after in transitions:
         node = runtime.world.get_node(ref)
-        state = after.get("state") or {}
+        state = after.get("state", {})
+        if not isinstance(state, dict):
+            continue
         if (node is not None and node.node_type == "event" and state.get("visibility_level") == "public"
                 and hidden.intersection(_refs(after))):
             level = max(level, IMPACT_LEVELS.index("major"))
@@ -188,22 +194,23 @@ def check_hard_rules(
     candidate: TickCandidate,
     *,
     now: int,
-    calendar: StoryCalendar | None = None,
-    window_start: int = 0,
+    calendar: StoryCalendar,
+    window_start: int,
 ) -> list[ConstraintIssue]:
-    """Check against the pre-tick runtime without mutating it.
+    """Check against the pre-tick runtime using the caller's calendar and tick window."""
+    # The review gate imports world-engine types; defer this import to avoid a cycle.
+    from forwin.book_state.reviewer import _MINUTE_EPSILON
 
-    The runtime carries neither calendar nor tick window. Callers should supply both;
-    without them only lexicon units and the epoch-to-now window are available.
-    """
     issues: list[ConstraintIssue] = []
 
     def issue(code: str, ref: str, message: str) -> None:
         issues.append(ConstraintIssue(code, message, ref))
 
     owner = _owner(runtime, candidate)
-    actors = {owner}
-    for intent_id in {candidate.intent_id, *candidate.intent_status_changes}:
+    actors = {owner} if candidate.new_intents else set()
+    for intent_id, status in candidate.intent_status_changes.items():
+        if status != "resolved":
+            continue
         intent = runtime.world.get_node(intent_id)
         if intent is not None:
             actors.add(str(intent.profile.get("owner_ref") or ""))
@@ -217,10 +224,16 @@ def check_hard_rules(
             actors.add(knowledge.source_ref)
     for fact in candidate.effects.new_facts:
         actors.update(ref for ref in fact.known_by if ref != "reader")
-    transitions = list(_transitions(runtime, candidate))
+    transitions = []
+    for transition in _transitions(runtime, candidate):
+        ref, path, before, after = transition
+        if not isinstance(before.get("state", {}), dict) or not isinstance(after.get("state", {}), dict):
+            issue("invalid_state", ref, "Entity state must be a dict")
+            continue
+        transitions.append(transition)
     movers = {move.entity_ref for move in candidate.effects.movements}
     for ref, path, before, after in transitions:
-        old, new = before.get("state") or {}, after.get("state") or {}
+        old, new = before.get("state", {}), after.get("state", {})
         if old.get("location_id") != new.get("location_id"):
             movers.add(ref)
     actors.update(movers)
@@ -251,7 +264,7 @@ def check_hard_rules(
 
     for intent in candidate.new_intents:
         try:
-            delay = duration_to_minutes(calendar or StoryCalendar("", 0, ()), lexicon,
+            delay = duration_to_minutes(calendar, lexicon,
                                         amount=max(0.0, intent.scheduled_in.amount), unit_name=intent.scheduled_in.unit)
         except StoryClockError as exc:
             issue("time_not_monotonic", owner, f"Cannot determine scheduled_at: {exc}")
@@ -260,14 +273,16 @@ def check_hard_rules(
             start = resolve_world_node_location_id(runtime.world, owner)
             travel = estimate_travel(runtime, lexicon, mover_id=owner, from_location_id=start,
                                      to_location_id=intent.location_id)
-            if not travel.reachable or not travel.route_known or travel.minutes is None or travel.minutes > delay:
+            if (not travel.reachable or not travel.route_known or travel.minutes is None
+                    or travel.minutes > delay + _MINUTE_EPSILON):
                 issue("unreachable_before_scheduled", owner,
                       f"{owner} cannot reach {intent.location_id} in {delay} minutes")
     for ref, path, before, after in transitions:
-        scheduled = (after.get("state") or {}).get("scheduled_at")
+        state = after.get("state", {})
+        scheduled = state.get("scheduled_at")
         if (path == "state" or path == "state.scheduled_at") and isinstance(scheduled, int) and scheduled < now:
             issue("time_not_monotonic", ref, f"scheduled_at {scheduled} precedes now {now}")
-        actual = (after.get("state") or {}).get("actual_story_time")
+        actual = state.get("actual_story_time")
         if (path in {"state", "state.actual_story_time"} and type(actual) is int
                 and not window_start <= actual <= now):
             issue("time_not_monotonic", ref, f"Event time {actual} is outside [{window_start}, {now}]")
@@ -300,22 +315,32 @@ def check_narrative_boundaries(
     knowledge.update((observer, f"fact:new:{fact.key}") for fact in candidate.effects.new_facts for observer in fact.known_by)
     violations: list[BoundaryViolation] = []
     for node in sorted(runtime.narrative.nodes_by_id.values(), key=lambda node: node.id):
-        if node.node_type != "review_constraint" or node.status in {"inactive", "resolved", "closed"}:
+        if node.node_type != "review_constraint" or getattr(node, "status", "active") != "active":
             continue
         payload = node.payload
         until = payload.get("until_chapter", 0)
+        until = until if type(until) is int else 0
         if until != 0 and until < next_chapter:
             continue
         ref, kind = str(payload.get("ref") or ""), str(payload.get("kind") or "")
         violated = False
         if kind == "must_not_know":
-            violated = (payload.get("observer_ref"), payload.get("fact_ref")) in knowledge
+            observer, fact = payload.get("observer_ref"), payload.get("fact_ref")
+            if not isinstance(observer, str) or not isinstance(fact, str) or not fact:
+                continue
+            fact = f"{FACT_REF_PREFIX}{fact.removeprefix(FACT_REF_PREFIX)}"
+            violated = (observer, fact) in knowledge
         else:
-            path, value = {
-                "must_exist": ("is_active", True),
-                "must_be_alive": ("state.alive_status", "alive"),
-                "must_hold_state": (_path(runtime, ref, str(payload.get("field") or "")), payload.get("value")),
-            }.get(kind, ("", None))
+            if kind == "must_hold_state":
+                field = payload.get("field")
+                if not isinstance(field, str) or not field.strip():
+                    continue
+                path, value = _path(runtime, ref, field), payload.get("value")
+            else:
+                path, value = {
+                    "must_exist": ("is_active", True),
+                    "must_be_alive": ("state.alive_status", "alive"),
+                }.get(kind, ("", None))
             for changed, changed_path, before, after in transitions:
                 if changed != ref or not path:
                     continue
@@ -344,27 +369,26 @@ def apply_budgets(
     *,
     impacts: Mapping[str, str],
     max_major_events: int,
-    runtime: BookStateRuntime | None = None,
-    now: int | None = None,
+    runtime: BookStateRuntime,
+    now: int,
 ) -> BudgetResult:
     """Keep major events by owner tier, descending agenda priority, then id.
 
-    Supply runtime for existing tiers/agendas and now to turn postponed candidates
-    with existing intents into planned-at-now bookkeeping. Other postponed
-    candidates remain intact for the caller to retry. Without context this is a
-    pure partition; unknown tiers tie and explicit agenda priorities participate.
+    Postponed candidates contain only planned-at-now bookkeeping for existing
+    intents. Candidates without an existing intent are deferred unchanged for retry.
     """
+    missing = sorted({candidate.candidate_id for candidate in candidates} - impacts.keys())
+    if missing:
+        raise ValueError(f"Missing computed impacts for candidates: {', '.join(missing)}")
+
     def order(candidate: TickCandidate) -> tuple[int, int, str]:
-        tier = None
+        tier = runtime.world.get_state(_owner(runtime, candidate)).get("actor_tier")
         agenda_refs = {intent.agenda_ref for intent in candidate.new_intents}
-        priorities: dict[str, int] = {}
-        if runtime is not None:
-            tier = runtime.world.get_state(_owner(runtime, candidate)).get("actor_tier")
-            intent = runtime.world.get_node(candidate.intent_id)
-            if intent is not None:
-                agenda_refs.add(str(intent.profile.get("agenda_ref") or ""))
-            agenda_refs.update(change.agenda_ref for change in candidate.agenda_changes)
-            priorities = {ref: _priority(runtime.world.get_state(ref).get("priority")) for ref in agenda_refs if ref}
+        intent = runtime.world.get_node(candidate.intent_id)
+        if intent is not None:
+            agenda_refs.add(str(intent.profile.get("agenda_ref") or ""))
+        agenda_refs.update(change.agenda_ref for change in candidate.agenda_changes)
+        priorities = {ref: _priority(runtime.world.get_state(ref).get("priority")) for ref in agenda_refs if ref}
         for change in candidate.agenda_changes:
             if change.priority is not None:
                 priorities[change.agenda_ref] = _priority(change.priority)
@@ -372,25 +396,24 @@ def apply_budgets(
                 -max(priorities.values(), default=3), candidate.candidate_id)
 
     major = sorted((candidate for candidate in candidates
-                    if impacts.get(candidate.candidate_id, candidate.impact_level) in {"major", "critical"}), key=order)
-    postponed = major[max(0, max_major_events):]
-    postponed_ids = {candidate.candidate_id for candidate in postponed}
+                    if impacts[candidate.candidate_id] in {"major", "critical"}), key=order)
+    over_budget = major[max(0, max_major_events):]
+    postponed_ids = {candidate.candidate_id for candidate in over_budget}
     kept = [candidate for candidate in candidates if candidate.candidate_id not in postponed_ids]
-    if now is not None:
-        deferred = []
-        for candidate in postponed:
-            intents = set(candidate.intent_status_changes)
-            if candidate.intent_id:
-                intents.add(candidate.intent_id)
-            if not intents:
-                deferred.append(candidate)
-                continue
-            deferred.append(candidate.model_copy(update={
-                "effects": WorldEffects(entity_changes=[
-                    EffectEntityChange(ref=ref, field="scheduled_at", new_value=now) for ref in sorted(intents)
-                ]),
-                "new_intents": [], "agenda_changes": [], "slip_updates": {}, "next_turn_at": {},
-                "intent_status_changes": {ref: "planned" for ref in sorted(intents)},
-            }, deep=True))
-        postponed = deferred
-    return BudgetResult(kept, postponed)
+    postponed: list[TickCandidate] = []
+    deferred_without_intent: list[TickCandidate] = []
+    for candidate in over_budget:
+        intents = sorted(ref for ref in {candidate.intent_id, *candidate.intent_status_changes}
+                         if (node := runtime.world.get_node(ref)) is not None and node.node_type == "intent")
+        if not intents:
+            deferred_without_intent.append(candidate)
+            continue
+        postponed.append(candidate.model_copy(update={
+            "impact_level": "minor", "summary": "Intent postponed by event budget",
+            "effects": WorldEffects(entity_changes=[
+                EffectEntityChange(ref=ref, field="scheduled_at", new_value=now) for ref in intents
+            ]),
+            "new_intents": [], "agenda_changes": [], "slip_updates": {}, "next_turn_at": {},
+            "intent_status_changes": {ref: "planned" for ref in intents},
+        }, deep=True))
+    return BudgetResult(kept, postponed, deferred_without_intent)

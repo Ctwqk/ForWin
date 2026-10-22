@@ -17,9 +17,14 @@ def normalize_for_evidence(text: str) -> str:
     return unicodedata.normalize("NFKC", "".join(text.split()))
 
 
+def _quotable(normalized: str) -> bool:
+    """A quote needs a letter or digit; punctuation alone matches almost any body."""
+    return any(char.isalnum() for char in normalized)
+
+
 def evidence_in_body(evidence: str, body: str) -> bool:
     normalized = normalize_for_evidence(evidence)
-    return bool(normalized) and normalized in normalize_for_evidence(body)
+    return _quotable(normalized) and normalized in normalize_for_evidence(body)
 
 
 def validate_evidence(
@@ -34,7 +39,7 @@ def validate_evidence(
             evidence = normalize_for_evidence(item.evidence)
             if field == "plan_fulfillment" and item.status == "missing" and not evidence:
                 kept.append(item)
-            elif evidence and evidence in normalized_body:
+            elif _quotable(evidence) and evidence in normalized_body:
                 kept.append(item)
             else:
                 issues.append(ExtractionIssue(
@@ -51,7 +56,7 @@ def validate_evidence(
                 severity="warning", code="elapsed_without_evidence", path="time",
                 message="Elapsed time has no supporting evidence.",
             ))
-        elif time_evidence not in normalized_body:
+        elif not _quotable(time_evidence) or time_evidence not in normalized_body:
             result.time.elapsed = None
             issues.append(ExtractionIssue(
                 severity="warning", code="evidence_not_in_body", path="time",

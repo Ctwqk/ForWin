@@ -115,6 +115,27 @@ def test_validate_evidence_checks_every_item_list(field, payload) -> None:
     assert dropped_ratio(issues, before) == 1.0
 
 
+@pytest.mark.parametrize("quote", ["。", " 。\n", "　。"])
+def test_punctuation_only_quote_is_not_evidence(quote) -> None:
+    before = _extraction(
+        plan_fulfillment=[{"target_id": "goal:1", "status": "done", "evidence": quote}],
+        entity_mentions=[{"name": "甲", "kind": "character", "evidence": quote}],
+    )
+    before.time = ChapterTime(elapsed=Duration(amount=1, unit="day"), evidence=quote)
+
+    after, issues = validate_evidence(before, BODY)
+
+    assert normalize_for_evidence(quote) in normalize_for_evidence(BODY)
+    assert not evidence_in_body(quote, BODY)
+    assert after.plan_fulfillment == [] and after.entity_mentions == []
+    assert after.time.elapsed is None
+    assert [(issue.code, issue.path) for issue in issues] == [
+        ("evidence_not_in_body", "plan_fulfillment[0]"),
+        ("evidence_not_in_body", "entity_mentions[0]"),
+        ("evidence_not_in_body", "time"),
+    ]
+
+
 @pytest.mark.parametrize("evidence,code", [("", "elapsed_without_evidence"), (" \n", "elapsed_without_evidence"), ("unsupported", "evidence_not_in_body")])
 def test_validate_evidence_clears_unsupported_elapsed(evidence, code) -> None:
     before = _extraction()

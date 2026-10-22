@@ -76,6 +76,15 @@ CONFLICT_REVIEW_INSTRUCTIONS = (
     "risk_level 表示所选选项对规划的风险。完整输出结构如下。",
 )
 
+# The chapter-plan goal plot_responds adds to the next unwritten chapter; the conflict summary follows it.
+PLOT_RESPONSE_GOAL_PREFIX = "回应已经发生的世界变化："
+
+
+def plot_response_goal(summary: str) -> str:
+    """The goal that has the next unwritten chapter respond to an accepted world change."""
+    return f"{PLOT_RESPONSE_GOAL_PREFIX}{summary.strip()}"
+
+
 # The BookState model each conflict-snapshot slice kind dumps, for dropping its default-valued fields.
 _SLICE_MODELS = {"world_node": WorldNode, "world_edge": WorldEdge, "map_node": MapNode, "fact": FactNode}
 

@@ -34,6 +34,7 @@ from forwin.protocol.book_state import (
     FactPatch,
     GraphDelta,
     GraphDeltaType,
+    NarrativePatch,
     NodePatch,
     WorldEdge,
     WorldNode,
@@ -57,6 +58,10 @@ from .types import (
     TickCandidate,
     TickContext,
 )
+
+
+# The narrative target_ref of a protection, a review_constraint node.
+_PROTECTION_REF_PREFIX = "review_constraint:"
 
 
 def _tick_local_id(project_id: str, tick_id: str, candidate_id: str, kind: str, local: int | str) -> str:
@@ -150,6 +155,7 @@ class _TickBuilder:
         self.fact_patches: list[FactPatch] = []
         self.created_facts: set[str] = set()
         self.cognition_patches: list[CognitionPatch] = []
+        self.narrative_patches: list[NarrativePatch] = []
         self.locations: dict[str, str] = {}
         self.holders: dict[str, str] = {}
         self.movements: list[dict[str, Any]] = []
@@ -198,6 +204,7 @@ class _TickBuilder:
             edge_patches=self.edge_patches,
             fact_patches=self.fact_patches,
             cognition_patches=self.cognition_patches,
+            narrative_patches=self.narrative_patches,
             evidence_refs=[self._evidence_ref()],
             metadata={
                 "tick_id": self.tick_id,
@@ -232,6 +239,8 @@ class _TickBuilder:
             actor_id = self._node_of_type(actor_ref, ACTOR_NODE_TYPES, "actor")
             if actor_id is not None:
                 self._set_node_field(actor_id, "state.next_turn_at", minute)
+        for constraint_ref, until_chapter in candidate.protection_releases.items():
+            self._release_protection(constraint_ref, until_chapter)
         effects = candidate.effects
         for fact in effects.new_facts:
             self._new_fact(fact)
@@ -387,6 +396,24 @@ class _TickBuilder:
             old_value=old_value,
             new_value=new_value,
             reason=self.reason,
+        ))
+
+    # protections
+
+    def _release_protection(self, ref: str, until_chapter: int) -> None:
+        """End a review_constraint's protection at ``until_chapter``; a missing until_chapter was open."""
+        node = self.runtime.narrative.nodes_by_id.get(ref.strip())
+        if node is None or node.node_type != "review_constraint":
+            self._unresolved(f"protection {ref.strip()!r} is not a review_constraint node")
+            return
+        self.narrative_patches.append(NarrativePatch(
+            target_ref=f"{_PROTECTION_REF_PREFIX}{node.id}",
+            op="set",
+            field_path="payload.until_chapter",
+            old_value=node.payload.get("until_chapter"),
+            new_value=until_chapter,
+            reason=self.reason,
+            evidence_refs=[self._evidence_ref()],
         ))
 
     # agendas and intents

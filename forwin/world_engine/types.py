@@ -220,6 +220,8 @@ class TickCandidate(_ContractModel):
     intent_status_changes: dict[str, IntentStatus] = Field(default_factory=dict)
     slip_updates: dict[str, int] = Field(default_factory=dict)
     next_turn_at: dict[str, int] = Field(default_factory=dict)
+    # A review_constraint node id -> the until_chapter that ends its protection.
+    protection_releases: dict[str, int] = Field(default_factory=dict)
     impact_level: ImpactLevel = "minor"
 
 

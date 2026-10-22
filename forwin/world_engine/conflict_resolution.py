@@ -1,0 +1,419 @@
+"""Carry out a decided world-plan conflict option through canon admission.
+
+``option_candidates`` turns the decision into world changes and ``record_option_side_effects`` records
+what the option owes the plan; ``ConflictResolutionService.resolve`` composes the two around one
+commit, and the world tick reuses both inside its own delta.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from forwin.audit.events import DecisionEventType
+from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.query import BookStateQuery
+from forwin.book_state.repository import BookStateRepository
+from forwin.book_state.runtime import BookStateRuntime
+from forwin.book_state.schema import ACTOR_NODE_TYPES
+from forwin.canon.admission import CanonAdmissionService, CanonStaleVersion
+from forwin.models.audit import DecisionEvent
+from forwin.models.base import new_id
+from forwin.models.project import ChapterPlan, Project
+from forwin.models.world_conflict import WorldPlanConflictRow
+from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
+from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
+from forwin.planning.future_plan_audit.patches import FuturePlanPatchMixin
+from forwin.planning.query import PlanningQuery
+from forwin.protocol.book_state import ApprovedGraphDeltaSet
+from forwin.runtime.policy import RuntimePolicy
+from forwin.writer.prompt_core.world_engine import plot_response_goal
+
+from .conflict_repository import ConflictNotOpen, WorldConflictRepository
+from .conflict_types import ConflictDecision
+from .constraints import check_narrative_boundaries
+from .delta_builder import WorldTickDeltaBuilder
+from .propagation import latest_news_in_transit
+from .types import TickCandidate, TickContext, WorldEffects, tick_seed
+
+
+# An accepted world change owes the plot a response within this many chapters of the latest one.
+OBLIGATION_DEADLINE_CHAPTERS = 6
+WORLD_CHANGE_OBLIGATION_TYPE = "world_change_response"
+PLOT_RESPONSE_PATCH_TYPE = "world_conflict_response"
+# A veto stops an open intent; one the story already settled keeps its status.
+_SETTLED_INTENT_STATUSES = frozenset({"resolved", "disrupted", "vetoed"})
+_EVENT_ACTOR_TYPES = {"human": "manual_ui", "codex": "worker", "auto": "system"}
+
+
+class ConflictStale(RuntimeError):
+    """Canon moved under the held change, so it no longer applies; the conflict stays open."""
+
+
+class ConflictOptionUnavailable(RuntimeError):
+    """The decided option cannot be carried out now; the conflict stays open."""
+
+
+@dataclass(frozen=True)
+class ConflictResolutionResult:
+    graph_delta_ids: tuple[str, ...]
+    obligation_id: str
+    plan_patch_id: str
+
+
+@dataclass(frozen=True)
+class OptionSideEffects:
+    obligation_id: str
+    plan_patch_id: str
+
+
+def _check_decision(conflict: WorldPlanConflictRow, decision: ConflictDecision) -> None:
+    options = json.loads(conflict.options_json or "[]")
+    if decision.option not in options:
+        raise ValueError(f"Conflict {conflict.id} offers {options}, not {decision.option}")
+    if decision.option == "amend_plan" and decision.decided_by != "human":
+        raise ValueError(f"Only a human may amend the plan; {decision.decided_by} chose amend_plan")
+    if decision.option == "rewrite_chapter":
+        raise ConflictOptionUnavailable("rewrite_chapter needs a chapter-extraction conflict, which P3 never raises")
+
+
+def option_candidates(
+    conflict: WorldPlanConflictRow,
+    decision: ConflictDecision,
+    *,
+    runtime: BookStateRuntime,
+    policy: RuntimePolicy,
+    reroll_count: int,
+    now: int,
+) -> list[TickCandidate]:
+    """The world changes that carry out the decision; none when the option changes nothing in the world.
+
+    ``runtime`` is the latest canon chapter's. veto_world stops the conflict's intent and, while
+    ``reroll_count`` is under ``world.max_rerolls``, has its actor act again at ``now``. The other
+    options commit the held change; amend_plan also ends the protections it breaks with that chapter.
+    """
+    _check_decision(conflict, decision)
+    if decision.option == "veto_world":
+        veto = _veto_candidate(conflict, runtime, policy=policy, reroll_count=reroll_count, now=now)
+        return [veto] if veto is not None else []
+    held = _held_change(conflict)
+    release = _release_candidate(conflict, held, runtime) if decision.option == "amend_plan" else None
+    return [held, release] if release is not None else [held]
+
+
+def _veto_candidate(
+    conflict: WorldPlanConflictRow, runtime: BookStateRuntime, *, policy: RuntimePolicy, reroll_count: int, now: int,
+) -> TickCandidate | None:
+    # The conflict row is the veto record the actor's next turn reads; the candidate only patches state.
+    world = runtime.world
+    intent_ref, actor_ref = conflict.intent_ref.strip(), conflict.actor_ref.strip()
+    intent = world.get_node(intent_ref) if intent_ref else None
+    actor = world.get_node(actor_ref) if actor_ref else None
+    statuses = (
+        {intent_ref: "vetoed"}
+        if intent is not None and str(intent.node_type) == "intent"
+        and world.get_state(intent_ref).get("status") not in _SETTLED_INTENT_STATUSES
+        else {}
+    )
+    turns = (
+        {actor_ref: now}
+        if actor is not None and str(actor.node_type) in ACTOR_NODE_TYPES and reroll_count < policy.world.max_rerolls
+        else {}
+    )
+    if not statuses and not turns:
+        return None
+    return TickCandidate(
+        candidate_id=f"conflict:{conflict.id}:veto",
+        origin="conflict_resolution",
+        actor_id=actor_ref,
+        intent_id=intent_ref,
+        summary=f"Vetoed: {conflict.summary}",
+        effects=WorldEffects(),
+        intent_status_changes=statuses,
+        next_turn_at=turns,
+    )
+
+
+def _held_change(conflict: WorldPlanConflictRow) -> TickCandidate:
+    """The world change the conflict held back, as the tick stored it."""
+    try:
+        return TickCandidate.model_validate(json.loads(conflict.proposed_change_json or "{}"))
+    except ValueError as exc:
+        raise ConflictOptionUnavailable(f"Conflict {conflict.id} holds no world change to commit: {exc}") from exc
+
+
+def _release_candidate(
+    conflict: WorldPlanConflictRow, held: TickCandidate, runtime: BookStateRuntime,
+) -> TickCandidate | None:
+    """Every protection the held change breaks in the next chapter ends with the latest one."""
+    latest = runtime.as_of_chapter
+    broken = sorted({
+        violation.constraint_node_id
+        for violation in check_narrative_boundaries(runtime, held, next_chapter=latest + 1)
+    })
+    if not broken:
+        return None
+    return TickCandidate(
+        candidate_id=f"conflict:{conflict.id}:release",
+        origin="conflict_resolution",
+        summary=f"Plan amended for: {conflict.summary}",
+        effects=WorldEffects(),
+        protection_releases={node_id: latest for node_id in broken},
+    )
+
+
+def record_option_side_effects(
+    session: Session,
+    conflict: WorldPlanConflictRow,
+    decision: ConflictDecision,
+    *,
+    latest_chapter: int,
+) -> OptionSideEffects:
+    """The obligation or plan goal the option leaves; call it once the option's world changes committed.
+
+    Both bind to the next unaccepted chapter plan after ``latest_chapter``. Without one, or when the
+    obligation ledger refuses the obligation, it raises ConflictOptionUnavailable and the caller rolls
+    back the committed changes with it.
+    """
+    _check_decision(conflict, decision)
+    if decision.option == "accept_with_obligation":
+        return _record_obligation(session, conflict, decision, latest_chapter=latest_chapter)
+    if decision.option == "plot_responds":
+        return OptionSideEffects(
+            obligation_id="", plan_patch_id=_record_plot_response(session, conflict, latest_chapter=latest_chapter),
+        )
+    return OptionSideEffects(obligation_id="", plan_patch_id="")
+
+
+def _next_unaccepted_plan(session: Session, project_id: str, *, latest_chapter: int) -> ChapterPlan:
+    plans = PlanningQuery().future_chapters(session, project_id=project_id, current_chapter=latest_chapter)
+    if not plans:
+        raise ConflictOptionUnavailable(f"No unaccepted chapter plan follows chapter {latest_chapter}")
+    return plans[0]
+
+
+def _record_obligation(
+    session: Session, conflict: WorldPlanConflictRow, decision: ConflictDecision, *, latest_chapter: int,
+) -> OptionSideEffects:
+    plan = _next_unaccepted_plan(session, conflict.project_id, latest_chapter=latest_chapter)
+    project = session.get(Project, conflict.project_id)
+    obligation_id = new_id()
+    summary = conflict.summary
+    obligation = NarrativeObligation(
+        id=obligation_id,
+        project_id=conflict.project_id,
+        origin_chapter_number=latest_chapter,
+        obligation_type=WORLD_CHANGE_OBLIGATION_TYPE,
+        summary=summary,
+        deferral_reason=decision.rationale,
+        subject_refs=json.loads(conflict.involved_refs_json or "[]"),
+        evidence_refs=[f"world_conflict:{conflict.id}"],
+        deadline_chapter=latest_chapter + OBLIGATION_DEADLINE_CHAPTERS,
+        payoff_test=summary,
+        created_by=decision.decided_by,
+        metadata={"conflict_id": conflict.id},
+    )
+    plan_patch = NarrativePlanPatch(
+        id=new_id(),
+        project_id=conflict.project_id,
+        patch_type="defer_acceptance",
+        target_scope="chapter",
+        target_plan_id=plan.id,
+        target_arc_id=plan.arc_plan_id,
+        affected_chapters=[plan.chapter_number],
+        source_obligation_ids=[obligation_id],
+        new_contract={"obligations_to_resolve": [obligation_id], "payoff_test": summary, "summary": summary},
+        diff_summary=f"Bind world-change obligation {obligation_id} to chapter {plan.chapter_number}.",
+        writer_context_injections=[{
+            "type": "narrative_obligation",
+            "obligation_id": obligation_id,
+            "priority": obligation.priority,
+            "summary": summary,
+            "payoff_test": summary,
+            "deadline_chapter": obligation.deadline_chapter,
+        }],
+        reviewer_context_injections=[
+            {"type": "narrative_obligation", "obligation_id": obligation_id, "payoff_test": summary},
+        ],
+        expected_resolution_tests=[summary],
+        metadata={"conflict_id": conflict.id},
+    )
+    result = DeferAcceptanceTransaction(session).run(
+        obligation=obligation,
+        plan_patch=plan_patch,
+        current_chapter=latest_chapter,
+        target_total_chapters=int(project.target_total_chapters or 0) if project is not None else 0,
+    )
+    if not result.success or result.obligation is None or result.plan_patch is None:
+        raise ConflictOptionUnavailable(f"The obligation ledger refused the obligation: {', '.join(result.errors)}")
+    return OptionSideEffects(obligation_id=result.obligation.id, plan_patch_id=result.plan_patch.id)
+
+
+def _record_plot_response(session: Session, conflict: WorldPlanConflictRow, *, latest_chapter: int) -> str:
+    """Put the response goal first in the next unaccepted plan's goals and progress markers."""
+    plan = _next_unaccepted_plan(session, conflict.project_id, latest_chapter=latest_chapter)
+    goal = plot_response_goal(conflict.summary)
+    patch = NarrativePlanPatch(
+        id=new_id(),
+        project_id=conflict.project_id,
+        patch_type=PLOT_RESPONSE_PATCH_TYPE,
+        target_scope="chapter",
+        target_plan_id=plan.id,
+        target_arc_id=plan.arc_plan_id,
+        affected_chapters=[plan.chapter_number],
+        new_contract={"form_instruction": goal, "conflict_id": conflict.id},
+        diff_summary=goal,
+        writer_context_injections=[{"type": PLOT_RESPONSE_PATCH_TYPE, "conflict_id": conflict.id, "instruction": goal}],
+        reviewer_context_injections=[
+            {"type": PLOT_RESPONSE_PATCH_TYPE, "conflict_id": conflict.id, "payoff_test": goal},
+        ],
+        expected_resolution_tests=[goal],
+        validation_status="passed",
+        applied=True,
+        metadata={"conflict_id": conflict.id},
+    )
+    FuturePlanPatchMixin._apply_form_plan_patch(plan, patch)
+    session.add(plan)
+    return NarrativeObligationRepository(session).create_plan_patch(patch).id
+
+
+def conflict_resolved_event(
+    row: WorldPlanConflictRow, *, chapter_number: int, extra: Mapping[str, Any] | None = None,
+) -> DecisionEvent:
+    """An unsaved WORLD_CONFLICT_RESOLVED event for a conflict ``mark_resolved`` just closed."""
+    decision = json.loads(row.decision_json or "{}")
+    decided_by = str(decision.get("decided_by") or "")
+    payload = {
+        "conflict_id": row.id,
+        "source": row.source,
+        "violated": row.violated,
+        "impact_level": row.impact_level,
+        "option": decision.get("option", ""),
+        "decided_by": decided_by,
+        "rationale": decision.get("rationale", ""),
+        "result_refs": json.loads(row.result_refs_json or "[]"),
+        **(extra or {}),
+    }
+    return DecisionEvent(
+        project_id=row.project_id,
+        chapter_number=chapter_number,
+        scope="chapter",
+        event_family="business_event",
+        event_type=DecisionEventType.WORLD_CONFLICT_RESOLVED,
+        actor_type=_EVENT_ACTOR_TYPES.get(decided_by, "system"),
+        actor_id=str(decision.get("actor_id") or decided_by),
+        summary=f"World conflict {row.id} resolved: {payload['option']}.",
+        reason=str(decision.get("rationale") or ""),
+        payload_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        related_object_type="world_conflict",
+        related_object_id=row.id,
+    )
+
+
+class ConflictResolutionService:
+    """Resolve one open conflict in the caller's session; the caller commits."""
+
+    def __init__(self, session: Session, *, admission: CanonAdmissionService, policy: RuntimePolicy) -> None:
+        self.session = session
+        self.admission = admission
+        self.policy = policy
+
+    def resolve(self, *, project_id: str, conflict_id: str, decision: ConflictDecision) -> ConflictResolutionResult:
+        """Carry out ``decision``: commit its world changes, record its side effects and close the conflict.
+
+        Everything lands in one SAVEPOINT. ConflictStale (canon moved under the change) and
+        ConflictOptionUnavailable roll it back whole, leaving the conflict open and the session usable.
+        """
+        session = self.session
+        repo = WorldConflictRepository(session)
+        row = repo.get(project_id, conflict_id, for_update=True)
+        if row is None:
+            raise LookupError(f"World conflict {conflict_id} not found in project {project_id}")
+        if row.status != "open":
+            raise ConflictNotOpen(f"Conflict {row.id} is {row.status}")
+        _check_decision(row, decision)
+        latest = BookStateRepository(session).latest_canon_chapter(project_id) or 0
+        # Count the actor's earlier vetoes before this one closes.
+        reroll_count = repo.reroll_count(project_id, actor_ref=row.actor_ref) if row.actor_ref.strip() else 0
+        runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=latest)
+        story_end = BookStateQuery(session).current_story_minute(project_id, as_of_chapter=latest)
+        now = story_end if story_end is not None else row.story_time
+        candidates = option_candidates(
+            row, decision, runtime=runtime, policy=self.policy, reroll_count=reroll_count, now=now,
+        )
+        tick_id = f"conflict-{row.id}"
+        try:
+            with session.begin_nested():
+                graph_delta_ids = (
+                    self._commit(project_id, candidates, tick_id=tick_id, chapter_number=latest, now=now)
+                    if candidates else ()
+                )
+                effects = record_option_side_effects(session, row, decision, latest_chapter=latest)
+                refs = [*graph_delta_ids, effects.obligation_id, effects.plan_patch_id]
+                repo.mark_resolved(row, decision=decision, result_refs=[ref for ref in refs if ref])
+                session.add(conflict_resolved_event(row, chapter_number=latest, extra={
+                    "tick_id": tick_id if graph_delta_ids else "",
+                    "graph_delta_ids": list(graph_delta_ids),
+                    "obligation_id": effects.obligation_id,
+                    "plan_patch_id": effects.plan_patch_id,
+                }))
+                session.flush()
+        except CanonStaleVersion as exc:
+            raise ConflictStale(f"Conflict {row.id}: canon moved under the held change: {exc}") from exc
+        return ConflictResolutionResult(
+            graph_delta_ids=graph_delta_ids,
+            obligation_id=effects.obligation_id,
+            plan_patch_id=effects.plan_patch_id,
+        )
+
+    def _commit(
+        self, project_id: str, candidates: Sequence[TickCandidate], *, tick_id: str, chapter_number: int, now: int,
+    ) -> tuple[str, ...]:
+        """Build the candidates into one world_engine delta on the latest canon chapter and commit it."""
+        # The resolution happens at the latest chapter's end: its window is that one minute.
+        context = TickContext(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            now=now,
+            window_start=now,
+            seed=tick_seed(project_id, chapter_number),
+        )
+        build = WorldTickDeltaBuilder(self.session).build(
+            context=context,
+            candidates=candidates,
+            news_in_transit=latest_news_in_transit(self.session, project_id),
+            tick_id=tick_id,
+        )
+        if build.delta is None:
+            errors = "; ".join(issue.message for issue in build.issues if issue.severity == "error")
+            raise ConflictStale(f"The held change no longer builds against canon: {errors}")
+        outcome = self.admission.commit_world_tick(
+            session=self.session,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            approved_changes=ApprovedGraphDeltaSet(
+                project_id=project_id, chapter_number=chapter_number, graph_deltas=[build.delta],
+            ),
+            tick_id=tick_id,
+        )
+        return outcome.graph_delta_ids
+
+
+__all__ = [
+    "OBLIGATION_DEADLINE_CHAPTERS",
+    "PLOT_RESPONSE_PATCH_TYPE",
+    "WORLD_CHANGE_OBLIGATION_TYPE",
+    "ConflictOptionUnavailable",
+    "ConflictResolutionResult",
+    "ConflictResolutionService",
+    "ConflictStale",
+    "OptionSideEffects",
+    "conflict_resolved_event",
+    "option_candidates",
+    "record_option_side_effects",
+]

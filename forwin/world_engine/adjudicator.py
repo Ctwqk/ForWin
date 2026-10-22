@@ -7,7 +7,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.book_state.story_clock import StoryCalendar
@@ -18,8 +17,9 @@ from forwin.protocol.book_state import WorldNode
 from forwin.skills import serialize_prompt_layers
 from forwin.utils import parse_llm_json
 from forwin.world_engine.constraints import ConstraintIssue
-from forwin.world_engine.types import AdjudicationResult, NEW_FACT_REF_PREFIX, TickContext, WorldEffects
-from forwin.writer.prompt_core.world_engine import build_adjudication_messages
+from forwin.world_engine.effect_validation import effect_reference_issues
+from forwin.world_engine.types import AdjudicationResult, TickContext
+from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_PROMPT_CHARS, build_adjudication_messages
 
 
 _STAGE_KEY = "world.adjudicate"
@@ -31,60 +31,7 @@ class AdjudicationCall:
     result: AdjudicationResult | None
     prompt_trace: dict
     issues: list[str]
-
-
-def _reference_issues(effects: WorldEffects, runtime: BookStateRuntime, lexicon: BookLexicon) -> list[str]:
-    allowed = (set(runtime.world.nodes_by_id) | set(runtime.map.nodes_by_id)
-               | {f"{FACT_REF_PREFIX}{ref}" for ref in runtime.world.facts_by_id}) - {"reader"}
-    new_facts = {f"{NEW_FACT_REF_PREFIX}{fact.key}" for fact in effects.new_facts}
-    modes = {mode.id for mode in lexicon.travel_modes}
-    issues: list[str] = []
-
-    def check(ref: str, path: str, *, refs: set[str] = allowed, optional: bool = False) -> None:
-        if optional and not ref:
-            return
-        if ref not in refs:
-            issues.append(f"unknown_ref at {path}: {ref!r}")
-
-    def value_refs(value: Any, path: str, *, is_ref: bool = False) -> None:
-        if isinstance(value, str) and is_ref:
-            check(value, path, optional=True)
-        elif isinstance(value, dict):
-            for key, item in value.items():
-                value_refs(item, f"{path}.{key}", is_ref=key.endswith(("_id", "_ids", "_ref", "_refs")))
-        elif isinstance(value, list):
-            for index, item in enumerate(value):
-                value_refs(item, f"{path}[{index}]", is_ref=is_ref)
-
-    for index, item in enumerate(effects.entity_changes):
-        check(item.ref, f"entity_changes[{index}].ref")
-        value_refs(item.new_value, f"entity_changes[{index}].new_value",
-                   is_ref=item.field.endswith(("_id", "_ids", "_ref", "_refs")))
-    for index, item in enumerate(effects.relation_changes):
-        check(item.source_ref, f"relation_changes[{index}].source_ref")
-        check(item.target_ref, f"relation_changes[{index}].target_ref")
-        value_refs(item.new_value, f"relation_changes[{index}].new_value",
-                   is_ref=item.field.endswith(("_id", "_ids", "_ref", "_refs")))
-    for index, item in enumerate(effects.movements):
-        check(item.entity_ref, f"movements[{index}].entity_ref")
-        check(item.to_location_id, f"movements[{index}].to_location_id", refs=set(runtime.map.nodes_by_id))
-        check(item.travel_mode_id, f"movements[{index}].travel_mode_id", refs=modes, optional=True)
-    for index, item in enumerate(effects.item_transfers):
-        check(item.item_ref, f"item_transfers[{index}].item_ref")
-        check(item.from_ref, f"item_transfers[{index}].from_ref", optional=True)
-        check(item.to_ref, f"item_transfers[{index}].to_ref", optional=True)
-    for index, item in enumerate(effects.events):
-        check(item.location_id, f"events[{index}].location_id", optional=True)
-        for ref in item.participant_refs:
-            check(ref, f"events[{index}].participant_refs")
-    for index, item in enumerate(effects.new_facts):
-        for ref in item.known_by:
-            check(ref, f"new_facts[{index}].known_by")
-    for index, item in enumerate(effects.knowledge):
-        check(item.observer_ref, f"knowledge[{index}].observer_ref")
-        check(item.fact_ref, f"knowledge[{index}].fact_ref", refs=allowed | new_facts)
-        check(item.source_ref, f"knowledge[{index}].source_ref", optional=True)
-    return issues
+    missing_intent_ids: tuple[str, ...] = ()
 
 
 def _validated_result(
@@ -99,7 +46,7 @@ def _validated_result(
         if outcome.intent_id in seen:
             issues.append(f"duplicate outcome for intent_id {outcome.intent_id!r}")
             continue
-        invalid = _reference_issues(outcome.effects, runtime, lexicon)
+        invalid = effect_reference_issues(outcome.effects, runtime, lexicon)
         if invalid:
             issues.extend(f"{outcome.intent_id}: {issue}" for issue in invalid)
             continue
@@ -130,11 +77,26 @@ class WorldAdjudicator:
         result = None
         issues: list[str] = []
         intent_ids = {intent.id for intent in intents}
+        if not intents:
+            result = AdjudicationResult()
+            prompt_trace = self._build_prompt_trace(
+                messages=[], context=context, intent_ids=[], attempts=[], business_retries=[],
+                result=result, issues=[],
+            )
+            return AdjudicationCall(result, prompt_trace, [])
         for attempt_no in range(1, self.max_attempts + 1):
             messages = build_adjudication_messages(
                 context=context, intents=intents, runtime=runtime, lexicon=lexicon, calendar=calendar,
                 feedback=feedback, retry_feedback=retry_feedback,
             )
+            if len(messages[-1]["content"]) > MAX_ADJUDICATION_PROMPT_CHARS:
+                issues = ["prompt_too_large"]
+                prompt_trace = self._build_prompt_trace(
+                    messages=messages, context=context, intent_ids=sorted(intent_ids), attempts=attempts,
+                    business_retries=business_retries, result=None, issues=issues,
+                    failure_reason="prompt_too_large",
+                )
+                return AdjudicationCall(None, prompt_trace, issues, tuple(sorted(intent_ids)))
             retry_feedback = []
             raw = ""
             call_error: Exception | None = None
@@ -169,9 +131,6 @@ class WorldAdjudicator:
                         event.setdefault("error_class", type(call_error).__name__)
                         if retry_feedback:
                             event.setdefault("error_message", failure_reason)
-                            event.setdefault("parse_ok", False)
-                            event.setdefault("schema_ok", False)
-                            event.setdefault("parse_error", failure_reason)
                         else:
                             event["error_message"] = failure_reason
                 attempts.extend(current_attempts)
@@ -181,7 +140,7 @@ class WorldAdjudicator:
                 key = (missing_count, len(candidate_issues))
                 if best_key is None or key <= best_key:
                     result, issues, best_key = candidate, candidate_issues, key
-                retry_feedback = candidate_issues
+                retry_feedback = candidate_issues if missing_count else []
 
             if (retry_feedback or call_error is not None) and attempt_no < self.max_attempts:
                 business_retries.append({
@@ -198,7 +157,8 @@ class WorldAdjudicator:
             messages=messages, context=context, intent_ids=sorted(intent_ids), attempts=attempts,
             business_retries=business_retries, result=result, issues=issues,
         )
-        return AdjudicationCall(result, prompt_trace, issues)
+        missing = intent_ids - {outcome.intent_id for outcome in result.outcomes} if result is not None else intent_ids
+        return AdjudicationCall(result, prompt_trace, issues, tuple(sorted(missing)))
 
     def _call_chat(self, messages: list[dict]) -> str:
         kwargs: dict[str, Any] = {
@@ -213,9 +173,10 @@ class WorldAdjudicator:
     def _build_prompt_trace(
         self, *, messages: list[dict], context: TickContext, intent_ids: list[str],
         attempts: list[dict[str, Any]], business_retries: list[dict[str, Any]],
-        result: AdjudicationResult | None, issues: list[str],
+        result: AdjudicationResult | None, issues: list[str], failure_reason: str = "",
     ) -> dict[str, Any]:
-        last_call_result = getattr(self.llm_client, "last_call_result", None)
+        missing = set(intent_ids) - {outcome.intent_id for outcome in result.outcomes} if result is not None else set(intent_ids)
+        last_call_result = getattr(self.llm_client, "last_call_result", None) if attempts else None
         trace = getattr(last_call_result, "trace", {}) or {}
         layers = serialize_prompt_layers(messages, [])
         return {
@@ -235,7 +196,8 @@ class WorldAdjudicator:
             },
             "attempts": attempts,
             "output_summary": {
-                "adjudication_ok": result is not None, "issues": issues,
+                "adjudication_ok": result is not None and not missing, "issues": issues,
+                "missing_intent_ids": sorted(missing), "failure_reason": failure_reason,
                 "outcome_count": len(result.outcomes) if result is not None else 0,
                 "skill_summary": [], "business_retry_events": business_retries,
             },

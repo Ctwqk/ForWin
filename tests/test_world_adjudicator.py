@@ -7,14 +7,13 @@ import pytest
 
 from forwin.book_state.cognition import CognitionView
 from forwin.book_state.knowledge import KNOWLEDGE_CHANNELS, KNOWLEDGE_STATES
-from forwin.book_state.lexicon import BookLexicon, TimeUnitAlias
+from forwin.book_state.lexicon import BookLexicon, TimeUnitAlias, TravelMode
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
-from forwin.book_state.schema import INTENT_ACTION_TYPES
 from forwin.book_state.story_clock import CalendarUnit, StoryCalendar
-from forwin.protocol.book_state import CognitionOverlay, FactNode, MapNode, WORLD_EDGE_TYPES, WorldNode
+from forwin.protocol.book_state import CognitionOverlay, FactNode, MapEdge, MapNode, WORLD_EDGE_TYPES, WorldEdge, WorldNode
 from forwin.world_engine.constraints import ConstraintIssue
-from forwin.world_engine.types import AdjudicationResult, TickContext
+from forwin.world_engine.types import AdjudicationResult, TickContext, WorldEffects
 
 
 CONTEXT = TickContext(project_id="p", chapter_number=3, now=120, window_start=60, seed=9182)
@@ -61,7 +60,8 @@ def _runtime():
                 "summary": "intent-summary",
             }, status="due", scheduled_at=90) for ref in ("intent-1", "intent-2")],
         ], states_by_node_id={"owner": {"resources": ["current-resource"], "location_id": "site"}}, facts=[
-            FactNode(id="hidden", project_id="p", proposition="hidden-world-truth", sensitivity_level="secret"),
+            FactNode(id="hidden", project_id="p", proposition="hidden-world-truth", sensitivity_level="secret",
+                     related_node_refs=["owner"]),
         ]),
         map_graph=MapGraph(nodes=[MapNode(id="site", project_id="p", node_type="site", name="site-name")]),
         cognition_by_observer={
@@ -145,8 +145,13 @@ def test_prompt_carries_seed_rules_and_calendar_units_but_no_reader_knowledge():
     client = StubLLM({"outcomes": [_outcome()]})
     call = _adjudicate(client, runtime=runtime)
     user = client.calls[0][0][-1]["content"]
+    payload = json.loads(user)
+    assert payload["context"]["seed"] == 9182
+    assert payload["rules"] == [{"id": "rule", "hardness": "hard", "statement": "rule-statement"}]
+    assert payload["calendar"]["units"] == [{"name": "cycle", "minutes": 120}]
+    assert payload["lexicon"]["time_unit_aliases"] == [{"name": "watch", "minutes": 30}]
     assert all(value in user for value in (
-        "9182", "rule-statement", "hard", "cycle", "120", "watch", "30", "hidden-world-truth",
+        "hidden-world-truth",
         "current-resource", "target-resource", "site-name", "holder_id", "owner_ref", "scheduled_at",
     ))
     assert "stale-resource" not in user
@@ -160,8 +165,11 @@ def test_prompt_lists_canonical_enum_values_missing_from_json_schema():
     client = StubLLM({"outcomes": [_outcome()]})
     _adjudicate(client)
     system = client.calls[0][0][0]["content"]
-    for allowed in (KNOWLEDGE_CHANNELS, KNOWLEDGE_STATES, WORLD_EDGE_TYPES, INTENT_ACTION_TYPES):
-        assert all(json.dumps(value) in system for value in allowed)
+    allowed = json.loads(system.split("Allowed values:\n")[1])
+    assert allowed == {
+        "knowledge_state": list(KNOWLEDGE_STATES), "knowledge_channel": list(KNOWLEDGE_CHANNELS),
+        "edge_type": sorted(WORLD_EDGE_TYPES), "new_fact_ref_prefix": "fact:new:",
+    }
 
 
 @pytest.mark.parametrize("first", [{}, {"outcomes": []}, {"outcomes": [_outcome("intent-2")]}])
@@ -235,3 +243,161 @@ def test_trace_preserves_backend_and_actual_model():
     assert trace["codex_job_id"] == "job-1"
     assert trace["fallback_used"] is True
     assert trace["model_profile"]["actual_model"] == "test-actual-model"
+
+
+def _prompt_payload(runtime, **kwargs):
+    from forwin.writer.prompt_core.world_engine import build_adjudication_messages
+    messages = build_adjudication_messages(
+        context=CONTEXT, intents=[runtime.world.get_node("intent-1")], runtime=runtime,
+        lexicon=LEXICON, calendar=CALENDAR, **kwargs,
+    )
+    return json.loads(messages[-1]["content"].split("\n\n")[0]), messages[-1]["content"]
+
+
+def test_prompt_limits_full_bodies_and_scopes_edges_and_facts():
+    runtime = _runtime()
+    for index in range(100):
+        runtime.world.add_node(_node(f"unrelated-{index}", profile={"detail": "unrelated-body" * 100}))
+    runtime.world.add_node(_node("nearby", location_id="site"))
+    runtime.world.add_node(_node("elsewhere", location_id="remote"))
+    runtime.world.add_node(_node("target-item", "resource", holder_id="target"))
+    runtime.world.add_node(_node("remote-item", "item", holder_id="elsewhere"))
+    runtime.world.get_node("target").profile["fact_refs"] = ["fact:referenced-hidden"]
+    for ref, source, target in (
+        ("one-hop", "nearby", "elsewhere"), ("two-hop", "elsewhere", "unrelated-0"),
+    ):
+        runtime.world.add_edge(WorldEdge(id=ref, project_id="p", source_id=source, target_id=target,
+                                        edge_family="social", edge_type="trusts"))
+    runtime.world.add_fact(FactNode(id="referenced-hidden", project_id="p", proposition="referenced-truth",
+                                  sensitivity_level="hidden", contradiction_refs=["fact:linked-hidden"]))
+    runtime.world.add_fact(FactNode(id="linked-hidden", project_id="p", proposition="linked-truth",
+                                  sensitivity_level="secret", contradiction_refs=["fact:referenced-hidden"]))
+    runtime.world.add_fact(FactNode(id="edge-fact", project_id="p", proposition="edge-truth",
+                                  related_edge_refs=["one-hop"]))
+    runtime.world.add_fact(FactNode(id="unrelated-fact", project_id="p", proposition="unrelated-truth",
+                                  related_node_refs=["elsewhere"], sensitivity_level="secret"))
+    payload, user = _prompt_payload(runtime)
+    assert {node["id"] for node in payload["world_nodes"]} == {"owner", "target", "item", "target-item", "nearby"}
+    assert [node["id"] for node in payload["intents"]] == ["intent-1"]
+    index = {node["id"]: node for node in payload["world_node_index"]}
+    assert index["unrelated-99"] == {"id": "unrelated-99", "node_type": "character", "name": ""}
+    assert "intent-1" not in index
+    assert "unrelated-body" not in user and "unrelated-truth" not in user
+    assert [edge["id"] for edge in payload["world_edges"]] == ["one-hop"]
+    assert {fact["id"] for fact in payload["facts"]} == {"hidden", "referenced-hidden", "linked-hidden", "edge-fact"}
+    for node in payload["world_nodes"] + payload["intents"]:
+        assert not ({"aliases", "tags", "metadata", "retired_at_chapter", "importance", "is_active"} & node.keys())
+        assert all(value not in (None, [], {}) for value in node.values())
+
+
+def test_prompt_includes_nodes_at_intent_location_and_one_hop_map():
+    runtime = _runtime()
+    runtime.world.get_node("intent-1").profile["location_id"] = "destination"
+    runtime.world.add_node(_node("at-destination", location_id="destination"))
+    for ref in ("destination", "neighbor", "remote"):
+        runtime.map.nodes_by_id[ref] = MapNode(id=ref, project_id="p", node_type="site", description="map-body-" + ref)
+    for ref, source, target in (("near", "destination", "neighbor"), ("far", "neighbor", "remote")):
+        runtime.map.edges_by_id[ref] = MapEdge(id=ref, project_id="p", from_node_id=source,
+                                             to_node_id=target, edge_type="path", travel_time=2)
+    payload, user = _prompt_payload(runtime)
+    assert "at-destination" in {node["id"] for node in payload["world_nodes"]}
+    assert [edge["id"] for edge in payload["map_edges"]] == ["near"]
+    assert "map-body-remote" not in user
+
+
+def test_prompt_drops_compact_index_before_size_guard():
+    runtime = _runtime()
+    for index in range(1200):
+        runtime.world.add_node(_node(f"unrelated-{index}"))
+    client = StubLLM({"outcomes": [_outcome()]})
+    call = _adjudicate(client, runtime=runtime)
+    assert len(client.calls) == 1 and call.result.outcomes
+    user = client.calls[0][0][-1]["content"]
+    assert len(user) <= 60000
+    assert "unrelated-1199" not in user
+
+
+def test_oversized_prompt_returns_failure_without_llm_call():
+    runtime = _runtime()
+    runtime.world.states_by_node_id["owner"]["resources"] = ["x" * 60001]
+    client = StubLLM({"outcomes": [_outcome()]})
+    call = _adjudicate(client, runtime=runtime)
+    assert client.calls == []
+    assert call.result is None
+    assert call.missing_intent_ids == ("intent-1",)
+    assert call.prompt_trace["attempts"] == []
+    assert call.prompt_trace["output_summary"]["failure_reason"] == "prompt_too_large"
+    assert call.prompt_trace["output_summary"]["adjudication_ok"] is False
+
+
+def test_exhausted_empty_result_reports_missing_intents():
+    call = _adjudicate(StubLLM({}), max_attempts=1)
+    assert call.prompt_trace["output_summary"]["adjudication_ok"] is False
+    assert call.missing_intent_ids == ("intent-1",)
+
+
+def test_duplicate_outcomes_keep_first_valid_without_retry():
+    client = StubLLM({"outcomes": [_outcome(summary="first"), _outcome(summary="second")]})
+    call = _adjudicate(client)
+    assert len(client.calls) == 1
+    assert call.result.outcomes[0].summary == "first"
+    assert any("duplicate" in issue for issue in call.issues)
+    assert call.missing_intent_ids == ()
+    assert call.prompt_trace["output_summary"]["adjudication_ok"] is True
+
+
+@pytest.mark.parametrize("feedback", [
+    {"intent-1": []}, {"other": [ConstraintIssue("test", "message", "owner")]},
+    {"intent-1": [], "other": [ConstraintIssue("test", "message", "owner")]},
+])
+def test_feedback_section_absent_without_issues_for_input_intents(feedback):
+    client = StubLLM({"outcomes": [_outcome()]})
+    _adjudicate(client, feedback=feedback)
+    assert "Constraint feedback by intent:" not in client.calls[0][0][-1]["content"]
+
+
+def test_empty_intents_return_empty_call_without_llm():
+    client = StubLLM({})
+    call = _adjudicate(client, refs=())
+    assert client.calls == []
+    assert call.result == AdjudicationResult()
+    assert call.issues == [] and call.missing_intent_ids == ()
+    assert call.prompt_trace["attempts"] == []
+
+
+@pytest.mark.parametrize("effects,path", [
+    ({"entity_changes": [{"ref": "owner", "field": "location_id", "new_value": "unknown"}]}, "entity_changes[0].new_value"),
+    ({"entity_changes": [{"ref": "owner", "field": "details", "new_value": {"target_refs": ["unknown"]}}]}, "entity_changes[0].new_value.target_refs[0]"),
+    ({"relation_changes": [{"source_ref": "owner", "target_ref": "target", "edge_type": "trusts", "change": "set", "field": "owner_ref", "new_value": "unknown"}]}, "relation_changes[0].new_value"),
+    ({"relation_changes": [{"source_ref": "owner", "target_ref": "target", "edge_type": "trusts", "change": "set", "field": "details", "new_value": {"target_ref": "unknown"}}]}, "relation_changes[0].new_value.target_ref"),
+    ({"movements": [{"entity_ref": "owner", "to_location_id": "unknown", "depart_at": 70, "arrive_at": 80}]}, "movements[0].to_location_id"),
+    ({"movements": [{"entity_ref": "owner", "to_location_id": "site", "travel_mode_id": "unknown", "depart_at": 70, "arrive_at": 80}]}, "movements[0].travel_mode_id"),
+    ({"events": [{"summary": "event", "participant_refs": ["unknown"], "location_id": "site", "visibility": "public", "at": 70}]}, "events[0].participant_refs"),
+    *[({"item_transfers": [{"item_ref": "item", "from_ref": "owner", "to_ref": "target", field: "unknown"}]}, f"item_transfers[0].{field}") for field in ("item_ref", "from_ref", "to_ref")],
+    *[({"new_facts": [{"key": "new", "proposition": "truth", "truth_value": True, "sensitivity": "hidden", "known_by": [ref]}]}, "new_facts[0].known_by") for ref in ("unknown", "reader")],
+])
+def test_shared_reference_validator_rejects_remaining_reference_branches(effects, path):
+    from forwin.world_engine.effect_validation import effect_reference_issues
+    issues = effect_reference_issues(WorldEffects.model_validate(effects), _runtime(), LEXICON)
+    assert any(path in issue for issue in issues)
+    bad = {"outcomes": [_outcome(effects=effects)]}
+    client = StubLLM(bad, bad)
+    call = _adjudicate(client)
+    assert len(client.calls) == 2 and call.result.outcomes == []
+    assert any(path in issue for issue in call.issues)
+
+
+def test_shared_reference_validator_accepts_known_refs_and_free_text():
+    from forwin.world_engine.effect_validation import effect_reference_issues
+    lexicon = BookLexicon(travel_modes=(TravelMode("walk", "walk", 1, ("path",)),))
+    effects = WorldEffects.model_validate({
+        "entity_changes": [{"ref": "owner", "field": "location_id", "new_value": "site"},
+                           {"ref": "owner", "field": "resources", "new_value": ["free text"]}],
+        "relation_changes": [{"source_ref": "owner", "target_ref": "target", "edge_type": "trusts",
+                              "change": "set", "field": "details", "new_value": {"target_refs": ["item"]}}],
+        "movements": [{"entity_ref": "owner", "to_location_id": "site", "travel_mode_id": "walk", "depart_at": 70, "arrive_at": 80}],
+        "events": [{"summary": "event", "participant_refs": ["owner"], "location_id": "site", "visibility": "public", "at": 70}],
+        "item_transfers": [{"item_ref": "item", "from_ref": "owner", "to_ref": "target"}],
+        "new_facts": [{"key": "new", "proposition": "truth", "truth_value": True, "sensitivity": "hidden", "known_by": ["owner"]}],
+    })
+    assert effect_reference_issues(effects, _runtime(), lexicon) == []

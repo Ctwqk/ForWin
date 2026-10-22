@@ -42,7 +42,8 @@ _PARSER_NAME = "ActorTurnRunner JSON parser"
 MAX_REACHABLE_PLACES = 12
 MAX_RECENT_VETOES = 5
 MAX_PENDING_INTENTS = 10
-# Newest first, so a long book's views stay well under the prompt guard.
+# Newest first (recorded seed and static knowledge ahead of event news), so a long book's views
+# stay well under the prompt guard.
 MAX_KNOWN_FACTS = 60
 MAX_PUBLIC_FACTS = 30
 # The knowledge states in which an actor holds a fact and acts on it.
@@ -302,11 +303,12 @@ def _cognition(runtime: BookStateRuntime, actor: WorldNode) -> CognitionView:
 def _known_facts(runtime: BookStateRuntime, cognition: CognitionView) -> tuple[list[dict], list[dict]]:
     """Facts with a recorded held state, and static public facts known by default, each list newest first.
 
-    A false belief reads as held. An unrecorded event fact stays unknown: its news arrives through
-    propagation, which records the knowledge.
+    Recorded non-event facts (seed and static knowledge) come before event news, so news never
+    crowds them out of the cap. A false belief reads as held. An unrecorded event fact stays
+    unknown: its news arrives through propagation, which records the knowledge.
     """
     known = set(runtime.world.nodes_by_id) | set(runtime.map.nodes_by_id)
-    recorded: list[tuple[int, str, dict]] = []
+    recorded: list[tuple[bool, int, str, dict]] = []
     public: list[tuple[int, str, dict]] = []
     for fact in runtime.world.facts_by_id.values():
         ref = f"{FACT_REF_PREFIX}{fact.id}"
@@ -320,11 +322,12 @@ def _known_facts(runtime: BookStateRuntime, cognition: CognitionView) -> tuple[l
         if related:
             entry["related_refs"] = related
         if ref in cognition.knowledge_by_ref:
-            recorded.append((-fact.created_at_chapter, ref, {**entry, "state": state}))
+            is_event = fact.fact_type == _EVENT_FACT_TYPE
+            recorded.append((is_event, -fact.created_at_chapter, ref, {**entry, "state": state}))
         else:
             public.append((-fact.created_at_chapter, ref, entry))
     return (
-        [entry for *_key, entry in sorted(recorded, key=lambda item: item[:2])[:MAX_KNOWN_FACTS]],
+        [entry for *_key, entry in sorted(recorded, key=lambda item: item[:3])[:MAX_KNOWN_FACTS]],
         [entry for *_key, entry in sorted(public, key=lambda item: item[:2])[:MAX_PUBLIC_FACTS]],
     )
 

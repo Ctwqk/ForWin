@@ -703,3 +703,22 @@ def test_non_finite_duration_retries_with_feedback(amount, field):
     assert call.result is not None and len(client.calls) == 2
     retry = _retry_feedback(client.calls[1])
     assert "invalid_duration" in retry and field in retry and "finite" in retry
+
+
+def test_seed_knowledge_outlasts_newer_event_news_under_the_cap():
+    from forwin.world_engine.actor_turns import MAX_KNOWN_FACTS
+    runtime = _runtime()
+    overlay = runtime.cognition_by_observer[("character", "hero")]
+    runtime.world.add_fact(_fact("seed-secret", "seed-secret-proposition", chapter=0))
+    overlay.knowledge_by_ref["fact:seed-secret"] = "knows"
+    for index in range(MAX_KNOWN_FACTS + 5):
+        runtime.world.add_fact(_fact(f"event-{index:03d}", f"event-news-{index:03d}", sensitivity="public",
+                                     chapter=index + 1, kind="event"))
+        overlay.knowledge_by_ref[f"fact:event-{index:03d}"] = "heard"
+    refs = [fact["ref"] for fact in _view(runtime=runtime).facts]
+    assert len(refs) == MAX_KNOWN_FACTS
+    # Non-event knowledge first, newest first; then event news, newest first.
+    assert refs[:6] == ["fact:false-certainty", "fact:false-rumor", "fact:heard-rumor", "fact:hero-secret",
+                        "fact:public-heard", "fact:seed-secret"]
+    assert refs[6] == f"fact:event-{MAX_KNOWN_FACTS + 4:03d}"
+    assert all(f"fact:event-{index:03d}" not in refs for index in range(11))

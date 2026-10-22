@@ -364,6 +364,8 @@ class ProjectApplicationService:
         project_id: str,
         chapter_number: int,
         req: ChapterReviewApproveRequest,
+        *,
+        allow_extraction_override: bool = False,
     ):
         deps = self.deps
         return reviews.approve_chapter_review(
@@ -381,6 +383,7 @@ class ProjectApplicationService:
             log_decision_event=deps.log_decision_event,
             create_continue_generation_task=deps.create_continue_generation_task,
             update_task=deps.update_task,
+            allow_extraction_override=allow_extraction_override,
         )
 
     def retry_chapter_review(

@@ -25,6 +25,7 @@ class AcceptanceStage:
         actor_type: DecisionActorType = "manual_ui",
         actor_id: str = "",
         source: str = "direct",
+        allow_extraction_override: bool = False,
     ) -> dict[str, str]:
         session: Session = self._SessionFactory()
         try:
@@ -96,6 +97,7 @@ class AcceptanceStage:
                 acceptance_mode="human_approved",
                 repair_attempt_count=repair_attempt_count,
                 residual_review_issues=residual_issues,
+                allow_extraction_override=allow_extraction_override,
                 canon_risk_level=(
                     "low" if verdict.verdict in {"pass", "warn"} else "high"
                 ),

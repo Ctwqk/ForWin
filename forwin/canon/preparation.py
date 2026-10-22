@@ -326,6 +326,7 @@ class CanonPreparationService:
         repair_attempt_count: int,
         residual_review_issues: list[dict[str, Any]],
         canon_risk_level: str,
+        allow_extraction_override: bool = False,
     ) -> CanonPreparationOutcome:
         candidate = CandidateDraftRepository(session).get(candidate_id)
         if candidate is None:
@@ -363,9 +364,10 @@ class CanonPreparationService:
             ),
         )
         ineligible_reason = candidate_ineligibility_reason(verdict)
+        # Only a person's accept may pass a review that failed for want of an extraction.
         override = (
             extraction_error_override(verdict)
-            if ineligible_reason and acceptance_mode == "human_approved"
+            if ineligible_reason and allow_extraction_override
             else None
         )
         if ineligible_reason and override is None:

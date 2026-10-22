@@ -718,7 +718,14 @@ def approve_chapter_review(
     log_decision_event,
     create_continue_generation_task,
     update_task,
+    allow_extraction_override: bool = False,
 ) -> ChapterReviewApproveResponse:
+    """Accept a chapter review into canon.
+
+    ``allow_extraction_override`` is set only for a person's accept (the review approve route,
+    which the UI and MCP use). It lets a review that failed only for want of a usable
+    extraction go to canon, which extracts the chapter again; the scheduler never sets it.
+    """
     if config is None or pipeline is None:
         raise HTTPException(500, "服务尚未完成初始化")
 
@@ -770,6 +777,8 @@ def approve_chapter_review(
             accept_kwargs["actor_type"] = "api"
         if "source" in accept_review_parameters:
             accept_kwargs["source"] = "chapter_review_approve_api"
+        if "allow_extraction_override" in accept_review_parameters:
+            accept_kwargs["allow_extraction_override"] = allow_extraction_override
         result = pipeline.accept_review(
             project_id,
             chapter_number,

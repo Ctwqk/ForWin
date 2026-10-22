@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from forwin.api_schema import ChapterReviewApproveRequest
 from forwin.application.projects import ProjectApplicationService
 
 
@@ -35,9 +36,24 @@ def build_handlers(
         "create_project_chapter_upload_job": service.create_project_chapter_upload_job,
         "get_chapter_review": service.get_chapter_review,
         "get_candidate_draft": service.get_candidate_draft,
-        "approve_chapter_review": service.approve_chapter_review,
+        "approve_chapter_review": _manual_review_approval(service),
         "retry_chapter_review": service.retry_chapter_review,
     }
+
+
+def _manual_review_approval(service: ProjectApplicationService) -> Callable[..., Any]:
+    def approve_chapter_review(
+        project_id: str,
+        chapter_number: int,
+        req: ChapterReviewApproveRequest,
+    ):
+        # The route is a person's accept (the UI or an MCP operator), unlike the scheduler's
+        # review quota, so a review that failed only for want of an extraction may reach canon.
+        return service.approve_chapter_review(
+            project_id, chapter_number, req, allow_extraction_override=True,
+        )
+
+    return approve_chapter_review
 
 
 __all__ = ["build_handlers"]

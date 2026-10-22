@@ -18,10 +18,12 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
+from forwin.api_schema import ChapterReviewApproveRequest
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.book_frame_repository import StoryCalendarRepository
 from forwin.book_state.extraction.evidence import FACT_FIELDS
 from forwin.config import InfrastructureConfig
+from forwin.http.automation import _run_scheduled_review_action
 from forwin.models import DecisionEvent
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.draft import ChapterDraft, ChapterReview
@@ -33,6 +35,7 @@ from forwin.protocol.writer import WriterOutput
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import ChapterLengthPolicy, RuntimePolicy
 from tests.chapter_delta_helpers import body_sha256
+from tests.http_runtime_harness import HttpRuntimeHarness
 from tests.postgres import postgres_test_url
 from tests.test_chapter_delta_multi_genre import _Book, _shortest_minutes, _start_book
 
@@ -239,10 +242,21 @@ def test_extraction_outage_ends_in_manual_review_not_failure(make_pipeline, outa
     assert _committed_source(pipeline, book) == []
 
 
-def _accept(pipeline, book: _Book, client: _Extraction) -> dict[str, str]:
-    """The operator's accept of chapter one, with canon extracting through ``client``."""
+def _review_api(pipeline, client: _Extraction) -> HttpRuntimeHarness:
+    """The HTTP review routes over ``pipeline``, with canon extracting through ``client``."""
     pipeline.canon_preparation_context = replace(pipeline.canon_preparation_context, llm_client=client)
-    return pipeline.accept_review(book.project_id, 1)
+    return HttpRuntimeHarness(
+        session_factory=pipeline._SessionFactory,  # noqa: SLF001
+        config=pipeline._runtime_container.infrastructure,  # noqa: SLF001
+        pipeline=pipeline,
+    )
+
+
+def _accept(pipeline, book: _Book, client: _Extraction):
+    """An operator's accept of chapter one through the review approve route (UI or MCP)."""
+    return _review_api(pipeline, client).approve_chapter_review(
+        book.project_id, 1, ChapterReviewApproveRequest(reason="operator accepts after the extractor recovered"),
+    )
 
 
 @pytest.mark.parametrize("outage,blocking_code", OUTAGES)
@@ -258,7 +272,7 @@ def test_human_accept_after_the_extractor_recovers_commits_past_the_extraction_e
 
     result = _accept(pipeline, book, client)
 
-    assert result["status"] in {"accepted", "maintenance_pending"}, result
+    assert result.status in {"accepted", "maintenance_pending"}, result
     # Canon extracted the reviewed body again and committed that extraction.
     assert client.extracted[extracted_before:] == [body_sha256(reviewed)]
     assert _chapter_status(pipeline, book) == "accepted"
@@ -274,7 +288,26 @@ def test_human_accept_while_the_extractor_is_down_blocks_at_canon(make_pipeline)
 
     result = _accept(pipeline, book, client)
 
-    assert (result["status"], result["frozen_artifact"]) == ("needs_review", "chapter-delta-extraction-blocked")
+    assert (result.status, result.frozen_artifact) == ("needs_review", "chapter-delta-extraction-blocked")
+    assert _chapter_status(pipeline, book) == "needs_review"
+    assert _committed_source(pipeline, book) == []
+    assert _events(pipeline, book, DecisionEventType.REVIEW_APPROVED) == []
+
+
+def test_scheduler_review_quota_does_not_accept_past_extraction_errors(make_pipeline) -> None:
+    pipeline = make_pipeline()
+    book, writer, client = _outage(pipeline, "provider_down")
+    _run(pipeline, book, writer, client)
+    reviewed = writer.bodies[len(writer.stage_keys) - 1]
+    client.answers.update([_answer(book, reviewed)])
+    extracted_before = len(client.extracted)
+    api = _review_api(pipeline, client)
+
+    result = _run_scheduled_review_action(api.runtime, book.project_id, 1)
+
+    # The scheduler is not a person: the stored fail verdict keeps the pre-wave rejection.
+    assert (result.status, result.frozen_artifact) == ("needs_review", "review verdict fail is not Canon-eligible")
+    assert client.extracted[extracted_before:] == []
     assert _chapter_status(pipeline, book) == "needs_review"
     assert _committed_source(pipeline, book) == []
     assert _events(pipeline, book, DecisionEventType.REVIEW_APPROVED) == []
@@ -398,3 +431,54 @@ def test_world_error_is_rewritten_reextracted_committed_and_resolves_its_obligat
     with pipeline._SessionFactory() as session:  # noqa: SLF001
         stored = session.get(NarrativeObligationRow, obligation.id)
         assert (stored.status, stored.resolution_chapter) == ("resolved", 1)
+
+
+CHAPTER_TWO = (
+    "天亮以后，祁长烬沿着崖背的碎石坡往下走。坡上没有路，他只能一手扶着岩壁，一手护着怀里的剑穗，走得很慢。"
+    "\n\n半山腰有一眼细泉，他停下来喝了几口水，顺手把剑穗上的泥点洗掉。红绳泡了水，颜色反倒鲜亮了些，"
+    "像是有人刚刚系上去的一样。他盯着那截红绳看了很久，才把它重新收好。"
+    "\n\n下到崖底时已经过了正午。林子里很静，只有远处偶尔传来几声鸟叫。他在一块平整的青石上坐下，"
+    "把这几天的事情从头想了一遍：师尊闪躲的眼神，碑上母亲的名字，还有那三年无人提起的守冢岁月。"
+    "\n\n他想不出答案，却也不再急着回山门。歇够了，他便顺着溪水往下游走，打算先找个落脚的村子，"
+    "打听一下当年守剑冢的人还剩下谁。溪水绕过一道弯，前面隐约露出几缕炊烟。"
+    "\n\n他放慢脚步，把斗笠压低了一些。山门的规矩他守了十几年，今天是第一次不想让任何人知道自己去了哪里。"
+    "\n\n村口有一棵老槐树，树下坐着几个晒太阳的老人，正低声说着今年的收成。祁长烬没有上前，只在不远处的井边打了半桶水，"
+    "装作赶路的行脚人歇脚。他听见有人提起断剑崖，说那里早些年还有人守着，后来守冢的人走了，崖上便再没有灯火。"
+    "\n\n他把这句话记在心里，没有追问。日头偏西时，他向村里唯一的客栈要了一间靠后的屋子，"
+    "关上门，把剑穗摊在桌上，借着窗缝透进来的光，一寸一寸地看那截褪了色的红绳。"
+)
+
+
+def test_pulp_chapter_after_an_accepted_outage_is_not_failed_for_a_missed_payoff(make_pipeline) -> None:
+    pipeline = make_pipeline("pulp")
+    book, writer, client = _outage(pipeline, "provider_down")
+    _run(pipeline, book, writer, client)
+    reviewed = writer.bodies[len(writer.stage_keys) - 1]
+    client.answers.update([_answer(book, reviewed)])
+    assert _accept(pipeline, book, client).status in {"accepted", "maintenance_pending"}
+    with pipeline._SessionFactory() as session:  # noqa: SLF001
+        goals = json.loads(session.scalar(select(ChapterPlan.goals_json).where(
+            ChapterPlan.project_id == book.project_id, ChapterPlan.chapter_number == 2,
+        )) or "[]")
+    quote = "下到崖底时已经过了正午"
+    client.answers[body_sha256(CHAPTER_TWO)] = {
+        "body_sha256": body_sha256(CHAPTER_TWO),
+        "time": {"elapsed": None, "evidence": ""},
+        "events": [{
+            "summary": "祁长烬下到崖底", "participant_refs": [book.refs[("node", "祁长烬")]],
+            "significance": "minor", "visibility": "public", "evidence": quote,
+        }],
+        "plan_fulfillment": [
+            {"target_id": f"goal:{index}", "status": "done", "evidence": quote} for index in range(1, len(goals) + 1)
+        ],
+    }
+
+    # Neither chapter shows a payoff. Chapter one's floor ran without an extraction, so its
+    # miss is unknown and does not start a run of consecutive misses.
+    result = _run(pipeline, book, _Writer(book, [CHAPTER_TWO]), client)
+
+    assert [event.reason for event in _events(pipeline, book, DecisionEventType.HARD_GATE_HIT)] == []
+    assert result.failed_chapters == [], result
+    evaluations = _events(pipeline, book, DecisionEventType.PULP_BEAT_EVALUATED)
+    assert [event.chapter_number for event in evaluations] == [1, 2]
+    assert all(json.loads(event.payload_json)["pulp_beat"]["visible_payoff_present"] is False for event in evaluations)

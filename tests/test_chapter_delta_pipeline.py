@@ -440,7 +440,8 @@ def test_human_accept_keeps_rejecting_a_review_with_another_error_beside_the_mis
     pipeline.canon_preparation_context = replace(pipeline.canon_preparation_context, llm_client=client)
     monkeypatch.setattr(pipeline, "_load_writer_output_from_meta", lambda _meta: planned)
 
-    result = pipeline.accept_review(chapter.project_id, 1)
+    # Even a person's accept, which may pass extraction errors alone, is rejected.
+    result = pipeline.accept_review(chapter.project_id, 1, allow_extraction_override=True)
 
     assert (result["status"], result["frozen_artifact"]) == ("needs_review", "review verdict fail is not Canon-eligible")
     assert client.extraction_calls() == 0

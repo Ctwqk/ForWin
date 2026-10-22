@@ -27,7 +27,9 @@ allowed_values = ["main", "fact_type", "fact_id", "thread_id", "world_line_id", 
   # BookState v6 intent profile reference to its owning agenda.
   "agenda_ref",
   # ChapterDeltaExtraction field name used in translator issue paths.
-  "intent_interactions"]
+  "intent_interactions",
+  # World tick candidate origin enum token (forwin/world_engine/types.py TickCandidate.origin).
+  "intent_interaction"]
 
 [canary]
 seed_terms = [

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from forwin.book_state.book_frame_repository import BookLexiconRepository
 from forwin.book_state.cognition import CognitionView
 from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
-from forwin.book_state.lexicon import TravelMode
+from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
@@ -24,7 +24,6 @@ from forwin.protocol.book_state import (
     GraphDelta,
     NodePatch,
     ObserverType,
-    PathResult,
 )
 
 
@@ -309,7 +308,6 @@ class _ChapterExtractionChecks:
         if not self.movements:
             return
         lexicon = BookLexiconRepository(self.session).get(self.delta.project_id)
-        modes = {mode.id: mode for mode in lexicon.travel_modes}
         start, end = self.delta.story_time_start, self._chapter_end()
         chapter_minutes = end - start if start is not None and end is not None else None
         # Each mover's shortest travel time per measured movement.
@@ -323,10 +321,9 @@ class _ChapterExtractionChecks:
             from_id, to_id = str(movement.get("from_id") or ""), str(movement.get("to_id") or "")
             if not from_id or not to_id or from_id == to_id:
                 continue
-            path = self._route(mover, from_id, to_id)
-            if path is None:
+            shortest = self._shortest_minutes(lexicon, mover, from_id, to_id)
+            if shortest is None:
                 continue
-            shortest = self._shortest_minutes(modes, mover, path)
             required[mover].append(shortest)
             if depart is not None and arrive is not None and arrive >= depart:
                 claimed = arrive - depart
@@ -339,7 +336,7 @@ class _ChapterExtractionChecks:
                     "and the movement has no valid depart and arrive offsets",
                 )
                 continue
-            self._speed_issues(mover, path, shortest, claimed)
+            self._speed_issues(mover, from_id, to_id, shortest, claimed)
         if chapter_minutes is not None:
             self._total_time_issues(required, chapter_minutes)
 
@@ -386,50 +383,36 @@ class _ChapterExtractionChecks:
                 return True
         return False
 
-    def _route(self, mover: str, from_id: str, to_id: str) -> PathResult | None:
-        """The mover's known route when it has a cognition overlay, else the objective one."""
+    def _shortest_minutes(self, lexicon: BookLexicon, mover: str, from_id: str, to_id: str) -> float | None:
+        """The mover's shortest time over a route it knows; None once a missing route is reported."""
+        # Imported here: forwin.protocol's package init loads this module, and the travel module
+        # imports forwin.protocol, so a module-level import cycles when the travel module loads first.
+        from forwin.world_engine.travel import estimate_travel
+
+        travel = estimate_travel(
+            self.runtime, lexicon, mover_id=mover, from_location_id=from_id, to_location_id=to_id,
+            graph=self.graph,
+        )
         target = f"node:{mover}"
-        objective = self.graph.shortest_path(from_id, to_id, metric="travel_time")
-        if not objective.reachable:
+        if not travel.reachable:
             self._issue(
                 "error", "movement_unreachable", target,
-                f"no objective map path for {mover} moving {from_id} -> {to_id}: {objective.blocked_reason}",
+                f"no objective map path for {mover} moving {from_id} -> {to_id}: {travel.blocked_reason}",
             )
             return None
-        observer = self._overlay_key(mover)
-        if observer is None:
-            return objective
-        known = self.graph.shortest_path(from_id, to_id, metric="travel_time", observer=observer)
-        if not known.reachable:
+        if not travel.route_known:
             self._issue(
                 "error", "movement_route_unknown_to_mover", target,
                 f"{mover} knows no route {from_id} -> {to_id}; the objective path uses edges it does not know",
             )
             return None
-        return known
+        return travel.minutes
 
-    def _shortest_minutes(self, modes: dict[str, TravelMode], mover: str, path: PathResult) -> float:
-        # Speed 1.0 over the mover's route, or one of its travel modes over the fastest route that
-        # mode may use; both follow the same known-route rule.
-        observer = self._overlay_key(mover)
-        candidates = [path.total_travel_time * 60]
-        for mode_id in self.runtime.world.get_state(mover).get("travel_mode_ids") or []:
-            mode = modes.get(mode_id)
-            if mode is None:
-                continue
-            by_mode = self.graph.shortest_path(
-                path.from_node_id, path.to_node_id, metric="travel_time", observer=observer,
-                allowed_edge_types=frozenset(mode.allowed_edge_types),
-            )
-            if by_mode.reachable:
-                candidates.append(by_mode.total_travel_time * 60 / mode.speed_multiplier)
-        return min(candidates)
-
-    def _speed_issues(self, mover: str, path: PathResult, shortest: float, claimed: int) -> None:
+    def _speed_issues(self, mover: str, from_id: str, to_id: str, shortest: float, claimed: int) -> None:
         if shortest <= 0:
             return
         detail = (
-            f"{mover} covers {path.from_node_id} -> {path.to_node_id} in {claimed} min; "
+            f"{mover} covers {from_id} -> {to_id} in {claimed} min; "
             f"the shortest is {shortest:g} min"
         )
         # The epsilon keeps a claim exactly at a bound from losing to float rounding.

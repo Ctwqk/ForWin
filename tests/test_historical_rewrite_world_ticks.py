@@ -17,12 +17,13 @@ from forwin.canon.types import CanonAdmissionOutcome
 from forwin.maintenance.events import ORDER_CONTROLS_KEY, POST_CANON_STEP_NAMES
 from forwin.models.audit import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.book_state import GraphDeltaRow, WorldNodeRow
+from forwin.models.book_state import GraphDeltaRow, WorldEdgeRow, WorldNodeRow, WorldSnapshotRow
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.maintenance import PostCanonMaintenanceRun
 from forwin.models.project import ChapterPlan
 from forwin.models.world_conflict import WorldPlanConflictRow
-from forwin.protocol.book_state import ApprovedGraphDeltaSet, CognitionPatch, GraphDelta, NodePatch
+from forwin.models.draft import CandidateDraftRecord
+from forwin.protocol.book_state import ApprovedGraphDeltaSet, CognitionPatch, EdgePatch, GraphDelta, NodePatch
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from forwin.world_engine.conflict_repository import WorldConflictRepository
@@ -77,9 +78,11 @@ def _set(node_id: str, field_path: str, old_value: str, new_value: str) -> NodeP
     )
 
 
-def _chapter_delta(project_id: str, chapter: int, delta_id: str, *patches: NodePatch) -> GraphDelta:
+def _chapter_delta(project_id: str, chapter: int, delta_id: str, *patches: NodePatch | EdgePatch) -> GraphDelta:
     return GraphDelta(
-        id=delta_id, project_id=project_id, chapter_number=chapter, summary=delta_id, node_patches=list(patches),
+        id=delta_id, project_id=project_id, chapter_number=chapter, summary=delta_id,
+        node_patches=[patch for patch in patches if isinstance(patch, NodePatch)],
+        edge_patches=[patch for patch in patches if isinstance(patch, EdgePatch)],
     )
 
 
@@ -160,15 +163,24 @@ def _commit_tick(Session, delta: GraphDelta, *, tick_id: str | None = None):
         )
 
 
-def _tick_three(project_id: str) -> GraphDelta:
-    return _tick_delta(project_id, 3, "tick-3", _set(CAMP, "state.mood", "calm", "angry"), impacts={"c-1": "minor"})
+def _tick_three(project_id: str, *patches: NodePatch) -> GraphDelta:
+    return _tick_delta(
+        project_id, 3, "tick-3", _set(CAMP, "state.mood", "calm", "angry"), *patches, impacts={"c-1": "minor"},
+    )
 
 
-def _book(Session, *, list_chapter_two_tick: bool = True) -> _Book:
+def _book(
+    Session,
+    *,
+    list_chapter_two_tick: bool = True,
+    chapter_three: tuple[NodePatch | EdgePatch, ...] = (),
+    tick_three: tuple[NodePatch, ...] = (),
+) -> _Book:
     """Chapters 1-3 are Canon; a world tick ran after chapter 2 and after chapter 3.
 
     The chapter 2 tick opens the gate, renames it, convenes a meeting and tells the scout a
-    secret; the chapter 3 tick angers the camp.
+    secret; the chapter 3 tick angers the camp. ``chapter_three`` and ``tick_three`` add
+    patches to chapter 3's own delta and to its tick.
     """
     with Session.begin() as session:
         updater = StateUpdater(session)
@@ -207,10 +219,16 @@ def _book(Session, *, list_chapter_two_tick: bool = True) -> _Book:
     _complete_post_canon(
         Session, project_id, 2, commits[2], world_delta_ids=tick_2 if list_chapter_two_tick else (),
     )
+    # An edge create carries its project in the payload.
+    chapter_three = tuple(
+        patch.model_copy(update={"new_value": {**patch.new_value, "project_id": project_id}})
+        if isinstance(patch, EdgePatch) else patch
+        for patch in chapter_three
+    )
     commits[3] = _accept(Session, project_id, 3, version=1, deltas=[
-        _chapter_delta(project_id, 3, "delta-ch3", _create(project_id, "event-later")),
+        _chapter_delta(project_id, 3, "delta-ch3", _create(project_id, "event-later"), *chapter_three),
     ])
-    tick_3 = _commit_tick(Session, _tick_three(project_id)).graph_delta_ids
+    tick_3 = _commit_tick(Session, _tick_three(project_id, *tick_three)).graph_delta_ids
     _complete_post_canon(Session, project_id, 3, commits[3], world_delta_ids=tick_3)
     return _Book(
         Session=Session,
@@ -349,16 +367,34 @@ def test_rewrite_replays_tick_deltas_and_turns_cas_failure_into_conflict(Session
             DecisionEvent.event_type == DecisionEventType.WORLD_CONFLICT_DETECTED,
         )).all()
     payload = json.loads(event.payload_json)
-    assert (event.related_object_type, event.related_object_id) == ("world_conflict", conflict.id)
-    assert (payload["conflict_id"], payload["graph_delta_id"], payload["tick_id"]) == (
-        conflict.id, book.tick_2, "tick-2",
+    assert (event.related_object_type, event.related_object_id, event.chapter_number) == (
+        "world_conflict", conflict.id, 2,
     )
+    assert {key: payload[key] for key in (
+        "conflict_id", "source", "violated", "impact_level", "required_decider", "blocks_from_chapter",
+        "proposed_change", "rewritten_chapter", "dropped_dependency",
+    )} == {
+        "conflict_id": conflict.id,
+        "source": "historical_rewrite",
+        "violated": "replay_cas",
+        "impact_level": "major",
+        "required_decider": "human",
+        "blocks_from_chapter": 4,
+        "proposed_change": {"graph_delta_id": book.tick_2, "tick_id": "tick-2"},
+        "rewritten_chapter": 2,
+        "dropped_dependency": None,
+    }
     # The dropped delta leaves the ledger, so the event keeps what it was.
     assert payload["graph_delta"]["id"] == book.tick_2
-    assert [mismatch["patch"] for mismatch in payload["cas_mismatches"]] == [f"node:{GATE}:state.phase"]
+    assert payload["cas_mismatches"] == [
+        {"patch": f"node:{GATE}:state.phase", "expected": "closed", "current": "sealed"},
+    ]
 
 
-@pytest.mark.parametrize("authorization", ["unlisted", "failed_world_step", "open_conflict"])
+@pytest.mark.parametrize(
+    "authorization",
+    ["unlisted", "failed_world_step", "other_chapter_world_step", "non_world_step", "open_conflict"],
+)
 def test_unlisted_world_engine_delta_still_invalidates_rewrite(Session, authorization: str) -> None:
     book = _book(Session, list_chapter_two_tick=authorization == "failed_world_step")
     with Session.begin() as session:
@@ -367,6 +403,17 @@ def test_unlisted_world_engine_delta_still_invalidates_rewrite(Session, authoriz
                 PostCanonMaintenanceRun.canon_commit_id == book.commit_ids[2],
                 PostCanonMaintenanceRun.step_name == "world",
             ).values(status="failed"))
+        # Only a world step of the tick's own chapter lists its deltas.
+        if authorization == "other_chapter_world_step":
+            session.execute(update(PostCanonMaintenanceRun).where(
+                PostCanonMaintenanceRun.canon_commit_id == book.commit_ids[3],
+                PostCanonMaintenanceRun.step_name == "world",
+            ).values(result_json=json.dumps({"graph_delta_ids": [book.tick_3, book.tick_2]})))
+        if authorization == "non_world_step":
+            session.execute(update(PostCanonMaintenanceRun).where(
+                PostCanonMaintenanceRun.canon_commit_id == book.commit_ids[2],
+                PostCanonMaintenanceRun.step_name != "world",
+            ).values(result_json=json.dumps({"graph_delta_ids": [book.tick_2]})))
         if authorization == "open_conflict":
             # Only a decided conflict vouches for the deltas it lists.
             conflict = _conflict(session, book)
@@ -455,3 +502,96 @@ def test_later_rewrite_neither_rejects_nor_reapplies_a_dropped_tick_delta(Sessio
         assert MEETING not in _runtime(book, chapter).world.nodes_by_id
     assert _state(book, 3, CAMP)["mood"] == "angry"
     assert len(_conflicts(book)) == 1
+
+
+def _outcome_snapshot(book: _Book) -> tuple:
+    with book.Session() as session:
+        return (
+            session.get(CanonCommitRecord, book.commit_ids[2]).status,
+            session.get(WorldNodeRow, MEETING) is not None,
+            sorted(session.scalars(select(WorldEdgeRow.id).where(WorldEdgeRow.project_id == book.project_id))),
+        )
+
+
+@pytest.mark.parametrize(
+    "dependent",
+    [
+        _set(MEETING, "state.phase", "convened", "adjourned"),
+        EdgePatch(
+            edge_id="edge-camp-meeting", op="create", source_id=CAMP, target_id=MEETING,
+            edge_type="ally_of", edge_family="social", new_value={},
+        ),
+    ],
+    ids=["sets_a_field", "creates_an_edge"],
+)
+def test_chapter_delta_depending_on_a_dropped_tick_aborts_rewrite(Session, dependent) -> None:
+    # Chapter 3 acts on the meeting that the chapter 2 tick convened.
+    book = _book(Session, chapter_three=(dependent,))
+    before = _outcome_snapshot(book)
+
+    outcome = _sealing_rewrite(book, 2)
+
+    assert outcome.stale is True
+    assert book.tick_2 in outcome.failure_reason
+    assert "delta-ch3" in outcome.failure_reason
+    # Nothing of the rewrite is kept: no dangling edge, no conflict, the old commit stands.
+    assert _outcome_snapshot(book) == before
+    assert before[0] == "committed"
+    assert book.tick_2 in _delta_ids(book)
+    assert _conflicts(book) == []
+    with Session() as session:
+        candidate = session.scalar(select(CandidateDraftRecord).where(
+            CandidateDraftRecord.project_id == book.project_id,
+            CandidateDraftRecord.chapter_number == 2,
+            CandidateDraftRecord.status == "ready_for_canon",
+        ))
+    assert candidate is not None
+
+
+def test_tick_depending_on_a_dropped_tick_cascades(Session) -> None:
+    # The chapter 3 tick sets a field the meeting does not have yet: its CAS alone passes.
+    unset_mood = NodePatch(
+        node_id=MEETING, node_type="event", op="set", field_path="state.mood", old_value=None, new_value="tense",
+    )
+    book = _book(Session, tick_three=(unset_mood,))
+
+    outcome = _sealing_rewrite(book, 2)
+
+    assert outcome.blocked is False, outcome.failure_reason
+    assert not {book.tick_2, book.tick_3} & _delta_ids(book)
+    assert _state(book, 3, CAMP)["mood"] == "calm"
+    assert MEETING not in _runtime(book, 3).world.nodes_by_id
+    conflicts = {json.loads(conflict.proposed_change_json)["graph_delta_id"]: conflict for conflict in _conflicts(book)}
+    assert set(conflicts) == {book.tick_2, book.tick_3}
+    cascaded = conflicts[book.tick_3]
+    assert (cascaded.violated, cascaded.required_decider, cascaded.detected_after_chapter) == ("replay_cas", "human", 3)
+    assert json.loads(cascaded.involved_refs_json) == [MEETING]
+    with Session() as session:
+        payload = json.loads(session.scalar(select(DecisionEvent.payload_json).where(
+            DecisionEvent.related_object_id == cascaded.id,
+        )))
+    assert payload["dropped_dependency"] == {"ref": MEETING, "graph_delta_id": book.tick_2}
+    assert payload["cas_mismatches"] == []
+
+
+def test_rewrite_drops_a_successor_chapter_tick_whose_reads_changed(Session) -> None:
+    book = _book(Session)
+
+    # The rewritten chapter 2 already moves the camp the chapter 3 tick angers.
+    outcome = _rewrite_chapter_two(book, version=2, delta=_chapter_delta(
+        book.project_id, 2, "delta-ch2-v2", _set(CAMP, "state.mood", "calm", "wary"),
+    ))
+
+    assert outcome.blocked is False, outcome.failure_reason
+    assert book.tick_3 not in _delta_ids(book)
+    assert book.tick_2 in _delta_ids(book)
+    assert _state(book, 3, CAMP)["mood"] == "wary"
+    assert _state(book, 3, GATE)["phase"] == "open"
+    [conflict] = _conflicts(book)
+    assert json.loads(conflict.proposed_change_json) == {"graph_delta_id": book.tick_3, "tick_id": "tick-3"}
+    assert (conflict.detected_after_chapter, conflict.story_time, conflict.blocks_from_chapter) == (3, 3060, 4)
+    assert (conflict.impact_level, json.loads(conflict.involved_refs_json)) == ("minor", [CAMP])
+    with Session() as session:
+        commit = session.get(CanonCommitRecord, book.commit_ids[3])
+        snapshot = session.get(WorldSnapshotRow, commit.world_snapshot_id)
+    assert json.loads(snapshot.source_delta_ids_json) == ["delta-ch3"]

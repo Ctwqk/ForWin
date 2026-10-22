@@ -10,9 +10,13 @@ from sqlalchemy.orm import Session
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.compiler import BookStateCompiler
 from forwin.book_state.knowledge import FACT_REF_PREFIX
-from forwin.book_state.repository import BookStateRepository, _dump, _loads
+from forwin.book_state.repository import (
+    BookStateRepository,
+    _as_jsonable,
+    _dump,
+    _loads,
+)
 from forwin.book_state.runtime import BookStateRuntime
-from forwin.book_state.schema import IMPACT_LEVELS
 from forwin.models.audit import DecisionEvent
 from forwin.models.book_state import (
     BookCognitionSnapshotRow,
@@ -35,8 +39,13 @@ from forwin.protocol.book_state import (
     NarrativePatch,
     NodePatch,
 )
+from forwin.world_engine.conflict_events import (
+    REPLAY_CAS_DECIDER,
+    REPLAY_CAS_OPTIONS,
+    conflict_detected_event,
+    replay_cas_conflict_draft,
+)
 from forwin.world_engine.conflict_repository import WorldConflictRepository
-from forwin.world_engine.conflict_types import ConflictDraft
 from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE
 
 from .plan import CanonCommitPlan
@@ -72,21 +81,6 @@ def _string_items(value: object) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
-def _highest_candidate_impact(delta: GraphDelta) -> str:
-    """The highest impact among the tick's candidates; "moderate" without any."""
-    impacts = delta.metadata.get("candidate_impacts")
-    ranks = (
-        [
-            IMPACT_LEVELS.index(level)
-            for level in impacts.values()
-            if level in IMPACT_LEVELS
-        ]
-        if isinstance(impacts, dict)
-        else []
-    )
-    return IMPACT_LEVELS[max(ranks)] if ranks else "moderate"
-
-
 def _patch_ref(patch: object) -> str:
     """The BookState ref a patch targets."""
     if isinstance(patch, NodePatch):
@@ -102,6 +96,56 @@ def _patch_ref(patch: object) -> str:
     if isinstance(patch, NarrativePatch):
         return patch.target_ref
     return ""
+
+
+def _created_refs(delta: GraphDelta) -> list[str]:
+    """The nodes, edges and facts a delta creates."""
+    return [
+        *(patch.node_id for patch in delta.node_patches if str(patch.op) == "create"),
+        *(patch.edge_id for patch in delta.edge_patches if str(patch.op) == "create"),
+        *(
+            f"{FACT_REF_PREFIX}{patch.fact_id}"
+            for patch in delta.fact_patches
+            if str(patch.op) == "create"
+        ),
+    ]
+
+
+def _read_refs(delta: GraphDelta) -> list[str]:
+    """Every ref a delta's patches change or mention, besides what they create."""
+    refs: list[str] = []
+    for patch in (
+        *delta.node_patches,
+        *delta.edge_patches,
+        *delta.fact_patches,
+        *delta.map_patches,
+        *delta.cognition_patches,
+        *delta.narrative_patches,
+    ):
+        if str(patch.op) != "create":
+            refs.append(_patch_ref(patch))
+        if isinstance(patch, EdgePatch):
+            refs.extend((patch.source_id, patch.target_id))
+        if isinstance(patch, FactPatch):
+            refs.extend(patch.related_refs)
+        # Values hold refs too: profile refs, edge payload endpoints, knowledge keys.
+        refs.extend(_mentioned_strings(patch.old_value))
+        refs.extend(_mentioned_strings(patch.new_value))
+    return refs
+
+
+def _mentioned_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [
+            text
+            for key, item in value.items()
+            for text in (str(key), *_mentioned_strings(item))
+        ]
+    if isinstance(value, list):
+        return [text for item in value for text in _mentioned_strings(item)]
+    return []
 
 
 class HistoricalCanonRewriteRepository:
@@ -332,6 +376,8 @@ class HistoricalCanonReplacement:
     retained_delta_ids: list[str]
     ordered_deltas: list[GraphDelta]
     replayed_chapters: list[int] = field(default_factory=list)
+    # Refs that dropped tick deltas created, each with the dropped delta's id.
+    dropped_tick_refs: dict[str, str] = field(default_factory=dict)
 
     def retire_old_contribution(self) -> None:
         repo = BookStateRepository(self.session)
@@ -583,23 +629,48 @@ class HistoricalCanonReplacement:
         """Re-apply and re-materialize deltas as recorded; return those still in effect.
 
         A world tick's delta read the canon it ran on, so it is checked against
-        the replayed runtime the way the compiler checks a new delta.
+        the replayed runtime the way the compiler checks a new delta. A delta
+        that reads what a dropped tick delta created cannot replay either: a
+        tick is dropped as well, any other delta aborts the rewrite.
         """
         replayed = []
         for delta in deltas:
+            dependency = self._dropped_tick_dependency(delta)
             if delta.source_type == WORLD_ENGINE_SOURCE_TYPE:
                 mismatches = compiler.cas_mismatches(runtime, delta)
-                if mismatches:
-                    self._drop_world_tick_delta(delta, mismatches)
+                if mismatches or dependency is not None:
+                    self._drop_world_tick_delta(delta, mismatches, dependency)
                     continue
+            elif dependency is not None:
+                ref, dropped_id = dependency
+                raise HistoricalRewriteInvalid(
+                    f"historical rewrite dropped world tick delta {dropped_id}, "
+                    f"which delta {delta.id} depends on through {ref}"
+                )
             compiler.projection.apply_delta_to_runtime(runtime, delta)
+            for ref in _created_refs(delta):
+                self.dropped_tick_refs.pop(ref, None)
             replayed.append(delta)
         for delta in replayed:
             compiler._persist_delta_side_effects(runtime, delta)
         return replayed
 
+    def _dropped_tick_dependency(self, delta: GraphDelta) -> tuple[str, str] | None:
+        """A ref this delta reads that a dropped tick delta created, and that delta."""
+        if not self.dropped_tick_refs:
+            return None
+        created = set(_created_refs(delta))
+        for ref in _read_refs(delta):
+            dropped_id = self.dropped_tick_refs.get(ref)
+            if dropped_id is not None and ref not in created:
+                return ref, dropped_id
+        return None
+
     def _drop_world_tick_delta(
-        self, delta: GraphDelta, mismatches: list[tuple[str, Any, Any]]
+        self,
+        delta: GraphDelta,
+        mismatches: list[tuple[str, Any, Any]],
+        dependency: tuple[str, str] | None,
     ) -> None:
         """Take the tick's delta out of effect; a human decides how the world responds.
 
@@ -610,46 +681,32 @@ class HistoricalCanonReplacement:
         BookStateRepository(self.session).retire_chapter_deltas(
             self.plan.project_id, delta.chapter_number, delta_ids=[delta.id]
         )
-        tick_id = str(delta.metadata.get("tick_id") or "")
-        labels = [label for label, _, _ in mismatches]
-        summary = (
-            f"Rewriting chapter {self.plan.chapter_number} changed what world tick "
-            f"{tick_id} read ({', '.join(labels)}); its delta {delta.id} no longer "
-            "applies."
-        )
+        for ref in _created_refs(delta):
+            self.dropped_tick_refs[ref] = delta.id
+        reasons = [label for label, _, _ in mismatches]
+        involved_refs = [_patch_ref(patch) for _, patch, _ in mismatches]
+        if dependency is not None:
+            ref, dropped_id = dependency
+            reasons.append(f"{ref} came from dropped delta {dropped_id}")
+            involved_refs.append(ref)
         conflict = WorldConflictRepository(self.session).create(
-            ConflictDraft(
-                project_id=self.plan.project_id,
-                source="historical_rewrite",
-                detected_after_chapter=delta.chapter_number,
-                story_time=delta.story_time_end or 0,
-                involved_refs=list(
-                    dict.fromkeys(_patch_ref(patch) for _, patch, _ in mismatches)
-                ),
-                violated="replay_cas",
-                impact_level=_highest_candidate_impact(delta),
-                summary=summary,
-                proposed_change={"graph_delta_id": delta.id, "tick_id": tick_id},
+            replay_cas_conflict_draft(
+                delta,
+                rewritten_chapter=self.plan.chapter_number,
+                reasons=reasons,
+                involved_refs=involved_refs,
                 blocks_from_chapter=self.through_chapter + 1,
             ),
-            required_decider="human",
-            options=("veto_world",),
+            required_decider=REPLAY_CAS_DECIDER,
+            options=REPLAY_CAS_OPTIONS,
         )
         self.session.add(
-            DecisionEvent(
-                project_id=self.plan.project_id,
+            conflict_detected_event(
+                conflict,
                 chapter_number=delta.chapter_number,
-                event_family="business_event",
-                event_type=DecisionEventType.WORLD_CONFLICT_DETECTED,
-                actor_type="system",
-                scope="chapter",
-                summary=summary,
-                payload_json=_dump(
+                extra=_as_jsonable(
                     {
-                        "conflict_id": conflict.id,
                         "rewritten_chapter": self.plan.chapter_number,
-                        "graph_delta_id": delta.id,
-                        "tick_id": tick_id,
                         "cas_mismatches": [
                             {
                                 "patch": label,
@@ -658,12 +715,15 @@ class HistoricalCanonReplacement:
                             }
                             for label, patch, current in mismatches
                         ],
+                        "dropped_dependency": (
+                            {"ref": dependency[0], "graph_delta_id": dependency[1]}
+                            if dependency is not None
+                            else None
+                        ),
                         # The ledger no longer holds the delta; this is its record.
                         "graph_delta": delta,
                     }
                 ),
-                related_object_type="world_conflict",
-                related_object_id=conflict.id,
             )
         )
         self.session.flush()

@@ -167,9 +167,12 @@ class CanonAdmissionService:
                         "BookState deltas already exist without a Canon commit record"
                     )
                 if rewrite is not None:
-                    compile_result = rewrite.rebuild_successor_projections(
-                        compile_result, compiler=BookStateCompiler(session)
-                    )
+                    try:
+                        compile_result = rewrite.rebuild_successor_projections(
+                            compile_result, compiler=BookStateCompiler(session)
+                        )
+                    except HistoricalRewriteInvalid as exc:
+                        raise CanonStaleVersion(str(exc)) from exc
                 session.flush()
                 inject("book_state")
 

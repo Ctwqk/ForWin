@@ -78,16 +78,23 @@ class CanonPolicy(FrozenPolicyModel):
 
 class WorldPolicy(FrozenPolicyModel):
     enabled: bool = True
-    max_actor_turns_per_tick: int = 6
-    actor_turn_batch_size: int = 1
-    max_new_intents_per_actor: int = 2
-    max_major_events_per_tick: int = 1
-    max_onstage_slips: int = 2
-    max_rerolls: int = 2
+    max_actor_turns_per_tick: int = Field(default=6, ge=1)
+    actor_turn_batch_size: int = Field(default=1, ge=1)
+    max_new_intents_per_actor: int = Field(default=2, ge=1)
+    max_major_events_per_tick: int = Field(default=1, ge=1)
+    max_onstage_slips: int = Field(default=2, ge=0)
+    max_rerolls: int = Field(default=2, ge=0)
     conflict_delegate: WorldConflictDelegate = "codex"
+
+    @classmethod
+    def for_profile(cls, quality_profile: str) -> WorldPolicy:
+        if quality_profile == "pulp":
+            return cls(max_actor_turns_per_tick=3)
+        return cls()
 
 
 class ModelsPolicy(FrozenPolicyModel):
+    # The dict field makes RuntimePolicy unhashable despite the frozen models.
     role_preferences: dict[str, tuple[str, ...]] = Field(
         default_factory=lambda: {"review.world_conflict": ("gpt-6-astra",)}
     )
@@ -106,6 +113,18 @@ class RuntimePolicy(FrozenPolicyModel):
     models: ModelsPolicy = Field(default_factory=ModelsPolicy)
     writer_attention_retries: int = Field(ge=0, le=12)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _load_world_defaults(cls, data: object) -> object:
+        if isinstance(data, dict) and "world" not in data:
+            return {
+                **data,
+                "world": WorldPolicy.for_profile(
+                    data.get("quality_profile", "standard")
+                ).model_dump(),
+            }
+        return data
+
     @classmethod
     def for_profile(cls, profile: QualityProfile, *, model_profile_id: str = "") -> Self:
         if profile == "pulp":
@@ -123,7 +142,7 @@ class RuntimePolicy(FrozenPolicyModel):
                 ),
                 planning=PlanningPolicy(future_constraints=False, plan_health=False, use_llm_simulation=False, context_recency_window=50),
                 canon=CanonPolicy(quality_gate="pulp_fatal"),
-                world=WorldPolicy(max_actor_turns_per_tick=3),
+                world=WorldPolicy.for_profile(profile),
                 writer_attention_retries=1,
             )
         return cls(
@@ -139,6 +158,7 @@ class RuntimePolicy(FrozenPolicyModel):
             ),
             planning=PlanningPolicy(future_constraints=True, plan_health=True, use_llm_simulation=True, context_recency_window=0),
             canon=CanonPolicy(),
+            world=WorldPolicy.for_profile(profile),
             writer_attention_retries=3,
         )
 
@@ -204,6 +224,7 @@ class RuntimePolicy(FrozenPolicyModel):
                 "chapter_length": next_length,
                 "pause": next_pause,
                 "world": next_world,
+                "models": self.models,
             }
         )
 

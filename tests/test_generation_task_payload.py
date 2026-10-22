@@ -44,10 +44,13 @@ def test_execution_payload_serializes_exact_non_secret_policy() -> None:
     assert "api_key" not in json.dumps(raw)
 
 
-def test_legacy_policy_snapshot_loads_world_and_models_defaults() -> None:
+@pytest.mark.parametrize("profile, actor_turns", [("standard", 6), ("pulp", 3)])
+def test_legacy_policy_snapshot_loads_world_and_models_defaults(profile, actor_turns) -> None:
     payload = execution_payload(
-        mode="continue", policy=RuntimePolicy.for_profile("standard"),
-        policy_version=1, root_event_id="root-legacy",
+        mode="continue",
+        policy=RuntimePolicy.for_profile(profile),
+        policy_version=1,
+        root_event_id="root-legacy",
     ).model_dump(mode="json")
     payload["policy_snapshot"].pop("world", None)
     payload["policy_snapshot"].pop("models", None)
@@ -55,6 +58,7 @@ def test_legacy_policy_snapshot_loads_world_and_models_defaults() -> None:
     restored = payload_from_json(json.dumps(payload))
 
     assert restored.policy_snapshot.world.conflict_delegate == "codex"
+    assert restored.policy_snapshot.world.max_actor_turns_per_tick == actor_turns
     assert restored.policy_snapshot.models.role_preferences == {
         "review.world_conflict": ("gpt-6-astra",),
     }

@@ -3,7 +3,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from forwin.runtime.policy import CanonPolicy, ReviewPolicy, RuntimePolicy, role_models
+from forwin.runtime.policy import CanonPolicy, ReviewPolicy, RuntimePolicy, WorldPolicy, role_models
 
 
 @pytest.mark.parametrize("profile, actor_turns", [("standard", 6), ("pulp", 3)])
@@ -24,16 +24,67 @@ def test_world_and_models_defaults_per_profile(profile, actor_turns) -> None:
     assert role_models(policy, "unknown.role") == ()
 
 
-@pytest.mark.parametrize("profile", ["standard", "pulp"])
-def test_stored_policy_without_world_section_loads_defaults(profile) -> None:
+@pytest.mark.parametrize("profile, actor_turns", [("standard", 6), ("pulp", 3)])
+def test_stored_policy_without_world_section_loads_defaults(profile, actor_turns) -> None:
     stored = json.loads(RuntimePolicy.for_profile(profile).model_dump_json())
     stored.pop("world", None)
     stored.pop("models", None)
     policy = RuntimePolicy.model_validate_json(json.dumps(stored))
     assert policy.schema_version == 2
     assert policy.world.conflict_delegate == "codex"
-    assert policy.world.max_actor_turns_per_tick == 6
+    assert policy.world.max_actor_turns_per_tick == actor_turns
     assert policy.models.role_preferences == {"review.world_conflict": ("gpt-6-astra",)}
+    saved = policy.with_user_settings(gate_delegate="spark").model_dump_json()
+    assert RuntimePolicy.model_validate_json(saved).world.max_actor_turns_per_tick == actor_turns
+
+
+@pytest.mark.parametrize(
+    "profile, next_profile", [("standard", "pulp"), ("pulp", "standard")]
+)
+def test_custom_role_preferences_survive_profile_change(profile, next_profile) -> None:
+    stored = RuntimePolicy.for_profile(profile).model_dump(mode="python")
+    preferences = {
+        "review.world_conflict": ("custom-primary", "custom-fallback"),
+        "world.actor_turn": ("custom-actor",),
+    }
+    stored["models"]["role_preferences"] = preferences
+    policy = RuntimePolicy.model_validate(stored)
+
+    updated = policy.with_user_settings(quality_profile=next_profile)
+
+    assert updated.quality_profile == next_profile
+    assert updated.models.role_preferences == preferences
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("max_actor_turns_per_tick", -1),
+        ("actor_turn_batch_size", 0),
+        ("max_new_intents_per_actor", 0),
+        ("max_major_events_per_tick", 0),
+        ("max_onstage_slips", -1),
+        ("max_rerolls", -1),
+    ],
+)
+def test_world_policy_rejects_counts_below_minimum(field, value) -> None:
+    with pytest.raises(ValidationError) as exc:
+        WorldPolicy.model_validate({field: value})
+    assert exc.value.errors()[0]["loc"] == (field,)
+
+
+def test_world_policy_accepts_minimum_counts() -> None:
+    policy = WorldPolicy(
+        max_actor_turns_per_tick=1,
+        actor_turn_batch_size=1,
+        max_new_intents_per_actor=1,
+        max_major_events_per_tick=1,
+        max_onstage_slips=0,
+        max_rerolls=0,
+    )
+    assert policy.max_actor_turns_per_tick == 1
+    assert policy.max_onstage_slips == 0
+    assert policy.max_rerolls == 0
 
 
 def test_world_conflict_delegate_survives_other_settings_and_profile_changes() -> None:

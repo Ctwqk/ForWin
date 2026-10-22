@@ -22,7 +22,10 @@ from forwin.models.base import Base
 from forwin.models.book_state import GraphDeltaPatchRow, GraphDeltaRow
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.genesis import PromptTrace
+from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.project import ChapterPlan, Project
+from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.naming import EntityRegistrar
 from forwin.protocol.book_state import WorldNode
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
@@ -466,3 +469,41 @@ def test_human_accept_with_stale_extraction_reextracts_or_blocks(runtime, monkey
         payload = _blocked_payloads(session, chapter.project_id)[-1]
         assert payload["blocked_path"] == "chapter-delta-extraction-blocked"
         assert [issue["code"] for issue in payload["issues"]] == ["extraction_unavailable"]
+
+
+def test_human_accept_without_extraction_judges_due_obligations_on_the_reextraction(runtime, monkeypatch) -> None:
+    pipeline, session, chapter = runtime
+    obligations = NarrativeObligationRepository(session)
+    patch = obligations.create_plan_patch(NarrativePlanPatch(
+        project_id=chapter.project_id, affected_chapters=[1], source_obligation_ids=["obl-token"],
+        validation_status="passed", applied=True,
+    ))
+    obligation = obligations.create_obligation(NarrativeObligation(
+        id="obl-token", project_id=chapter.project_id, origin_chapter_number=0, obligation_type="reader_promise",
+        priority="P0", status="active", summary="林夜拿到铜令。", hardness="design_debt", deadline_chapter=1,
+        payoff_test="第1章林夜拿到铜令。", linked_plan_patch_ids=[patch.id],
+    ))
+    planned, _candidate_id = _persist_candidate(session, chapter, _output(chapter))
+    chapter.status = "needs_review"
+    session.add(chapter)
+    session.commit()
+    client = ExtractionClient(_payload(plan_fulfillment=[
+        {"target_id": "goal:1", "status": "missing"},
+        {"target_id": f"obligation:{obligation.id}", "status": "done", "evidence": "林夜收下陈七递来的铜令"},
+    ]))
+    pipeline.canon_preparation_context = replace(pipeline.canon_preparation_context, llm_client=client)
+    monkeypatch.setattr(pipeline, "_load_writer_output_from_meta", lambda _meta: planned)
+
+    result = pipeline.accept_review(chapter.project_id, 1)
+
+    session.expire_all()
+    assert planned.chapter_delta is None
+    assert result["status"] in {"accepted", "maintenance_pending"}, result
+    assert client.extraction_calls() == 1
+    rows = session.scalars(select(GraphDeltaRow).where(GraphDeltaRow.project_id == chapter.project_id)).all()
+    assert [row.source_id for row in rows] == [f"chapter:1:{_sha(BODY)}"]
+    # The quality gate found the obligation fulfilled in the new extraction, and after
+    # acceptance the committed delta resolved it.
+    assert _blocked_payloads(session, chapter.project_id) == []
+    stored = session.get(NarrativeObligationRow, obligation.id)
+    assert (stored.status, stored.resolution_chapter) == ("resolved", 1)

@@ -37,6 +37,7 @@ from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.chapter_delta_helpers import chapter_delta
 from tests.postgres import postgres_test_url
 
 
@@ -322,7 +323,10 @@ def test_prepare_from_approved_persists_only_precanon_candidate_state() -> None:
         assert chapter.status == "planned"
 
 
-def test_prepare_uses_pretransaction_collaborators_without_compiling() -> None:
+# A current extraction keeps quality first; without one, BookState preparation extracts
+# before the quality gate judges due obligations.
+@pytest.mark.parametrize("extracted,order", [(True, ["quality", "book_state"]), (False, ["book_state", "quality"])])
+def test_prepare_uses_pretransaction_collaborators_without_compiling(extracted, order) -> None:
     engine = get_engine(postgres_test_url("canon-plan-collaborators"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -357,6 +361,7 @@ def test_prepare_uses_pretransaction_collaborators_without_compiling() -> None:
             body="协作者准备正文",
             char_count=7,
             end_of_chapter_summary="准备完成",
+            chapter_delta=chapter_delta("协作者准备正文") if extracted else None,
         )
         entity_plan = EntityAdmissionPlan(
             project_id=project.id,
@@ -441,7 +446,7 @@ def test_prepare_uses_pretransaction_collaborators_without_compiling() -> None:
             canon_risk_level="low",
         )
 
-        assert calls == ["quality", "book_state"]
+        assert calls == order
         assert outcome.plan is not None
         assert session.scalar(select(func.count(GraphDeltaRow.id))) == 0
         assert (

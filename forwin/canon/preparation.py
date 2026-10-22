@@ -9,7 +9,10 @@ from sqlalchemy.orm import Session
 
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
-from forwin.book_state.extraction.chapter_delta_extractor import ensure_chapter_delta
+from forwin.book_state.extraction.chapter_delta_extractor import (
+    chapter_delta_is_current,
+    ensure_chapter_delta,
+)
 from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction
 from forwin.book_state.extraction.world_review import review_chapter_extraction
 from forwin.book_state.reviewer import BookStateReviewVerdict
@@ -229,6 +232,30 @@ def _record_book_state_block(
     )
 
 
+def _verify_admission(
+    session: Session,
+    *,
+    candidate_id: str,
+    project_id: str,
+    writer_output: WriterOutput,
+) -> EntityAdmissionPlan | CanonPreparationOutcome:
+    try:
+        return EntityRegistrar(session=session).verify_writer_output_admission(
+            project_id=project_id,
+            writer_output=writer_output,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _mark_candidate_needs_review(
+            CandidateDraftRepository(session),
+            candidate_id,
+            reason=str(exc),
+        )
+        return CanonPreparationOutcome(
+            blocked_path=str(exc),
+            block_kind="entity_admission",
+        )
+
+
 class CanonPreparationService:
     def __init__(
         self,
@@ -303,6 +330,39 @@ class CanonPreparationService:
                 block_kind="candidate_ineligible",
             )
 
+        entity_admission_plan: EntityAdmissionPlan | None = None
+        book_state_outcome: BookStatePreparationOutcome | None = None
+        if not chapter_delta_is_current(writer_output):
+            # BookState preparation redoes a missing or stale extraction. It runs before the
+            # quality gate here, which judges due obligations on the extraction canon
+            # commits. Admission is still verified first; the re-extraction keeps that plan.
+            admission = _verify_admission(
+                session,
+                candidate_id=candidate.id,
+                project_id=project_id,
+                writer_output=writer_output,
+            )
+            if isinstance(admission, CanonPreparationOutcome):
+                return admission
+            entity_admission_plan = admission
+            prepared = self._prepare_book_state(
+                context=context,
+                session=session,
+                candidate_id=candidate.id,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                writer_output=writer_output,
+                verdict=verdict,
+                entity_admission_plan=entity_admission_plan,
+            )
+            if isinstance(prepared, CanonPreparationOutcome):
+                return prepared
+            book_state_outcome = prepared
+            if prepared.extraction is not None:
+                writer_output = writer_output.model_copy(
+                    update={"chapter_delta": prepared.extraction}
+                )
+
         try:
             quality_outcome = self.quality_evaluator(
                 context=context,
@@ -365,25 +425,56 @@ class CanonPreparationService:
                 block_kind="canon_quality",
                 canon_gate_result=quality_outcome.gate_result,
             )
-        try:
-            entity_admission_plan = EntityRegistrar(
-                session=session
-            ).verify_writer_output_admission(
+        if entity_admission_plan is None:
+            admission = _verify_admission(
+                session,
+                candidate_id=candidate.id,
                 project_id=project_id,
                 writer_output=writer_output,
             )
-        except Exception as exc:  # noqa: BLE001
-            _mark_candidate_needs_review(
-                CandidateDraftRepository(session),
-                candidate.id,
-                reason=str(exc),
+            if isinstance(admission, CanonPreparationOutcome):
+                return admission
+            entity_admission_plan = admission
+        if book_state_outcome is None:
+            prepared = self._prepare_book_state(
+                context=context,
+                session=session,
+                candidate_id=candidate.id,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                writer_output=writer_output,
+                verdict=verdict,
+                entity_admission_plan=entity_admission_plan,
             )
-            return CanonPreparationOutcome(
-                blocked_path=str(exc),
-                block_kind="entity_admission",
-            )
+            if isinstance(prepared, CanonPreparationOutcome):
+                return prepared
+            book_state_outcome = prepared
+        return self.prepare_from_approved(
+            session=session,
+            candidate_id=candidate_id,
+            approved_book_state_changes=book_state_outcome.approved_changes,
+            entity_admission_plan=entity_admission_plan,
+            acceptance_mode=acceptance_mode,
+            repair_attempt_count=repair_attempt_count,
+            residual_review_issues=residual_review_issues,
+            canon_risk_level=canon_risk_level,
+        )
+
+    def _prepare_book_state(
+        self,
+        *,
+        context: CanonPreparationContext,
+        session: Session,
+        candidate_id: str,
+        project_id: str,
+        chapter_number: int,
+        writer_output: WriterOutput,
+        verdict: ReviewVerdict,
+        entity_admission_plan: EntityAdmissionPlan,
+    ) -> BookStatePreparationOutcome | CanonPreparationOutcome:
+        """The approved BookState changes, or the outcome that blocks the candidate."""
         try:
-            book_state_outcome = self.book_state_preparer.prepare(
+            outcome = self.book_state_preparer.prepare(
                 context=context,
                 session=session,
                 candidate_id=candidate_id,
@@ -396,33 +487,24 @@ class CanonPreparationService:
         except Exception as exc:  # noqa: BLE001
             _mark_candidate_failed(
                 CandidateDraftRepository(session),
-                candidate.id,
+                candidate_id,
                 reason=str(exc),
             )
             return CanonPreparationOutcome(
                 blocked_path=str(exc),
                 block_kind="canon_preparation_error",
             )
-        if book_state_outcome.blocked:
+        if outcome.blocked:
             _mark_candidate_needs_review(
                 CandidateDraftRepository(session),
-                candidate.id,
-                reason=book_state_outcome.blocked_path or "BookState blocked",
+                candidate_id,
+                reason=outcome.blocked_path or "BookState blocked",
             )
             return CanonPreparationOutcome(
-                blocked_path=book_state_outcome.blocked_path,
+                blocked_path=outcome.blocked_path,
                 block_kind="book_state",
             )
-        return self.prepare_from_approved(
-            session=session,
-            candidate_id=candidate_id,
-            approved_book_state_changes=book_state_outcome.approved_changes,
-            entity_admission_plan=entity_admission_plan,
-            acceptance_mode=acceptance_mode,
-            repair_attempt_count=repair_attempt_count,
-            residual_review_issues=residual_review_issues,
-            canon_risk_level=canon_risk_level,
-        )
+        return outcome
 
     def prepare_from_approved(
         self,

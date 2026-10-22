@@ -56,6 +56,12 @@ def elapsed_minutes(
     )
 
 
+def chapter_delta_is_current(writer_output: WriterOutput) -> bool:
+    """The output carries an extraction of its current body."""
+    current = writer_output.chapter_delta
+    return current is not None and current.body_sha256 == _sha256(writer_output.body)
+
+
 def ensure_chapter_delta(
     session: Session,
     *,
@@ -69,8 +75,7 @@ def ensure_chapter_delta(
     A changed body is re-extracted. Without a usable LLM client the output comes back with no
     chapter_delta and an error issue, so a stale extraction never survives a body change.
     """
-    current = writer_output.chapter_delta
-    if current is not None and current.body_sha256 == _sha256(writer_output.body):
+    if chapter_delta_is_current(writer_output):
         return writer_output, None
     if not callable(getattr(llm_client, "chat", None)):
         result = ChapterDeltaExtractionResult(

@@ -242,7 +242,7 @@ class RoutingMixin:
         family = str(task_family or "").strip().lower()
         stage = str(stage_key or "").strip().lower()
         wants_json = bool(response_format or output_schema)
-        if family == "world_engine":
+        if family == "world_engine" or stage == "plan.arc_beats":
             return "planning_json_general"
         if "chapter_delta" in stage:
             return "canon_extraction"

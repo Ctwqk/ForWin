@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -13,9 +13,9 @@ from forwin.book_state.knowledge import FACT_REF_PREFIX, KNOWLEDGE_STATES
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
-from forwin.book_state.reveal_schedule import _active_pack
+from forwin.book_state.reveal_schedule import active_genesis_pack
 from forwin.book_state.runtime import BookStateRuntime
-from forwin.book_state.schema import ACTOR_NODE_TYPES
+from forwin.book_state.schema import ACTOR_NODE_TYPES, WORLD_NODE_FIELDS
 from forwin.canon.admission import GENESIS_SEED_SOURCE_TYPE
 from forwin.genesis.arc_activation_review import build_arc_activation_review_pack
 from forwin.genesis.handoff.world_seed_committer import seed_ref_id
@@ -31,10 +31,13 @@ from forwin.planning.beat_sheet.types import (
     MAX_BAND_CHAPTERS, MIN_BAND_CHAPTERS, PROTECTION_KINDS, READER_OBSERVER, ArcBeatSheetData, BandSpan,
 )
 from forwin.planning.world_digest import build_world_digest
+from forwin.protocol.book_state import WorldNode
 from forwin.runtime.policy import RuntimePolicy
 from forwin.skills import serialize_prompt_layers
 from forwin.utils import parse_llm_json
+from forwin.world_engine.types import INVALID_OUTPUT, LLM_UNAVAILABLE
 from forwin.writer.prompt_core.planning import build_arc_beats_messages
+from forwin.writer.prompt_core.world_engine import EVENT_FACT_TYPE, MAX_ADJUDICATION_EVENT_FACTS
 
 
 STAGE_KEY = "plan.arc_beats"
@@ -42,20 +45,23 @@ _TASK_FAMILY = "planning"
 _PARSER_NAME = "ArcBeatSheet JSON parser"
 # Story minutes the world digest looks ahead per arc chapter: one day.
 _DIGEST_MINUTES_PER_CHAPTER = 24 * 60
-# The newest event facts the prompt lists; standing facts are all listed, as in world adjudication.
-MAX_PROMPT_EVENT_FACTS = 20
-_EVENT_FACT_TYPE = "event"
 _OUTPUT_SCHEMA = ArcBeatSheetData.model_json_schema()
 _ALLOWED = {
     "protection_kind": list(PROTECTION_KINDS),
     "reveal_target_state": list(KNOWLEDGE_STATES),
     "reader_observer": READER_OBSERVER,
+    # The fields must_hold_state and exit_state may name, by actor kind.
+    "actor_fields": {
+        kind: {section: sorted(WORLD_NODE_FIELDS[kind][section]) for section in ("state", "profile")}
+        for kind in ACTOR_NODE_TYPES
+    },
 }
 
 
 class ArcBeatSheetService:
     """Writes beat sheet versions in the caller's session; the caller commits.
 
+    ``llm_client`` is None when no model is configured: every generation then writes the fallback.
     ``save_trace`` saves the call's PromptTrace and its LLM DecisionEvents in that session and returns the
     trace id; every generation saves one, a fallback included.
     """
@@ -72,7 +78,7 @@ class ArcBeatSheetService:
         self.save_trace = save_trace
         self.max_attempts = max(1, int(max_attempts))
         self.max_tokens = max_tokens
-        self._chat_parameters = inspect.signature(llm_client.chat).parameters
+        self._chat_parameters = inspect.signature(llm_client.chat).parameters if llm_client is not None else {}
 
     def ensure_for_arc(
         self, session: Session, *, project_id: str, arc_plan: ArcPlanVersion, policy: RuntimePolicy,
@@ -105,7 +111,7 @@ class ArcBeatSheetService:
         # The refs are checked against the latest canon: chapter 0 at handoff.
         as_of = BookStateRepository(session).latest_canon_chapter(project_id) or 0
         runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=as_of)
-        pack = _active_pack(session, project_id)
+        pack = active_genesis_pack(session, project_id)
         fallback_protagonist = fallback_protagonist_ref(project_id, pack, runtime)
         protagonist = (current.protagonist_ref
                        if current is not None and _is_seeded_character(runtime, current.protagonist_ref)
@@ -116,6 +122,7 @@ class ArcBeatSheetService:
             window_end_minute=now + (end - start + 1) * _DIGEST_MINUTES_PER_CHAPTER,
             budget_chars=policy.planning.digest_budget_chars, runtime=runtime,
         )
+        actors = _actors(runtime)
         payload: dict[str, Any] = {
             "arc": {
                 "arc_number": int(arc_plan.arc_number or 0), "title": arc_plan.title, "goal": arc_plan.goal,
@@ -125,7 +132,7 @@ class ArcBeatSheetService:
             },
             "band_size": policy.planning.band_size,
             "band_limits": [MIN_BAND_CHAPTERS, MAX_BAND_CHAPTERS],
-            "actors": _actors(runtime),
+            "actors": actors,
             "facts": _facts(runtime),
             "reveal_candidates": _reveal_candidates(project_id, pack, runtime),
             "previous_arc_closing_state": build_arc_activation_review_pack(
@@ -142,7 +149,9 @@ class ArcBeatSheetService:
         if revision is not None:
             payload["current_beat_sheet"] = current.model_dump(mode="json") if current is not None else None
             payload["revision"] = dict(revision)
-        call = self._call(payload, digest.text, start=start, end=end, runtime=runtime)
+        call = self._call(
+            payload, digest.text, start=start, end=end, runtime=runtime, actor_ids={actor["id"] for actor in actors},
+        )
         data, source = call.data, "llm"
         if data is None:
             data, source = build_fallback_beat_sheet(
@@ -156,46 +165,61 @@ class ArcBeatSheetService:
 
     def _call(
         self, payload: Mapping[str, Any], digest_text: str, *, start: int, end: int, runtime: BookStateRuntime,
+        actor_ids: Collection[str],
     ) -> _BeatSheetCall:
+        """Up to ``max_attempts`` calls. A malformed or invalid answer goes back to the model as feedback;
+        a provider failure resends the same messages."""
         call = _BeatSheetCall()
         retry_feedback: list[str] = []
+        # Whether any call returned an answer, valid or not.
+        answered = False
         for attempt_no in range(1, self.max_attempts + 1):
             call.messages = build_arc_beats_messages(
                 payload=payload, digest_text=digest_text, output_schema=_OUTPUT_SCHEMA,
                 allowed=_ALLOWED, retry_feedback=retry_feedback,
             )
+            if self.llm_client is None:
+                call.issues, call.failure_reason = ["no LLM client is configured"], LLM_UNAVAILABLE
+                return call
             raw = ""
             call_error: Exception | None = None
+            provider_failed = False
             try:
                 raw = self._chat(call.messages)
+            except Exception as exc:  # noqa: BLE001 - a provider failure is retried, then the arc falls back
+                call_error, provider_failed = exc, True
+            else:
+                answered = True
                 try:
                     parsed = ArcBeatSheetData.model_validate(parse_llm_json(raw, error_prefix=_PARSER_NAME))
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001 - a malformed answer is sent back to the model
+                    call_error = exc
                     mark_latest_attempt_parse_failure(
                         self.llm_client, parser_name=_PARSER_NAME, stage_key=STAGE_KEY,
                         schema_name="ArcBeatSheetData", raw_output=raw, error=exc,
                     )
-                    raise
-            except Exception as exc:  # noqa: BLE001 - a failed call is retried once, then the arc falls back
-                call_error = exc
-                call.issues = [f"{type(exc).__name__}: {exc}"]
-            finally:
-                mark_latest_attempt_workflow(self.llm_client, attempt_no=attempt_no, stage_key=STAGE_KEY)
-                call.attempts.extend(self._drained_attempts(
-                    attempt_no, call.messages, raw, call_error, "\n".join(call.issues),
-                ))
-            if call_error is None:
-                call.issues = beat_sheet_issues(parsed, chapter_start=start, chapter_end=end, runtime=runtime)
-                if not call.issues:
-                    call.data = _normalized(parsed)
-                    return call
-            retry_feedback = call.issues
+            if call_error is not None:
+                call.issues = [f"{type(call_error).__name__}: {call_error}"]
+            else:
+                call.issues = beat_sheet_issues(
+                    parsed, chapter_start=start, chapter_end=end, runtime=runtime, actor_ids=actor_ids,
+                )
+            mark_latest_attempt_workflow(self.llm_client, attempt_no=attempt_no, stage_key=STAGE_KEY)
+            call.attempts.extend(self._drained_attempts(
+                attempt_no, call.messages, raw, call_error, "\n".join(call.issues),
+            ))
+            if not call.issues:
+                call.data = _normalized(parsed)
+                return call
+            if not provider_failed:
+                retry_feedback = call.issues
             if attempt_no < self.max_attempts:
                 call.business_retries.append({
                     "stage": STAGE_KEY, "attempt_no": attempt_no, "max_attempts": self.max_attempts,
                     "reason_class": type(call_error).__name__ if call_error else "BeatSheetValidation",
                     "reason": "\n".join(call.issues)[:500], "retry_kind": "business_validation",
                 })
+        call.failure_reason = INVALID_OUTPUT if answered else LLM_UNAVAILABLE
         return call
 
     def _chat(self, messages: list[dict]) -> str:
@@ -255,7 +279,8 @@ class ArcBeatSheetService:
             },
             "attempts": call.attempts,
             "output_summary": {
-                "source": source, "issues": call.issues, "beat_sheet_id": row.id, "version": row.version,
+                "source": source, "failure_reason": call.failure_reason, "issues": call.issues,
+                "beat_sheet_id": row.id, "version": row.version,
                 "skill_summary": [], "business_retry_events": call.business_retries,
             },
         }
@@ -267,6 +292,8 @@ class _BeatSheetCall:
 
     data: ArcBeatSheetData | None = None
     issues: list[str] = field(default_factory=list)
+    # LLM_UNAVAILABLE when no call returned an answer, INVALID_OUTPUT when none was valid; empty on success.
+    failure_reason: str = ""
     messages: list[dict] = field(default_factory=list)
     attempts: list[dict[str, Any]] = field(default_factory=list)
     business_retries: list[dict[str, Any]] = field(default_factory=list)
@@ -274,15 +301,26 @@ class _BeatSheetCall:
 
 def beat_sheet_issues(
     data: ArcBeatSheetData, *, chapter_start: int, chapter_end: int, runtime: BookStateRuntime,
+    actor_ids: Collection[str],
 ) -> list[str]:
-    """Every deterministic problem with the sheet; refs must name the runtime's nodes and facts."""
+    """Every deterministic problem with the sheet.
+
+    The protagonist, milestone requirements and protection and exit-state refs must be actors the prompt offered
+    (``actor_ids``); observers must be the reader or active nodes; fact refs must name the runtime's facts.
+    """
     world = runtime.world
     issues = _coverage_issues("phases", [phase.chapter_range for phase in data.phases], chapter_start, chapter_end)
     issues.extend(band_breakdown_issues(data.band_breakdown, chapter_start, chapter_end))
 
-    def node(ref: str, path: str) -> None:
-        if world.get_node(ref) is None:
-            issues.append(f"{path}: {ref!r} is not a BookState node")
+    def actor(ref: str, path: str) -> WorldNode | None:
+        if ref not in actor_ids:
+            issues.append(f"{path}: {ref!r} is not one of the offered actors")
+            return None
+        return world.get_node(ref)
+
+    def observer(ref: str, path: str) -> None:
+        if ref != READER_OBSERVER and not _is_active(runtime, ref):
+            issues.append(f"{path}: {ref!r} is not an active BookState node")
 
     def fact(ref: str, path: str) -> None:
         if not ref.startswith(FACT_REF_PREFIX) or ref.removeprefix(FACT_REF_PREFIX) not in world.facts_by_id:
@@ -292,7 +330,13 @@ def beat_sheet_issues(
         if not chapter_start <= first <= last <= chapter_end:
             issues.append(f"{path} {first}-{last} is not an ordered range inside the arc {chapter_start}-{chapter_end}")
 
-    if not _is_seeded_character(runtime, data.protagonist_ref):
+    def state_field(node: WorldNode | None, field: str, path: str) -> None:
+        if node is not None and not _is_node_field(node, field):
+            issues.append(f"{path} {field!r} is not a {str(node.node_type)} field")
+
+    if actor(data.protagonist_ref, "protagonist_ref") is not None and not _is_seeded_character(
+        runtime, data.protagonist_ref,
+    ):
         issues.append(f"protagonist_ref: {data.protagonist_ref!r} is not a character node from the world seed")
     seen: set[str] = set()
     for index, milestone in enumerate(data.milestones):
@@ -302,29 +346,43 @@ def beat_sheet_issues(
         seen.add(milestone.id)
         within(*milestone.target_range, f"{path}.target_range")
         for ref_index, ref in enumerate(milestone.required_refs):
-            node(ref, f"{path}.required_refs[{ref_index}]")
+            actor(ref, f"{path}.required_refs[{ref_index}]")
     for index, protection in enumerate(data.protections):
         path = f"protections[{index}]"
-        node(protection.ref, f"{path}.ref")
         if not chapter_start <= protection.until_chapter <= chapter_end:
             issues.append(f"{path}.until_chapter {protection.until_chapter} is outside the arc {chapter_start}-{chapter_end}")
         if protection.kind == "must_not_know":
-            node(protection.observer_ref, f"{path}.observer_ref")
+            observer(protection.observer_ref, f"{path}.observer_ref")
             fact(protection.fact_ref, f"{path}.fact_ref")
-        elif protection.kind == "must_hold_state" and not protection.field.strip():
-            issues.append(f"{path}.field is required for must_hold_state")
+            # The ref names the observer; the reader is an observer but no actor (Ruling P4a-R13).
+            if not protection.ref == protection.observer_ref == READER_OBSERVER:
+                actor(protection.ref, f"{path}.ref")
+            continue
+        node = actor(protection.ref, f"{path}.ref")
+        if node is None:
+            continue
+        if protection.kind == "must_be_alive" and str(node.node_type) != "character":
+            # Only characters carry alive_status: on anything else the protection could never fire.
+            issues.append(f"{path}.ref: must_be_alive needs a character, not {str(node.node_type)!r}")
+        elif protection.kind == "must_hold_state":
+            if not protection.field.strip():
+                issues.append(f"{path}.field is required for must_hold_state")
+            else:
+                state_field(node, protection.field, f"{path}.field")
     for index, target in enumerate(data.reveal_targets):
         path = f"reveal_targets[{index}]"
         fact(target.fact_ref, f"{path}.fact_ref")
-        if target.observer != READER_OBSERVER:
-            node(target.observer, f"{path}.observer")
+        observer(target.observer, f"{path}.observer")
         if target.target_state not in KNOWLEDGE_STATES:
             issues.append(f"{path}.target_state {target.target_state!r} is not an allowed value")
         within(*target.range, f"{path}.range")
     for index, item in enumerate(data.exit_state):
-        node(item.ref, f"exit_state[{index}].ref")
+        path = f"exit_state[{index}]"
+        node = actor(item.ref, f"{path}.ref")
         if not item.field.strip():
-            issues.append(f"exit_state[{index}].field is required")
+            issues.append(f"{path}.field is required")
+        else:
+            state_field(node, item.field, f"{path}.field")
     return issues
 
 
@@ -373,16 +431,31 @@ def _normalized(data: ArcBeatSheetData) -> ArcBeatSheetData:
     })
 
 
+def _is_active(runtime: BookStateRuntime, ref: str) -> bool:
+    node = runtime.world.get_node(ref)
+    return node is not None and node.is_active
+
+
 def _is_seeded_character(runtime: BookStateRuntime, ref: str) -> bool:
     node = runtime.world.get_node(ref)
-    return (node is not None and str(node.node_type) == "character"
+    return (node is not None and node.is_active and str(node.node_type) == "character"
             and node.metadata.get("source") == GENESIS_SEED_SOURCE_TYPE)
+
+
+def _is_node_field(node: WorldNode, field: str) -> bool:
+    """Whether ``field`` is a state or profile field of the node's type, bare or as a ``state.``/``profile.`` path."""
+    fields = WORLD_NODE_FIELDS.get(str(node.node_type), {})
+    section, _, rest = field.strip().partition(".")
+    if section in ("state", "profile") and rest:
+        return rest.split(".", 1)[0] in fields.get(section, ())
+    return section in fields.get("state", set()) | fields.get("profile", set())
 
 
 def _actors(runtime: BookStateRuntime) -> list[dict[str, Any]]:
     return [
         {"id": node.id, "name": node.name, "kind": str(node.node_type),
-         "tier": runtime.world.get_state(node.id).get("actor_tier")}
+         "tier": runtime.world.get_state(node.id).get("actor_tier"),
+         "seeded": node.metadata.get("source") == GENESIS_SEED_SOURCE_TYPE}
         for node in sorted(runtime.world.nodes_by_id.values(), key=lambda item: item.id)
         if node.is_active and str(node.node_type) in ACTOR_NODE_TYPES
     ]
@@ -390,9 +463,10 @@ def _actors(runtime: BookStateRuntime) -> list[dict[str, Any]]:
 
 def _facts(runtime: BookStateRuntime) -> list[dict[str, Any]]:
     facts = runtime.world.facts_by_id.values()
-    events = sorted((fact for fact in facts if fact.fact_type == _EVENT_FACT_TYPE),
-                    key=lambda fact: (-fact.created_at_chapter, fact.id))[:MAX_PROMPT_EVENT_FACTS]
-    shown = [fact for fact in facts if fact.fact_type != _EVENT_FACT_TYPE] + events
+    # Every standing fact and the newest event facts, as world adjudication lists them.
+    events = sorted((fact for fact in facts if fact.fact_type == EVENT_FACT_TYPE),
+                    key=lambda fact: (-fact.created_at_chapter, fact.id))[:MAX_ADJUDICATION_EVENT_FACTS]
+    shown = [fact for fact in facts if fact.fact_type != EVENT_FACT_TYPE] + events
     return [
         {"ref": f"{FACT_REF_PREFIX}{fact.id}", "proposition": fact.proposition, "sensitivity": fact.sensitivity_level}
         for fact in sorted(shown, key=lambda item: item.id)

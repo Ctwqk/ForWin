@@ -26,12 +26,14 @@ ARC_BEATS_INSTRUCTIONS = (
     "卷长不足下限时只给一个 band；band_index 从 0 起按顺序编号。",
     "phases 把本卷分成若干阶段，purpose 写该阶段要完成的叙事任务。milestones 是本卷必须达成的节点："
     "id 在本表内唯一，target_range 在卷内，required_refs 列出达成它时必须仍然存在的行动者 id；hard 为 true 表示不可放弃。",
-    "protections 保护里程碑依赖的世界状态：kind 只能取允许值；ref 是被保护的行动者 id，must_not_know 时 ref 与 observer_ref "
-    "都是不得知情的观察者，并给出 fact_ref；must_hold_state 给出 field 与 value；until_chapter 取对应里程碑 target_range 的结束章。",
+    "protections 保护里程碑依赖的世界状态：kind 只能取允许值；ref 是被保护的行动者 id；must_be_alive 只用于 kind 为 character "
+    "的行动者；must_not_know 时 ref 与 observer_ref 都是不得知情的观察者（行动者 id，或允许值中的读者标记），并给出 fact_ref；"
+    "must_hold_state 给出 field 与 value；until_chapter 取对应里程碑 target_range 的结束章，在卷内。",
     "reveal_targets 安排本卷的揭示：fact_ref 只用 facts 的 ref，observer 为允许值中的读者标记或行动者 id，"
     "target_state 只能取允许值，range 在卷内。reveal_candidates 给出事实的建议揭示卷，不要提前揭示后续卷的秘密。",
-    "exit_state 列出本卷结束时必须成立的状态：ref 为行动者 id，field 与 value 是它的状态字段与取值，note 说明理由。",
-    "protagonist_ref 从 actors 中选一个 kind 为 character 的行动者作为本卷主角。reader_promise 与 arc_payoff_map "
+    "exit_state 列出本卷结束时必须成立的状态：ref 为行动者 id，field 与 value 是它的状态字段与取值，note 说明理由。"
+    "must_hold_state 与 exit_state 的 field 只能取允许值 actor_fields 中该行动者 kind 的字段，可写字段名或加 state. / profile. 前缀。",
+    "protagonist_ref 从 actors 中选一个 kind 为 character 且 seeded 为 true 的行动者作为本卷主角。reader_promise 与 arc_payoff_map "
     "写本卷对读者的承诺与回报安排。",
     "引用只能使用 actors 的 id 与 facts 的 ref，不得编造人物、地点或事实。世界摘要、上一卷收尾状态与未了义务是作者视角，"
     "可以含有秘密，只用于规划。给出 revision 时，在 current_beat_sheet 的基础上修订，消除 conflict_summary 所述的冲突。"

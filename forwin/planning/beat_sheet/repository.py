@@ -26,11 +26,14 @@ class ArcBeatSheetRepository:
         )
 
     def active_for_project(self, project_id: str) -> list[ArcBeatSheetRow]:
-        """The active sheet of every arc that has one, in arc order."""
+        """The active sheet of every arc that has one, in arc order; superseded arc plans have none."""
         return list(self.session.scalars(
             select(ArcBeatSheetRow)
             .join(ArcPlanVersion, ArcPlanVersion.id == ArcBeatSheetRow.arc_plan_id)
-            .where(ArcBeatSheetRow.project_id == project_id, ArcBeatSheetRow.status == "active")
+            .where(
+                ArcBeatSheetRow.project_id == project_id, ArcBeatSheetRow.status == "active",
+                ArcPlanVersion.status != "superseded",
+            )
             .order_by(ArcPlanVersion.chapter_start, ArcBeatSheetRow.arc_plan_id)
         ))
 

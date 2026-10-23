@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from forwin.audit.events import DecisionEventType
-from forwin.book_state import BookStateRepository
+from forwin.book_state import BookStateCompiler, BookStateRepository
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
 from forwin.genesis.handoff.world_seed_committer import WorldSeedCommitter
@@ -16,13 +16,17 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.planning_v6 import ArcBeatSheetRow
 from forwin.models.project import ArcPlanVersion
-from forwin.protocol.book_state import FactNode, MapNode, WorldNode
+from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.narrative_obligations.types import NarrativeObligation
+from forwin.protocol.book_state import (
+    ApprovedGraphDeltaSet, FactNode, FactPatch, GraphDelta, MapNode, NodePatch, WorldNode,
+)
 from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from forwin.writer.prompt_core.planning import WORLD_DIGEST_TITLES
 from tests.postgres import postgres_test_url
-from tests.test_chapter_delta_translator import REGION, SUBWORLD, _World, _pack
+from tests.test_chapter_delta_translator import OPENING, REGION, SUBWORLD, _World, _pack
 
 
 POLICY = RuntimePolicy.for_profile("standard")
@@ -43,7 +47,7 @@ class StubLLM:
         if isinstance(response, Exception):
             self.llm_attempt_events.append({**attempt, "error_class": type(response).__name__})
             raise response
-        text = json.dumps(response)
+        text = response if isinstance(response, str) else json.dumps(response)
         self.llm_attempt_events.append({**attempt, "output_chars": len(text)})
         return text
 
@@ -54,6 +58,9 @@ class StubLLM:
     def user_prompt(self, call: int) -> str:
         return self.calls[call][0][-1]["content"]
 
+    def payload(self, call: int) -> dict:
+        return json.loads(self.user_prompt(call).split("\n\n", 1)[0])
+
 
 @pytest.fixture
 def Session():
@@ -61,6 +68,22 @@ def Session():
     init_db(engine)
     yield get_session_factory(engine)
     engine.dispose()
+
+
+@pytest.fixture
+def digest_calls(monkeypatch) -> list[dict]:
+    """The keyword arguments of every world digest the service builds; the real digest still runs."""
+    from forwin.planning.beat_sheet import service as module
+
+    calls: list[dict] = []
+    real = module.build_world_digest
+
+    def spy(session, **kwargs):
+        calls.append(kwargs)
+        return real(session, **kwargs)
+
+    monkeypatch.setattr(module, "build_world_digest", spy)
+    return calls
 
 
 def _book(Session, *, chapter_end: int = 12) -> tuple[_World, str]:
@@ -156,10 +179,15 @@ def _trace_event_types(session, trace_id: str) -> list[str]:
     ).order_by(DecisionEvent.created_at, DecisionEvent.id)))
 
 
-def test_beat_sheet_from_stub_llm_validates_and_persists(Session) -> None:
+def test_beat_sheet_from_stub_llm_validates_and_persists(Session, digest_calls) -> None:
     from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
 
     world, arc_id = _book(Session)
+    with Session.begin() as session:
+        NarrativeObligationRepository(session).create_obligation(NarrativeObligation(
+            project_id=world.project_id, origin_chapter_number=0, obligation_type="world_change_response",
+            status="active", summary="obligation-summary", deadline_chapter=5, payoff_test="payoff-test",
+        ))
     client = StubLLM(_sheet(world))
     row_id = _ensure(Session, _service(client), world, arc_id)
 
@@ -171,7 +199,19 @@ def test_beat_sheet_from_stub_llm_validates_and_persists(Session) -> None:
     for expected in ("arc-goal", "arc-stakes", "arc-payoff", WORLD_DIGEST_TITLES["protagonist"],
                      world.hero, world.fact("fact-1"), "proposition-1", "candidate-note"):
         assert expected in prompt
-    assert json.loads(prompt.split("\n\n", 1)[0])["band_size"] == POLICY.planning.band_size
+    payload = client.payload(0)
+    assert payload["band_size"] == POLICY.planning.band_size
+    assert [(item["summary"], item["deadline_chapter"]) for item in payload["open_obligations"]] == [
+        ("obligation-summary", 5),
+    ]
+    actors = {item["id"]: item for item in payload["actors"]}
+    assert actors[world.hero]["seeded"] is True and actors[world.hero]["kind"] == "character"
+    # The digest: the policy budget, one story day per arc chapter from the opening minute, the fallback protagonist.
+    assert digest_calls == [{
+        "project_id": world.project_id, "as_of_chapter": 0, "protagonist_ref": world.hero,
+        "window_end_minute": OPENING + 12 * 1440, "budget_chars": POLICY.planning.digest_budget_chars,
+        "runtime": digest_calls[0]["runtime"],
+    }]
 
     with Session() as session:
         row = session.get(ArcBeatSheetRow, row_id)
@@ -218,7 +258,7 @@ def test_invalid_ref_retries_once_then_falls_back(Session) -> None:
         assert (data.reader_promise, data.arc_payoff_map) == (ReaderPromise(), ArcPayoffMap())
         (trace,) = _traces(session, world.project_id)
         summary = json.loads(trace.output_summary_json)
-        assert summary["source"] == "fallback"
+        assert (summary["source"], summary["failure_reason"]) == ("fallback", "invalid_output")
         assert any("ghost-node" in issue for issue in summary["issues"])
         assert DecisionEventType.RETRY_ATTEMPT in _trace_event_types(session, trace.id)
 
@@ -232,7 +272,73 @@ def test_llm_error_falls_back_and_still_records_the_trace(Session) -> None:
     with Session() as session:
         assert session.get(ArcBeatSheetRow, row_id).source == "fallback"
         (trace,) = _traces(session, world.project_id)
+        assert json.loads(trace.output_summary_json)["failure_reason"] == "llm_unavailable"
         assert _trace_event_types(session, trace.id).count(DecisionEventType.LLM_REQUEST_FAILED) == 2
+
+
+@pytest.mark.parametrize(("first", "fed_back"), [
+    (RuntimeError("provider down"), False),
+    ("not a json object", True),
+], ids=["provider_error", "malformed_output"])
+def test_only_output_problems_are_fed_back_on_retry(Session, first, fed_back) -> None:
+    world, arc_id = _book(Session)
+    client = StubLLM(first, _sheet(world))
+    row_id = _ensure(Session, _service(client), world, arc_id)
+
+    assert len(client.calls) == 2
+    # A provider failure resends the same messages; a malformed answer goes back to the model.
+    assert (client.calls[1][0] == client.calls[0][0]) is not fed_back
+    assert ("Retry validation feedback" in client.user_prompt(1)) is fed_back
+    assert "provider down" not in client.user_prompt(1)
+    with Session() as session:
+        assert session.get(ArcBeatSheetRow, row_id).source == "llm"
+
+
+def test_without_an_llm_client_the_fallback_is_written_with_a_trace(Session) -> None:
+    world, arc_id = _book(Session)
+    row_id = _ensure(Session, _service(None), world, arc_id)
+
+    with Session() as session:
+        row = session.get(ArcBeatSheetRow, row_id)
+        assert (row.source, row.protagonist_ref) == ("fallback", world.hero)
+        (trace,) = _traces(session, world.project_id)
+        summary = json.loads(trace.output_summary_json)
+        assert (summary["source"], summary["failure_reason"]) == ("fallback", "llm_unavailable")
+        assert json.loads(trace.attempts_json) == []
+        assert _trace_event_types(session, trace.id) == []
+
+
+def test_sheet_after_chapter_one_is_checked_against_the_latest_canon(Session, digest_calls) -> None:
+    world, arc_id = _book(Session)
+    with Session.begin() as session:
+        result = BookStateCompiler(session).compile(ApprovedGraphDeltaSet(
+            project_id=world.project_id, chapter_number=1, graph_deltas=[GraphDelta(
+                id=f"chapter-1-{world.project_id}", project_id=world.project_id, chapter_number=1,
+                story_time_start=OPENING, story_time_end=OPENING + 90,
+                node_patches=[NodePatch(node_id=world.rival, node_type="character", op="deactivate",
+                                        field_path="is_active", old_value=True)],
+                fact_patches=[FactPatch(fact_id="fact-ch1", op="create", proposition="chapter-one-fact",
+                                        new_value={"project_id": world.project_id})],
+            )],
+        ))
+        assert result.committed, result.blocked_reasons
+    stale = _sheet(world)
+    current = _sheet(world, required_refs=[world.hero])
+    current["protections"] = current["protections"][:1]
+    current["exit_state"] = [{"ref": world.hero, "field": "alive_status", "value": "alive", "note": ""}]
+    current["reveal_targets"][0]["fact_ref"] = "fact:fact-ch1"
+    client = StubLLM(stale, current)
+    row_id = _ensure(Session, _service(client), world, arc_id)
+
+    actor_ids = [item["id"] for item in client.payload(0)["actors"]]
+    assert world.hero in actor_ids and world.rival not in actor_ids
+    assert "fact:fact-ch1" in [item["ref"] for item in client.payload(0)["facts"]]
+    feedback = client.user_prompt(1).split("Retry validation feedback", 1)[1]
+    assert f"milestones[0].required_refs[1]: {world.rival!r} is not one of the offered actors" in feedback
+    assert digest_calls[0]["as_of_chapter"] == 1
+    assert digest_calls[0]["window_end_minute"] == OPENING + 90 + 12 * 1440
+    with Session() as session:
+        assert session.get(ArcBeatSheetRow, row_id).source == "llm"
 
 
 @pytest.mark.parametrize(("bands", "issue"), [
@@ -284,6 +390,11 @@ def test_revise_creates_new_version_and_supersedes_old(Session) -> None:
         assert [row.id for row in repo.active_for_project(world.project_id)] == [second_id]
         assert repo.load(second).milestones[0].description == "revised-milestone"
         assert len(_traces(session, world.project_id)) == 2
+    with Session.begin() as session:
+        session.get(ArcPlanVersion, arc_id).status = "superseded"
+    with Session() as session:
+        # A sheet of a superseded arc plan is no longer one of the project's active sheets.
+        assert ArcBeatSheetRepository(session).active_for_project(world.project_id) == []
 
 
 def test_ensure_is_idempotent(Session) -> None:
@@ -298,44 +409,140 @@ def test_ensure_is_idempotent(Session) -> None:
         assert session.scalars(select(ArcBeatSheetRow.version).where(ArcBeatSheetRow.arc_plan_id == arc_id)).all() == [1]
 
 
-def test_validation_requires_a_seeded_protagonist_and_complete_protections() -> None:
+_SEEDED = {"source": "genesis_seed"}
+_RUNTIME = BookStateRuntime(project_id="p", as_of_chapter=0, world=ObjectiveWorldGraph(nodes=[
+    WorldNode(id="hero", project_id="p", node_type="character", metadata=_SEEDED),
+    WorldNode(id="rival", project_id="p", node_type="character", metadata=_SEEDED),
+    WorldNode(id="ghost", project_id="p", node_type="character", metadata=_SEEDED, is_active=False),
+    WorldNode(id="newcomer", project_id="p", node_type="character", metadata={"source": "chapter_extraction"}),
+    WorldNode(id="banner", project_id="p", node_type="faction", metadata=_SEEDED),
+    WorldNode(id="relic", project_id="p", node_type="item"),
+], facts=[FactNode(id="secret", project_id="p", proposition="secret-value")]), map_graph=MapGraph())
+# The actors a prompt built from _RUNTIME lists: every active actor node.
+_OFFERED = {"hero", "rival", "newcomer", "banner"}
+_VALID = {
+    "protagonist_ref": "hero",
+    "phases": [{"name": "phase", "chapter_range": [1, 6], "purpose": "purpose"}],
+    "band_breakdown": [{"band_index": 0, "chapter_start": 1, "chapter_end": 6}],
+    "milestones": [{"id": "m-1", "description": "d", "target_range": [2, 4], "required_refs": ["hero"]}],
+    "protections": [{"ref": "hero", "kind": "must_be_alive", "until_chapter": 4}],
+    "reveal_targets": [{"fact_ref": "fact:secret", "observer": "reader", "target_state": "suspects", "range": [5, 6]}],
+    "exit_state": [{"ref": "rival", "field": "alive_status", "value": "alive"}],
+}
+
+
+def _issues(*, chapter_end: int = 6, **changes) -> list[str]:
     from forwin.planning.beat_sheet.service import beat_sheet_issues
     from forwin.planning.beat_sheet.types import ArcBeatSheetData
 
-    seeded = {"source": "genesis_seed"}
-    runtime = BookStateRuntime(project_id="p", as_of_chapter=0, world=ObjectiveWorldGraph(nodes=[
-        WorldNode(id="hero", project_id="p", node_type="character", metadata=seeded),
-        WorldNode(id="newcomer", project_id="p", node_type="character", metadata={"source": "chapter_extraction"}),
-    ], facts=[FactNode(id="secret", project_id="p", proposition="secret-value")]), map_graph=MapGraph())
-    sheet = {
-        "protagonist_ref": "newcomer",
-        "phases": [{"name": "phase", "chapter_range": [1, 6], "purpose": "purpose"}],
-        "band_breakdown": [{"band_index": 0, "chapter_start": 1, "chapter_end": 6}],
-        "protections": [
-            {"ref": "hero", "kind": "must_hold_state", "until_chapter": 6},
-            {"ref": "hero", "kind": "must_not_know", "until_chapter": 7, "observer_ref": "hero", "fact_ref": "secret"},
-        ],
-        "reveal_targets": [{"fact_ref": "fact:secret", "observer": "reader", "target_state": "revealed", "range": [2, 3]}],
-    }
+    data = ArcBeatSheetData.model_validate({**_VALID, **changes})
+    return beat_sheet_issues(data, chapter_start=1, chapter_end=chapter_end, runtime=_RUNTIME, actor_ids=_OFFERED)
 
-    def issues(**changes) -> list[str]:
-        data = ArcBeatSheetData.model_validate({**sheet, **changes})
-        return beat_sheet_issues(data, chapter_start=1, chapter_end=6, runtime=runtime)
 
-    assert issues() == [
-        "protagonist_ref: 'newcomer' is not a character node from the world seed",
-        "protections[0].field is required for must_hold_state",
-        "protections[1].until_chapter 7 is outside the arc 1-6",
-        "protections[1].fact_ref: 'secret' is not a fact ref",
-        "reveal_targets[0].target_state 'revealed' is not an allowed value",
-    ]
-    assert issues(protagonist_ref="hero", protections=[], reveal_targets=[]) == []
-    # An arc shorter than the band minimum is one short band.
+def _protection(ref: str, kind: str, until: int = 4, **fields) -> dict:
+    return {"protections": [{"ref": ref, "kind": kind, "until_chapter": until, **fields}]}
+
+
+def _milestone(**fields) -> dict:
+    return {"milestones": [{**_VALID["milestones"][0], **fields}]}
+
+
+def _reveal(**fields) -> dict:
+    return {"reveal_targets": [{**_VALID["reveal_targets"][0], **fields}]}
+
+
+def _exit(ref: str, field: str) -> dict:
+    return {"exit_state": [{"ref": ref, "field": field, "value": "v"}]}
+
+
+@pytest.mark.parametrize(("changes", "issue"), [
+    ({"protagonist_ref": "ghost"}, "protagonist_ref: 'ghost' is not one of the offered actors"),
+    ({"protagonist_ref": "newcomer"}, "protagonist_ref: 'newcomer' is not a character node from the world seed"),
+    (_milestone(required_refs=["ghost"]), "milestones[0].required_refs[0]: 'ghost' is not one of the offered actors"),
+    (_milestone(required_refs=["relic"]), "milestones[0].required_refs[0]: 'relic' is not one of the offered actors"),
+    (_milestone(target_range=[5, 9]), "milestones[0].target_range 5-9 is not an ordered range inside the arc 1-6"),
+    (_protection("ghost", "must_exist"), "protections[0].ref: 'ghost' is not one of the offered actors"),
+    (_protection("hero", "must_be_alive", until=7), "protections[0].until_chapter 7 is outside the arc 1-6"),
+    (_protection("banner", "must_be_alive"), "protections[0].ref: must_be_alive needs a character, not 'faction'"),
+    (_protection("hero", "must_hold_state"), "protections[0].field is required for must_hold_state"),
+    (_protection("hero", "must_hold_state", field="unknown_field"),
+     "protections[0].field 'unknown_field' is not a character field"),
+    (_protection("hero", "must_hold_state", field="profile.location_id"),
+     "protections[0].field 'profile.location_id' is not a character field"),
+    (_protection("hero", "must_not_know", observer_ref="ghost", fact_ref="fact:secret"),
+     "protections[0].observer_ref: 'ghost' is not an active BookState node"),
+    (_protection("hero", "must_not_know", observer_ref="hero", fact_ref="secret"),
+     "protections[0].fact_ref: 'secret' is not a fact ref"),
+    (_reveal(observer="nobody"), "reveal_targets[0].observer: 'nobody' is not an active BookState node"),
+    (_reveal(observer="ghost"), "reveal_targets[0].observer: 'ghost' is not an active BookState node"),
+    (_reveal(target_state="revealed"), "reveal_targets[0].target_state 'revealed' is not an allowed value"),
+    (_reveal(fact_ref="secret"), "reveal_targets[0].fact_ref: 'secret' is not a fact ref"),
+    (_exit("ghost", "alive_status"), "exit_state[0].ref: 'ghost' is not one of the offered actors"),
+    (_exit("rival", ""), "exit_state[0].field is required"),
+    (_exit("banner", "unknown_field"), "exit_state[0].field 'unknown_field' is not a faction field"),
+], ids=[
+    "deactivated_protagonist",
+    "unseeded_protagonist",
+    "deactivated_required_ref",
+    "unoffered_required_ref",
+    "milestone_outside_arc",
+    "deactivated_protection_ref",
+    "until_outside_arc",
+    "alive_on_faction",
+    "hold_state_without_field",
+    "hold_state_unknown_field",
+    "hold_state_wrong_section",
+    "deactivated_observer",
+    "bare_fact_ref",
+    "unknown_reveal_observer",
+    "deactivated_reveal_observer",
+    "unknown_target_state",
+    "bare_reveal_fact",
+    "deactivated_exit_ref",
+    "exit_without_field",
+    "exit_unknown_field",
+])
+def test_validation_rejects_refs_and_protections_that_cannot_hold(changes, issue) -> None:
+    assert issue in _issues(**changes)
+
+
+@pytest.mark.parametrize("changes", [
+    {},
+    # Ruling P4a-R13: the reader is an observer a must_not_know protection may name.
+    _protection("reader", "must_not_know", observer_ref="reader", fact_ref="fact:secret"),
+    _protection("hero", "must_hold_state", field="location_id", value="site"),
+    _protection("hero", "must_hold_state", field="state.location_id", value="site"),
+    _protection("hero", "must_hold_state", field="profile.fear", value="fear"),
+    _exit("banner", "state.influence_level"),
+], ids=["valid", "reader_must_not_know", "bare_field", "state_field", "profile_field", "faction_exit_field"])
+def test_validation_accepts_sheets_that_can_hold(changes) -> None:
+    assert _issues(**changes) == []
+
+
+def test_an_arc_shorter_than_four_chapters_is_one_band() -> None:
     short = {"phases": [{"name": "phase", "chapter_range": [1, 3], "purpose": "purpose"}],
-             "band_breakdown": [{"band_index": 0, "chapter_start": 1, "chapter_end": 3}]}
-    data = ArcBeatSheetData.model_validate({**sheet, **short, "protagonist_ref": "hero", "protections": [],
-                                            "reveal_targets": []})
-    assert beat_sheet_issues(data, chapter_start=1, chapter_end=3, runtime=runtime) == []
+             "milestones": [], "protections": [], "reveal_targets": []}
+    one = [{"band_index": 0, "chapter_start": 1, "chapter_end": 3}]
+    two = [{"band_index": 0, "chapter_start": 1, "chapter_end": 1}, {"band_index": 1, "chapter_start": 2, "chapter_end": 3}]
+    assert _issues(chapter_end=3, band_breakdown=one, **short) == []
+    assert _issues(chapter_end=3, band_breakdown=two, **short) == [
+        "band_breakdown: an arc of 3 chapters is a single band",
+    ]
+
+
+def test_fallback_protagonist_needs_a_seeded_core_cast_character() -> None:
+    from forwin.genesis.handoff.world_seed_committer import seed_ref_id
+    from forwin.planning.beat_sheet.fallback import fallback_protagonist_ref
+
+    hero = seed_ref_id("p", "character", "cast-2")
+    runtime = BookStateRuntime(project_id="p", as_of_chapter=0, world=ObjectiveWorldGraph(nodes=[
+        WorldNode(id=hero, project_id="p", node_type="character", metadata=_SEEDED),
+    ]), map_graph=MapGraph())
+    cast = {"world": {"story_engine": {"core_cast": [{"id": "cast-1"}, {"id": "cast-2"}]}}}
+    assert fallback_protagonist_ref("p", cast, runtime) == hero
+    for pack in ({}, {"world": {"story_engine": {"core_cast": [{"id": "cast-1"}]}}}):
+        with pytest.raises(ValueError, match="no seeded core_cast character"):
+            fallback_protagonist_ref("p", pack, runtime)
 
 
 def test_split_arc_into_bands_always_passes_band_validation() -> None:

@@ -3,30 +3,42 @@
 from __future__ import annotations
 
 import json
-from collections import deque
+import logging
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
-from forwin.book_state.knowledge import FACT_REF_PREFIX
+from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
-from forwin.book_state.schema import ACTOR_NODE_TYPES
+from forwin.book_state.schema import ACTOR_NODE_TYPES, WORLD_EDGE_TYPES_BY_FAMILY
 from forwin.book_state.story_clock import StoryCalendar, format_story_time
 from forwin.book_state.thread_sampling import sample_active_threads
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
-from forwin.protocol.book_state import WorldNode
+from forwin.protocol.book_state import WorldEdge, WorldNode
 from forwin.world_engine.propagation import latest_news_in_transit
 from forwin.world_engine.travel import estimate_travel
 from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE
 from forwin.writer.prompt_core.planning import WORLD_DIGEST_TITLES
 
 
+logger = logging.getLogger(__name__)
+
+DIGEST_SECTION_KEYS = (
+    "protagonist", "actors", "news_in_transit", "offscreen_events", "secrets_progress",
+    "tensions", "clocks", "stalled_threads_obligations",
+)
 DIGEST_TOP_ACTORS = 8
+DIGEST_INTENTS_PER_ACTOR = 3
+DIGEST_SECRETS_LIMIT = 12
+DIGEST_TENSIONS_LIMIT = 10
+_PROTAGONIST_RELATIONS_LIMIT = 6
+_TENSION_TYPES = WORLD_EDGE_TYPES_BY_FAMILY["social"] | WORLD_EDGE_TYPES_BY_FAMILY["loyalty_conflict"]
 _RECENT_CHAPTERS = 3
 _STALE_THREAD_WINDOW = 3
 _THREAD_LIMIT = 20
@@ -61,6 +73,7 @@ def build_world_digest(
 
     Hidden intents and objective secrets are included: this digest must never be supplied
     to the chapter writer. Equal relevance is resolved by node id, independent of row order.
+    trimmed_keys records removal order: the last section first.
     """
     if budget_chars < 0:
         raise ValueError("budget_chars must be nonnegative")
@@ -72,9 +85,21 @@ def build_world_digest(
     lexicon = BookLexiconRepository(session).get(project_id)
     calendar = StoryCalendarRepository(session).get(project_id)
     location_id = resolve_world_node_location_id(runtime.world, protagonist_ref)
-    lines: dict[str, list[str]] = {key: [] for key in WORLD_DIGEST_TITLES}
-    lines["protagonist"] = [_actor_line(runtime, protagonist, calendar)]
-    lines["actors"] = _actors(runtime, lexicon, calendar, protagonist_ref, location_id)
+    owned = _index_owned(runtime)
+    lines: dict[str, list[str]] = {key: [] for key in DIGEST_SECTION_KEYS}
+    protagonist_state = runtime.world.get_state(protagonist_ref)
+    resources_and_rank = {key: protagonist_state[key] for key in
+                          ("resources", "resource_summary", "rank_title", "power_level") if key in protagonist_state}
+    lines["protagonist"] = [_actor_line(runtime, protagonist, calendar, owned)
+                            + (" | " + _fields(**resources_and_rank) if resources_and_rank else "")]
+    relations = sorted((edge for edge in runtime.world.edges_by_id.values() if edge.is_active),
+                       key=lambda edge: (protagonist_ref not in (edge.source_id, edge.target_id), edge.id))
+    lines["protagonist"].extend(_relation_line(runtime, edge) for edge in
+                               [edge for edge in relations if protagonist_ref in (edge.source_id, edge.target_id)]
+                               [:_PROTAGONIST_RELATIONS_LIMIT])
+    lines["tensions"] = [_relation_line(runtime, edge) for edge in relations
+                         if edge.edge_type in _TENSION_TYPES][:DIGEST_TENSIONS_LIMIT]
+    lines["actors"] = _actors(runtime, lexicon, calendar, protagonist_ref, location_id, owned)
 
     for news in sorted(latest_news_in_transit(session, project_id),
                        key=lambda item: (item.arrive_at, item.fact_ref, item.observer_ref)):
@@ -86,49 +111,54 @@ def build_world_digest(
         if fact is None:
             continue
         lines["news_in_transit"].append(_line(
-            fact.proposition, fact_ref=news.fact_ref, observer_ref=news.observer_ref,
+            fact.proposition, observer=_name(runtime, news.observer_ref),
             location=_name(runtime, location_id), arrive_at=_time(calendar, news.arrive_at),
         ))
 
     events = [node for node in runtime.world.nodes_by_id.values()
-              if str(node.node_type) == "event" and node.metadata.get("source") == WORLD_ENGINE_SOURCE_TYPE
+              if node.is_active and str(node.node_type) == "event"
+              and node.metadata.get("source") == WORLD_ENGINE_SOURCE_TYPE
               and max(0, as_of_chapter - _RECENT_CHAPTERS + 1) <= node.created_at_chapter <= as_of_chapter]
     for event in sorted(events, key=lambda node: (-node.created_at_chapter, node.id)):
-        state = runtime.world.get_state(event.id)
         lines["offscreen_events"].append(_line(
-            event.name, ref=event.id, chapter=event.created_at_chapter, summary=event.summary,
-            at=_time(calendar, state.get("actual_story_time")), profile=event.profile, state=state,
+            event.summary or event.profile.get("public_summary") or event.name or event.id,
+            location=_name(runtime, event.profile.get("location_id") or resolve_world_node_location_id(runtime.world, event.id)),
+            chapter=event.created_at_chapter,
         ))
 
     reader = runtime.cognition_by_observer.get(("reader", "reader"))
     recorded = reader.knowledge_by_ref if reader is not None else {}
     targets = earliest_reveal_chapters(session, project_id)
-    for fact in sorted(runtime.world.facts_by_id.values(), key=lambda item: item.id):
+    secrets = [fact for fact in runtime.world.facts_by_id.values()
+               if fact.sensitivity_level in HIDDEN_SENSITIVITY or fact.id in targets
+               or f"{FACT_REF_PREFIX}{fact.id}" in recorded]
+    for fact in sorted(secrets, key=lambda item: (targets.get(item.id, float("inf")), item.id))[:DIGEST_SECRETS_LIMIT]:
         ref = f"{FACT_REF_PREFIX}{fact.id}"
         lines["secrets_progress"].append(_line(
-            fact.proposition, fact_ref=ref, sensitivity=fact.sensitivity_level,
+            fact.proposition, sensitivity=fact.sensitivity_level,
             reader_state=recorded.get(ref, "unknown"), reveal_target=targets.get(fact.id),
         ))
 
     for node in sorted(runtime.world.nodes_by_id.values(), key=lambda item: item.id):
-        state = runtime.world.get_state(node.id)
-        if not node.is_active:
+        if not node.is_active or str(node.node_type) != "clock":
             continue
-        if str(node.node_type) == "conflict" and state.get("status", node.status) not in {"resolved", "closed"}:
-            lines["tensions"].append(_line(node.name, ref=node.id, summary=node.summary,
-                                             profile=node.profile, state=state))
-        if str(node.node_type) == "clock" and state.get("status") == "running":
-            lines["clocks"].append(_line(node.name, ref=node.id, profile=node.profile,
-                                          due_at=_time(calendar, state.get("due_at")), state=state))
+        state = runtime.world.get_state(node.id)
+        if state.get("status") == "running":
+            due_at = state.get("due_at")
+            remaining = max(0, due_at - window_end_minute) if type(due_at) is int else None
+            lines["clocks"].append(_line(
+                node.profile.get("label") or node.name or node.id,
+                remaining=_duration(calendar, remaining), scope=node.profile.get("scope"),
+            ))
 
     sampled = sample_active_threads(session=session, project_id=project_id, chapter_number=as_of_chapter,
-                                    limit=_THREAD_LIMIT, stale_window=_STALE_THREAD_WINDOW)
+                                    limit=_THREAD_LIMIT, stale_window=_STALE_THREAD_WINDOW, runtime=runtime)
     for thread in sampled.threads:
         beat = sampled.latest_beats.get(thread.id)
         last_active = beat.chapter_number if beat is not None else thread.opened_at_chapter
         if as_of_chapter - last_active >= _STALE_THREAD_WINDOW:
             lines["stalled_threads_obligations"].append(_line(
-                thread.name, thread_ref=thread.id, description=thread.description,
+                thread.name, description=thread.description,
                 last_active_chapter=last_active, priority=thread.priority,
             ))
     obligations = NarrativeObligationRepository(session).list_active_for_context(
@@ -136,20 +166,23 @@ def build_world_digest(
     )
     for item in sorted(obligations, key=lambda item: (item.deadline_chapter, item.priority, item.id)):
         lines["stalled_threads_obligations"].append(_line(
-            item.summary, obligation_ref=item.id, deadline_chapter=item.deadline_chapter,
-            priority=item.priority, subject_refs=item.subject_refs, payoff_test=item.payoff_test,
+            item.summary, deadline_chapter=item.deadline_chapter,
+            priority=item.priority, subjects=[_name(runtime, ref) for ref in item.subject_refs], payoff_test=item.payoff_test,
         ))
-    sections = [DigestSection(key, title, lines[key]) for key, title in WORLD_DIGEST_TITLES.items()]
+    sections = [DigestSection(key, WORLD_DIGEST_TITLES[key], lines[key]) for key in DIGEST_SECTION_KEYS]
     trimmed_keys: list[str] = []
-    text = _render(sections)
+    text = render_digest_sections(sections)
     while sections and len(text) > budget_chars:
-        trimmed_keys.append(sections.pop().key)
-        text = _render(sections)
+        key = sections.pop().key
+        trimmed_keys.append(key)
+        if key == "protagonist":
+            logger.warning("World digest protagonist section trimmed for project %s at budget %s", project_id, budget_chars)
+        text = render_digest_sections(sections)
     return WorldDigest(sections, text, trimmed_keys)
 
 
 def _actors(runtime: BookStateRuntime, lexicon: BookLexicon, calendar: StoryCalendar | None,
-            protagonist_ref: str, location_id: str) -> list[str]:
+            protagonist_ref: str, location_id: str, owned: dict[tuple[str, str], list[WorldNode]]) -> list[str]:
     adjacency: dict[str, set[str]] = {}
     for edge in runtime.world.edges_by_id.values():
         if edge.is_active:
@@ -175,52 +208,73 @@ def _actors(runtime: BookStateRuntime, lexicon: BookLexicon, calendar: StoryCale
             minutes = estimate_travel(runtime, lexicon, mover_id=actor.id,
                                       from_location_id=origin, to_location_id=location_id).minutes
         targets_related = any(related.intersection(intent.profile.get("target_refs") or [])
-                              for intent in _owned(runtime, actor.id, "intent"))
+                              for intent in owned.get((actor.id, "intent"), ()))
         distance = distances.get(actor.id)
         rank = (distance if distance is not None else float("inf"),
                 minutes if minutes is not None else float("inf"), not targets_related, actor.id)
         ranked.append((rank, actor, distance, minutes, targets_related))
     return [
-        _actor_line(runtime, actor, calendar) + " | " + _fields(
+        _actor_line(runtime, actor, calendar, owned) + " | " + _fields(
             relationship_hops=distance, travel_minutes=minutes, targets_related=targets_related,
         )
         for _, actor, distance, minutes, targets_related in sorted(ranked, key=lambda item: item[0])[:DIGEST_TOP_ACTORS]
     ]
 
 
-def _owned(runtime: BookStateRuntime, owner_ref: str, kind: str) -> list[WorldNode]:
-    statuses = _PENDING_INTENTS if kind == "intent" else {"active"}
-    return sorted(
-        (node for node in runtime.world.nodes_by_id.values()
-         if str(node.node_type) == kind and node.is_active and node.profile.get("owner_ref") == owner_ref
-         and runtime.world.get_state(node.id).get("status") in statuses),
-        key=lambda node: (runtime.world.get_state(node.id).get("scheduled_at", 0), node.id),
-    )
+def _index_owned(runtime: BookStateRuntime) -> dict[tuple[str, str], list[WorldNode]]:
+    owned: dict[tuple[str, str], list[WorldNode]] = defaultdict(list)
+    for node in runtime.world.nodes_by_id.values():
+        kind = str(node.node_type)
+        if not node.is_active or kind not in {"agenda", "intent"}:
+            continue
+        statuses = _PENDING_INTENTS if kind == "intent" else {"active"}
+        if runtime.world.get_state(node.id).get("status") in statuses:
+            owned[(node.profile.get("owner_ref", ""), kind)].append(node)
+    for (_, kind), nodes in owned.items():
+        nodes.sort(key=lambda node: (
+            runtime.world.get_state(node.id).get("scheduled_at", float("inf")) if kind == "intent" else 0, node.id,
+        ))
+    return owned
 
 
-def _actor_line(runtime: BookStateRuntime, actor: WorldNode, calendar: StoryCalendar | None) -> str:
+def _actor_line(runtime: BookStateRuntime, actor: WorldNode, calendar: StoryCalendar | None,
+                owned: dict[tuple[str, str], list[WorldNode]]) -> str:
+    state = runtime.world.get_state(actor.id)
+    restraint = state.get("restraint")
     return _line(
-        actor.name, ref=actor.id,
+        actor.name or actor.id,
         location=_name(runtime, resolve_world_node_location_id(runtime.world, actor.id)),
-        state=runtime.world.get_state(actor.id),
-        agendas=[{"ref": node.id, "name": node.name, "profile": node.profile,
-                  "state": runtime.world.get_state(node.id)} for node in _owned(runtime, actor.id, "agenda")],
-        intents=[{"ref": node.id, "name": node.name, "profile": node.profile,
-                  "state": runtime.world.get_state(node.id),
+        alive_status=state.get("alive_status"),
+        restraint=restraint.get("state") if isinstance(restraint, dict) else restraint,
+        tier=state.get("actor_tier"),
+        agendas=[node.profile.get("goal") for node in owned.get((actor.id, "agenda"), ())],
+        intents=[{"action_type": node.profile.get("action_type"), "summary": node.profile.get("summary") or node.summary,
+                  "targets": [_name(runtime, ref) for ref in node.profile.get("target_refs", ())],
                   "scheduled_at": _time(calendar, runtime.world.get_state(node.id).get("scheduled_at"))}
-                 for node in _owned(runtime, actor.id, "intent")],
+                 for node in owned.get((actor.id, "intent"), ())[:DIGEST_INTENTS_PER_ACTOR]],
     )
+
+
+def _relation_line(runtime: BookStateRuntime, edge: WorldEdge) -> str:
+    return " — ".join(_value(value) for value in (_name(runtime, edge.source_id), edge.edge_type,
+                                                  _name(runtime, edge.target_id)))
 
 
 def _name(runtime: BookStateRuntime, ref: str) -> str:
     node = runtime.world.get_node(ref) or runtime.map.nodes_by_id.get(ref)
-    return node.name if node is not None else ref
+    return (node.name or ref) if node is not None else ref
 
 
 def _time(calendar: StoryCalendar | None, minute: Any) -> str:
     if type(minute) is not int:
         return "unknown"
     return f"{minute} ({format_story_time(calendar, minute)})" if calendar is not None else str(minute)
+
+
+def _duration(calendar: StoryCalendar | None, minutes: int | None) -> str:
+    if calendar is not None:
+        calendar = StoryCalendar("", 0, calendar.units)
+    return _time(calendar, minutes)
 
 
 def _fields(**fields: Any) -> str:
@@ -239,8 +293,12 @@ def _line(name: str, **fields: Any) -> str:
     return f"{_value(name)} | {_fields(**fields)}"
 
 
-def _render(sections: list[DigestSection]) -> str:
+def render_digest_sections(sections: list[DigestSection]) -> str:
+    """Render sections with the same separators used for budget accounting."""
     return "\n\n".join("\n".join([section.title, *section.lines]) for section in sections)
 
 
-__all__ = ["DIGEST_TOP_ACTORS", "DigestSection", "WorldDigest", "build_world_digest"]
+__all__ = [
+    "DIGEST_SECTION_KEYS", "DIGEST_TOP_ACTORS", "DIGEST_INTENTS_PER_ACTOR", "DIGEST_SECRETS_LIMIT",
+    "DIGEST_TENSIONS_LIMIT", "DigestSection", "WorldDigest", "build_world_digest", "render_digest_sections",
+]

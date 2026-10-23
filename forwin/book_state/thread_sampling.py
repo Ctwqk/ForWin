@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from forwin.book_state.query import BookStateQuery
+from forwin.book_state.runtime import BookStateRuntime
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,15 +39,17 @@ def sample_active_threads(
     limit: int,
     stale_window: int,
     recent_window: int = 2,
+    runtime: BookStateRuntime | None = None,
 ) -> SampledThreadSet:
     active_limit = max(1, int(limit))
     candidate_limit = max(active_limit * 3, active_limit + 6)
     stale_threshold = max(1, int(stale_window))
     hot_threshold = max(1, int(recent_window))
-    runtime = BookStateQuery(session).runtime(
-        project_id,
-        as_of_chapter=max(int(chapter_number), 0),
-    )
+    if runtime is None:
+        runtime = BookStateQuery(session).runtime(
+            project_id,
+            as_of_chapter=max(int(chapter_number), 0),
+        )
     candidates: list[SampledThread] = []
     latest_beats: dict[str, SampledThreadBeat] = {}
     for node in runtime.narrative.nodes_by_id.values():

@@ -43,7 +43,7 @@ from forwin.world_engine.tick import WorldTickResult, WorldTickService
 from forwin.world_engine.tick_nodes import outcome_candidate
 from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE, AdjudicatedOutcome, TickCandidate, WorldEffects
 from forwin.writer.prompt_core.world_engine import ACTOR_CONSTRAINT_FEEDBACK, plot_response_goal
-from tests import test_world_gate_v6
+from tests import world_gate_helpers
 from tests.test_canon_atomic_transaction import _prepare_chapter_candidate
 from tests.test_historical_rewrite_world_ticks import _accept, _complete_post_canon
 from tests.test_world_gate_v6 import (
@@ -158,7 +158,7 @@ def _seed_tick_world(
     With ``rival_strikes`` the rival also means to strike at the hero three days in, offstage. ``errands``
     more offstage intents of the hero fall due one an hour from the first hour on.
     """
-    original = test_world_gate_v6._pack
+    original = world_gate_helpers._pack
 
     def pack(**kwargs: Any) -> dict[str, Any]:
         built = original(**kwargs)
@@ -197,7 +197,7 @@ def _seed_tick_world(
             }]
         return built
 
-    monkeypatch.setattr(test_world_gate_v6, "_pack", pack)
+    monkeypatch.setattr(world_gate_helpers, "_pack", pack)
     return _seed_world(Session)
 
 

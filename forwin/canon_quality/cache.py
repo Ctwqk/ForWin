@@ -42,7 +42,7 @@ def build_quality_analysis_cache_key(
             ChapterPlan.chapter_number == int(chapter_number or 0),
         )
     ).scalar_one_or_none()
-    from forwin.planning.band_planner.persistence import plan_fingerprint
+    from forwin.planning.band_planner.persistence import chapter_plan_fingerprint
 
     analyzer_payload = {
         "quality_analysis_version": QUALITY_ANALYSIS_VERSION,
@@ -63,7 +63,7 @@ def build_quality_analysis_cache_key(
         "project_id": project_id,
         "chapter_number": int(chapter_number or 0),
         "content_hash": _stable_hash(content_payload),
-        "plan_fingerprint": plan_fingerprint(plan) if plan is not None else "",
+        "plan_fingerprint": chapter_plan_fingerprint(plan),
         "analysis_mode": mode,
         "analyzer_fingerprint": _stable_hash(analyzer_payload),
     }

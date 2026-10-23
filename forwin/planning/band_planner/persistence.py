@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -205,13 +206,17 @@ def _entry_targets(runtime: BookStateRuntime, chapter: ChapterPlanDraft) -> list
     return targets
 
 
-__all__ = ["ENTITY_ADMISSION_RULE", "PersistedBandPlan", "persist_band_plan", "reapply_active_patches"]
+__all__ = ["ENTITY_ADMISSION_RULE", "PersistedBandPlan", "persist_band_plan", "reapply_active_patches",
+           "chapter_plan_fingerprint", "plan_fingerprint"]
+
+
+def chapter_plan_fingerprint(plan: ChapterPlan | None) -> str:
+    """The chapter plan revision, or the explicit no-plan fingerprint."""
+    return plan_fingerprint(plan) if plan is not None else ""
 
 
 def plan_fingerprint(plan: ChapterPlan) -> str:
     """Stable revision of every chapter-plan input used by writing and review."""
-    import hashlib
-
     payload = {
         "chapter_plan_id": str(plan.id or ""),
         "arc_plan_id": str(plan.arc_plan_id or ""),

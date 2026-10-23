@@ -26,7 +26,6 @@ from forwin.book_state.reviewer import BookStateReviewVerdict
 from forwin.candidate_drafts import (
     CandidateDraftRepository,
     candidate_body_hash,
-    candidate_plan_revision,
     candidate_writer_output_admission_fingerprint,
 )
 from forwin.canon.eligibility import (
@@ -384,8 +383,12 @@ class CanonPreparationService:
 
         entity_admission_plan: EntityAdmissionPlan | None = None
         book_state_outcome: BookStatePreparationOutcome | None = None
-        chapter_plan = session.get(ChapterPlan, candidate.chapter_plan_id)
-        fingerprint = candidate_plan_revision(chapter_plan) if chapter_plan is not None else ""
+        from forwin.planning.band_planner.persistence import chapter_plan_fingerprint
+
+        chapter_plan = session.scalar(select(ChapterPlan).where(
+            ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == chapter_number,
+        ))
+        fingerprint = chapter_plan_fingerprint(chapter_plan)
         if override is not None or not chapter_delta_is_current(writer_output, plan_fingerprint=fingerprint):
             # BookState preparation redoes a missing or stale extraction. It runs before the
             # quality gate here, which judges due obligations on the extraction canon

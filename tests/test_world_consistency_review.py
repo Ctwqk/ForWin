@@ -3,81 +3,32 @@ from __future__ import annotations
 import ast
 import importlib.util
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
-from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
-from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import RepairVerification, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review.decision.rules.final_residual import FinalResidualPolicy
 from forwin.review.decision.rules.repair_v2 import decide_repair_v2
 from forwin.review.decision.rules.review_outcome import decide_review_outcome
 from forwin.review.decision.types import DecisionInput, PlanLayerHealth
-from forwin.review.draft_service import DraftReviewService
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.review.world_consistency import WorldConsistencyReviewer, _named
 from forwin.runtime.policy import RuntimePolicy
-from forwin.state.repo import StateRepository
 from forwin.writer.prompt_core.world_repair import DEFAULT_WORLD_REPAIR_FIX, WORLD_REPAIR_FIXES
 from tests.chapter_delta_helpers import chapter_delta
+from tests.world_gate_helpers import _knowledge, _seed_world, _session_factory, _World
 from tests.test_world_gate_v6 import (
     _day_of_moves,
-    _knowledge,
     _move,
-    _seed_world,
-    _session_factory,
     _time,
-    _World,
 )
 
-BODY = "The hero walked the road."
-
-
-def _output(world: _World, fields: dict[str, Any] | None = None, *, extracted: bool = True,
-            meta: dict[str, Any] | None = None) -> WriterOutput:
-    """A chapter-1 candidate with a current admission plan, as review sees it after admission."""
-    output = WriterOutput(
-        project_id=world.project_id, chapter_number=1, title="Chapter one", body=BODY,
-        end_of_chapter_summary="The hero arrived.",
-        chapter_delta=chapter_delta(BODY, **(fields or {})) if extracted else None,
-    )
-    plan = EntityAdmissionPlan(
-        project_id=world.project_id, chapter_number=1,
-        candidate_fingerprint=writer_output_admission_fingerprint(output),
-    )
-    return output.model_copy(update={"generation_meta": {
-        **(meta or {}), "entity_admission_plan": plan.model_dump(mode="json"),
-    }})
+from tests.chapter_delta_helpers import BODY, draft_review as _draft_review, world_review_output as _output
 
 
 def _hero_walks(world: _World, amount: float, unit: str) -> dict[str, Any]:
     # loc 1 -> loc 2 is a 2 h road: 120 minutes; the 20% tolerance allows 96.
     return {**_time(amount, unit), "movements": [_move(world.hero, world.loc(1), world.loc(2))]}
-
-
-def _draft_review(Session, world: _World, output: WriterOutput, *, goals: list[str] | None = None,
-                  **service_kwargs: Any) -> ReviewVerdict:
-    passing = ReviewVerdict(verdict="pass", issues=[])
-    service = DraftReviewService(
-        experience_review_enabled=False,
-        lint_review_enabled=False,
-        personality_review_enabled=False,
-        canon_quality_review_in_hub_enabled=False,
-        **service_kwargs,
-    )
-    with Session() as session:
-        return service.review(
-            project_id=world.project_id,
-            repo=StateRepository(session),
-            context=ChapterContextPack(
-                project_id=world.project_id, project_title="world", premise="p", genre="g",
-                setting_summary="", chapter_number=1, chapter_plan_title="Chapter one",
-                chapter_plan_one_line="The hero walks.", chapter_goals=list(goals or []),
-            ),
-            writer_output=output,
-            continuity_checker=SimpleNamespace(check=lambda _project_id, _output: passing),
-        )
 
 
 def _world_review(Session, world: _World, output: WriterOutput) -> ReviewVerdict:

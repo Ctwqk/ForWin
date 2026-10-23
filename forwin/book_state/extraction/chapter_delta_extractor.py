@@ -59,7 +59,7 @@ def elapsed_minutes(
     )
 
 
-def chapter_delta_is_current(writer_output: WriterOutput, *, plan_fingerprint: str = "") -> bool:
+def chapter_delta_is_current(writer_output: WriterOutput, *, plan_fingerprint: str) -> bool:
     """The output carries an extraction of its current body and plan."""
     current = writer_output.chapter_delta
     return (current is not None and current.body_sha256 == _sha256(writer_output.body)
@@ -79,12 +79,12 @@ def ensure_chapter_delta(
     A changed body or plan is re-extracted. Without a usable LLM client the output comes back
     with no chapter_delta and an error issue, so a stale extraction never survives a change.
     """
-    from forwin.planning.band_planner.persistence import plan_fingerprint
+    from forwin.planning.band_planner.persistence import chapter_plan_fingerprint
 
     plan = session.scalar(select(ChapterPlan).where(
         ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == chapter_number,
     ))
-    fingerprint = plan_fingerprint(plan) if plan is not None else ""
+    fingerprint = chapter_plan_fingerprint(plan)
     if chapter_delta_is_current(writer_output, plan_fingerprint=fingerprint):
         return writer_output, None
     if not callable(getattr(llm_client, "chat", None)):
@@ -252,7 +252,7 @@ class ChapterDeltaExtractor:
         prompt_trace = self._build_prompt_trace(
             messages=messages, extraction_input=extraction_input, chapter_title=chapter_title,
             body_hash=body_hash, attempts=attempts, business_retries=business_retries,
-            extraction=extraction, issues=issues,
+            extraction=extraction, issues=issues, plan_fingerprint=plan_fingerprint,
         )
         return ChapterDeltaExtractionResult(extraction, tuple(issues), attempt_no, prompt_trace)
 
@@ -270,7 +270,7 @@ class ChapterDeltaExtractor:
         self, *, messages: list[dict], extraction_input: ChapterExtractionInput,
         chapter_title: str, body_hash: str, attempts: list[dict[str, Any]],
         business_retries: list[dict[str, Any]], extraction: ChapterDeltaExtraction | None,
-        issues: list[ExtractionIssue],
+        issues: list[ExtractionIssue], plan_fingerprint: str,
     ) -> dict[str, Any]:
         last_call_result = getattr(self.llm_client, "last_call_result", None)
         trace = getattr(last_call_result, "trace", {}) or {}
@@ -287,7 +287,7 @@ class ChapterDeltaExtractor:
             "input_snapshot": {
                 "project_id": extraction_input.project_id, "chapter_number": extraction_input.chapter_number,
                 "chapter_title": chapter_title, "body_sha256": body_hash,
-                "plan_fingerprint": extraction.plan_fingerprint if extraction is not None else "",
+                "plan_fingerprint": plan_fingerprint,
                 "stage_key": _STAGE_KEY, "selected_skills": [],
             },
             "model_profile": {key: getattr(self.llm_client, key, "") for key in (

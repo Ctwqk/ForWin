@@ -36,7 +36,7 @@ from forwin.world_engine.types import (
     TickCandidate,
     WorldEffects,
 )
-from tests import test_world_gate_v6
+from tests import world_gate_helpers
 from tests.test_world_gate_v6 import (
     _codes,
     _commit,
@@ -521,7 +521,7 @@ def test_tick_event_fact_ref_names_the_fact_the_builder_creates() -> None:
 
 def _seed_steps_world(Session, monkeypatch: pytest.MonkeyPatch) -> _World:
     """The gate world plus a hero agenda, an onstage intent due in an hour, a later intent and a public clock."""
-    original = test_world_gate_v6._pack
+    original = world_gate_helpers._pack
 
     def pack(**kwargs: Any) -> dict[str, Any]:
         built = original(**kwargs)
@@ -546,7 +546,7 @@ def _seed_steps_world(Session, monkeypatch: pytest.MonkeyPatch) -> _World:
         }]
         return built
 
-    monkeypatch.setattr(test_world_gate_v6, "_pack", pack)
+    monkeypatch.setattr(world_gate_helpers, "_pack", pack)
     return _seed_world(Session)
 
 

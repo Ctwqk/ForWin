@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 
@@ -8,7 +7,6 @@ import pytest
 
 from forwin.book_state.extraction.chapter_delta_schema import (
     ChapterDeltaExtraction,
-    ChapterTime,
     PlanFulfillment,
     ThreadBeat,
 )
@@ -16,32 +14,11 @@ from forwin.book_state.extraction.chapter_input import _fulfillment_targets
 from forwin.models.project import ChapterPlan
 from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.planning.contracts import PlanTaskItem
-from forwin.protocol.context import ReviewContextPack
-from forwin.protocol.writer import WriterOutput
 from forwin.review.plan_reviewer import PlanContractReviewer
 from forwin.runtime.policy import RuntimePolicy
 
 
-def _context(goals: list[str]) -> ReviewContextPack:
-    return ReviewContextPack(
-        project_title="Test", chapter_number=1, chapter_plan_title="Test",
-        chapter_plan_one_line="Test", chapter_goals=goals,
-    )
-
-
-def _output(*fulfillment: tuple[str, str], extracted: bool = True) -> WriterOutput:
-    body = "The courier handed over the sealed packet."
-    return WriterOutput(
-        chapter_number=1, title="Delivery", body=body, end_of_chapter_summary=body,
-        chapter_delta=ChapterDeltaExtraction(
-            body_sha256=hashlib.sha256(body.encode()).hexdigest(),
-            time=ChapterTime(evidence=body),
-            plan_fulfillment=[
-                PlanFulfillment(target_id=target, status=status, evidence=body)
-                for target, status in fulfillment
-            ],
-        ) if extracted else None,
-    )
+from tests.chapter_delta_helpers import plan_review_context as _context, plan_review_output as _output
 
 
 def test_missing_goal_is_error_partial_is_warning() -> None:

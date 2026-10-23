@@ -226,7 +226,7 @@ def test_digest_ranking_uses_mover_travel_modes_and_handles_unknown_locations(so
 def test_digest_postgres_reads_canon_projection_and_news(monkeypatch):
     from forwin.planning.world_digest import build_world_digest
     from forwin.narrative_obligations.repository import NarrativeObligationRepository
-    from tests import test_world_gate_v6 as fixtures
+    from tests import world_gate_helpers as fixtures
     from tests.test_world_gate_v6 import _commit, _delta, _knowledge, _seed_world, _session_factory, _time
     from tests.test_world_tick_delta import _built, _candidate, _chapter_one, _commit_tick, _context
 

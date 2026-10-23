@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import logging
+
 from sqlalchemy import select
 
 from forwin.book_state.extraction.chapter_input import plan_binding_targets, plan_goal_targets
@@ -9,6 +12,11 @@ from forwin.protocol.writer import WriterOutput
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.review.plan_checks import evaluate_constraint_issues
 
+from forwin.writer.prompt_core.world_repair import PLAN_BINDING_REPAIR_TEXT
+
+
+logger = logging.getLogger(__name__)
+
 
 class PlanContractReviewer:
     name = "plan_contract"
@@ -16,6 +24,8 @@ class PlanContractReviewer:
     def review(self, context, writer_output: WriterOutput, *, chapter_plan=None, session=None,
                project_id: str = "", **_kwargs) -> ReviewVerdict:
         if chapter_plan is None and session is not None:
+            if not project_id:
+                logger.warning("Plan binding lookup missing project_id: chapter=%s", context.chapter_number)
             chapter_plan = session.scalar(select(ChapterPlan).where(
                 ChapterPlan.project_id == project_id,
                 ChapterPlan.chapter_number == context.chapter_number,
@@ -80,14 +90,18 @@ class PlanContractReviewer:
             if item is not None and item.status == "done":
                 continue
             partial = item is not None and item.status == "partial"
+            details = json.loads(binding)
+            index = int(target_id.removeprefix("bind:"))
+            kind = details.get("kind", "unknown")
             issues.append(ContinuityIssue(
                 rule_name="plan_binding_partial" if partial else "plan_binding_missing",
                 severity="warning" if partial else "error",
-                description=f"Plan binding {'partially fulfilled' if partial else 'missing'}: {binding}",
+                description=PLAN_BINDING_REPAIR_TEXT["partial" if partial else "missing"].format(n=index + 1, kind=kind),
                 reviewer="plan_contract", issue_type=issue_type, target_scope="chapter",
                 issue_group=issue_group,
                 evidence_refs=[f"target={target_id}", *([item.evidence] if item and item.evidence else [])],
-                suggested_fix=f"Fulfill the plan binding: {binding}", blocking=not partial,
+                suggested_fix=PLAN_BINDING_REPAIR_TEXT["fix"].format(n=index + 1, kind=kind),
+                original_result={**details, "index": index}, blocking=not partial,
             ))
         issues.extend(
             evaluate_constraint_issues(

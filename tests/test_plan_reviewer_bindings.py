@@ -7,7 +7,7 @@ import pytest
 
 from forwin.models.project import ChapterPlan
 from forwin.review.plan_reviewer import PlanContractReviewer
-from tests.test_plan_fulfillment_review import _context, _output
+from tests.chapter_delta_helpers import plan_review_context as _context, plan_review_output as _output
 
 
 @pytest.mark.parametrize("reported", [False, True])
@@ -43,8 +43,8 @@ def test_draft_review_reads_bindings_and_reveals_from_plan_postgres():
     from sqlalchemy import select
     from forwin.models.project import ArcPlanVersion
     from forwin.planning.beat_sheet.types import READER_OBSERVER
-    from tests.test_world_gate_v6 import _knowledge, _seed_world, _session_factory
-    from tests.test_world_consistency_review import BODY, _draft_review, _output as world_output
+    from tests.world_gate_helpers import _knowledge, _seed_world, _session_factory
+    from tests.chapter_delta_helpers import BODY, draft_review as _draft_review, world_review_output as world_output
 
     engine, Session = _session_factory()
     try:
@@ -72,7 +72,7 @@ def test_draft_review_loads_binding_plan_sqlite():
     from sqlalchemy.orm import sessionmaker
     from forwin.models.base import Base
     from forwin.models.project import ArcPlanVersion, Project
-    from tests.test_world_consistency_review import _draft_review, _output as world_output
+    from tests.chapter_delta_helpers import draft_review as _draft_review, world_review_output as world_output
 
     engine = create_engine("sqlite:///:memory:")
     try:
@@ -92,3 +92,49 @@ def test_draft_review_loads_binding_plan_sqlite():
         assert [(issue.rule_name, issue.blocking) for issue in review.issues] == [("plan_binding_missing", True)]
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("status", ["missing", "partial"])
+def test_binding_repair_never_exposes_author_details(status):
+    from forwin.generation.pipeline_core.repair_patches import _chapter_experience_patch_payload
+    from forwin.protocol.experience import ChapterExperiencePlan
+    from forwin.review.draft_service import DraftReviewService
+
+    marker = "AUTHOR_ONLY_SECRET_927"
+    bindings = [{"kind": "secret", "ref": f"fact:{marker}-{n}", "how": f"Reveal {marker}-{n}"}
+                for n in range(2)]
+    plan = ChapterPlan(world_bindings_json=json.dumps(bindings))
+    context = _context(["Follow the visible clue"])
+    output = _output(("goal:1", "done"), ("bind:0", status), ("bind:1", status))
+    review = PlanContractReviewer().review(context, output, chapter_plan=plan)
+    assert len({issue.description for issue in review.issues}) == 2
+    for index, issue in enumerate(review.issues):
+        assert marker not in issue.description + issue.suggested_fix
+        assert str(index + 1) in issue.description
+        assert "secret" in issue.description
+        assert issue.original_result == {**bindings[index], "index": index}
+        assert marker not in " ".join(issue.evidence_refs)
+    instruction = DraftReviewService._plan_repair_instruction(plan_issues=review.issues, context=context)
+    assert marker not in " ".join(instruction.must_fix)
+    instruction = DraftReviewService._restrict_must_fix_to_writer_errors(instruction, issues=review.issues)
+    assert marker not in " ".join(instruction.must_fix)
+    patch = _chapter_experience_patch_payload(ChapterExperiencePlan(chapter_number=1), instruction)
+    assert marker not in " ".join(patch["rule_anchors"])
+    if status == "missing":
+        assert len(instruction.must_fix) == len(patch["rule_anchors"]) == 2
+
+
+def test_partial_binding_warns_without_blocking():
+    plan = ChapterPlan(world_bindings_json='[{"kind":"event","ref":"event-1","how":"Witness"}]')
+    review = PlanContractReviewer().review(_context([]), _output(("bind:0", "partial")), chapter_plan=plan)
+    assert review.verdict == "warn"
+    assert [(issue.rule_name, issue.severity, issue.blocking) for issue in review.issues] == [
+        ("plan_binding_partial", "warning", False),
+    ]
+    assert "target=bind:0" in review.issues[0].evidence_refs
+
+
+def test_binding_lookup_without_project_logs_warning(caplog):
+    session = SimpleNamespace(scalar=lambda query: None)
+    PlanContractReviewer().review(_context([]), _output(), session=session)
+    assert "project_id" in caplog.text and "chapter=1" in caplog.text

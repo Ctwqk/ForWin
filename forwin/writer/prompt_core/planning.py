@@ -49,7 +49,7 @@ BAND_PLAN_INSTRUCTIONS = (
     "character 的行动者，并且出现在 onstage_refs 中；onstage_refs 只用 actors 的 id，location_refs 只用 locations 的 id；"
     "expected_span 给出本章预计经过的故事时长，unit 只能取允许值 time_units。",
     "world_bindings 写本章承接的世界元素 {kind, ref, how}：kind 为 intent 时 ref 取 intents 的 id，event 取 events 的 id，"
-    "clock 取 clocks 的 id，relation 取 relations 的 id，news 取 news 的 fact_ref，secret 取 facts 的 ref；how 写本章如何呈现它。"
+    "clock 取 clocks 的 id，relation 取 relations 的 id，news 取 news 的 fact_ref，secret 取 facts 的 ref；how 写本章如何呈现它。每项世界绑定必须由本章面向写作者的某条 goals 承接；world_bindings 不会交给写作者。"
     "due_onstage_intent_ids 中到点且需要在场的意图，应绑定到本 band 的某一章。",
     "reveal_directives 写本章让读者或某个行动者得知的事实：id 在本 band 内唯一，fact_ref 只用 facts 的 ref，observer 为允许值中的"
     "读者标记或 actors 的 id，target_state 只能取允许值；遵守 reveal_targets 的章节范围，不要提前揭示。hint_directives 只做暗示："

@@ -24,8 +24,15 @@ WORLD_REPAIR_FIXES: dict[str, str] = {
 }
 
 
+PLAN_BINDING_REPAIR_TEXT = {
+    "missing": "本章计划的第 {n} 项世界绑定（{kind}）没有在正文中落实；按本章目标补写相应情节。",
+    "partial": "本章计划的第 {n} 项世界绑定（{kind}）仅部分落实；按本章目标补足相应情节。",
+    "fix": "按本章目标落实第 {n} 项世界绑定（{kind}），让相应目标在正文中完整交付。",
+}
+
+
 def world_repair_fix(code: str) -> str:
     return WORLD_REPAIR_FIXES.get(code, DEFAULT_WORLD_REPAIR_FIX)
 
 
-__all__ = ["DEFAULT_WORLD_REPAIR_FIX", "WORLD_REPAIR_FIXES", "world_repair_fix"]
+__all__ = ["DEFAULT_WORLD_REPAIR_FIX", "WORLD_REPAIR_FIXES", "PLAN_BINDING_REPAIR_TEXT", "world_repair_fix"]

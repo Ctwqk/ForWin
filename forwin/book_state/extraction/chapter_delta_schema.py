@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from forwin.protocol.book_state import WORLD_EDGE_TYPES
 
@@ -165,7 +166,7 @@ class EntityMention(_ExtractionModel):
 class ChapterDeltaExtraction(_ExtractionModel):
     schema_version: Literal["v1"] = "v1"
     body_sha256: str
-    plan_fingerprint: str = ""
+    plan_fingerprint: SkipJsonSchema[str] = ""
     time: ChapterTime
     entity_changes: list[EntityChange] = Field(default_factory=list)
     relation_changes: list[RelationChange] = Field(default_factory=list)

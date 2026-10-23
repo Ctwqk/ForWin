@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import defaultdict
 from collections.abc import Iterable
 from copy import copy, deepcopy
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.book_frame_repository import BookLexiconRepository
 from forwin.book_state.cognition import CognitionView
-from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
+from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY, KNOWLEDGE_STATES
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.narrative import (
@@ -31,6 +32,9 @@ from forwin.protocol.book_state import (
     NodePatch,
     ObserverType,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 # The source_type ChapterDeltaTranslator gives the chapter's delta.
@@ -74,7 +78,6 @@ class BookStateReviewGate:
         *,
         base_chapter: int | None = None,
         travel_tolerance: float = DEFAULT_TRAVEL_TOLERANCE,
-        reveal_directives: list[dict[str, Any]] | None = None,
     ) -> BookStateReviewVerdict:
         if base_chapter is None:
             base_chapter = self.projection.repo.compile_base_chapter(
@@ -97,7 +100,6 @@ class BookStateReviewGate:
                 issues.extend(
                     _ChapterExtractionChecks(
                         self.session, runtime, delta, travel_tolerance=travel_tolerance,
-                        reveal_directives=reveal_directives,
                     ).run()
                 )
             else:
@@ -317,6 +319,7 @@ def chapter_reveal_directives(session: Session, project_id: str, chapter_number:
     try:
         return _records(json.loads(plan.reveal_directives_json or "[]")) if plan is not None else []
     except (TypeError, json.JSONDecodeError):
+        logger.warning("Malformed reveal directives: project=%s chapter=%s", project_id, chapter_number)
         return []
 
 
@@ -336,7 +339,6 @@ class _ChapterExtractionChecks:
         delta: GraphDelta,
         *,
         travel_tolerance: float,
-        reveal_directives: list[dict[str, Any]] | None = None,
     ) -> None:
         self.session = session
         self.runtime = runtime
@@ -348,7 +350,6 @@ class _ChapterExtractionChecks:
         self.facts = _fact_traits(runtime, delta)
         self.issues: list[BookStateReviewIssue] = []
         self._reveal_schedule: dict[str, int] | None = None
-        self._reveal_directives = reveal_directives
 
     def run(self) -> list[BookStateReviewIssue]:
         self._movement_issues()
@@ -572,7 +573,7 @@ class _ChapterExtractionChecks:
 
     def _knowledge_issues(self) -> None:
         learned: dict[tuple[str, str], str] = {}
-        revealed: set[str] = set()
+        revealed: set[tuple[str, str]] = set()
         for tag in self.knowledge_tags:
             observer_id = str(tag.get("observer_id") or "")
             fact_ref = str(tag.get("fact_ref") or "")
@@ -592,9 +593,9 @@ class _ChapterExtractionChecks:
                 )
             if str(tag.get("observer_type") or "") == ObserverType.READER.value:
                 for ref in (fact_ref, str(tag.get("touches_secret_ref") or "")):
-                    if ref and ref not in revealed and self._hidden(ref):
-                        revealed.add(ref)
-                        self._reveal_issues(ref)
+                    if ref and (ref, state) not in revealed and self._hidden(ref):
+                        revealed.add((ref, state))
+                        self._reveal_issues(ref, state)
             contradicts = str(tag.get("contradicts_ref") or "")
             # A false fact that contradicts a secret is misdirection, not a contradiction of canon.
             if contradicts and self._hidden(contradicts) and self._true(fact_ref):
@@ -623,20 +624,21 @@ class _ChapterExtractionChecks:
         )
 
     @cached_property
-    def _allowed_reader_reveals(self) -> set[str]:
+    def _allowed_reader_reveals(self) -> dict[str, int]:
         from forwin.planning.beat_sheet.types import READER_OBSERVER
 
+        allowed: dict[str, int] = {}
         if self.delta.source_type != CHAPTER_EXTRACTION_SOURCE_TYPE:
-            return set()
-        directives = self._reveal_directives
-        if directives is None:
-            directives = chapter_reveal_directives(self.session, self.delta.project_id, self.delta.chapter_number)
-        return {
-            directive["fact_ref"] for directive in directives
-            if directive.get("observer") == READER_OBSERVER and isinstance(directive.get("fact_ref"), str)
-        }
+            return allowed
+        directives = chapter_reveal_directives(self.session, self.delta.project_id, self.delta.chapter_number)
+        for directive in directives:
+            fact_ref, state = directive.get("fact_ref"), directive.get("target_state")
+            if (directive.get("observer") == READER_OBSERVER and isinstance(fact_ref, str)
+                    and state in KNOWLEDGE_STATES):
+                allowed[fact_ref] = max(allowed.get(fact_ref, -1), KNOWLEDGE_STATES.index(state))
+        return allowed
 
-    def _reveal_issues(self, fact_ref: str) -> None:
+    def _reveal_issues(self, fact_ref: str, state: str) -> None:
         if self._reveal_schedule is None:
             self._reveal_schedule = earliest_reveal_chapters(self.session, self.delta.project_id)
         earliest = self._reveal_schedule.get(fact_ref.removeprefix(FACT_REF_PREFIX))
@@ -645,7 +647,10 @@ class _ChapterExtractionChecks:
                 "warning", "unscheduled_reveal", fact_ref,
                 f"the reader advances on {fact_ref}, which has no reveal schedule",
             )
-        elif self.delta.chapter_number < earliest and fact_ref not in self._allowed_reader_reveals:
+        elif self.delta.chapter_number < earliest and not (
+            state in KNOWLEDGE_STATES
+            and KNOWLEDGE_STATES.index(state) <= self._allowed_reader_reveals.get(fact_ref, -1)
+        ):
             self._issue(
                 "error", "premature_reveal", fact_ref,
                 f"the reader advances on {fact_ref} in chapter {self.delta.chapter_number}; "

@@ -286,6 +286,9 @@ def test_planner_prompts_mark_the_fields_that_reach_the_writer():
     # Milestone descriptions become the experience plan's curiosity-beat questions.
     arc = writer_facing(ARC_BEATS_INSTRUCTIONS, "purpose", "milestones 的 description")
     band = writer_facing(BAND_PLAN_INSTRUCTIONS, "title", "one_line", "goals", "hook")
+    binding_instruction = next(item for item in BAND_PLAN_INSTRUCTIONS if "world_bindings 写" in item)
+    assert "每项世界绑定必须由本章面向写作者的某条 goals 承接" in binding_instruction
+    assert binding_instruction in build_band_plan_messages(**arguments)[0]["content"]
     for messages, instruction in ((build_arc_beats_messages(**arguments), arc),
                                   (build_band_plan_messages(**arguments), band)):
         system = next(message["content"] for message in messages if message["role"] == "system")

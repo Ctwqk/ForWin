@@ -405,7 +405,7 @@ def test_prompt_carries_tables_and_secret_list_but_marks_it_label_only():
               "The gate hides a passage", BODY, "Summary only", "fix evidence"]
     assert all(value in user for value in values)
     assert [user.index(value) for value in values] == sorted(user.index(value) for value in values)
-    assert all(name in messages[0]["content"] for name in ChapterDeltaExtraction.model_fields)
+    assert all(name in messages[0]["content"] for name in ChapterDeltaExtraction.model_json_schema()["properties"])
 
 
 def test_prompt_limits_participants_and_movers_to_entities_acting_by_themselves():
@@ -555,8 +555,19 @@ def test_fingerprint_is_canonical_and_shared_with_quality_cache():
     assert candidate_plan_revision(plan) == key()["plan_fingerprint"] == original
     plan.world_bindings_json = '[ {"how": "Advance", "ref": "intent-1", "kind": "intent"} ]'
     assert plan_fingerprint(plan) == original
+    for field, empty in (("onstage_refs_json", "[]"), ("experience_plan_json", "{}")):
+        for value in (None, "", empty):
+            setattr(plan, field, value)
+            assert plan_fingerprint(plan) == original
+    for field, value in (("status", "accepted"), ("repair_attempt_count", 5), ("canon_risk_level", "high")):
+        setattr(plan, field, value)
+        assert plan_fingerprint(plan) == original
+    plan.experience_plan_json = '{"a": 1, "b": 2}'
+    experience_revision = plan_fingerprint(plan)
+    plan.experience_plan_json = '{ "b": 2, "a": 1 }'
+    assert plan_fingerprint(plan) == experience_revision
     plan.hook = "A new hook"
-    assert candidate_plan_revision(plan) == key()["plan_fingerprint"] != original
+    assert candidate_plan_revision(plan) == key()["plan_fingerprint"] != experience_revision
 
 
 def test_canon_preparation_preserves_quality_order_for_current_plan(monkeypatch):
@@ -590,7 +601,7 @@ def test_canon_preparation_preserves_quality_order_for_current_plan(monkeypatch)
     monkeypatch.setattr(service, "_prepare_book_state", world)
     result = service.prepare(
         context=SimpleNamespace(_record_decision_event=lambda **kwargs: None),
-        session=SimpleNamespace(get=lambda *args: plan), repo=None, updater=None,
+        session=SimpleNamespace(scalar=lambda query: plan), repo=None, updater=None,
         candidate_id="candidate", project_id="project", chapter_number=2, writer_output=output,
         verdict=ReviewVerdict(verdict="pass"), acceptance_mode="auto", repair_attempt_count=0,
         residual_review_issues=[], canon_risk_level="",
@@ -703,3 +714,19 @@ def test_plan_change_without_client_discards_stale_extraction():
         project_id="project", chapter_number=2, writer_output=output)
     assert refreshed.chapter_delta is None
     assert [issue.code for issue in result.issues] == ["extraction_unavailable"]
+
+
+def test_failed_extraction_keeps_plan_fingerprint_in_trace():
+    result = ChapterDeltaExtractor(StubLLM("invalid"), max_attempts=1).extract(
+        extraction_input=INPUT, chapter_title="Gate", chapter_body=BODY, chapter_summary="Summary",
+        calendar=CALENDAR, lexicon=LEXICON, plan_fingerprint="plan-revision-7",
+    )
+    assert result.extraction is None
+    assert result.prompt_trace["input_snapshot"]["plan_fingerprint"] == "plan-revision-7"
+
+
+def test_plan_fingerprint_is_internal_not_llm_schema():
+    schema = ChapterDeltaExtraction.model_json_schema()
+    assert "plan_fingerprint" not in schema["properties"]
+    extraction = ChapterDeltaExtraction.model_validate({**payload(), "plan_fingerprint": "stored"})
+    assert extraction.model_dump()["plan_fingerprint"] == "stored"

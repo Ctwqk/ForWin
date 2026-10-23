@@ -996,11 +996,10 @@ max_literals = 25
 
 [[entry]]
 path = "forwin/writer/prompt_core/world_repair.py"
-symbol = "WORLD_REPAIR_FIXES"
 checks = ["cjk_collection"]
 category = "prompt_text"
-justification = "世界审查门 error 写给 writer 的修复说明（按 issue code 取用），不参与判定"
-max_literals = 15
+justification = "世界审查门与计划绑定写给 writer 的修复模板；绑定只列位置与 kind，不含作者视角的 how 或 ref，不参与判定"
+max_literals = 18
 
 [[entry]]
 path = "forwin/writer/prompt_core/world_view.py"

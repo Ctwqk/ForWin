@@ -6,7 +6,6 @@ transaction. It is the inverse of ``conflict_resolution.record_option_side_effec
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -17,6 +16,7 @@ from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativePlanPatch
 from forwin.planning.future_plan_audit.patches import FuturePlanPatchMixin
+from forwin.world_engine.conflict_repository import PLAN_PATCH_REF_PREFIX, conflict_result_refs
 
 
 PLAN_PATCH_REVERT_TYPE = "plan_patch_revert"
@@ -139,11 +139,8 @@ def _active_resolution_patches(
 
 
 def _result_refs(row: WorldPlanConflictRow) -> list[str]:
-    try:
-        refs = json.loads(row.result_refs_json or "[]")
-    except ValueError:
-        return []
-    return [ref for ref in refs if isinstance(ref, str)] if isinstance(refs, list) else []
+    """The row's result_refs, a band plan's ``plan_patch:<id>`` read as the bare patch id P3 refs use."""
+    return [ref.removeprefix(PLAN_PATCH_REF_PREFIX) for ref in conflict_result_refs(row)]
 
 
 __all__ = ["PLAN_PATCH_REVERT_TYPE", "SupersededResolutions", "supersede_resolutions"]

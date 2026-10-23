@@ -991,8 +991,8 @@ max_literals = 18
 path = "forwin/writer/prompt_core/planning.py"
 checks = ["cjk_collection"]
 category = "prompt_text"
-justification = "Eight structural section titles for the author-only planning world digest, and the plan.arc_beats instructions that describe the beat sheet's fields and allowed values; all story content comes from BookState, Genesis and repository fields."
-max_literals = 16
+justification = "Eight structural section titles for the author-only planning world digest, and the plan.arc_beats and plan.band instructions that describe the beat sheet's and band plan's fields and allowed values; all story content comes from BookState, Genesis and repository fields."
+max_literals = 25
 
 [[entry]]
 path = "forwin/writer/prompt_core/world_repair.py"

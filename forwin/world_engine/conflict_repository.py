@@ -11,6 +11,10 @@ from forwin.models.world_conflict import WorldPlanConflictRow
 from .conflict_types import ConflictDecider, ConflictDecision, ConflictDraft, ConflictOption
 
 
+# The result_refs prefix of a plan patch a band plan wrote for a resolution; P3 resolutions list bare patch ids.
+PLAN_PATCH_REF_PREFIX = "plan_patch:"
+
+
 class ConflictNotOpen(RuntimeError):
     pass
 
@@ -91,6 +95,30 @@ class WorldConflictRepository:
         row.status = "resolved"
         self.session.flush()
 
+    def pending_plot_responses(self, project_id: str) -> list[WorldPlanConflictRow]:
+        """Resolved plot_responds conflicts still waiting for a plan to answer them, oldest first.
+
+        A resolution waits when it found no plan to bind (``pending_plan_response`` in its decision) and no
+        band plan has bound it since (no ``plan_patch:`` ref).
+        """
+        rows = self.session.scalars(
+            select(WorldPlanConflictRow)
+            .where(WorldPlanConflictRow.project_id == project_id, WorldPlanConflictRow.status == "resolved")
+            .order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id)
+        )
+        pending = []
+        for row in rows:
+            decision = json.loads(row.decision_json or "{}")
+            if (decision.get("option") == "plot_responds" and decision.get("pending_plan_response") is True
+                    and not any(ref.startswith(PLAN_PATCH_REF_PREFIX) for ref in conflict_result_refs(row))):
+                pending.append(row)
+        return pending
+
+    def attach_result_refs(self, row: WorldPlanConflictRow, refs: Sequence[str]) -> None:
+        """Append ``refs`` to the row's result_refs, each once."""
+        row.result_refs_json = json.dumps(list(dict.fromkeys([*conflict_result_refs(row), *refs])), ensure_ascii=False)
+        self.session.flush()
+
     def escalate(self, row: WorldPlanConflictRow) -> None:
         row.required_decider = "human"
         self.session.flush()
@@ -106,3 +134,12 @@ class WorldConflictRepository:
             )
         )
         return sum(json.loads(decision).get("option") == "veto_world" for decision in decisions)
+
+
+def conflict_result_refs(row: WorldPlanConflictRow) -> list[str]:
+    """The row's result_refs; anything but a list of strings reads as none."""
+    try:
+        refs = json.loads(row.result_refs_json or "[]")
+    except ValueError:
+        return []
+    return [ref for ref in refs if isinstance(ref, str)] if isinstance(refs, list) else []

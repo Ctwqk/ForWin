@@ -21,7 +21,7 @@ from forwin.experience.service import (
     AudienceCalibrationProfile,
     load_long_window_audience_trends,
 )
-from forwin.experience.types import ArcExperienceBundle
+from forwin.experience.types import ArcExperienceBundle, BeatSheetExperienceInput
 from forwin.planning.arc_envelope_resolver import BaseEnvelopeContext
 from forwin.planning.arc_structure_service import (
     ArcStructureDraftData as CoreArcStructureDraftData,
@@ -502,8 +502,9 @@ class ArcEnvelopeManager:
             band_id=band_id,
             chapter_start=chapter_start,
             chapter_end=chapter_end,
-            structure=_to_core_structure(structure),
-            arc_experience=_experience_from_compat_structure(structure),
+            experience=BeatSheetExperienceInput.from_structure(
+                structure.key_beats, _experience_from_compat_structure(structure),
+            ),
             active_band=active_band,
             calibration=calibration,
             cost_ceiling=cost_ceiling,
@@ -520,8 +521,9 @@ class ArcEnvelopeManager:
     ) -> ChapterExperiencePlan:
         return self.planning.chapter_planner.derive_chapter_experience_plan(
             chapter_number=chapter_number,
-            structure=_to_core_structure(structure),
-            arc_experience=_experience_from_compat_structure(structure),
+            experience=BeatSheetExperienceInput.from_structure(
+                structure.key_beats, _experience_from_compat_structure(structure),
+            ),
             schedule=schedule,
             chapter_plan=chapter_plan,
             calibration=calibration,

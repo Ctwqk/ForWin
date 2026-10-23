@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from forwin.experience.service import AudienceCalibrationProfile
-from forwin.experience.types import ArcExperienceBundle
+from forwin.experience.types import BeatSheetExperienceInput
 from forwin.models.project import ChapterPlan
-from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.protocol.experience import BandDelightSchedule, ChapterExperiencePlan
 
 
@@ -20,8 +19,7 @@ class ChapterExperiencePlanner:
         self,
         *,
         chapter_number: int,
-        structure: ArcStructureDraftData,
-        arc_experience: ArcExperienceBundle,
+        experience: BeatSheetExperienceInput,
         schedule: BandDelightSchedule,
         chapter_plan: ChapterPlan,
         calibration: AudienceCalibrationProfile | None = None,
@@ -73,8 +71,8 @@ class ChapterExperiencePlanner:
                 else "至少兑现一个可验证的局面变化"
             )
         )
-        payoff_map = arc_experience.arc_payoff_map
-        reader_promise = arc_experience.reader_promise
+        payoff_map = experience.arc_payoff_map
+        reader_promise = experience.reader_promise
         rule_anchors = [
             item.summary
             for item in payoff_map.revelation_layers[:2]

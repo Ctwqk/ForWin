@@ -9,7 +9,7 @@ from forwin.experience.band_scheduler import BandExperienceScheduler
 from forwin.experience.chapter_planner import ChapterExperiencePlanner
 from forwin.experience.persistence import ExperiencePersistence
 from forwin.experience.service import ExperiencePlanningService
-from forwin.experience.types import ArcExperienceBundle
+from forwin.experience.types import ArcExperienceBundle, BeatSheetExperienceInput
 from forwin.models.project import ChapterPlan, Project
 from forwin.planning.band_plan.band_role import classify_band_role
 from forwin.planning.band_plan.contract_templates import contract_for_role
@@ -115,12 +115,12 @@ class BandPlanService:
                 )
             calibration.progression_blocked_template_ids = blocked_template_ids
             calibration.progression_blocked_categories = blocked_categories
+        experience = BeatSheetExperienceInput.from_structure(request.structure.key_beats, request.arc_experience)
         schedule = self.scheduler.derive_band_delight_schedule(
             band_id=window.band_id,
             chapter_start=window.chapter_start,
             chapter_end=window.chapter_end,
-            structure=request.structure,
-            arc_experience=request.arc_experience,
+            experience=experience,
             active_band=window.active_band,
             calibration=calibration,
             cost_ceiling=self.trope_cost_ceiling,
@@ -180,8 +180,7 @@ class BandPlanService:
         for plan in window.active_band:
             experience_plan = self.chapter_planner.derive_chapter_experience_plan(
                 chapter_number=plan.chapter_number,
-                structure=request.structure,
-                arc_experience=request.arc_experience,
+                experience=experience,
                 schedule=schedule,
                 chapter_plan=plan,
                 calibration=calibration,

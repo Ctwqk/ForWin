@@ -5,13 +5,14 @@ from .band_scheduler import BandExperienceScheduler
 from .chapter_planner import ChapterExperiencePlanner
 from .persistence import ExperiencePersistence
 from .service import AudienceCalibrationProfile, ExperiencePlanningService
-from .types import ArcExperienceBundle, ChapterPlanningOverlay
+from .types import ArcExperienceBundle, BeatSheetExperienceInput, ChapterPlanningOverlay
 
 __all__ = [
     "ArcExperienceBundle",
     "ArcExperiencePlanningService",
     "AudienceCalibrationProfile",
     "BandExperienceScheduler",
+    "BeatSheetExperienceInput",
     "ChapterExperiencePlanner",
     "ChapterPlanningOverlay",
     "ExperiencePersistence",

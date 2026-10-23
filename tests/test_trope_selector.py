@@ -7,7 +7,7 @@ import pytest
 from forwin.experience.band_scheduler import BandExperienceScheduler
 from forwin.experience.service import AudienceCalibrationProfile
 from forwin.experience.trope_selector import TropeSelectionContext, TropeSelector
-from forwin.experience.types import ArcExperienceBundle
+from forwin.experience.types import ArcExperienceBundle, BeatSheetExperienceInput
 from forwin.models.project import ChapterPlan
 from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.planning.band_plan_service import BandPlanningRequest, BandPlanService
@@ -65,6 +65,12 @@ def _arc_experience(*, macro_payoffs: list[MacroPayoff] | None = None) -> ArcExp
     )
 
 
+def _experience(*, macro_payoffs: list[MacroPayoff] | None = None) -> BeatSheetExperienceInput:
+    return BeatSheetExperienceInput.from_structure(
+        _structure().key_beats, _arc_experience(macro_payoffs=macro_payoffs),
+    )
+
+
 @pytest.fixture(autouse=True)
 def _clear_trope_cache() -> None:
     load_trope_template_library.cache_clear()
@@ -79,8 +85,7 @@ def test_cost_ceiling_selects_low_cost_templates_when_available(monkeypatch: pyt
         band_id="band:1:1",
         chapter_start=1,
         chapter_end=1,
-        structure=_structure(),
-        arc_experience=_arc_experience(),
+        experience=_experience(),
         active_band=_chapters()[:1],
         calibration=AudienceCalibrationProfile(),
         cost_ceiling=1,
@@ -109,8 +114,7 @@ def test_selector_avoids_duplicate_template_ids_when_unused_templates_exist(
         band_id="band:1:3",
         chapter_start=1,
         chapter_end=3,
-        structure=_structure(),
-        arc_experience=_arc_experience(
+        experience=_experience(
             macro_payoffs=[
                 MacroPayoff(
                     payoff_id="power-payoff",
@@ -138,8 +142,7 @@ def test_selector_avoids_third_sub_trope_use_in_twenty_chapter_window(
         band_id="band:21:24",
         chapter_start=21,
         chapter_end=24,
-        structure=_structure(),
-        arc_experience=_arc_experience(
+        experience=_experience(
             macro_payoffs=[
                 MacroPayoff(
                     payoff_id="power-payoff",
@@ -230,8 +233,7 @@ def test_boost_reward_density_does_not_duplicate_mid_power_reward() -> None:
         band_id="band:1:4",
         chapter_start=1,
         chapter_end=4,
-        structure=_structure(),
-        arc_experience=_arc_experience(),
+        experience=_experience(),
         active_band=_chapter_band(4),
         calibration=AudienceCalibrationProfile(boost_reward_density=True),
         cost_ceiling=3,

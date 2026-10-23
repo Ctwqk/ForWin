@@ -3,9 +3,8 @@ from __future__ import annotations
 from forwin.experience.service import AudienceCalibrationProfile
 from forwin.experience.trope_cooldown import TropeCooldownPolicy
 from forwin.experience.trope_selector import TropeSelectionContext, TropeSelector
-from forwin.experience.types import ArcExperienceBundle
+from forwin.experience.types import BeatSheetExperienceInput
 from forwin.models.project import ChapterPlan
-from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.protocol.experience import (
     AmbiguityPayoff,
     BandDelightSchedule,
@@ -22,8 +21,7 @@ class BandExperienceScheduler:
         band_id: str,
         chapter_start: int,
         chapter_end: int,
-        structure: ArcStructureDraftData,
-        arc_experience: ArcExperienceBundle,
+        experience: BeatSheetExperienceInput,
         active_band: list[ChapterPlan],
         calibration: AudienceCalibrationProfile | None = None,
         cost_ceiling: int = 3,
@@ -35,8 +33,9 @@ class BandExperienceScheduler:
         scheduled_rewards: list[BandRewardItem] = []
         curiosity_beats: list[CuriosityBeat] = []
         ambiguity_payoffs: list[AmbiguityPayoff] = []
-        payoff_map = arc_experience.arc_payoff_map
-        reader_promise = arc_experience.reader_promise
+        payoff_map = experience.arc_payoff_map
+        reader_promise = experience.reader_promise
+        key_beats = experience.key_beats
         macro_by_category = {
             item.category: item
             for item in payoff_map.macro_payoffs
@@ -152,11 +151,11 @@ class BandExperienceScheduler:
         first_question = (
             active_band[0].one_line
             if active_band and active_band[0].one_line
-            else (structure.key_beats[0] if structure.key_beats else "当前局面真正的问题是什么")
+            else (key_beats[0] if key_beats else "当前局面真正的问题是什么")
         )
         opened_question = (
-            structure.key_beats[1]
-            if len(structure.key_beats) > 1
+            key_beats[1]
+            if len(key_beats) > 1
             else "当前危机背后还有谁在推动局势"
         )
         curiosity_beats.append(
@@ -164,8 +163,8 @@ class BandExperienceScheduler:
                 chapter_hint=chapter_start,
                 question_open=first_question,
                 question_resolve=(
-                    structure.key_beats[0]
-                    if structure.key_beats
+                    key_beats[0]
+                    if key_beats
                     else "本 band 至少确认一条线索不是偶然"
                 ),
                 escalated_question=opened_question,
@@ -178,8 +177,8 @@ class BandExperienceScheduler:
                     question_open=opened_question,
                     question_resolve="确认一个阶段性真相或代价",
                     escalated_question=(
-                        structure.key_beats[2]
-                        if len(structure.key_beats) > 2
+                        key_beats[2]
+                        if len(key_beats) > 2
                         else "真正的规则限制究竟是什么"
                     ),
                 )
@@ -242,8 +241,8 @@ class BandExperienceScheduler:
             immersion_anchor_scene_goal=(
                 f"第{immersion_anchor_chapter}章必须给出一个可感知现场的沉浸 anchor scene："
                 + (
-                    structure.key_beats[0]
-                    if structure.key_beats
+                    key_beats[0]
+                    if key_beats
                     else (active_band[0].one_line if active_band else "让读者进入现场")
                 )
             ),

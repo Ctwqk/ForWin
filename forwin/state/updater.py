@@ -188,6 +188,48 @@ class StateUpdater:
         self.session.flush()
         return plan
 
+    def update_chapter_plan(
+        self,
+        plan: ChapterPlan,
+        *,
+        arc_plan_id: str,
+        band_plan_id: str,
+        title: str,
+        one_line: str,
+        goals: list[str],
+        pov_ref: str,
+        onstage_refs: list[str],
+        location_refs: list[str],
+        world_bindings: list[dict],
+        reveal_directives: list[dict],
+        hint_directives: list[dict],
+        intended_changes: list[dict],
+        milestone_ids: list[str],
+        expected_span_minutes: int | None,
+        hook: str,
+    ) -> ChapterPlan:
+        """Rewrite a plan row in place with a band plan's chapter: the row keeps its id and status."""
+        normalized_goals = _normalize_goals_payload(goals)
+        plan.arc_plan_id = arc_plan_id
+        plan.band_plan_id = band_plan_id
+        plan.title = rebase_generic_numeric_chapter_title(title, plan.chapter_number)
+        plan.one_line = one_line
+        plan.goals_json = json.dumps(normalized_goals, ensure_ascii=False)
+        plan.task_contract_json = plan_task_contract_to_json(derive_chapter_task_contract(normalized_goals))
+        plan.pov_ref = pov_ref
+        plan.onstage_refs_json = json.dumps(onstage_refs, ensure_ascii=False)
+        plan.location_refs_json = json.dumps(location_refs, ensure_ascii=False)
+        plan.world_bindings_json = json.dumps(world_bindings, ensure_ascii=False)
+        plan.reveal_directives_json = json.dumps(reveal_directives, ensure_ascii=False)
+        plan.hint_directives_json = json.dumps(hint_directives, ensure_ascii=False)
+        plan.intended_changes_json = json.dumps(intended_changes, ensure_ascii=False)
+        plan.milestone_ids_json = json.dumps(milestone_ids, ensure_ascii=False)
+        plan.expected_span_minutes = expected_span_minutes
+        plan.hook = hook
+        self.session.add(plan)
+        self.session.flush()
+        return plan
+
     def create_book_genesis_revision(
         self,
         *,

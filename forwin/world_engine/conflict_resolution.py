@@ -270,7 +270,7 @@ def record_option_side_effects(
     return OptionSideEffects(obligation_id="", plan_patch_id="")
 
 
-def _writer_text(conflict: WorldPlanConflictRow) -> str:
+def writer_response_text(conflict: WorldPlanConflictRow) -> str:
     """What the writer is told of the conflict's accepted change: its public events, or a template.
 
     The held change's summary is objective truth (an adjudicated secret, an actor's plan), so it never
@@ -300,7 +300,7 @@ def _record_obligation(
         raise ConflictOptionUnavailable(f"No chapter follows chapter {latest_chapter} within the book's {total}")
     plan = _next_unaccepted_plan(session, conflict.project_id, latest_chapter=latest_chapter)
     obligation_id = new_id()
-    summary = _writer_text(conflict)
+    summary = writer_response_text(conflict)
     obligation = NarrativeObligation(
         id=obligation_id,
         project_id=conflict.project_id,
@@ -354,7 +354,12 @@ def _record_obligation(
 def _record_plot_response(session: Session, conflict: WorldPlanConflictRow, *, latest_chapter: int) -> str:
     """Put the response goal first in the next unaccepted plan's goals and progress markers."""
     plan = _next_unaccepted_plan(session, conflict.project_id, latest_chapter=latest_chapter)
-    goal = _writer_text(conflict)
+    return record_plot_response_patch(session, conflict, plan)
+
+
+def record_plot_response_patch(session: Session, conflict: WorldPlanConflictRow, plan: ChapterPlan) -> str:
+    """Apply and record the conflict's plot-response patch on ``plan``; returns the patch id."""
+    goal = writer_response_text(conflict)
     patch = NarrativePlanPatch(
         id=new_id(),
         project_id=conflict.project_id,
@@ -596,4 +601,6 @@ __all__ = [
     "option_candidates",
     "propagation_candidate",
     "record_option_side_effects",
+    "record_plot_response_patch",
+    "writer_response_text",
 ]

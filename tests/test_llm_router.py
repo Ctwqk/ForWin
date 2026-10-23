@@ -422,16 +422,17 @@ class LLMRouterTests(unittest.TestCase):
                 "planning_json_general",
             )
 
-    def test_arc_beats_stage_routes_as_general_planning_json(self) -> None:
-        for response_format in ({"type": "json_object"}, None):
-            self.assertEqual(
-                LLMClient._llm_task_route(
-                    task_family="planning",
-                    stage_key="plan.arc_beats",
-                    response_format=response_format,
-                ),
-                "planning_json_general",
-            )
+    def test_arc_beats_and_band_stages_route_as_general_planning_json(self) -> None:
+        for stage_key in ("plan.arc_beats", "plan.band"):
+            for response_format in ({"type": "json_object"}, None):
+                self.assertEqual(
+                    LLMClient._llm_task_route(
+                        task_family="planning",
+                        stage_key=stage_key,
+                        response_format=response_format,
+                    ),
+                    "planning_json_general",
+                )
 
 
 if __name__ == "__main__":

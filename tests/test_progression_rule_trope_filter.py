@@ -3,7 +3,7 @@ from sqlalchemy.orm import sessionmaker
 
 from forwin.experience.band_scheduler import BandExperienceScheduler
 from forwin.experience.service import AudienceCalibrationProfile, ExperiencePlanningService
-from forwin.experience.types import ArcExperienceBundle
+from forwin.experience.types import ArcExperienceBundle, BeatSheetExperienceInput
 from forwin.models import Base, SignalWindowAggregate
 from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
@@ -49,8 +49,7 @@ def test_scheduler_filters_progression_rule_blocked_template_ids(monkeypatch) ->
         band_id="b1",
         chapter_start=1,
         chapter_end=4,
-        structure=_structure(),
-        arc_experience=_arc_experience(),
+        experience=BeatSheetExperienceInput.from_structure(_structure().key_beats, _arc_experience()),
         active_band=[],
         calibration=calibration,
         cost_ceiling=3,

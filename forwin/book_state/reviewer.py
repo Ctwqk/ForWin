@@ -14,7 +14,9 @@ from forwin.book_state.cognition import CognitionView
 from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.map_graph import MapGraph
-from forwin.book_state.narrative import PLAN_CONSTRAINT_SOURCE_TYPE
+from forwin.book_state.narrative import (
+    PLAN_CONSTRAINT_SOURCE_TYPE, PROTECTION_KINDS, PROTECTION_STATUS_PATH, RELEASED_PROTECTION_STATUS,
+)
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
@@ -33,8 +35,8 @@ CHAPTER_EXTRACTION_SOURCE_TYPE = "chapter_extraction"
 # The source_type of a world tick's delta, forwin.world_engine.types.WORLD_ENGINE_SOURCE_TYPE; owned
 # here because importing the world engine types at module level cycles back into this module.
 WORLD_ENGINE_SOURCE_TYPE = "world_engine"
-# Deltas carrying the v6 movement, item transfer and knowledge metadata.
-_V6_SOURCE_TYPES = frozenset({CHAPTER_EXTRACTION_SOURCE_TYPE, WORLD_ENGINE_SOURCE_TYPE, PLAN_CONSTRAINT_SOURCE_TYPE})
+# Chapter and world-tick deltas checked for v6 movement, item transfer and knowledge rules.
+_V6_SOURCE_TYPES = frozenset({CHAPTER_EXTRACTION_SOURCE_TYPE, WORLD_ENGINE_SOURCE_TYPE})
 DEFAULT_TRAVEL_TOLERANCE = 0.2
 _AWARE_STATES = frozenset({"knows", "believes"})
 _MINUTE_EPSILON = 1e-6
@@ -107,8 +109,7 @@ class BookStateReviewGate:
 
 
 def _plan_constraint_issues(runtime: BookStateRuntime, delta: GraphDelta) -> list[BookStateReviewIssue]:
-    """Plan constraints only change narrative protections; validate each resulting payload."""
-    from forwin.planning.beat_sheet.types import PROTECTION_KINDS
+    """Validate protection payloads, or just the patch for an absolute release."""
 
     issues = []
 
@@ -133,6 +134,12 @@ def _plan_constraint_issues(runtime: BookStateRuntime, delta: GraphDelta) -> lis
         payload = node.get("payload")
         if node.get("node_type") != "review_constraint" or not isinstance(payload, dict):
             invalid(patch.target_ref, "plan constraints must target review_constraint nodes")
+            continue
+        if "status" in payload and payload["status"] not in ("active", RELEASED_PROTECTION_STATUS):
+            invalid(patch.target_ref, "invalid protection status")
+        if (str(patch.op) in {"set", "replace"} and patch.field_path == PROTECTION_STATUS_PATH
+                and patch.new_value == RELEASED_PROTECTION_STATUS):
+            nodes[ref] = node
             continue
         kind, until = payload.get("kind"), payload.get("until_chapter")
         required = [payload.get("ref")]

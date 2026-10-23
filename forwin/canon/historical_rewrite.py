@@ -48,13 +48,45 @@ from forwin.world_engine.conflict_events import (
 from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.world_engine.superseded_resolutions import supersede_resolutions
 from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE
-from forwin.book_state.narrative import PLAN_CONSTRAINT_SOURCE_TYPE
+from forwin.book_state.narrative import (
+    PLAN_CONSTRAINT_SOURCE_TYPE, PROTECTION_STATUS_PATH, RELEASED_PROTECTION_STATUS,
+)
 
 from .plan import CanonCommitPlan
 
 
 class HistoricalRewriteInvalid(ValueError):
     """The retry audit trail does not authorize replacement of this commit."""
+
+
+def _rebase_plan_constraints(
+    runtime: BookStateRuntime, delta: GraphDelta, *, rewritten_chapter: int,
+) -> GraphDelta:
+    """Keep planner intent: releases are absolute; creates must still resolve their references."""
+    patches = []
+    for patch in delta.narrative_patches:
+        if str(patch.op) == "create":
+            payload = patch.new_value.get("payload", {})
+            refs = [payload.get("ref"), payload.get("observer_ref"), payload.get("fact_ref")]
+            for ref in refs:
+                if not ref or ref == "reader":
+                    continue
+                exists = (ref.removeprefix(FACT_REF_PREFIX) in runtime.world.facts_by_id
+                          if ref.startswith(FACT_REF_PREFIX)
+                          else ref in runtime.world.nodes_by_id or ref in runtime.map.nodes_by_id)
+                if not exists:
+                    protection = patch.target_ref.split(":", 1)[-1]
+                    raise HistoricalRewriteInvalid(
+                        f"rewriting chapter {rewritten_chapter} removes {ref}, "
+                        f"which beat-sheet protection {protection} uses"
+                    )
+        elif patch.field_path == PROTECTION_STATUS_PATH and patch.new_value == RELEASED_PROTECTION_STATUS:
+            node = runtime.narrative.nodes_by_id.get(patch.target_ref.split(":", 1)[-1])
+            if node is None or node.payload.get("status") == RELEASED_PROTECTION_STATUS:
+                continue
+            patch = patch.model_copy(update={"old_value": node.payload.get("status")})
+        patches.append(patch)
+    return delta.model_copy(update={"narrative_patches": patches})
 
 
 def _payload(event: DecisionEvent) -> dict:
@@ -641,7 +673,9 @@ class HistoricalCanonReplacement:
         replayed = []
         for delta in deltas:
             dependency = self._dropped_tick_dependency(delta)
-            if delta.source_type in {WORLD_ENGINE_SOURCE_TYPE, PLAN_CONSTRAINT_SOURCE_TYPE}:
+            if delta.source_type == PLAN_CONSTRAINT_SOURCE_TYPE:
+                delta = _rebase_plan_constraints(runtime, delta, rewritten_chapter=self.plan.chapter_number)
+            elif delta.source_type == WORLD_ENGINE_SOURCE_TYPE:
                 mismatches = compiler.cas_mismatches(runtime, delta)
                 if mismatches or dependency is not None:
                     self._drop_world_tick_delta(delta, mismatches, dependency)

@@ -590,7 +590,7 @@ def test_amend_plan_releases_protections_and_requires_human(monkeypatch) -> None
     _resolve_failing(Session, book, conflict_id, "amend_plan", ValueError, decided_by="codex")
     assert [
         (item.candidate_id, item.protection_releases) for item in _candidates(Session, book, conflict_id, "amend_plan")
-    ] == [("adjudication:kill", {}), (f"conflict:{conflict_id}:release", {"protect-rival": 1})]
+    ] == [("adjudication:kill", []), (f"conflict:{conflict_id}:release", ["protect-rival"])]
 
     result = _resolve(Session, book, conflict_id, "amend_plan")
 
@@ -859,7 +859,7 @@ def test_builder_releases_only_review_constraints_and_records_an_absent_status(m
     def release(ref: str) -> TickCandidate:
         return TickCandidate(
             candidate_id="c-release", origin="conflict_resolution", summary=SUMMARY, effects=WorldEffects(),
-            protection_releases={ref: 1},
+            protection_releases=[ref],
         )
 
     unknown = _build(Session, context, [release("not-a-protection")], tick_id="tick-release")

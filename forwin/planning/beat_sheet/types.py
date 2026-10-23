@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, get_args
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from forwin.book_state.narrative import PROTECTION_KINDS
 from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
 
 
 ProtectionKind = Literal["must_exist", "must_be_alive", "must_hold_state", "must_not_know"]
-PROTECTION_KINDS: tuple[str, ...] = get_args(ProtectionKind)
 # A reveal target's observer when the reveal is to the reader rather than to an actor.
 READER_OBSERVER = "reader"
 # A band's chapter count; an arc shorter than the minimum is one short band.

@@ -9,6 +9,7 @@ from typing import Any
 
 from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
 from forwin.book_state.lexicon import BookLexicon
+from forwin.book_state.narrative import RELEASED_PROTECTION_STATUS
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
 from forwin.book_state.schema import ACTOR_TIERS, IMPACT_LEVELS, WORLD_NODE_FIELDS
@@ -356,7 +357,7 @@ def check_narrative_boundaries(
         if node.node_type != "review_constraint" or getattr(node, "status", "active") != "active":
             continue
         payload = node.payload
-        if payload.get("status") == "released":
+        if payload.get("status") == RELEASED_PROTECTION_STATUS:
             continue
         until = payload.get("until_chapter", 0)
         until = until if type(until) is int else 0

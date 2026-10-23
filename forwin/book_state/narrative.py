@@ -32,6 +32,7 @@ NARRATIVE_EDGE_TYPES: set[str] = {
     "contradicts_plan",
 }
 
+PROTECTION_KINDS: tuple[str, ...] = ("must_exist", "must_be_alive", "must_hold_state", "must_not_know")
 PLAN_CONSTRAINT_SOURCE_TYPE = "plan_constraint"
 PROTECTION_STATUS_PATH = "payload.status"
 RELEASED_PROTECTION_STATUS = "released"

@@ -854,3 +854,35 @@ def test_gate_rejects_non_narrative_plan_constraint(monkeypatch):
     verdict = gate.review(ApprovedGraphDeltaSet(project_id="p", chapter_number=0, graph_deltas=[delta]), base_chapter=0)
     assert not verdict.accepted
     assert ("error", "invalid_protection") in _codes(verdict)
+
+
+def test_beat_sheet_reader_target_moves_premature_reveal_boundary():
+    from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+    from forwin.planning.beat_sheet.types import ArcBeatSheetData
+
+    engine, Session = _session_factory()
+    try:
+        world = _seed_world(Session, reveal_candidates=[{"fact_id": "fact-secret", "arc_number": 2}])
+        reader_learns = {"knowledge_events": [_knowledge("reader", world.fact("fact-secret"), channel="inferred")]}
+        assert _check(Session, world, 6, reader_learns) == []
+        with Session.begin() as session:
+            arc = session.scalars(select(ArcPlanVersion).where(
+                ArcPlanVersion.project_id == world.project_id, ArcPlanVersion.arc_number == 2)).one()
+            repo = ArcBeatSheetRepository(session)
+            data = ArcBeatSheetData(protagonist_ref=world.hero, phases=[], band_breakdown=[], reveal_targets=[{
+                "fact_ref": world.fact("fact-secret"), "observer": "reader", "target_state": "knows", "range": [8, 10],
+            }])
+            repo.create(world.project_id, arc.id, data, source="llm", reason="delayed reveal")
+        assert _check(Session, world, 6, reader_learns) == [("error", "premature_reveal")]
+        assert _check(Session, world, 7, reader_learns) == [("error", "premature_reveal")]
+        assert _check(Session, world, 8, reader_learns) == []
+        with Session.begin() as session:
+            repo = ArcBeatSheetRepository(session)
+            current = repo.active_for_project(world.project_id)[0]
+            data = repo.load(current).model_copy(update={"reveal_targets": [
+                repo.load(current).reveal_targets[0].model_copy(update={"range": (7, 10)}),
+            ]})
+            repo.create(world.project_id, current.arc_plan_id, data, source="llm", reason="earlier reveal")
+        assert _check(Session, world, 7, reader_learns) == []
+    finally:
+        engine.dispose()

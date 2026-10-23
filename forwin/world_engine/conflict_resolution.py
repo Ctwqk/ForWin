@@ -210,7 +210,7 @@ def _release_candidate(
         origin="conflict_resolution",
         summary=conflict.summary,
         effects=WorldEffects(),
-        protection_releases={node_id: runtime.as_of_chapter for node_id in broken},
+        protection_releases=broken,
     )
 
 

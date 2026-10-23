@@ -9,6 +9,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.knowledge import FACT_REF_PREFIX
+from forwin.planning.beat_sheet.types import READER_OBSERVER
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import ArcPlanVersion, Project
 from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
@@ -49,8 +51,8 @@ def earliest_reveal_chapters(session: Session, project_id: str) -> dict[str, int
     repo = ArcBeatSheetRepository(session)
     for row in repo.active_for_project(project_id):
         for target in repo.load(row).reveal_targets:
-            if target.observer == "reader":
-                ref, start = target.fact_ref.removeprefix("fact:"), target.range[0]
+            if target.observer == READER_OBSERVER:
+                ref, start = target.fact_ref.removeprefix(FACT_REF_PREFIX), target.range[0]
                 reader_targets[ref] = min(reader_targets.get(ref, start), start)
     schedule.update(reader_targets)
     return schedule

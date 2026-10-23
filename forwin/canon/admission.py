@@ -606,30 +606,41 @@ class CanonAdmissionService:
 
     def commit_plan_constraints(
         self, *, session: Session, project_id: str, beat_sheet_id: str,
-        creates: list[ProtectionSpec], releases: list[str],
+        creates: list[ProtectionSpec], releases: list[str], release_sheet_id: str | None = None,
     ) -> CanonPlanConstraintOutcome:
         """Commit a sheet's protections after the latest canon delta; the caller owns the transaction."""
         project = session.scalar(select(Project).where(Project.id == project_id).with_for_update(key_share=True))
         if project is None:
             raise CanonStaleVersion("project no longer exists")
+        escaped = json.dumps(beat_sheet_id, ensure_ascii=False)[1:-1]
         rows = session.execute(select(GraphDeltaRow.id, GraphDeltaRow.metadata_json).where(
             GraphDeltaRow.project_id == project_id, GraphDeltaRow.source_type == PLAN_CONSTRAINT_SOURCE_TYPE,
+            GraphDeltaRow.metadata_json.contains(escaped, autoescape=True),
         ).order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)).all()
         existing = tuple(ref for ref, metadata in rows if _json_object(metadata).get("beat_sheet_id") == beat_sheet_id)
         if existing:
             return CanonPlanConstraintOutcome(existing, True)
         chapter = BookStateRepository(session).latest_canon_chapter(project_id) or 0
         runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=chapter)
+        releases = list(releases)
+        if release_sheet_id is not None:
+            releases.extend(node.id for node in runtime.narrative.nodes_by_id.values()
+                            if node.node_type == "review_constraint"
+                            and node.metadata.get("beat_sheet_id") == release_sheet_id
+                            and node.payload.get("status") != RELEASED_PROTECTION_STATUS)
         patches = []
+        created_ids, released_ids = [], []
         for ref in dict.fromkeys(releases):
             node = runtime.narrative.nodes_by_id.get(ref)
             if node is None or node.node_type != "review_constraint":
                 raise CanonWriteFailure(f"protection {ref!r} is not a review_constraint node")
+            released_ids.append(ref)
             patches.append(NarrativePatch(target_ref=f"review_constraint:{ref}", op="set",
                 field_path=PROTECTION_STATUS_PATH, old_value=node.payload.get("status"),
                 new_value=RELEASED_PROTECTION_STATUS))
         for spec in creates:
             ref = new_id()
+            created_ids.append(ref)
             payload = {"ref": spec.ref, "kind": spec.kind, "until_chapter": spec.until_chapter, "source": "beat_sheet"}
             if spec.kind == "must_not_know":
                 payload.update(observer_ref=spec.observer_ref, fact_ref=spec.fact_ref)
@@ -661,6 +672,16 @@ class CanonAdmissionService:
             WorldSnapshotRow.project_id == project_id, WorldSnapshotRow.as_of_chapter == chapter,
         ))
         session.get(WorldSnapshotRow, result.world_snapshot_id).built_at = last_snapshot_time + timedelta(microseconds=1)
+        session.flush()
+        session.add(DecisionEvent(
+            id=new_id(), project_id=project_id, chapter_number=chapter, scope="chapter",
+            event_family="business_event", event_type=DecisionEventType.PLAN_CONSTRAINTS_COMMITTED,
+            actor_type="system", summary=f"Beat-sheet protections {beat_sheet_id} committed into chapter {chapter}.",
+            payload_json=json.dumps({"beat_sheet_id": beat_sheet_id, "graph_delta_ids": list(result.graph_delta_ids),
+                                     "created_ids": created_ids, "released_ids": released_ids,
+                                     "chapter_number": chapter}, ensure_ascii=False, sort_keys=True),
+            related_object_type="beat_sheet", related_object_id=beat_sheet_id,
+        ))
         session.flush()
         return CanonPlanConstraintOutcome(tuple(result.graph_delta_ids), False)
 

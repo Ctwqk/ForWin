@@ -240,8 +240,8 @@ class _TickBuilder:
             actor_id = self._node_of_type(actor_ref, ACTOR_NODE_TYPES, "actor")
             if actor_id is not None:
                 self._set_node_field(actor_id, "state.next_turn_at", minute)
-        for constraint_ref, until_chapter in candidate.protection_releases.items():
-            self._release_protection(constraint_ref, until_chapter)
+        for constraint_ref in candidate.protection_releases:
+            self._release_protection(constraint_ref)
         effects = candidate.effects
         for fact in effects.new_facts:
             self._new_fact(fact)
@@ -401,8 +401,8 @@ class _TickBuilder:
 
     # protections
 
-    def _release_protection(self, ref: str, until_chapter: int) -> None:
-        """Release a protection, including at chapter zero; retain the P3 candidate wire format."""
+    def _release_protection(self, ref: str) -> None:
+        """Release a protection by status, including at chapter zero."""
         node = self.runtime.narrative.nodes_by_id.get(ref.strip())
         if node is None or node.node_type != "review_constraint":
             self._unresolved(f"protection {ref.strip()!r} is not a review_constraint node")

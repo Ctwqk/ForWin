@@ -631,3 +631,55 @@ def test_generation_rereads_active_sheet_after_llm_and_saves_losing_trace(Sessio
         rows = list(session.scalars(select(ArcBeatSheetRow).where(ArcBeatSheetRow.project_id == world.project_id)))
         assert len(rows) == (2 if revise else 1)
         assert len(_traces(session, world.project_id)) == (2 if revise else 1)
+
+
+@pytest.mark.parametrize("revise", [False, True], ids=["ensure_for_arc", "revise"])
+def test_two_sessions_race(Session, revise):
+    import threading
+    from forwin.book_state.projection import BookStateProjection
+    from forwin.models.book_state import GraphDeltaRow
+
+    world, arc_id = _book(Session)
+    if revise:
+        _ensure(Session, _service(StubLLM(_sheet(world))), world, arc_id)
+    barrier = threading.Barrier(2)
+    results, errors = {}, {}
+
+    class BarrierLLM(StubLLM):
+        def chat(self, messages, **kwargs):
+            barrier.wait(timeout=20)
+            return super().chat(messages, **kwargs)
+
+    def run(name):
+        try:
+            service = _service(BarrierLLM(_sheet(world)))
+            with Session.begin() as session:
+                args = dict(project_id=world.project_id, arc_plan=session.get(ArcPlanVersion, arc_id), policy=POLICY)
+                row = (service.revise(session, **args, reason=f"race-{name}", conflict_summary="change")
+                       if revise else service.ensure_for_arc(session, **args))
+                results[name] = row.id
+        except Exception as exc:  # noqa: BLE001 - report worker failures in the test thread
+            errors[name] = repr(exc)
+
+    threads = [threading.Thread(target=run, args=(name,), daemon=True) for name in ("x", "y")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=25)
+    assert not any(thread.is_alive() for thread in threads)
+    assert not errors, errors
+    assert results["x"] == results["y"]
+    with Session() as session:
+        rows = list(session.scalars(select(ArcBeatSheetRow).where(ArcBeatSheetRow.project_id == world.project_id)))
+        assert [(row.version, row.status) for row in sorted(rows, key=lambda row: row.version)] == (
+            [(1, "superseded"), (2, "active")] if revise else [(1, "active")])
+        active = [row for row in rows if row.status == "active"]
+        assert active[0].id == results["x"]
+        deltas = list(session.scalars(select(GraphDeltaRow).where(
+            GraphDeltaRow.project_id == world.project_id, GraphDeltaRow.source_type == "plan_constraint")))
+        assert len(deltas) == (2 if revise else 1)
+        assert len(_traces(session, world.project_id)) == (3 if revise else 2)
+        runtime = BookStateProjection(session).load_runtime_as_of(world.project_id, as_of_chapter=0)
+        live = [node for node in runtime.narrative.nodes_by_id.values()
+                if node.node_type == "review_constraint" and node.payload.get("status") != "released"]
+        assert {node.metadata.get("beat_sheet_id") for node in live} == {results["x"]}

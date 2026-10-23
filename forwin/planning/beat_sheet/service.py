@@ -171,14 +171,10 @@ class ArcBeatSheetService:
                 call, project_id=project_id, as_of=as_of, arc_plan=arc_plan, reason=reason, source=source, row=active,
             ))
             return active
-        latest = BookStateRepository(session).latest_canon_chapter(project_id) or 0
-        locked_runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=latest)
-        releases = [node.id for node in locked_runtime.narrative.nodes_by_id.values()
-                    if active is not None and node.node_type == "review_constraint"
-                    and node.metadata.get("beat_sheet_id") == active.id]
         row = repo.create(project_id, arc_plan.id, data, source=source, reason=reason)
         CanonAdmissionService().commit_plan_constraints(
-            session=session, project_id=project_id, beat_sheet_id=row.id, creates=data.protections, releases=releases,
+            session=session, project_id=project_id, beat_sheet_id=row.id, creates=data.protections, releases=[],
+            release_sheet_id=active.id if active is not None else None,
         )
         self.save_trace(session, self._prompt_trace(
             call, project_id=project_id, as_of=as_of, arc_plan=arc_plan, reason=reason, source=source, row=row,

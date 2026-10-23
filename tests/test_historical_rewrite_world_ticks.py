@@ -883,7 +883,7 @@ def test_historical_rewrite_replays_plan_constraint_delta(Session):
     assert replayed.payload["until_chapter"] == 5
 
 
-def test_historical_rewrite_checks_plan_constraint_release_cas(Session):
+def test_historical_rewrite_rebases_plan_constraint_release(Session):
     from forwin.protocol.book_state import NarrativePatch
 
     book = _book(Session, with_plan_constraint=True)
@@ -899,6 +899,77 @@ def test_historical_rewrite_checks_plan_constraint_release_cas(Session):
                                                  field_path="payload.status", old_value=None, new_value="active"))
     outcome = _rewrite_chapter_two(book, version=2, delta=delta)
     assert outcome.blocked is False, outcome.failure_reason
-    assert not set(released.graph_delta_ids) & _delta_ids(book)
-    assert _runtime(book, 3).narrative.nodes_by_id[protection.id].payload["status"] == "active"
-    assert _replay_conflict(book).violated == "replay_cas"
+    assert set(released.graph_delta_ids) <= _delta_ids(book)
+    assert _runtime(book, 3).narrative.nodes_by_id[protection.id].payload["status"] == "released"
+    with Session() as session:
+        assert not list(session.scalars(select(WorldPlanConflictRow).where(
+            WorldPlanConflictRow.project_id == book.project_id,
+            WorldPlanConflictRow.source == "historical_rewrite")))
+
+
+def _list_extra_tick(book, delta_ids):
+    with book.Session.begin() as session:
+        run = session.scalars(select(PostCanonMaintenanceRun).where(
+            PostCanonMaintenanceRun.project_id == book.project_id,
+            PostCanonMaintenanceRun.chapter_number == 3, PostCanonMaintenanceRun.step_name == "world")).one()
+        result = json.loads(run.result_json)
+        result["graph_delta_ids"] = [*result["graph_delta_ids"], *delta_ids]
+        run.result_json = json.dumps(result)
+
+
+def test_rewrite_keeps_revision_after_dropping_tick_release(Session):
+    from forwin.planning.beat_sheet.types import ProtectionSpec
+    from forwin.protocol.book_state import NarrativePatch
+
+    book = _book(Session, with_plan_constraint=True)
+    protection = next(n for n in _runtime(book, 3).narrative.nodes_by_id.values()
+                      if n.metadata.get("beat_sheet_id") == "sheet-ch1")
+    tick = _tick_delta(book.project_id, 3, "tick-release", _set(GATE, "state.phase", "open", "ajar"))
+    tick.narrative_patches.append(NarrativePatch(
+        target_ref=f"review_constraint:{protection.id}", op="set", field_path="payload.status",
+        old_value=None, new_value="released"))
+    tick_ids = _commit_tick(Session, tick).graph_delta_ids
+    _list_extra_tick(book, tick_ids)
+    with Session.begin() as session:
+        revision = CanonAdmissionService().commit_plan_constraints(
+            session=session, project_id=book.project_id, beat_sheet_id="sheet-revised",
+            creates=[ProtectionSpec(ref=CAMP, kind="must_exist", until_chapter=6)], releases=[protection.id])
+    outcome = _sealing_rewrite(book, 2)
+    assert not outcome.blocked, outcome.failure_reason
+    after = _runtime(book, 3).narrative.nodes_by_id
+    assert after[protection.id].payload["status"] == "released"
+    assert len([n for n in after.values() if n.metadata.get("beat_sheet_id") == "sheet-revised"]) == 1
+    assert set(revision.graph_delta_ids) <= _delta_ids(book)
+    assert not set(tick_ids) & _delta_ids(book)
+    with Session() as session:
+        conflicts = list(session.scalars(select(WorldPlanConflictRow).where(
+            WorldPlanConflictRow.project_id == book.project_id, WorldPlanConflictRow.source == "historical_rewrite")))
+        # Real dropped ticks can conflict; no protection delta may produce a tick-worded conflict.
+        assert all("world tick  " not in conflict.summary for conflict in conflicts)
+        assert all("sheet-revised" not in conflict.summary for conflict in conflicts)
+        events = list(session.scalars(select(DecisionEvent).where(DecisionEvent.project_id == book.project_id)))
+        assert not any(json.loads(event.payload_json or "{}").get("graph_delta", {}).get("id")
+                       in revision.graph_delta_ids for event in events)
+
+
+def test_rewrite_aborts_when_protection_fact_disappears(Session):
+    from forwin.planning.beat_sheet.types import ProtectionSpec
+    from forwin.protocol.book_state import FactPatch
+
+    book = _book(Session)
+    tick = _tick_delta(book.project_id, 3, "tick-fact", _set(GATE, "state.phase", "open", "ajar"))
+    tick.fact_patches.append(FactPatch(fact_id="temporary-fact", op="create", new_value={
+        "id": "temporary-fact", "project_id": book.project_id, "proposition": "temporary fact"}))
+    tick_ids = _commit_tick(Session, tick).graph_delta_ids
+    _list_extra_tick(book, tick_ids)
+    with Session.begin() as session:
+        protection = CanonAdmissionService().commit_plan_constraints(
+            session=session, project_id=book.project_id, beat_sheet_id="sheet-fact",
+            creates=[ProtectionSpec(ref="reader", kind="must_not_know", observer_ref="reader",
+                                    fact_ref="fact:temporary-fact", until_chapter=6)], releases=[])
+    before = _outcome_snapshot(book)
+    outcome = _sealing_rewrite(book, 2)
+    assert outcome.stale, outcome.failure_reason
+    assert "rewriting chapter 2 removes fact:temporary-fact, which beat-sheet protection" in outcome.failure_reason
+    assert _outcome_snapshot(book) == before
+    assert set(tick_ids + protection.graph_delta_ids) <= _delta_ids(book)

@@ -36,6 +36,8 @@ from forwin.models.draft import (
     ChapterReview,
 )
 from forwin.planning.future_plan_audit import FuturePlanAuditor
+from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+from forwin.planning.feasibility import FeasibilityAuditor
 from forwin.models.project import Project
 from sqlalchemy.orm import Session
 from forwin.state.updater import StateUpdater
@@ -278,12 +280,90 @@ class AuditControlStage:
             raise RuntimeError(
                 "future_plan_audit_blocked:" + ";".join(plan_health.reasons)
             )
+        self._audit_current_plan_feasibility(
+            session=session,
+            updater=updater,
+            project=project,
+            chapter_plan=chapter_plan,
+        )
         if result.applied_plan_patch_ids:
             session.flush()
             return self.retrieval_broker.build_chapter_context(
                 repo, project_id, chapter_plan
             )
         return context
+
+    def _audit_current_plan_feasibility(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project: Project | None,
+        chapter_plan: ChapterPlan,
+    ) -> None:
+        """The feasibility audit of the chapter about to be written, against the latest canon.
+
+        Its issues on this chapter are recorded with the future plan audit's gate; an error blocks the
+        chapter on the same path as a blocking future plan audit, a warning only informs.
+        """
+        chapter_number = int(chapter_plan.chapter_number or 0)
+        sheets = ArcBeatSheetRepository(session)
+        sheet = sheets.active_for_arc(chapter_plan.arc_plan_id)
+        issues = [
+            issue
+            for issue in FeasibilityAuditor().audit_plans(
+                session,
+                project_id=chapter_plan.project_id,
+                plans=[chapter_plan],
+                beat_sheet=sheets.load(sheet) if sheet is not None else None,
+                policy=self._project_policy(session, project),
+            )
+            if issue.chapter_number == chapter_number
+        ]
+        if not issues:
+            return
+        errors = [issue for issue in issues if issue.severity == "error"]
+        self._record_decision_event(
+            updater=updater,
+            project_id=chapter_plan.project_id,
+            chapter_number=chapter_number,
+            event_family="evaluation_verdict",
+            event_type=DecisionEventType.FUTURE_PLAN_AUDIT_RUN,
+            scope="chapter",
+            summary=(
+                f"plan feasibility audit: {len(errors)} error(s), "
+                f"{len(issues) - len(errors)} warning(s)"
+            ),
+            related_object_type="chapter_plan",
+            related_object_id=chapter_plan.id,
+            payload=attach_gate_outcome(
+                {
+                    "audit": "feasibility",
+                    "issues": [issue.model_dump(mode="json") for issue in issues],
+                },
+                GateOutcome(
+                    gate_id="future_plan_audit",
+                    responsibility_domain="future_plan_integrity",
+                    scope="chapter",
+                    candidate_id=chapter_plan.id,
+                    chapter_number=chapter_number,
+                    fired=True,
+                    decision="block" if errors else "warn",
+                    blocked=bool(errors),
+                    issue_keys=list(dict.fromkeys(issue.code for issue in issues)),
+                    evidence_refs=list(
+                        dict.fromkeys(issue.ref for issue in issues if issue.ref)
+                    ),
+                ),
+            ),
+        )
+        if errors:
+            raise RuntimeError(
+                "future_plan_audit_blocked:"
+                + ";".join(
+                    ["feasibility", *(f"{issue.code}={issue.ref}" for issue in errors)]
+                )
+            )
 
     def _audit_future_plans_after_acceptance(
         self,

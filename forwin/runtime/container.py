@@ -228,6 +228,37 @@ class RuntimeContainer:
         )
         return self.core_services().generation_application
 
+    def build_plan_amender(self):
+        """The amender amend_plan resolutions plan with: a band planner and a beat sheet service on the
+        generation LLM client, or on none when no model is configured."""
+        from forwin.maintenance.post_canon import save_world_prompt_trace
+        from forwin.planning.amend import PlanAmender
+        from forwin.planning.band_planner.service import BandPlanner
+        from forwin.planning.beat_sheet.service import ArcBeatSheetService
+        from forwin.planning.feasibility import FeasibilityAuditor
+
+        self._require_capability(
+            "generation",
+            allowed_roles={"api", "generation_worker"},
+        )
+        with self._lock:
+            self._require_open()
+            core = self.core_services()
+            llm_client = (
+                self.generation_services().llm_client
+                if _llm_available(core.infrastructure, core.policy)
+                else None
+            )
+            return PlanAmender(
+                BandPlanner(
+                    llm_client,
+                    feasibility=FeasibilityAuditor(),
+                    save_trace=save_world_prompt_trace,
+                    trope_cost_ceiling=2 if core.policy.quality_profile == "pulp" else 3,
+                ),
+                ArcBeatSheetService(llm_client, save_trace=save_world_prompt_trace),
+            )
+
     def build_book_genesis_service(self):
         self._require_capability(
             "generation",

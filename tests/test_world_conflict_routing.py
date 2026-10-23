@@ -94,3 +94,51 @@ def test_historical_rewrite_routing_matches_replay_cas(impact_level: str, delega
     draft = _draft(source="historical_rewrite", impact_level=impact_level)
     assert available_options(draft) == REPLAY_CAS_OPTIONS == ("veto_world",)
     assert route_conflict(draft, policy=_policy(delegate)) == REPLAY_CAS_DECIDER == "human"
+
+
+@pytest.mark.parametrize("source", ["plan_feasibility", "band_planning"])
+@pytest.mark.parametrize("violated", ["feasibility", "milestone", "reveal_schedule", "protection"])
+@pytest.mark.parametrize("impact_level", ["minor", "moderate", "major", "critical"])
+@pytest.mark.parametrize("delegate", ["codex", "human"])
+def test_plan_conflict_offers_only_amend_and_routes_human(
+    source: str, violated: str, impact_level: str, delegate: str,
+) -> None:
+    draft = _draft(source=source, impact_level=impact_level, violated=violated)
+
+    assert available_options(draft) == ("amend_plan",)
+    assert route_conflict(draft, policy=_policy(delegate)) == "human"
+
+
+def test_band_planner_conflicts_agree_with_routing(monkeypatch) -> None:
+    """Ruling P4a-R3: the conflict BandPlanner opens offers and routes what the routing table says."""
+    from types import SimpleNamespace
+
+    from forwin.planning.band_planner import service as module
+    from forwin.planning.band_planner.types import PlanIssue
+    from forwin.planning.beat_sheet.types import BandSpan
+
+    created: list[tuple[ConflictDraft, str, tuple[str, ...]]] = []
+
+    class Recorder:
+        def __init__(self, session) -> None:
+            pass
+
+        def create(self, draft, *, required_decider, options):
+            created.append((draft, required_decider, tuple(options)))
+            return draft
+
+    monkeypatch.setattr(module, "WorldConflictRepository", Recorder)
+    monkeypatch.setattr(module, "BookStateQuery", lambda session: SimpleNamespace(
+        current_story_minute=lambda project_id, as_of_chapter: 0,
+    ))
+    module._band_planning_conflict(
+        None, project_id="project-1", band=BandSpan(band_index=0, chapter_start=1, chapter_end=4),
+        issues=[PlanIssue(code="onstage_unavailable", severity="error", chapter_number=2, ref="actor-1", message="m")],
+        as_of=0,
+    )
+
+    ((draft, decider, options),) = created
+    assert draft.source == "band_planning"
+    assert available_options(draft) == options
+    for delegate in ("codex", "human"):
+        assert route_conflict(draft, policy=_policy(delegate)) == decider

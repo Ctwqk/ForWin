@@ -35,7 +35,11 @@ def _conflict_info(row: WorldPlanConflictRow) -> WorldConflictInfo:
     )
 
 
-def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[..., Any]]:
+def build_handlers(
+    *, get_session: Callable[[], Any], get_plan_amender: Callable[[], Any] = lambda: None,
+) -> dict[str, Callable[..., Any]]:
+    """``get_plan_amender`` builds the amender amend_plan plans with; None leaves plan conflicts unamendable."""
+
     def list_project_world_conflicts(project_id: str, status: str | None = None) -> list[WorldConflictInfo]:
         with get_session() as session:
             require_project(session, project_id)
@@ -74,6 +78,7 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
             try:
                 ConflictResolutionService(
                     session, admission=CanonAdmissionService(), policy=policy,
+                    plan_amender=get_plan_amender() if decision.option == "amend_plan" else None,
                 ).resolve(project_id=project_id, conflict_id=conflict_id, decision=decision)
             except (ConflictNotOpen, ConflictStale) as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc

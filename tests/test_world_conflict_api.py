@@ -239,3 +239,40 @@ def test_list_route_rejects_invalid_status(mock_conflict_api, status):
     response = client.get("/api/projects/p1/world-conflicts", params={"status": status})
     assert response.status_code == 400
     repo.list.assert_not_called()
+
+
+@pytest.mark.parametrize(("option", "handed"), [("amend_plan", True), ("veto_world", False)])
+def test_resolve_route_hands_the_plan_amender_only_to_amend_plan(monkeypatch, option, handed):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from fastapi import FastAPI
+
+    from forwin.http.adapters import api_world_conflict_routes as routes
+
+    session = MagicMock()
+    session.__enter__.return_value = session
+    monkeypatch.setattr(routes, "require_project", lambda *_: SimpleNamespace(id="p1"))
+    monkeypatch.setattr(routes, "ProjectPolicyStore", lambda _: MagicMock())
+    monkeypatch.setattr(routes, "WorldConflictRepository", lambda _: MagicMock())
+    monkeypatch.setattr(routes, "_conflict_info", lambda row: {})
+    constructed: list[dict] = []
+
+    def service(*args, **kwargs):
+        constructed.append(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(routes, "ConflictResolutionService", service)
+    amender, builds = object(), []
+    handlers = routes.build_handlers(get_session=lambda: session,
+                                     get_plan_amender=lambda: builds.append(1) or amender)
+    app = FastAPI()
+    app.add_api_route("/resolve/{project_id}/{conflict_id}", handlers["resolve_project_world_conflict"],
+                      methods=["POST"], response_model=None)
+    with TestClient(app) as client:
+        response = client.post("/resolve/p1/c1", json={"option": option, "rationale": "r", "reason": "why"})
+
+    assert response.status_code == 200
+    assert constructed[0]["plan_amender"] is (amender if handed else None)
+    assert len(builds) == (1 if handed else 0)
+    session.commit.assert_called_once()

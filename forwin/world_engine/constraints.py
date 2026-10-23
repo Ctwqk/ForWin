@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -13,6 +13,7 @@ from forwin.book_state.narrative import RELEASED_PROTECTION_STATUS
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
 from forwin.book_state.schema import ACTOR_TIERS, IMPACT_LEVELS, WORLD_NODE_FIELDS
+from forwin.protocol.book_state import NarrativeNode
 from forwin.book_state.story_clock import StoryCalendar, StoryClockError, duration_to_minutes
 from forwin.world_engine.travel import estimate_travel
 from forwin.world_engine.types import NEW_FACT_REF_PREFIX, EffectEntityChange, TickCandidate, WorldEffects
@@ -97,9 +98,9 @@ def _changes(candidate: TickCandidate) -> Iterator[tuple[str, str, Any]]:
         yield transfer.item_ref, "state.holder_id", transfer.to_ref
 
 
-def _transitions(runtime: BookStateRuntime, candidate: TickCandidate):
+def _transitions(runtime: BookStateRuntime, changes: Iterable[tuple[str, str, Any]]):
     payloads: dict[str, dict[str, Any]] = {}
-    for ref, field, value in _changes(candidate):
+    for ref, field, value in changes:
         before = payloads.get(ref, _payload(runtime, ref))
         after = deepcopy(before)
         path = _path(runtime, ref, field)
@@ -140,7 +141,7 @@ def classify_impact(
         return "critical"
     if candidate.effects.relation_changes:
         level = max(level, IMPACT_LEVELS.index("moderate"))
-    transitions = list(_transitions(runtime, candidate))
+    transitions = list(_transitions(runtime, _changes(candidate)))
     for ref, path, before, after in transitions:
         if before == after:
             continue
@@ -264,7 +265,7 @@ def check_hard_rules(
     for fact in candidate.effects.new_facts:
         actors.update(ref for ref in fact.known_by if ref != "reader")
     transitions = []
-    for transition in _transitions(runtime, candidate):
+    for transition in _transitions(runtime, _changes(candidate)):
         ref, path, before, after = transition
         if not isinstance(before.get("state", {}), dict) or not isinstance(after.get("state", {}), dict):
             issue("invalid_state", ref, "Entity state must be a dict")
@@ -345,14 +346,13 @@ def _at(payload: dict[str, Any], path: str) -> Any:
     return value
 
 
-def check_narrative_boundaries(
-    runtime: BookStateRuntime, candidate: TickCandidate, *, next_chapter: int,
-) -> list[BoundaryViolation]:
-    transitions = list(_transitions(runtime, candidate))
-    knowledge = {(item.observer_ref, item.fact_ref) for item in candidate.effects.knowledge
-                 if item.state in {"knows", "believes"}}
-    knowledge.update((observer, f"fact:new:{fact.key}") for fact in candidate.effects.new_facts for observer in fact.known_by)
-    violations: list[BoundaryViolation] = []
+def active_protections(runtime: BookStateRuntime, *, next_chapter: int) -> list[NarrativeNode]:
+    """The review_constraint protections in force in ``next_chapter``, in id order.
+
+    A protection is in force while its node is active, its payload is not released, and its until_chapter
+    is open (0) or not before ``next_chapter``.
+    """
+    protections = []
     for node in sorted(runtime.narrative.nodes_by_id.values(), key=lambda node: node.id):
         if node.node_type != "review_constraint" or getattr(node, "status", "active") != "active":
             continue
@@ -363,6 +363,37 @@ def check_narrative_boundaries(
         until = until if type(until) is int else 0
         if until != 0 and until < next_chapter:
             continue
+        protections.append(node)
+    return protections
+
+
+def check_narrative_boundaries(
+    runtime: BookStateRuntime, candidate: TickCandidate, *, next_chapter: int,
+) -> list[BoundaryViolation]:
+    knowledge = {(item.observer_ref, item.fact_ref) for item in candidate.effects.knowledge
+                 if item.state in {"knows", "believes"}}
+    knowledge.update((observer, f"fact:new:{fact.key}") for fact in candidate.effects.new_facts for observer in fact.known_by)
+    return narrative_boundary_violations(
+        runtime, changes=_changes(candidate), knowledge=knowledge, next_chapter=next_chapter,
+    )
+
+
+def narrative_boundary_violations(
+    runtime: BookStateRuntime,
+    *,
+    changes: Iterable[tuple[str, str, Any]],
+    knowledge: Collection[tuple[str, str]],
+    next_chapter: int,
+) -> list[BoundaryViolation]:
+    """The protections in force in ``next_chapter`` that the changes or the knowledge break.
+
+    ``changes`` are (ref, field, value) in the order they apply, a field bare or with its ``state.`` /
+    ``profile.`` section; ``knowledge`` holds (observer ref, ``fact:<id>``) pairs the observers come to know.
+    """
+    transitions = list(_transitions(runtime, changes))
+    violations: list[BoundaryViolation] = []
+    for node in active_protections(runtime, next_chapter=next_chapter):
+        payload = node.payload
         ref, kind = str(payload.get("ref") or ""), str(payload.get("kind") or "")
         violated = False
         if kind == "must_not_know":

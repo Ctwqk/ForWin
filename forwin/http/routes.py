@@ -119,6 +119,8 @@ class CoreDeps:
     render_home_page: Callable[..., str]
     get_memory_index: Callable[[], Any] = lambda: None
     provide_memory_index: Callable[[], Any] = lambda: None
+    # The plan amender amend_plan resolutions plan with; None when the runtime has none.
+    provide_plan_amender: Callable[[], Any] = lambda: None
 
 
 @dataclass(frozen=True)
@@ -212,7 +214,9 @@ def register_api_routes(
     project_control_handlers = api_project_control_routes.build_handlers(
         service=deps.project_control.service,
     )
-    world_conflict_handlers = api_world_conflict_routes.build_handlers(get_session=get_session)
+    world_conflict_handlers = api_world_conflict_routes.build_handlers(
+        get_session=get_session, get_plan_amender=deps.core.provide_plan_amender,
+    )
     world_model_handlers = api_world_model_routes.build_handlers(
         get_session=get_session,
         get_config=get_config,

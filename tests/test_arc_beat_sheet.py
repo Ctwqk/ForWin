@@ -431,12 +431,13 @@ _VALID = {
 }
 
 
-def _issues(*, chapter_end: int = 6, **changes) -> list[str]:
+def _issues(*, chapter_end: int = 6, reveal_chapters: dict[str, int] | None = None, **changes) -> list[str]:
     from forwin.planning.beat_sheet.service import beat_sheet_issues
     from forwin.planning.beat_sheet.types import ArcBeatSheetData
 
     data = ArcBeatSheetData.model_validate({**_VALID, **changes})
-    return beat_sheet_issues(data, chapter_start=1, chapter_end=chapter_end, runtime=_RUNTIME, actor_ids=_OFFERED)
+    return beat_sheet_issues(data, chapter_start=1, chapter_end=chapter_end, runtime=_RUNTIME, actor_ids=_OFFERED,
+                             reveal_chapters=reveal_chapters)
 
 
 def _protection(ref: str, kind: str, until: int = 4, **fields) -> dict:
@@ -517,6 +518,53 @@ def test_validation_rejects_refs_and_protections_that_cannot_hold(changes, issue
 ], ids=["valid", "reader_must_not_know", "bare_field", "state_field", "profile_field", "faction_exit_field"])
 def test_validation_accepts_sheets_that_can_hold(changes) -> None:
     assert _issues(**changes) == []
+
+
+# Ruling P4a-R21: phase purposes and milestone descriptions reach the writer verbatim.
+_READER_PROTECTED = _protection("reader", "must_not_know", observer_ref="reader", fact_ref="fact:secret")
+
+
+@pytest.mark.parametrize(("changes", "issue"), [
+    ({"phases": [{"name": "phase", "chapter_range": [1, 6], "purpose": "reach the secret-value"}]},
+     "phases[0].purpose states the proposition of fact:secret, which the reader may learn only from chapter 5"),
+    # Inserted whitespace does not hide the proposition.
+    (_milestone(description="find the secret- value"),
+     "milestones[0].description states the proposition of fact:secret, which the reader may learn only from "
+     "chapter 5"),
+], ids=["phase_purpose", "milestone_description"])
+def test_validation_rejects_writer_text_stating_an_unrevealed_secret(changes, issue) -> None:
+    assert any(item.startswith(issue) for item in _issues(**_READER_PROTECTED, **changes))
+    # The fact is neither hidden nor protected from the reader without the protection.
+    assert _issues(**changes) == []
+
+
+def test_reveal_chapters_schedule_facts_the_sheet_does_not_target() -> None:
+    purpose = {"phases": [{"name": "phase", "chapter_range": [1, 6], "purpose": "the secret-value"}]}
+    unscheduled = _issues(**_READER_PROTECTED, **purpose, reveal_targets=[])
+    assert [item.split(";")[0] for item in unscheduled] == [
+        "phases[0].purpose states the proposition of fact:secret, which has no reader reveal scheduled",
+    ]
+    assert _issues(**_READER_PROTECTED, **purpose, reveal_targets=[], reveal_chapters={"secret": 1}) == []
+    # The sheet's own reader target wins over the schedule it replaces.
+    assert _issues(**_READER_PROTECTED, **purpose, reveal_chapters={"secret": 1}) != []
+
+
+def test_generation_checks_writer_text_against_the_reveal_schedule(Session, monkeypatch) -> None:
+    from forwin.planning.beat_sheet import service as module
+
+    world, arc_id = _book(Session)
+    fact_id = world.fact("fact-1").removeprefix("fact:")
+    monkeypatch.setattr(module, "earliest_reveal_chapters", lambda session, project_id: {fact_id: 9})
+    bad, good = _sheet(world), _sheet(world)
+    for sheet in (bad, good):
+        sheet["reveal_targets"] = []
+    bad["phases"][0]["purpose"] = "say proposition-1 aloud"
+    client = StubLLM(bad, good)
+    _ensure(Session, _service(client), world, arc_id)
+
+    assert len(client.calls) == 2
+    feedback = client.user_prompt(1).split("Retry validation feedback", 1)[1]
+    assert f"phases[0].purpose states the proposition of {world.fact('fact-1')}" in feedback
 
 
 def test_an_arc_shorter_than_four_chapters_is_one_band() -> None:

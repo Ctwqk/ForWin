@@ -19,6 +19,7 @@ from forwin.canon import CanonAdmissionService, CanonStaleVersion, CanonWriteFai
 from forwin.models import ArcPlanVersion, ChapterPlan, NarrativeObligationRow, NarrativePlanPatchRow, Project
 from forwin.models.audit import DecisionEvent
 from forwin.models.book_state import GraphDeltaRow
+from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.planning.goals import load_goals_json
 from forwin.protocol.book_state import GraphDelta, NarrativePatch
 from forwin.runtime.policy import RuntimePolicy
@@ -1060,4 +1061,251 @@ def test_veto_reroll_window_starts_exactly_max_rerolls_chapters_back(monkeypatch
     # the one reroll; one detected after chapter 1 is outside the window.
     assert rerolls_after_a_veto_detected_at(1) is True
     assert rerolls_after_a_veto_detected_at(2) is False
+    engine.dispose()
+
+
+# amend_plan through PlanAmender (P4a)
+
+
+PLAN_CONFLICT_SUMMARY = "summary-plan-conflict"
+_FEASIBLE = {3: {"milestone_ids": ["milestone-1"]}}
+
+
+def _band_world(Session):
+    """The band planner's book with chapters 1-4 planned as band plan version 1."""
+    from tests.test_arc_beat_sheet import StubLLM
+    from tests.test_band_planner import _band, _book as band_book, _plan_band, _planner
+
+    world, arc_id, sheet_id = band_book(Session)
+    first = _plan_band(Session, _planner(StubLLM(_band(world, range(1, 5), _FEASIBLE))), world, arc_id, sheet_id)
+    return world, arc_id, first.band_plan_id
+
+
+def _plan_conflict(Session, world, *, violated: str = "feasibility", band=(1, 4), band_plan_id=None,
+                   source: str = "plan_feasibility", issues=()) -> str:
+    with Session.begin() as session:
+        row = WorldConflictRepository(session).create(ConflictDraft(
+            project_id=world.project_id, source=source, detected_after_chapter=0, story_time=1000,
+            involved_refs=[], violated=violated, impact_level="major", summary=PLAN_CONFLICT_SUMMARY,
+            proposed_change={"kind": "plan_issues", "band": list(band), "band_plan_id": band_plan_id,
+                             "issues": list(issues)},
+            blocks_from_chapter=band[0],
+        ), required_decider="human", options=("amend_plan",))
+        return row.id
+
+
+def _amender(band_client, sheet_client):
+    from forwin.maintenance.post_canon import save_world_prompt_trace
+    from forwin.planning.amend import PlanAmender
+    from forwin.planning.beat_sheet.service import ArcBeatSheetService
+    from forwin.planning.feasibility import FeasibilityAuditor
+    from tests.test_band_planner import _planner
+
+    return PlanAmender(_planner(band_client, FeasibilityAuditor()),
+                       ArcBeatSheetService(sheet_client, save_trace=save_world_prompt_trace))
+
+
+def _amend(Session, project_id: str, conflict_id: str, amender, *, decided_by: str = "human"):
+    # A plain session: the amender commits between its model calls.
+    with Session() as session:
+        result = ConflictResolutionService(
+            session, admission=CanonAdmissionService(), policy=POLICY, plan_amender=amender,
+        ).resolve(project_id=project_id, conflict_id=conflict_id, decision=_decision("amend_plan", decided_by))
+        session.commit()
+        return result
+
+
+def _unlocked(Session, project_id: str, conflict_id: str):
+    """A model-call hook asserting that nobody holds the project row or the conflict row."""
+    def check() -> None:
+        with Session.begin() as other:
+            other.execute(select(Project.id).where(Project.id == project_id).with_for_update(nowait=True))
+            other.execute(select(WorldPlanConflictRow.id).where(WorldPlanConflictRow.id == conflict_id)
+                          .with_for_update(nowait=True))
+    return check
+
+
+def _conflict_row(Session, project_id: str, conflict_id: str) -> tuple[str, list[str]]:
+    with Session() as session:
+        row = WorldConflictRepository(session).get(project_id, conflict_id)
+        return row.status, json.loads(row.result_refs_json)
+
+
+def test_amend_plan_on_plan_conflict_replans_band_with_rationale() -> None:
+    from forwin.models.planning_v6 import BandPlanRow
+    from tests.test_arc_beat_sheet import StubLLM
+    from tests.test_band_planner import HookedLLM, _band
+
+    engine, Session = _session_factory()
+    world, _arc_id, band_plan_id = _band_world(Session)
+    with Session.begin() as session:
+        # The amendment ignores the replan cap once.
+        session.get(BandPlanRow, band_plan_id).replan_count = POLICY.planning.max_replans_per_band
+    conflict_id = _plan_conflict(Session, world, band_plan_id=band_plan_id)
+    band_client = HookedLLM(_unlocked(Session, world.project_id, conflict_id), _band(world, range(1, 5), _FEASIBLE))
+    sheet_client = StubLLM()
+
+    result = _amend(Session, world.project_id, conflict_id, _amender(band_client, sheet_client))
+
+    assert band_client.payload(0)["notes"] == ["rationale-1"]
+    assert band_client.payload(0)["chapters_to_plan"] == [1, 2, 3, 4]
+    assert sheet_client.calls == []
+    assert (result.graph_delta_ids, result.beat_sheet_id) == ((), "")
+    with Session() as session:
+        replanned = session.get(BandPlanRow, result.band_plan_id)
+        assert (replanned.version, replanned.status, replanned.replan_count) == (
+            2, "active", POLICY.planning.max_replans_per_band + 1,
+        )
+        assert session.get(BandPlanRow, band_plan_id).status == "superseded"
+    assert _conflict_row(Session, world.project_id, conflict_id) == ("resolved", [f"band_plan:{result.band_plan_id}"])
+    with Session() as session:
+        (event,) = session.scalars(select(DecisionEvent).where(
+            DecisionEvent.event_type == DecisionEventType.WORLD_CONFLICT_RESOLVED,
+            DecisionEvent.related_object_id == conflict_id,
+        )).all()
+        payload = json.loads(event.payload_json)
+        assert (payload["option"], payload["band_plan_id"], payload["beat_sheet_id"]) == (
+            "amend_plan", result.band_plan_id, "",
+        )
+    engine.dispose()
+
+
+def test_amend_plan_on_plan_conflict_needs_a_human_and_an_amender() -> None:
+    from tests.test_arc_beat_sheet import StubLLM
+
+    engine, Session = _session_factory()
+    world, _arc_id, band_plan_id = _band_world(Session)
+    conflict_id = _plan_conflict(Session, world, band_plan_id=band_plan_id)
+
+    with Session() as session:
+        with pytest.raises(ConflictOptionUnavailable, match="plan amender"):
+            _service(session).resolve(project_id=world.project_id, conflict_id=conflict_id,
+                                      decision=_decision("amend_plan"))
+    with pytest.raises(ValueError, match="Only a human"):
+        _amend(Session, world.project_id, conflict_id, _amender(StubLLM(), StubLLM()), decided_by="codex")
+    with Session() as session:
+        with pytest.raises(ValueError, match="offers"):
+            _service(session).resolve(project_id=world.project_id, conflict_id=conflict_id,
+                                      decision=_decision("veto_world"))
+    assert _conflict_row(Session, world.project_id, conflict_id) == ("open", [])
+    engine.dispose()
+
+
+def test_failed_amendment_keeps_the_conflict_open_and_its_trace() -> None:
+    from forwin.models.genesis import PromptTrace
+    from tests.test_arc_beat_sheet import StubLLM
+
+    engine, Session = _session_factory()
+    world, _arc_id, band_plan_id = _band_world(Session)
+    conflict_id = _plan_conflict(Session, world, band_plan_id=band_plan_id)
+    band_client = StubLLM(RuntimeError("provider down"), RuntimeError("provider down"))
+
+    with pytest.raises(ConflictOptionUnavailable, match="llm_unavailable"):
+        _amend(Session, world.project_id, conflict_id, _amender(band_client, StubLLM()))
+
+    assert len(band_client.calls) == 2
+    assert _conflict_row(Session, world.project_id, conflict_id) == ("open", [])
+    with Session() as session:
+        traces = session.scalars(select(PromptTrace).where(
+            PromptTrace.project_id == world.project_id, PromptTrace.stage_key == "plan.band",
+        )).all()
+        assert len(traces) == 2
+    engine.dispose()
+
+
+def test_amend_plan_on_milestone_conflict_revises_beat_sheet_first() -> None:
+    from forwin.models.planning_v6 import BandPlanRow
+    from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+    from tests.test_arc_beat_sheet import StubLLM, _sheet
+    from tests.test_band_planner import HookedLLM, _band
+
+    engine, Session = _session_factory()
+    world, arc_id, band_plan_id = _band_world(Session)
+    conflict_id = _plan_conflict(Session, world, violated="milestone", band_plan_id=band_plan_id)
+    revised = _sheet(world, bands=((1, 4), (5, 8), (9, 12)))
+    revised["milestones"][0]["description"] = "revised-milestone"
+    sheet_client = StubLLM(revised)
+    # The revision's project row lock is released before the band is planned again.
+    band_client = HookedLLM(_unlocked(Session, world.project_id, conflict_id), _band(world, range(1, 5)))
+
+    result = _amend(Session, world.project_id, conflict_id, _amender(band_client, sheet_client))
+
+    revision = sheet_client.payload(0)["revision"]
+    assert PLAN_CONFLICT_SUMMARY in revision["conflict_summary"] and "rationale-1" in revision["conflict_summary"]
+    # The band is planned again from the revised sheet, keeping its band plan.
+    payload = band_client.payload(0)
+    assert [item["description"] for item in payload["milestones"]] == ["revised-milestone"]
+    assert payload["notes"] == ["rationale-1"]
+    with Session() as session:
+        sheet = ArcBeatSheetRepository(session).active_for_arc(arc_id)
+        assert (sheet.id, sheet.version) == (result.beat_sheet_id, 2)
+        replanned = session.get(BandPlanRow, result.band_plan_id)
+        assert (replanned.version, replanned.beat_sheet_id, replanned.chapter_end) == (2, sheet.id, 4)
+    assert _conflict_row(Session, world.project_id, conflict_id) == (
+        "resolved", [f"beat_sheet:{result.beat_sheet_id}", f"band_plan:{result.band_plan_id}"],
+    )
+    engine.dispose()
+
+
+def test_amendment_plans_the_new_band_when_the_revision_resplits_it() -> None:
+    from forwin.models.planning_v6 import BandPlanRow
+    from tests.test_arc_beat_sheet import StubLLM, _sheet
+    from tests.test_band_planner import _band
+
+    engine, Session = _session_factory()
+    world, arc_id, band_plan_id = _band_world(Session)
+    issues = [{"code": "exit_state_unaddressed", "severity": "warning", "chapter_number": 4, "ref": world.rival,
+               "message": "m"}]
+    conflict_id = _plan_conflict(Session, world, band_plan_id=band_plan_id, issues=issues)
+    # Chapters 1-4 now sit in the revised sheet's band 1-6.
+    sheet_client = StubLLM(_sheet(world, bands=((1, 6), (7, 12))))
+    band_client = StubLLM(_band(world, range(1, 7)))
+
+    result = _amend(Session, world.project_id, conflict_id, _amender(band_client, sheet_client))
+
+    assert len(sheet_client.calls) == 1
+    assert band_client.payload(0)["band"] == {"band_index": 0, "chapter_start": 1, "chapter_end": 6}
+    assert band_client.payload(0)["chapters_to_plan"] == [1, 2, 3, 4, 5, 6]
+    with Session() as session:
+        planned = session.get(BandPlanRow, result.band_plan_id)
+        assert (planned.status, planned.chapter_start, planned.chapter_end) == ("active", 1, 6)
+        assert planned.beat_sheet_id == result.beat_sheet_id
+    assert _conflict_row(Session, world.project_id, conflict_id)[0] == "resolved"
+    engine.dispose()
+
+
+def test_world_amend_plan_triggers_replan_of_unwritten_band_chapters() -> None:
+    from forwin.models.planning_v6 import BandPlanRow
+    from tests.test_arc_beat_sheet import StubLLM
+    from tests.test_band_planner import HookedLLM, _band
+
+    engine, Session = _session_factory()
+    world, _arc_id, band_plan_id = _band_world(Session)
+    held = TickCandidate(
+        candidate_id="adjudication:held", origin="adjudication", actor_id=world.hero, summary="summary-held",
+        effects=WorldEffects(entity_changes=[EffectEntityChange(ref=world.rival, field="mood", new_value="wary")]),
+        impact_level="major",
+    )
+    with Session.begin() as session:
+        conflict_id = WorldConflictRepository(session).create(ConflictDraft(
+            project_id=world.project_id, source="world_tick", detected_after_chapter=0, story_time=1000,
+            involved_refs=[world.rival], violated="impact_review", impact_level="major", summary=SUMMARY,
+            proposed_change=held.model_dump(mode="json"), actor_ref=world.hero, blocks_from_chapter=1,
+        ), required_decider="human", options=("veto_world", "plot_responds", "amend_plan")).id
+    # The resolution's conflict row and project row locks are released before the replan's model call.
+    band_client = HookedLLM(_unlocked(Session, world.project_id, conflict_id), _band(world, range(1, 5), _FEASIBLE))
+
+    result = _amend(Session, world.project_id, conflict_id, _amender(band_client, StubLLM()))
+
+    assert len(result.graph_delta_ids) == 1
+    with Session() as session:
+        runtime = BookStateProjection(session).load_runtime_as_of(world.project_id, as_of_chapter=0)
+        assert runtime.world.get_state(world.rival)["mood"] == "wary"
+    payload = band_client.payload(0)
+    assert (payload["chapters_to_plan"], payload["notes"]) == ([1, 2, 3, 4], [SUMMARY])
+    with Session() as session:
+        assert session.get(BandPlanRow, result.band_plan_id).version == 2
+    assert _conflict_row(Session, world.project_id, conflict_id) == (
+        "resolved", [*result.graph_delta_ids, f"band_plan:{result.band_plan_id}"],
+    )
     engine.dispose()

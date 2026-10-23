@@ -9,6 +9,9 @@ from .conflict_types import ConflictDecider, ConflictDraft, ConflictOption
 
 # What an auto-routed conflict does: the world gives way.
 AUTO_OPTION: ConflictOption = "veto_world"
+# A plan the planner could not make feasible: only a human amends it, through the plan amender.
+PLAN_CONFLICT_SOURCES = frozenset({"plan_feasibility", "band_planning"})
+_PLAN_CONFLICT_OPTIONS: tuple[ConflictOption, ...] = ("amend_plan",)
 # P3 has no chapter-extraction source, so rewrite_chapter is never offered.
 _PLAN_OPTIONS: tuple[ConflictOption, ...] = ("veto_world", "plot_responds", "amend_plan")
 # A change that breaks a narrative boundary lands only once the user amends the plan around it.
@@ -19,10 +22,12 @@ _CODEX_IMPACTS = frozenset({"moderate", "major"})
 
 
 def available_options(draft: ConflictDraft) -> tuple[ConflictOption, ...]:
-    """A rewrite can only undo what the world did, a broken boundary is vetoed or amended around,
-    and lighter conflicts may also leave an obligation."""
+    """A rewrite can only undo what the world did, an infeasible plan can only be amended, a broken
+    boundary is vetoed or amended around, and lighter conflicts may also leave an obligation."""
     if draft.source == "historical_rewrite":
         return ("veto_world",)
+    if draft.source in PLAN_CONFLICT_SOURCES:
+        return _PLAN_CONFLICT_OPTIONS
     if draft.violated in _BOUNDARY_VIOLATIONS:
         return _BOUNDARY_OPTIONS
     if draft.impact_level in _OBLIGATION_IMPACTS:
@@ -31,9 +36,10 @@ def available_options(draft: ConflictDraft) -> tuple[ConflictOption, ...]:
 
 
 def route_conflict(draft: ConflictDraft, *, policy: RuntimePolicy) -> ConflictDecider:
-    """Rewrites and critical conflicts go to a human, minor ones are vetoed automatically, and the
-    rest go to Codex unless the policy keeps them for a human."""
-    if draft.source == "historical_rewrite" or draft.impact_level == "critical":
+    """Rewrites, plan conflicts and critical conflicts go to a human, minor ones are vetoed automatically,
+    and the rest go to Codex unless the policy keeps them for a human."""
+    if (draft.source == "historical_rewrite" or draft.source in PLAN_CONFLICT_SOURCES
+            or draft.impact_level == "critical"):
         return "human"
     if draft.impact_level == "minor":
         return "auto"
@@ -42,4 +48,4 @@ def route_conflict(draft: ConflictDraft, *, policy: RuntimePolicy) -> ConflictDe
     return "human"
 
 
-__all__ = ["AUTO_OPTION", "available_options", "route_conflict"]
+__all__ = ["AUTO_OPTION", "PLAN_CONFLICT_SOURCES", "available_options", "route_conflict"]

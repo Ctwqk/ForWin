@@ -290,6 +290,10 @@ def create_app(runtime: HttpRuntime | None = None) -> FastAPI:
         broker = runtime.container.generation_services().retrieval_broker
         return broker.resolve_memory_index()
 
+    def provide_plan_amender():
+        container = runtime.container
+        return container.build_plan_amender() if container is not None else None
+
     handlers = register_api_routes(
         app,
         deps=ApiRouteDeps(
@@ -299,6 +303,7 @@ def create_app(runtime: HttpRuntime | None = None) -> FastAPI:
                 render_home_page=render_home_page,
                 get_memory_index=current_memory_index,
                 provide_memory_index=provide_projection_memory_index,
+                provide_plan_amender=provide_plan_amender,
             ),
             task=TaskDeps(
                 service=runtime.task_application,

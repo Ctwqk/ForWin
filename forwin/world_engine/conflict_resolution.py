@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -40,13 +40,18 @@ from forwin.protocol.book_state import ApprovedGraphDeltaSet
 from forwin.runtime.policy import RuntimePolicy
 from forwin.writer.prompt_core.world_engine import world_change_response
 
-from .conflict_repository import ConflictNotOpen, WorldConflictRepository
+from .conflict_repository import ConflictNotOpen, WorldConflictRepository, conflict_result_refs
+from .conflict_routing import PLAN_CONFLICT_SOURCES
 from .conflict_types import ConflictDecision
 from .constraints import check_narrative_boundaries
 from .delta_builder import WorldTickDeltaBuilder
 from .propagation import latest_news_in_transit, propagate_news, tick_events
 from .running_state import RunningStateCheck
 from .types import EffectEvent, NewsItem, TickCandidate, TickContext, WorldEffects, tick_seed
+
+if TYPE_CHECKING:
+    # The amender plans through the band planner, which imports this module.
+    from forwin.planning.amend import PlanAmender
 
 
 # An accepted world change owes the plot a response within this many chapters of the latest one.
@@ -74,6 +79,9 @@ class ConflictResolutionResult:
     plan_patch_id: str
     # The builder's warnings, {code, message}: parts of the change that did not apply.
     warnings: tuple[dict[str, str], ...] = ()
+    # What an amend_plan's amender wrote: the band plan it planned and the beat sheet version it revised.
+    band_plan_id: str = ""
+    beat_sheet_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -418,12 +426,25 @@ def conflict_resolved_event(
 
 
 class ConflictResolutionService:
-    """Resolve one open conflict in the caller's session; the caller commits."""
+    """Resolve one open conflict in the caller's session; the caller commits.
 
-    def __init__(self, session: Session, *, admission: CanonAdmissionService, policy: RuntimePolicy) -> None:
+    ``plan_amender`` carries out amend_plan's planning. Without it amend_plan on a plan conflict is unavailable
+    and a world-tick amend_plan only commits its change. With it an amend_plan resolution commits the session
+    itself before the amender's model calls, so pass a session outside a ``Session.begin()`` block.
+    """
+
+    def __init__(
+        self,
+        session: Session,
+        *,
+        admission: CanonAdmissionService,
+        policy: RuntimePolicy,
+        plan_amender: PlanAmender | None = None,
+    ) -> None:
         self.session = session
         self.admission = admission
         self.policy = policy
+        self.plan_amender = plan_amender
 
     def resolve(self, *, project_id: str, conflict_id: str, decision: ConflictDecision) -> ConflictResolutionResult:
         """Carry out ``decision``: commit its world changes, record its side effects and close the conflict.
@@ -433,12 +454,18 @@ class ConflictResolutionService:
         that canon first: one that no longer holds raises ConflictStale. Everything else lands in one
         SAVEPOINT. ConflictStale and ConflictOptionUnavailable roll it back whole, leaving the conflict
         open and the session usable; any other CanonWriteFailure propagates after the same rollback.
+
+        A plan conflict never takes that path: its only option, amend_plan, plans again (_resolve_plan_conflict).
+        A world-tick amend_plan hands the plan to the amender once its change is committed.
         """
         session = self.session
         repo = WorldConflictRepository(session)
-        row = repo.get(project_id, conflict_id, for_update=True)
-        if row is None:
+        found = repo.get(project_id, conflict_id)
+        if found is None:
             raise LookupError(f"World conflict {conflict_id} not found in project {project_id}")
+        if found.source in PLAN_CONFLICT_SOURCES:
+            return self._resolve_plan_conflict(found, decision)
+        row = repo.get(project_id, conflict_id, for_update=True)
         # FOR NO KEY UPDATE, as canon admission takes it: after the conflict row, as the world tick orders them.
         session.execute(select(Project.id).where(Project.id == project_id).with_for_update(key_share=True))
         if row.status != "open":
@@ -486,11 +513,53 @@ class ConflictResolutionService:
                     f"Conflict {row.id}: chapter {latest} is no longer the latest canon chapter"
                 ) from exc
             raise
-        return ConflictResolutionResult(
+        result = ConflictResolutionResult(
             graph_delta_ids=graph_delta_ids,
             obligation_id=effects.obligation_id,
             plan_patch_id=effects.plan_patch_id,
             warnings=warnings,
+        )
+        if decision.option != "amend_plan" or self.plan_amender is None:
+            return result
+        # Commit the resolution first: neither its conflict row lock nor its project row lock may last
+        # through the amender's model calls.
+        session.commit()
+        amended = self.plan_amender.amend(session, conflict=row, decision=decision, policy=self.policy)
+        return replace(result, band_plan_id=amended.band_plan_id or "", beat_sheet_id=amended.beat_sheet_id or "")
+
+    def _resolve_plan_conflict(
+        self, row: WorldPlanConflictRow, decision: ConflictDecision,
+    ) -> ConflictResolutionResult:
+        """amend_plan on a plan conflict: the amender plans the conflict's band again, then the conflict closes.
+
+        No lock is held through the amender's model calls. The conflict row is locked only to close it, so a
+        concurrent resolution that closed it first leaves the new plan standing and raises ConflictNotOpen. When
+        no band plan could be made, ConflictOptionUnavailable leaves the conflict open; the amender has already
+        committed its traces.
+        """
+        session = self.session
+        if row.status != "open":
+            raise ConflictNotOpen(f"Conflict {row.id} is {row.status}")
+        _check_decision(row, decision)
+        if self.plan_amender is None:
+            raise ConflictOptionUnavailable(f"Conflict {row.id}: amend_plan needs a plan amender; none is configured")
+        amended = self.plan_amender.amend(session, conflict=row, decision=decision, policy=self.policy)
+        if amended.band_plan_id is None:
+            problems = "; ".join(f"{issue.code}: {issue.message}" for issue in amended.issues) or "no band plan"
+            raise ConflictOptionUnavailable(f"Conflict {row.id}: its chapters could not be planned again: {problems}")
+        repo = WorldConflictRepository(session)
+        row = repo.get(row.project_id, row.id, for_update=True)
+        if row.status != "open":
+            raise ConflictNotOpen(f"Conflict {row.id} is {row.status}")
+        repo.mark_resolved(row, decision=decision, result_refs=conflict_result_refs(row))
+        session.add(conflict_resolved_event(
+            row, chapter_number=BookStateRepository(session).latest_canon_chapter(row.project_id) or 0,
+            extra={"band_plan_id": amended.band_plan_id, "beat_sheet_id": amended.beat_sheet_id or ""},
+        ))
+        session.flush()
+        return ConflictResolutionResult(
+            graph_delta_ids=(), obligation_id="", plan_patch_id="", band_plan_id=amended.band_plan_id,
+            beat_sheet_id=amended.beat_sheet_id or "",
         )
 
     def _check_against_canon(

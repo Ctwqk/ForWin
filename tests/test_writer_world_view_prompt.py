@@ -283,7 +283,8 @@ def test_planner_prompts_mark_the_fields_that_reach_the_writer():
         return matches[0]
 
     arguments = {"payload": {}, "digest_text": "digest", "output_schema": {}, "allowed": {}}
-    arc = writer_facing(ARC_BEATS_INSTRUCTIONS, "purpose")
+    # Milestone descriptions become the experience plan's curiosity-beat questions.
+    arc = writer_facing(ARC_BEATS_INSTRUCTIONS, "purpose", "milestones 的 description")
     band = writer_facing(BAND_PLAN_INSTRUCTIONS, "title", "one_line", "goals", "hook")
     for messages, instruction in ((build_arc_beats_messages(**arguments), arc),
                                   (build_band_plan_messages(**arguments), band)):

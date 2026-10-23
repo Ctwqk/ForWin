@@ -10,11 +10,11 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.book_state.knowledge import FACT_REF_PREFIX, KNOWLEDGE_STATES
+from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY, KNOWLEDGE_STATES
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
-from forwin.book_state.reveal_schedule import active_genesis_pack
+from forwin.book_state.reveal_schedule import active_genesis_pack, earliest_reveal_chapters
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.book_state.schema import ACTOR_NODE_TYPES, WORLD_NODE_FIELDS
 from forwin.canon.admission import GENESIS_SEED_SOURCE_TYPE, CanonAdmissionService
@@ -31,6 +31,7 @@ from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
 from forwin.planning.beat_sheet.types import (
     MAX_BAND_CHAPTERS, MIN_BAND_CHAPTERS, PROTECTION_KINDS, READER_OBSERVER, ArcBeatSheetData, BandSpan,
 )
+from forwin.planning.fact_text import stated_facts
 from forwin.planning.world_digest import build_world_digest
 from forwin.protocol.book_state import WorldNode
 from forwin.runtime.policy import RuntimePolicy
@@ -157,6 +158,7 @@ class ArcBeatSheetService:
             payload["revision"] = dict(revision)
         call = self._call(
             payload, digest.text, start=start, end=end, runtime=runtime, actor_ids={actor["id"] for actor in actors},
+            reveal_chapters=earliest_reveal_chapters(session, project_id),
         )
         data, source = call.data, "llm"
         if data is None:
@@ -183,7 +185,7 @@ class ArcBeatSheetService:
 
     def _call(
         self, payload: Mapping[str, Any], digest_text: str, *, start: int, end: int, runtime: BookStateRuntime,
-        actor_ids: Collection[str],
+        actor_ids: Collection[str], reveal_chapters: Mapping[str, int],
     ) -> _BeatSheetCall:
         """Up to ``max_attempts`` calls. A malformed or invalid answer goes back to the model as feedback;
         a provider failure resends the same messages."""
@@ -221,6 +223,7 @@ class ArcBeatSheetService:
             else:
                 call.issues = beat_sheet_issues(
                     parsed, chapter_start=start, chapter_end=end, runtime=runtime, actor_ids=actor_ids,
+                    reveal_chapters=reveal_chapters,
                 )
             mark_latest_attempt_workflow(self.llm_client, attempt_no=attempt_no, stage_key=STAGE_KEY)
             call.attempts.extend(self._drained_attempts(
@@ -319,12 +322,14 @@ class _BeatSheetCall:
 
 def beat_sheet_issues(
     data: ArcBeatSheetData, *, chapter_start: int, chapter_end: int, runtime: BookStateRuntime,
-    actor_ids: Collection[str],
+    actor_ids: Collection[str], reveal_chapters: Mapping[str, int] | None = None,
 ) -> list[str]:
     """Every deterministic problem with the sheet.
 
     The protagonist, milestone requirements and protection and exit-state refs must be actors the prompt offered
     (``actor_ids``); observers must be the reader or active nodes; fact refs must name the runtime's facts.
+    ``reveal_chapters`` (fact node id -> earliest reader reveal chapter) schedules the facts the sheet's own
+    reader targets do not.
     """
     world = runtime.world
     issues = _coverage_issues("phases", [phase.chapter_range for phase in data.phases], chapter_start, chapter_end)
@@ -401,6 +406,42 @@ def beat_sheet_issues(
             issues.append(f"{path}.field is required")
         else:
             state_field(node, item.field, f"{path}.field")
+    issues.extend(_writer_text_issues(data, runtime, reveal_chapters or {}))
+    return issues
+
+
+def _writer_text_issues(
+    data: ArcBeatSheetData, runtime: BookStateRuntime, reveal_chapters: Mapping[str, int],
+) -> list[str]:
+    """Phase purposes and milestone descriptions reach the writer verbatim (Ruling P4a-R21): neither may state a
+    secret or hidden fact, or one the sheet keeps from the reader, before the reader may learn it."""
+    reveal = dict(reveal_chapters)
+    own: dict[str, int] = {}
+    for target in data.reveal_targets:
+        if target.observer == READER_OBSERVER:
+            fact = target.fact_ref.removeprefix(FACT_REF_PREFIX)
+            own[fact] = min(own.get(fact, target.range[0]), target.range[0])
+    # The sheet's own reader targets replace the schedule for their facts.
+    reveal.update(own)
+    protected = {spec.fact_ref.removeprefix(FACT_REF_PREFIX) for spec in data.protections
+                 if spec.kind == "must_not_know" and spec.observer_ref == READER_OBSERVER}
+    concealed = {f"{FACT_REF_PREFIX}{fact.id}": fact.proposition for fact in runtime.world.facts_by_id.values()
+                 if fact.sensitivity_level in HIDDEN_SENSITIVITY or fact.id in protected}
+    texts = [(f"phases[{index}].purpose", phase.purpose, phase.chapter_range[0])
+             for index, phase in enumerate(data.phases)]
+    texts.extend((f"milestones[{index}].description", milestone.description, milestone.target_range[0])
+                 for index, milestone in enumerate(data.milestones))
+    issues = []
+    for path, text, start in texts:
+        for ref in stated_facts([text], concealed):
+            chapter = reveal.get(ref.removeprefix(FACT_REF_PREFIX))
+            if chapter is not None and chapter <= start:
+                continue
+            when = f"the reader may learn only from chapter {chapter}" if chapter is not None else (
+                "has no reader reveal scheduled"
+            )
+            issues.append(f"{path} states the proposition of {ref}, which {when}; it reaches the writer verbatim, "
+                          f"so hint at it instead")
     return issues
 
 

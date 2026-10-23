@@ -12,6 +12,7 @@ from forwin.book_state.story_clock import StoryCalendar, StoryClockError, durati
 from forwin.planning.band_planner.inputs import OfferedRefs, PendingResponse
 from forwin.planning.band_planner.types import BandPlanOutput, ChapterPlanDraft, PlanIssue
 from forwin.planning.beat_sheet.types import READER_OBSERVER
+from forwin.planning.fact_text import normalized_text
 
 
 def band_plan_issues(
@@ -173,8 +174,8 @@ def _is_node_field(node_type: str, field: str) -> bool:
     return section in fields.get("state", set()) | fields.get("profile", set())
 
 
-def _normalized(text: str) -> str:
-    return " ".join(text.split())
+# The planner's one normalizer (Ruling P4a-R21): whitespace never hides a proposition or a goal.
+_normalized = normalized_text
 
 
 def _issue(code: str, chapter_number: int | None, ref: str, message: str) -> PlanIssue:

@@ -989,6 +989,13 @@ justification = "Structured world adjudication and actor-turn instructions; stor
 max_literals = 18
 
 [[entry]]
+path = "forwin/writer/prompt_core/planning.py"
+checks = ["cjk_collection"]
+category = "prompt_text"
+justification = "Eight structural section titles for the author-only planning world digest; all story content comes from BookState and repository fields."
+max_literals = 8
+
+[[entry]]
 path = "forwin/writer/prompt_core/world_repair.py"
 symbol = "WORLD_REPAIR_FIXES"
 checks = ["cjk_collection"]

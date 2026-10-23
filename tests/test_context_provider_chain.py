@@ -257,6 +257,41 @@ def test_world_view_provider_builds_once_with_policy_budget_and_shared_runtime(m
     assert context.arc_phase_purpose == "陆沉逼近旧王遗迹"
 
 
+def test_world_view_failure_fails_the_assembly_and_a_missing_policy_takes_the_default_budget(monkeypatch) -> None:
+    import pytest
+
+    from forwin.runtime.policy import WriterPolicy
+    from forwin.world_view import builder as view_builder
+    from forwin.world_view.types import ChapterWorldView
+
+    budgets = []
+
+    def build(session, *, project_id, chapter_plan, budget_chars, runtime=None):
+        budgets.append(budget_chars)
+        if chapter_plan.pov_ref == "broken":
+            raise RuntimeError("world view failed")
+        return ChapterWorldView()
+
+    monkeypatch.setattr(view_builder, "build_chapter_world_view", build)
+    engine = get_engine(postgres_test_url("context-world-view-failure"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    try:
+        with Session.begin() as session:
+            # A project row without a stored runtime policy.
+            session.add(Project(id="project-1", title="测试书", premise="p", genre="玄幻", setting_summary="s"))
+            session.flush()
+            context = assemble_context(_FakeRepo(session), "project-1", _plan())
+            # The writer never gets a chapter context without its world view.
+            with pytest.raises(RuntimeError, match="world view failed"):
+                assemble_context(_FakeRepo(session), "project-1", _plan(pov_ref="broken"))
+    finally:
+        engine.dispose()
+
+    assert context.world_view == ChapterWorldView()
+    assert budgets == [WriterPolicy().world_view_budget_chars] * 2 == [6000, 6000]
+
+
 def test_context_gates_are_explicit_runner_not_provider_side_effects() -> None:
     from forwin.context.gates.context_integrity_gate import ContextIntegrityGate
     from forwin.context.request import ContextDraft, ContextRequest

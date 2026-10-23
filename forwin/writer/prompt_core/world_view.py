@@ -18,8 +18,11 @@ from forwin.world_view.types import (
 # A forbidden topic names an unrevealed secret's subjects, never its proposition.
 FORBIDDEN_TOPIC_TEMPLATE = "涉及{subjects}的未揭示真相"
 FORBIDDEN_TOPIC_SUBJECT_SEPARATOR = "、"
-# The <<FORWIN_LOCATION>> instruction; the location table lists the ids it accepts.
+# The <<FORWIN_LOCATION>> instruction of the scene prompt; the location table lists the ids it accepts.
 SCENE_LOCATION_INSTRUCTION = "填地点表中的 id，新地点写 new:<名称>"
+LOCATION_TABLE_HEADING = "地点表（id：名称）"
+# Stands in for an actor whose name the writer may not see or that has none; never a node id.
+UNNAMED_ACTOR_LABEL = "一名未具名的角色"
 # Knowledge states (book_state.knowledge.KNOWLEDGE_STATES) as the writer reads them.
 KNOWLEDGE_STATE_LABELS = {
     "heard": "听说",
@@ -50,7 +53,7 @@ def view_location_rows(view: ChapterWorldView) -> list[ViewLocation]:
 
 def render_world_view(view: ChapterWorldView) -> str:
     """The view as the writer reads it; the view's builder trims to fit this text in its budget."""
-    pov = view.pov_name or view.pov_ref
+    pov = _pov_label(view) if view.pov_ref else ""
     location = view.pov_location
     lines = [
         "【POV 世界视图】",
@@ -70,10 +73,7 @@ def render_world_view(view: ChapterWorldView) -> str:
         lines, "禁止定论的话题（不要给出确定答案，也不要编造真相）",
         [topic.topic for topic in view.forbidden_topics],
     )
-    _extend(
-        lines, f"地点表（{SCENE_LOCATION_INSTRUCTION}）",
-        [_location_row(row, view.pov_location) for row in view_location_rows(view)],
-    )
+    _extend(lines, LOCATION_TABLE_HEADING, [_location_row(row, view.pov_location) for row in view_location_rows(view)])
     _extend(lines, "POV 知道的时限", [_clock_row(clock) for clock in view.pov_clocks])
     return "\n".join(lines)
 
@@ -94,17 +94,29 @@ def _state_label(state: str) -> str:
     return KNOWLEDGE_STATE_LABELS.get(state, state)
 
 
+def _pov_label(view: ChapterWorldView) -> str:
+    return view.pov_name or UNNAMED_ACTOR_LABEL
+
+
+def _onstage_label(entity: OnstageEntity) -> str:
+    """How the writer refers to an onstage entity: a concealed one only by its public identity."""
+    if entity.concealed or not entity.name:
+        return entity.public_identity or UNNAMED_ACTOR_LABEL
+    return entity.name
+
+
 def _onstage_row(entity: OnstageEntity) -> str:
+    label = _onstage_label(entity)
     details = [
         f"位置 {entity.location_name}" if entity.location_name else "",
         f"生死 {entity.alive_status}" if entity.alive_status else "",
         f"束缚 {entity.restraint}" if entity.restraint else "",
         f"伤势 {entity.health}" if entity.health else "",
-        f"公开身份 {entity.public_identity}" if entity.public_identity else "",
+        f"公开身份 {entity.public_identity}" if entity.public_identity and entity.public_identity != label else "",
         f"随身 {'、'.join(entity.held_items)}" if entity.held_items else "",
     ]
     shown = "；".join(detail for detail in details if detail)
-    return f"{entity.name or entity.ref}：{shown}" if shown else entity.name or entity.ref
+    return f"{label}：{shown}" if shown else label
 
 
 def _knowledge_row(fact: KnownFact) -> str:
@@ -125,10 +137,10 @@ def _reveal_row(view: ChapterWorldView, reveal: AllowedReveal) -> str:
     if view.pov_ref and reveal.observer == view.pov_ref:
         # In close third person the POV learning a truth tells the reader too: perception only.
         return (
-            f"{view.pov_name or view.pov_ref}本章{state}{reveal.topic}："
+            f"{_pov_label(view)}本章{state}{reveal.topic}："
             "只写 POV 察觉到的迹象与反应，不要向读者说出真相内容"
         )
-    return f"{reveal.observer_name or reveal.observer}本章{state}：{reveal.proposition}；本章不得向读者明示"
+    return f"{reveal.observer_name or UNNAMED_ACTOR_LABEL}本章{state}：{reveal.proposition}（本章不得向读者明示）"
 
 
 def _location_row(location: ViewLocation, pov_location: ViewLocation | None) -> str:
@@ -150,7 +162,9 @@ __all__ = [
     "FORBIDDEN_TOPIC_SUBJECT_SEPARATOR",
     "FORBIDDEN_TOPIC_TEMPLATE",
     "KNOWLEDGE_STATE_LABELS",
+    "LOCATION_TABLE_HEADING",
     "SCENE_LOCATION_INSTRUCTION",
+    "UNNAMED_ACTOR_LABEL",
     "_world_view_section",
     "forbidden_topic_text",
     "render_world_view",

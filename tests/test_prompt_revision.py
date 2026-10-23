@@ -30,6 +30,7 @@ EXPECTED_PROMPT_REVISIONS = {
     "scene_breakdown_basic": "f850d8f67a2ab110",
     "single_final_chapter": "99ba13c66fc3b92d",
     "single_obligation_visible": "e2d92a093b20360c",
+    "single_world_view": "e265894506eae8c9",
 }
 
 
@@ -107,7 +108,7 @@ def test_prompt_regression_fixtures_have_stable_revision_hashes() -> None:
     """Update workflow: regenerate snapshots only after reviewing the prompt diff intentionally."""
     cases = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
-    assert len(cases) == 10
+    assert len(cases) == 11
     observed: dict[str, str] = {}
     for case in cases:
         messages = _build_messages(case)

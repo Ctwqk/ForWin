@@ -107,7 +107,9 @@ def build_chapter_world_view(
                        chapter_number=chapter_number)
     relevant_refs = {pov_ref, *(entity.ref for entity in onstage), *location_refs} - {""}
 
-    allowed = _allowed_reveals(runtime, _directives(chapter_plan.reveal_directives_json), chapter_number)
+    allowed = _allowed_reveals(
+        runtime, _directives(chapter_plan.reveal_directives_json), chapter_number, pov_ref=pov_ref,
+    )
     hint_directives = _directives(chapter_plan.hint_directives_json)
     knowledge, reader_known, forbidden, secret_refs = _fact_parts(
         runtime,
@@ -176,9 +178,9 @@ def _fact_of(facts_by_id: Mapping[str, FactNode], ref: Any) -> FactNode | None:
 
 
 def _allowed_reveals(
-    runtime: BookStateRuntime, directives: list[Mapping[str, Any]], chapter_number: int,
+    runtime: BookStateRuntime, directives: list[Mapping[str, Any]], chapter_number: int, *, pov_ref: str,
 ) -> list[AllowedReveal]:
-    """Directives with an observer and a known fact; the observer's name only for an actor."""
+    """Directives with an observer and a known fact; the observer's name only for an actor it does not conceal."""
     world = runtime.world
     allowed: list[AllowedReveal] = []
     for item in directives:
@@ -192,12 +194,20 @@ def _allowed_reveals(
                            chapter_number, item.get("id"), item.get("fact_ref"))
             continue
         node = world.get_node(observer)
+        names = _subject_names(runtime, fact)
+        if observer == pov_ref and not names:
+            # The POV's reveal renders by its topic alone, so the writer learns only that something happens.
+            logger.warning("Chapter %s reveal directive %r to the POV has no nameable subject to name it by",
+                           chapter_number, item.get("id"))
         allowed.append(AllowedReveal(
             directive_id=str(item.get("id") or ""), fact_ref=f"{FACT_REF_PREFIX}{fact.id}",
             proposition=fact.proposition, observer=observer,
-            observer_name=node.name if node is not None and str(node.node_type) in ACTOR_NODE_TYPES else "",
+            observer_name=(
+                node.name if node is not None and str(node.node_type) in ACTOR_NODE_TYPES
+                and not _concealed(world, node) else ""
+            ),
             target_state=str(item.get("target_state") or ""),
-            topic=forbidden_topic_text(names) if (names := _subject_names(runtime, fact)) else "",
+            topic=forbidden_topic_text(names) if names else "",
         ))
     return allowed
 
@@ -371,9 +381,11 @@ def _onstage(
         restraint = state.get("restraint")
         restraint = restraint.get("state") if isinstance(restraint, dict) else restraint
         location = runtime.map.nodes_by_id.get(resolve_world_node_location_id(world, ref))
+        concealed = ref != pov_ref and _concealed(world, node)
         entities.append(OnstageEntity(
             ref=ref,
-            name=node.name,
+            name="" if concealed else node.name,
+            concealed=concealed,
             location_name=location.name if location is not None else "",
             alive_status=_text(state.get("alive_status")),
             restraint="" if restraint in (None, "", "free") else _text(restraint),

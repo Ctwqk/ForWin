@@ -307,18 +307,21 @@ def _previous_summaries_section(context: ChapterContextPack, *, limit: int) -> s
 
 
 def _active_entities_section(context: ChapterContextPack, *, limit: int) -> str | None:
-    """Names from the world view only: its onstage entities, then up to ``limit`` the POV knows of."""
+    """Proper names from the world view only: its onstage entities, then up to ``limit`` the POV knows of.
+
+    Characters, groups, places and items alike; a concealed onstage entity is not named.
+    """
     view = getattr(context, "world_view", None)
     if view is None:
         return None
-    lines = [f"  · {entity.name}（在场）" for entity in view.onstage if entity.name]
+    lines = [f"  · {entity.name}（在场）" for entity in view.onstage if entity.name and not entity.concealed]
     lines.extend(
         f"  · {entity.name}" + (f"（别名：{'、'.join(entity.aliases)}）" if entity.aliases else "")
         for entity in view.known_entities[:limit]
     )
     if not lines:
         return None
-    return "【当前允许命名角色】\n" + "\n".join(lines)
+    return "【当前允许使用的专名】\n" + "\n".join(lines)
 
 
 def _personality_context_section(context: ChapterContextPack, *, limit: int = 6) -> str | None:
@@ -363,7 +366,9 @@ def _personality_context_section(context: ChapterContextPack, *, limit: int = 6)
 
 def _subworld_control_section(context: ChapterContextPack) -> str | None:
     view = getattr(context, "world_view", None)
-    onstage_names = [entity.name for entity in view.onstage if entity.name] if view is not None else []
+    onstage_names = (
+        [entity.name for entity in view.onstage if entity.name and not entity.concealed] if view is not None else []
+    )
     if not any(
         (
             getattr(context, "active_subworlds", None),
@@ -391,7 +396,7 @@ def _subworld_control_section(context: ChapterContextPack) -> str | None:
         lines.append(f"  · 准入模式：{context.entity_admission_rule}")
     lines.extend(
         [
-            "  · 规则1：命名人物只能使用本章出场名单与【当前允许命名角色】里的名字。",
+            "  · 规则1：命名人物只能使用本章出场名单与【当前允许使用的专名】里的名字。",
             "  · 规则2：若要引入新命名人物，只能使用上面的 chapter_entry_targets。",
             "  · 规则3：可以写无名泛称路人，但不要把无名角色写成新的专名人物。",
             "  · 规则4：不得把前情中已经出现的姓名扩写、替换或另造别名，必须逐字沿用上下文中的写法。",

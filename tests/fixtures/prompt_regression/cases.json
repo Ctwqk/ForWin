@@ -236,5 +236,149 @@
         ]
       }
     }
+  },
+  {
+    "case_id": "single_world_view",
+    "builder": "single",
+    "context": {
+      "project_id": "prompt-regression",
+      "project_title": "星门档案",
+      "premise": "主角：陈星，空间站事故调查员。",
+      "genre": "科幻悬疑",
+      "setting_summary": "近未来轨道城和失联空间站。",
+      "chapter_number": 7,
+      "chapter_plan_title": "第二舱段",
+      "chapter_plan_one_line": "陈星与韩遥进入第二舱段。",
+      "chapter_goals": [
+        "进入第二舱段",
+        "找到黑匣子的去向"
+      ],
+      "chapter_plan_hook": "舱门在两人身后自行锁死。",
+      "arc_phase_purpose": "把调查推进到空间站深处，让主角第一次正面承受失联事件的代价。",
+      "world_view": {
+        "pov_ref": "char-chen",
+        "pov_name": "陈星",
+        "onstage": [
+          {
+            "ref": "char-chen",
+            "name": "陈星",
+            "location_name": "第二舱段入口",
+            "alive_status": "alive",
+            "public_identity": "事故调查员",
+            "held_items": [
+              "手电"
+            ]
+          },
+          {
+            "ref": "char-han",
+            "name": "韩遥",
+            "location_name": "第二舱段入口",
+            "alive_status": "alive",
+            "health": "左臂擦伤"
+          },
+          {
+            "ref": "char-masked",
+            "concealed": true,
+            "public_identity": "戴面罩的维修工"
+          }
+        ],
+        "known_entities": [
+          {
+            "ref": "org-ring",
+            "name": "环轨管理局",
+            "aliases": [
+              "管理局"
+            ]
+          }
+        ],
+        "pov_knowledge": [
+          {
+            "fact_ref": "fact:f-log",
+            "proposition": "失联前最后一份日志被人删改过。",
+            "state": "knows",
+            "pov_only_secret": true
+          },
+          {
+            "fact_ref": "fact:f-air",
+            "proposition": "第二舱段已经完全失压。",
+            "state": "believes",
+            "pov_believes_false": true
+          },
+          {
+            "fact_ref": "fact:f-noise",
+            "proposition": "环廊深处有规律的敲击声。",
+            "state": "heard"
+          }
+        ],
+        "reader_known": [
+          "fact:f-signal: 空间站仍在发出异常信号。"
+        ],
+        "allowed_reveals": [
+          {
+            "directive_id": "d-box",
+            "fact_ref": "fact:f-box",
+            "proposition": "黑匣子被人转移到了第三舱段。",
+            "observer": "reader",
+            "target_state": "suspects",
+            "topic": "涉及黑匣子的未揭示真相"
+          },
+          {
+            "directive_id": "d-han",
+            "fact_ref": "fact:f-han",
+            "proposition": "管理局曾命令韩遥封存事故记录。",
+            "observer": "char-han",
+            "observer_name": "韩遥",
+            "target_state": "knows",
+            "topic": "涉及韩遥、环轨管理局的未揭示真相"
+          }
+        ],
+        "hints": [
+          {
+            "directive_id": "h-drag",
+            "hint_text": "舱壁上有新近的拖拽痕迹。"
+          }
+        ],
+        "forbidden_topics": [
+          {
+            "fact_ref": "fact:f-masked",
+            "topic": "涉及戴面罩的维修工的未揭示真相"
+          }
+        ],
+        "locations": [
+          {
+            "id": "map-gate",
+            "name": "第二舱段入口",
+            "minutes_from_pov": 0
+          },
+          {
+            "id": "map-hub",
+            "name": "中枢环廊",
+            "minutes_from_pov": 25
+          },
+          {
+            "id": "map-third",
+            "name": "第三舱段"
+          }
+        ],
+        "pov_location": {
+          "id": "map-gate",
+          "name": "第二舱段入口",
+          "minutes_from_pov": 0
+        },
+        "now_label": "第3日21时",
+        "expected_span_label": "2时",
+        "pov_clocks": [
+          {
+            "label": "氧气余量",
+            "remaining_label": "5时"
+          },
+          {
+            "label": "撤离窗口",
+            "remaining_label": "1日",
+            "secret": true
+          }
+        ]
+      }
+    }
   }
 ]

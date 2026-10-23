@@ -13,7 +13,10 @@ class OnstageEntity(_ViewModel):
     """What anyone in the scene can perceive of one onstage entity."""
 
     ref: str
+    # Empty for a concealed entity: the writer sees it only by its public identity.
     name: str = ""
+    # Its visibility level is hidden or secret; never the POV itself.
+    concealed: bool = False
     location_name: str = ""
     alive_status: str = ""
     # The restraint state token; empty when free.

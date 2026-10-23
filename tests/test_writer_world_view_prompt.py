@@ -17,8 +17,16 @@ from forwin.writer.prompt_core import (
     build_scene_stitch_prompt,
     build_single_chapter_draft_prompt,
 )
+from forwin.writer.prompt_core.planning import (
+    ARC_BEATS_INSTRUCTIONS,
+    BAND_PLAN_INSTRUCTIONS,
+    build_arc_beats_messages,
+    build_band_plan_messages,
+)
 from forwin.writer.prompt_core.world_view import (
+    LOCATION_TABLE_HEADING,
     SCENE_LOCATION_INSTRUCTION,
+    UNNAMED_ACTOR_LABEL,
     _world_view_section,
     forbidden_topic_text,
     render_world_view,
@@ -155,7 +163,7 @@ def test_world_view_section_renders_reveals_by_observer(source):
     )
     # An actor learns it; the reader is not told.
     assert line("truth-of-actor-revealed") == (
-        "    · ally-name本章确知：truth-of-actor-revealed；本章不得向读者明示"
+        "    · ally-name本章确知：truth-of-actor-revealed（本章不得向读者明示）"
     )
     # The POV learning a secret is perception only: its topic, never its truth.
     pov_line = line("hero-name本章怀疑")
@@ -181,12 +189,18 @@ def test_scene_location_marker_lists_view_location_ids(source):
 
     assert f"<<FORWIN_LOCATION>>\n{SCENE_LOCATION_INSTRUCTION}\n" in text
     assert SCENE_LOCATION_INSTRUCTION == "填地点表中的 id，新地点写 new:<名称>"
-    table = text[text.index("地点表"):].splitlines()
+    table = text[text.index(LOCATION_TABLE_HEADING):].splitlines()
+    assert table[0] == f"{LOCATION_TABLE_HEADING}："
     assert table[1] == "    · home：home-name（POV 所在）"
     assert table[2] == "    · chapter-place：chapter-place-name（POV 约 360 分钟可达）"
     full = _prompt("scene_generation", _context(_build(source)))
     assert "    · n0：n0-name（POV 约 30 分钟可达）" in full
     assert "沿用当前地点\n<<FORWIN_ENTITIES>>" not in text
+    # Only the scene prompt has a <<FORWIN_LOCATION>> output; the others show a neutral table.
+    for builder in BUILDERS:
+        prompt = _prompt(builder, _context(view))
+        assert LOCATION_TABLE_HEADING in prompt
+        assert prompt.count(SCENE_LOCATION_INSTRUCTION) == (builder == "scene_generation")
 
 
 def test_single_prompt_renders_canon_quality_once():
@@ -209,14 +223,72 @@ def test_named_entities_come_from_the_view(source):
                             description="villain-description", current_state={})
     text = _prompt("single", _context(view, active_entities=[hidden], allowed_entities=["villain-name"]))
 
-    section = text[text.index("【当前允许命名角色】"):].split("\n\n", 1)[0].splitlines()
+    section = text[text.index("【当前允许使用的专名】"):].split("\n\n", 1)[0].splitlines()
     assert section[1:4] == ["  · hero-name（在场）", "  · ally-name（在场）", "  · known-0（别名：alias-0）"]
     # The single prompt lists six of the POV's known entities after the onstage ones.
     assert len(section) == 1 + 2 + 6
+    assert "命名人物只能使用本章出场名单与【当前允许使用的专名】里的名字" in text
     admission = text[text.index("【人物准入规则】"):].split("\n\n", 1)[0]
     assert "本章出场名单：hero-name、ally-name" in admission
     assert "villain" not in text
     assert _prompt("single", _context(None, active_entities=[hidden])).count("villain") == 0
+
+
+def test_concealed_and_unnamed_actors_are_never_named(source, caplog):
+    from forwin.protocol.book_state import WorldNode
+
+    world = source.runtime.world
+    for ref, identity in (("hooded", "hooded-identity"), ("shade", "")):
+        world.add_node(WorldNode(id=ref, project_id="p", node_type="character", name=f"{ref}-name",
+                                 profile={"public_identity": identity}, state={"visibility_level": "secret"}))
+    world.add_node(WorldNode(id="guild", project_id="p", node_type="institution", name="guild-name"))
+    reveals = [
+        {"id": "d-hooded", "fact_ref": "fact:actor-revealed", "observer": "hooded", "target_state": "knows"},
+        {"id": "d-guild", "fact_ref": "fact:revealed", "observer": "guild", "target_state": "knows"},
+        {"id": "d-pov-bare", "fact_ref": "fact:pov-revealed", "observer": "hero", "target_state": "knows"},
+    ]
+    view = _build(source, plan=_plan(onstage_refs_json=json.dumps(["hero", "ally", "hooded", "shade"]),
+                                     reveal_directives_json=json.dumps(reveals)))
+    assert [(entity.ref, entity.name, entity.concealed) for entity in view.onstage] == [
+        ("hero", "hero-name", False), ("ally", "ally-name", False), ("hooded", "", True), ("shade", "", True),
+    ]
+    # A POV reveal whose fact has no nameable subject is logged: its row cannot say what it concerns.
+    assert any("d-pov-bare" in record.message and "nameable" in record.message for record in caplog.records)
+
+    for builder in BUILDERS:
+        text = _prompt(builder, _context(view))
+        for name in ("hooded-name", "shade-name", "guild"):
+            assert name not in text, (builder, name)
+    lines = render_world_view(view).splitlines()
+    # Onstage by public identity, or the neutral label; reveal observers by the label, never an id.
+    assert "    · hooded-identity" in lines and f"    · {UNNAMED_ACTOR_LABEL}" in lines
+    assert f"    · {UNNAMED_ACTOR_LABEL}本章确知：truth-of-actor-revealed（本章不得向读者明示）" in lines
+    assert f"    · {UNNAMED_ACTOR_LABEL}本章确知：truth-of-revealed（本章不得向读者明示）" in lines
+    text = _prompt("single", _context(view))
+    assert "本章出场名单：hero-name、ally-name\n" in text
+    named = text[text.index("【当前允许使用的专名】"):].split("\n\n", 1)[0]
+    assert "hooded-identity" not in named and UNNAMED_ACTOR_LABEL not in named
+    # A POV without a name is the label too.
+    assert f"  · 视角人物：{UNNAMED_ACTOR_LABEL}（按此人的视角叙述）" in render_world_view(
+        ChapterWorldView(pov_ref="hero")).splitlines()
+
+
+def test_planner_prompts_mark_the_fields_that_reach_the_writer():
+    """The beat-sheet and band-plan LLMs see secrets; the fields the writer reads verbatim say so."""
+
+    def writer_facing(instructions, *fields):
+        matches = [item for item in instructions if "原样交给写作者" in item and all(f in item for f in fields)]
+        assert len(matches) == 1
+        assert "秘密" in matches[0]
+        return matches[0]
+
+    arguments = {"payload": {}, "digest_text": "digest", "output_schema": {}, "allowed": {}}
+    arc = writer_facing(ARC_BEATS_INSTRUCTIONS, "purpose")
+    band = writer_facing(BAND_PLAN_INSTRUCTIONS, "title", "one_line", "goals", "hook")
+    for messages, instruction in ((build_arc_beats_messages(**arguments), arc),
+                                  (build_band_plan_messages(**arguments), band)):
+        system = next(message["content"] for message in messages if message["role"] == "system")
+        assert instruction in system
 
 
 def test_personality_section_only_onstage():
@@ -234,8 +306,10 @@ def test_personality_section_only_onstage():
     draft = ContextDraft(data={
         "allowed_entities": ["hero-name", "ally-name", "villain-name"],
         "book_state_overlay": {"personality_characters": characters},
+        # The concealed villain is onstage but its context would name it.
         "world_view": ChapterWorldView(onstage=[OnstageEntity(ref="ally", name="ally-name"),
-                                                OnstageEntity(ref="hero", name="hero-name")]),
+                                                OnstageEntity(ref="hero", name="hero-name"),
+                                                OnstageEntity(ref="villain", concealed=True)]),
     })
     request = ContextRequest(project_id="p", chapter_plan=None, repo=None)
 

@@ -14,9 +14,10 @@ class PersonalityContextProvider:
     def contribute(self, request: ContextRequest, draft: ContextDraft) -> None:
         active_personality_contexts: list[dict] = []
         library = draft.data.setdefault("personality_library", CharacterPersonalityLibrary())
-        # Only the chapter's onstage characters, as the world view resolved them.
+        # Only the chapter's onstage characters, as the world view resolved them; the section names
+        # each one, so a concealed character stays out.
         view = draft.data.get("world_view")
-        onstage_refs = {entity.ref for entity in view.onstage} if view is not None else set()
+        onstage_refs = {entity.ref for entity in view.onstage if not entity.concealed} if view is not None else set()
         try:
             active_personality_contexts = [
                 item.model_dump(mode="json")

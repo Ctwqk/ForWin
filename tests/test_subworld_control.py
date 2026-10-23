@@ -643,7 +643,7 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertIn("本章出场名单：阿青", content)
         self.assertNotIn("未出场者", content)
         self.assertIn("沈知遥", content)
-        self.assertIn("命名人物只能使用本章出场名单与【当前允许命名角色】里的名字", content)
+        self.assertIn("命名人物只能使用本章出场名单与【当前允许使用的专名】里的名字", content)
 
     def test_writer_prompt_includes_recent_thread_beats_without_deriving_name_anchors(self) -> None:
         context = SimpleNamespace(

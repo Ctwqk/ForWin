@@ -103,6 +103,10 @@ Protection, milestone and reveal-schedule boundary conflicts offer only veto/ame
 
 The code schema head is `0005_world_plan_conflicts` (parent `0004_drop_parallel_ledgers`); this is not evidence that a running server has deployed it. Explicit P4 deferrals are protection producers, critical/milestone producers, `rewrite_chapter` (never offered in P3), `world.drift`, and `checkable` evaluation. P3 also defers a delta-only re-tick and re-reasoning retained ticks' open conflicts after a latest-chapter rewrite, builder `runtime=` reuse and re-queuing forbidden news deliveries; an already-ticked rewrite receives no new tick news for its own events. M7 (P10 extension) defers CAS checks for retained ticks' references to refs created by a replaced chapter. M10 defers showing the held change on console conflict cards; inspect `proposed_change` with `world_conflict_get` before deciding. See [current architecture](../Design-docs/CURRENT_ARCHITECTURE.md) for the full P4 list.
 
+### Post-Canon Comment Analysis
+
+Reader-comment analysis runs before post-Canon feedback aggregation. `FORWIN_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS` retains its existing name and defaults to 20 seconds; a failed or timed-out optional model call falls back to comment-language cues. Pulp uses keyword analysis only; standard uses the LLM when available.
+
 ### Safe Stop
 
 1. Call `task_get` or `task_list` to identify the active generation task.
@@ -148,4 +152,3 @@ Run the focused operator and Codex integration tests from the repository virtual
   -q
 ```
 
-Reader-comment analysis runs before post-Canon feedback aggregation. `FORWIN_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS` retains its existing name and defaults to 20 seconds; a failed or timed-out optional model call falls back to comment-language cues.

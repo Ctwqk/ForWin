@@ -9,8 +9,6 @@ GateDelegate = Literal["human", "spark"]
 WorldConflictDelegate = Literal["codex", "human"]
 BandCheckpointAction = Literal["continue", "pause_on_warn", "pause_always"]
 
-_PLANNING_PROFILE_KNOBS = ("band_size", "max_replans_per_band", "digest_budget_chars")
-
 
 class FrozenPolicyModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -90,6 +88,11 @@ class PlanningPolicy(FrozenPolicyModel):
             plan_health=True,
             context_recency_window=0,
         )
+
+
+_PLANNING_PROFILE_KNOBS = tuple(
+    name for name, field in PlanningPolicy.model_fields.items() if not field.is_required()
+)
 
 
 class WriterPolicy(FrozenPolicyModel):

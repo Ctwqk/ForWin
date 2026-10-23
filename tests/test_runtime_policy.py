@@ -3,7 +3,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from forwin.runtime.policy import CanonPolicy, ReviewPolicy, RuntimePolicy, WorldPolicy, role_models
+from forwin.runtime.policy import CanonPolicy, PlanningPolicy, ReviewPolicy, RuntimePolicy, WorldPolicy, role_models
 
 
 @pytest.mark.parametrize(
@@ -89,8 +89,9 @@ def test_planning_and_writer_knobs_accept_boundaries(
 def test_stored_policy_without_new_sections_loads(profile, expected) -> None:
     stored = RuntimePolicy.for_profile(profile).model_dump(mode="json")
     stored.pop("writer", None)
-    for field in ("band_size", "max_replans_per_band", "digest_budget_chars"):
-        stored["planning"].pop(field, None)
+    for name, field in PlanningPolicy.model_fields.items():
+        if not field.is_required():
+            stored["planning"].pop(name, None)
     stored["planning"]["context_recency_window"] = 73
     original = json.dumps(stored)
 

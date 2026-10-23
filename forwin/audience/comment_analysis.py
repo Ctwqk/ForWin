@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 import logging
 import os
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from forwin.audience.feedback import (
 from forwin.models import (
     CommentSignalCandidate,
     PublisherRawComment,
+    Project,
     new_id,
 )
 from forwin.utils import parse_llm_json
@@ -491,6 +492,42 @@ def aggregate_and_level_signals(
     return result
 
 
+def analyze_recent_comments(
+    session: Session,
+    project_id: str,
+    *,
+    analyzer: Callable[..., list[CommentSignalCandidate]],
+    limit: int = 8,
+) -> list[CommentSignalCandidate]:
+    """Analyze recent comments with a caller-bound CommentAnalyzer method."""
+    project = session.get(Project, project_id)
+    if project is None:
+        raise ValueError(f"Project not found: {project_id}")
+    title = str(project.title or "").strip()
+    if not title:
+        return []
+    has_scoped_comments = session.scalar(
+        select(PublisherRawComment.id).where(
+            PublisherRawComment.project_id == project_id,
+        ).limit(1)
+    ) is not None
+    stmt = select(PublisherRawComment)
+    if has_scoped_comments:
+        stmt = stmt.where(PublisherRawComment.project_id == project_id)
+    else:
+        stmt = stmt.where(
+            PublisherRawComment.project_id.in_((project_id, "")),
+            PublisherRawComment.work_name == title,
+        )
+    comments = session.scalars(stmt.order_by(
+        PublisherRawComment.synced_at.desc(),
+        PublisherRawComment.updated_at.desc(),
+    ).limit(limit)).all()
+    if not comments:
+        return []
+    return analyzer(session=session, project_id=project_id, comments=comments)
+
+
 def build_reader_feedback_snapshot(
     session: Session,
     project_title: str,
@@ -499,9 +536,6 @@ def build_reader_feedback_snapshot(
     chapter_number: int = 0,
     before_chapter: int | None = None,
     limit: int = 6,
-    llm_client=None,
-    analyze_missing: bool = False,
-    analyzer: CommentAnalyzer | None = None,
     allowed_chapter_titles: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     empty_snapshot = {
@@ -569,15 +603,6 @@ def build_reader_feedback_snapshot(
     )
     if not rows:
         return empty_snapshot
-
-    if analyze_missing and project_id:
-        analyzer = analyzer or CommentAnalyzer(llm_client=llm_client)
-        analyzer.analyze_and_store(
-            session=session,
-            project_id=project_id,
-            comments=rows,
-            chapter_number=chapter_number or max((before_chapter or 1) - 1, 0),
-        )
 
     signal_rows: list[CommentSignalCandidate] = []
     aggregated_signals: dict[str, dict[str, Any]] = {}

@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+from functools import partial
 import math
 import threading
 from typing import TYPE_CHECKING, Any
@@ -34,7 +35,7 @@ from forwin.observability.llm_trace import build_llm_decision_event_payloads, pr
 from forwin.observability.payloads import safe_error_summary
 from forwin.planning.stage_analysis import save_stage_analysis
 from forwin.runtime.policy_store import ProjectPolicyStore
-from forwin.audience.comment_analysis import build_reader_feedback_snapshot
+from forwin.audience.comment_analysis import analyze_recent_comments
 from forwin.state.updater import StateUpdater
 
 if TYPE_CHECKING:
@@ -965,17 +966,13 @@ class PostCanonMaintenanceService:
         session: Session,
         commit: CanonCommitRecord,
     ) -> Mapping[str, Any]:
-        project = session.get(Project, commit.project_id)
-        if project is None:
-            raise ValueError(f"Project not found: {commit.project_id}")
-        build_reader_feedback_snapshot(
+        analyze_recent_comments(
             session,
-            project.title,
-            project_id=commit.project_id,
-            chapter_number=commit.chapter_number,
-            limit=8,
-            analyze_missing=True,
-            analyzer=self.comment_analyzer,
+            commit.project_id,
+            analyzer=partial(
+                self.comment_analyzer.analyze_and_store,
+                chapter_number=commit.chapter_number,
+            ),
         )
         result = run_feedback_aggregation_pass(
             session,
@@ -1025,6 +1022,7 @@ class PostCanonMaintenanceService:
                     },
                     "attempts": comment_attempts,
                 },
+                artifact_store=self.artifact_store,
             )
         return enqueue_trace_upload(
             session,

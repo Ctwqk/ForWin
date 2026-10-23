@@ -364,7 +364,10 @@ class RuntimeContainer:
                 subworld_manager=subworld_manager,
             )
             llm_available = bool(model_profile.api_key) or infrastructure.codex_enabled
-            comment_analyzer = CommentAnalyzer(llm_client=llm_client if llm_available else None)
+            comment_analyzer = CommentAnalyzer(
+                llm_client=llm_client
+                if policy.quality_profile == "standard" and llm_available else None
+            )
             planning_service = PlanningService.build_default(
                 director=arc_director,
                 subworld_manager=subworld_manager,
@@ -562,7 +565,10 @@ class RuntimeContainer:
                 subworld_manager=subworld_manager,
             )
             llm_available = _llm_available(infrastructure, policy)
-            comment_analyzer = CommentAnalyzer(llm_client=llm_client if llm_available else None)
+            comment_analyzer = CommentAnalyzer(
+                llm_client=llm_client
+                if policy.quality_profile == "standard" and llm_available else None
+            )
             planning_service = PlanningService.build_default(
                 director=arc_director,
                 subworld_manager=subworld_manager,

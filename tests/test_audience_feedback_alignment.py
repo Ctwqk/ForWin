@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import json
 import unittest
+from datetime import datetime
+from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
-from sqlalchemy import inspect, select
+import pytest
+from sqlalchemy import create_engine, inspect, select
+from sqlalchemy.orm import Session
 from tests_support import capture_select_statements
 
 from forwin.models import (
+    Base,
+    DecisionEvent,
+    OutboxEvent,
+    PromptTrace,
     ChapterPlan,
     CommentSignalCandidate,
     FeedbackActionRecord,
@@ -19,15 +28,26 @@ from forwin.models import (
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.audience.feedback import (
+    FeedbackCooldown,
     classify_signal_level,
+    derive_action_effectiveness,
+    estimate_reader_scale,
     derive_audience_trends,
     run_feedback_aggregation_pass,
     score_signal_aggregate_v1,
 )
 from forwin.arc_sizing import policy_for_total_chapters
-from forwin.planning.arc_envelope import ArcEnvelopeManager
+from forwin.planning.arc_envelope import ArcEnvelopeManager, ArcStructureDraftData
+from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
 from forwin.planning.stage_analysis import PacingStrategist
+from forwin.audience import comment_analysis
 from forwin.audience.comment_analysis import CommentAnalyzer
+from forwin.config import InfrastructureConfig
+from forwin.runtime import container as container_module
+from forwin.runtime.container import RuntimeContainer
+from forwin.maintenance.post_canon import PostCanonMaintenanceService
+from forwin.runtime.policy import RuntimePolicy
+from forwin.storage import ArtifactStore
 from forwin.publishers.manager import PublisherManager
 from forwin.state.repo import StateRepository
 from tests.postgres import postgres_test_url
@@ -121,31 +141,6 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.session.flush()
         return row
 
-    def test_feedback_step_analyzes_new_comments_before_aggregation(self) -> None:
-        from types import SimpleNamespace
-        from forwin.maintenance.post_canon import PostCanonMaintenanceService
-
-        project = self._create_project()
-        comment = self._add_comment(
-            project_id=project.id, work_name=project.title, body="剧情有逻辑矛盾",
-            remote_comment_id="new-feedback", author_id="reader-1", author_name="reader",
-        )
-        service = object.__new__(PostCanonMaintenanceService)
-        service.comment_analyzer = CommentAnalyzer(llm_client=None)
-        commit = SimpleNamespace(project_id=project.id, chapter_number=1)
-        result = service._run_feedback_step(self.session, commit)
-        candidates = self.session.scalars(select(CommentSignalCandidate).where(
-            CommentSignalCandidate.source_comment_id == comment.id,
-        )).all()
-        self.assertTrue(candidates)
-        self.assertTrue(all(row.chapter_number == 1 for row in candidates))
-        self.assertGreater(result["aggregate_count"], 0)
-        ids = [row.id for row in candidates]
-        service._run_feedback_step(self.session, commit)
-        self.assertEqual(self.session.scalars(select(CommentSignalCandidate.id).where(
-            CommentSignalCandidate.source_comment_id == comment.id,
-        )).all(), ids)
-
     def _add_signal(
         self,
         *,
@@ -174,6 +169,28 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.session.add(row)
         self.session.flush()
         return row
+
+    def test_feedback_step_analyzes_new_comments_before_aggregation(self) -> None:
+        project = self._create_project()
+        comment = self._add_comment(
+            project_id=project.id, work_name=project.title, body="剧情有逻辑矛盾",
+            remote_comment_id="new-feedback", author_id="reader-1", author_name="reader",
+        )
+        service = object.__new__(PostCanonMaintenanceService)
+        service.comment_analyzer = CommentAnalyzer(llm_client=None)
+        commit = SimpleNamespace(project_id=project.id, chapter_number=1)
+        result = service._run_feedback_step(self.session, commit)
+        candidates = self.session.scalars(select(CommentSignalCandidate).where(
+            CommentSignalCandidate.source_comment_id == comment.id,
+        )).all()
+        self.assertTrue(candidates)
+        self.assertTrue(all(row.chapter_number == 1 for row in candidates))
+        self.assertGreater(result["aggregate_count"], 0)
+        ids = [row.id for row in candidates]
+        service._run_feedback_step(self.session, commit)
+        self.assertEqual(self.session.scalars(select(CommentSignalCandidate.id).where(
+            CommentSignalCandidate.source_comment_id == comment.id,
+        )).all(), ids)
 
     def test_init_db_exposes_audience_feedback_schema(self) -> None:
         inspector = inspect(self.engine)
@@ -742,8 +759,6 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(second.actionable, [])
 
     def test_estimate_reader_scale_uses_raw_comment_volume_not_signal_count(self) -> None:
-        from forwin.audience.feedback import estimate_reader_scale
-
         project = self._create_project()
         for index in range(4):
             self._add_comment(
@@ -780,8 +795,6 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(snapshot.tier, 1)
 
     def test_estimate_reader_scale_prefers_platform_metric(self) -> None:
-        from forwin.audience.feedback import estimate_reader_scale
-
         project = self._create_project()
         self._add_comment(
             project_id=project.id,
@@ -811,8 +824,6 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(snapshot.tier, 2)
 
     def test_action_effectiveness_marks_score_drop_improved(self) -> None:
-        from forwin.audience.feedback import derive_action_effectiveness
-
         project = self._create_project()
         self.session.add(
             FeedbackActionRecord(
@@ -876,8 +887,6 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(outcomes[0]["action_type"], "boost_reward_density")
 
     def test_action_effectiveness_batches_signal_aggregate_reads(self) -> None:
-        from forwin.audience.feedback import derive_action_effectiveness
-
         project = self._create_project()
         self.session.add_all(
             [
@@ -993,8 +1002,6 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(len(aggregate_queries), 1)
 
     def test_feedback_cooldown_batches_latest_action_lookup(self) -> None:
-        from forwin.audience.feedback import FeedbackCooldown
-
         project = self._create_project()
         self.session.add_all(
             [
@@ -1230,9 +1237,6 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertGreater(trends[0].current_score, trends[0].previous_score)
 
     def test_arc_envelope_manager_calibrates_overlay_from_audience_signals(self) -> None:
-        from forwin.planning.arc_envelope import ArcStructureDraftData
-        from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
-
         project = self._create_project()
         self.session.add_all(
             [
@@ -1374,17 +1378,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertIn("relationship", plan.minimum_progress_channels)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-def test_feedback_comment_attempts_save_prompt_trace_and_events() -> None:
-    from types import SimpleNamespace
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import Session
-    from forwin.maintenance.post_canon import PostCanonMaintenanceService
-    from forwin.models import Base, DecisionEvent, OutboxEvent, PromptTrace
-
+def test_feedback_comment_attempts_save_prompt_trace_and_events(tmp_path) -> None:
     engine = create_engine("sqlite:///:memory:")
     try:
         Base.metadata.create_all(engine)
@@ -1392,15 +1386,26 @@ def test_feedback_comment_attempts_save_prompt_trace_and_events() -> None:
             session.add(Project(id="project-trace", title="title", premise="premise", genre="genre"))
             session.flush()
             service = object.__new__(PostCanonMaintenanceService)
+            service.artifact_store = ArtifactStore(str(tmp_path))
+            raw_request = {"messages": [{"role": "user", "content": "reader comment"}]}
+            raw_response = '{"signals": []}'
             result = service._enqueue_step_trace(
                 session=session,
                 commit=SimpleNamespace(id="canon-trace", project_id="project-trace", chapter_number=1),
                 step_name="feedback",
-                attempts=[{"stage_key": "comment_analysis", "attempt_no": 1, "http_status": 200, "output_chars": 20}],
+                attempts=[{
+                    "stage_key": "comment_analysis", "attempt_no": 1,
+                    "http_status": 200, "output_chars": 20,
+                    "_raw_request_payload": raw_request, "_raw_response_text": raw_response,
+                }],
             )
             trace = session.scalars(select(PromptTrace)).one()
             assert trace.stage_key == "comment_analysis"
             assert trace.trace_scope == "audience"
+            attempt = json.loads(trace.attempts_json)[0]
+            assert json.loads(Path(attempt["raw_prompt_artifact_uri"]).read_text()) == raw_request
+            assert Path(attempt["raw_response_artifact_uri"]).read_text() == raw_response
+            assert not any(key.startswith("_raw_") for key in attempt)
             events = session.scalars(select(DecisionEvent)).all()
             assert events
             assert all(event.related_object_id == trace.id for event in events)
@@ -1408,3 +1413,74 @@ def test_feedback_comment_attempts_save_prompt_trace_and_events() -> None:
             assert outbox.event_id == result["event_id"]
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("profile", ["standard", "pulp"])
+@pytest.mark.parametrize("llm_available", [True, False])
+@pytest.mark.parametrize("role", ["generation_worker", "outbox_worker"])
+def test_comment_analysis_container_respects_profile(monkeypatch, profile, llm_available, role) -> None:
+    infrastructure = InfrastructureConfig(
+        minimax_api_key="test-key" if llm_available else "", codex_enabled=False,
+        retrieval_backend="hash",
+    )
+    policy = RuntimePolicy.for_profile(profile)
+    llm = _FakeLLM('{"signals": []}')
+    core = SimpleNamespace(
+        infrastructure=infrastructure, policy=policy, artifact_store=None,
+        observability=None, session_factory=lambda: None,
+    )
+    monkeypatch.setattr(RuntimeContainer, "_build_llm_client", staticmethod(lambda *_: llm))
+    monkeypatch.setattr(RuntimeContainer, "_build_skill_runtime", staticmethod(lambda *_: None))
+    monkeypatch.setattr(
+        RuntimeContainer, "_build_book_genesis_service", staticmethod(lambda **_: SimpleNamespace()),
+    )
+    monkeypatch.setattr(container_module, "build_writer", lambda *_: None)
+    container = RuntimeContainer(infrastructure, policy, role, _core_services=core)
+    if role == "generation_worker":
+        service = container.generation_services()
+    else:
+        service = container._build_outbox_post_canon_maintenance(core)
+    analyzer = service.comment_analyzer
+    comment = PublisherRawComment(id="comment", body_text="reader comment")
+    analyzer._analyze_comments_with_llm([comment])
+    assert len(llm.prompts) == (1 if profile == "standard" and llm_available else 0)
+
+
+@pytest.mark.parametrize("comment_project_id", ["p", ""])
+def test_analyze_recent_comments_scopes_limits_and_replays(comment_project_id) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            session.add(Project(id="p", title="title", premise="premise", genre="genre"))
+            session.flush()
+            for i in range(10):
+                session.add(PublisherRawComment(
+                    id=f"comment-{i}", project_id=comment_project_id, work_name="title", body_text="bug",
+                    platform_id="test", remote_comment_id=f"remote-{i}",
+                    synced_at=datetime(2026, 10, 22, 0, i),
+                ))
+            session.add(PublisherRawComment(
+                id="other", project_id="other", work_name="title", body_text="bug",
+                platform_id="test", remote_comment_id="other",
+            ))
+            session.flush()
+            analyzer = CommentAnalyzer(llm_client=None)
+            service = object.__new__(PostCanonMaintenanceService)
+            service.comment_analyzer = analyzer
+            result = service._run_feedback_step(
+                session, SimpleNamespace(project_id="p", chapter_number=3),
+            )
+            rows = session.scalars(select(CommentSignalCandidate)).all()
+            assert {row.source_comment_id for row in rows} == {f"comment-{i}" for i in range(2, 10)}
+            assert all(row.chapter_number == 3 for row in rows)
+            assert result["aggregate_count"] > 0
+            assert comment_analysis.analyze_recent_comments(
+                session, "p", analyzer=analyzer.analyze_and_store,
+            ) == []
+    finally:
+        engine.dispose()
+
+
+if __name__ == "__main__":
+    unittest.main()

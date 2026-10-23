@@ -1206,6 +1206,27 @@ def test_removed_simulation_package_cannot_be_imported() -> None:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            imports = ([node.module or ""] if isinstance(node, ast.ImportFrom)
-                       else [alias.name for alias in node.names] if isinstance(node, ast.Import) else [])
+            if isinstance(node, ast.ImportFrom):
+                imports = [node.module or ""]
+                imports.extend(f"{node.module}.{alias.name}" for alias in node.names)
+            elif isinstance(node, ast.Import):
+                imports = [alias.name for alias in node.names]
+            else:
+                imports = []
             assert not any(name == "forwin.simulation" or name.startswith("forwin.simulation.") for name in imports), path
+
+
+@pytest.mark.parametrize("source", [
+    "import forwin.simulation",
+    "import forwin.simulation.world as world",
+    "from forwin.simulation import world",
+    "from forwin import simulation",
+    "from forwin import simulation as removed",
+])
+def test_simulation_import_guard_catches_import_forms(tmp_path, monkeypatch, source) -> None:
+    package = tmp_path / "forwin"
+    package.mkdir()
+    (package / "consumer.py").write_text(source, encoding="utf-8")
+    monkeypatch.setitem(globals(), "ROOT", tmp_path)
+    with pytest.raises(AssertionError):
+        test_removed_simulation_package_cannot_be_imported()

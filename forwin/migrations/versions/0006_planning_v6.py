@@ -8,6 +8,8 @@ Adds versioned arc beat sheets and band plans, and chapter planning fields.
 New NOT NULL chapter columns carry server defaults for existing rows.
 The maintenance step rename and deletion are irreversible; downgrade only
 reverts the schema; removed policy keys and maintenance history are not restored.
+Downgrade leaves stored policies without use_llm_simulation, so pre-0006 code
+cannot load them. The rollback runbook restores from backup.
 """
 
 import json

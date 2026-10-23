@@ -139,7 +139,7 @@ FinalResidualPolicy 只判资格，不提交 Canon。fail/error 或不可接纳 
 
 post-Canon maintenance 按 world → planning → arc → feedback 顺序执行。world 只运行世界 tick，feedback 在聚合前分析新读者评论；后续规划、下一章 Arc resolution 和反馈读取推进后的世界。这些结果被下一章的 planning/personality/context 消费。四步全部成功后，还需完成 order controls，包括 obligation 验证、future-plan audit、generation-audit report 和 band checkpoint。第2章及以后提交 Canon 都强制检查前章这一屏障；未解除的 future-contract、checkpoint 或人工阻断会使提交等待恢复。pulp 的 continue 只放过 checkpoint warn，fail 仍阻断。
 
-四步维护及order_controls的trace已与对象存储上传分开：业务结果、成功状态和冻结脱敏trace的OutboxEvent同事务提交，上传在事务后由现有worker处理。存储失败重试上传，不重跑已成功的维护模型。对象key含内容SHA，旧trace延迟补传不会覆盖后来重跑order_controls的trace；上传状态归outbox，维护结果保留引用。原始payload保留在outbox中，尚未增加自动清理策略。
+四步维护及order_controls的trace已与对象存储上传分开：业务结果、成功状态和冻结脱敏trace的OutboxEvent同事务提交，上传在事务后由现有worker处理。存储失败重试上传，不重跑已成功的维护模型。对象key含内容SHA，旧trace延迟补传不会覆盖后来重跑order_controls的trace；上传状态归outbox，维护结果保留引用，但 world 步骤只返回 tick 的 `step_result()`，不附加 `trace` 引用；其 trace 仍照常入队。原始payload保留在outbox中，尚未增加自动清理策略。
 
 Generation Audit 已 report-only；FuturePlanAudit 和 band checkpoint 仍可阻断，不能混称为同一个审计。
 

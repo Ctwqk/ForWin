@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import importlib
+import json
 
 from alembic import command
 import pytest
@@ -9,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from forwin import models
 from forwin.models.base import alembic_config
+from forwin.runtime.policy import RuntimePolicy
 from tests.postgres import postgres_empty_test_url
 
 
@@ -211,8 +214,6 @@ def test_models_create_all_on_sqlite() -> None:
 
 
 def test_0006_strips_removed_planning_key_preserving_other_policy_data(monkeypatch) -> None:
-    import importlib
-    import json
     migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
     engine = sa.create_engine("sqlite:///:memory:")
     policies = {
@@ -250,3 +251,34 @@ def test_0006_removes_simulation_table_and_downgrade_restores_empty_schema(legac
     assert [(c["name"], str(c["type"]), c["nullable"]) for c in sa.inspect(engine).get_columns(table_name)] == original
     with engine.connect() as connection:
         assert connection.execute(sa.text(f"SELECT count(*) FROM {table_name}")).scalar_one() == 0
+
+
+def test_0006_upgrade_strips_stored_policy_key_and_preserves_other_fields(legacy_database) -> None:
+    config, engine = legacy_database
+    legacy = RuntimePolicy.for_profile("standard").model_dump(mode="json")
+    legacy["planning"]["use_llm_simulation"] = True
+    legacy["planning"]["context_recency_window"] = 61
+    with Session(engine) as session, session.begin():
+        session.add(models.Project(
+            id="legacy-policy", title="title", premise="premise", genre="genre",
+            runtime_policy_json=json.dumps(legacy), runtime_policy_version=1,
+        ))
+    command.upgrade(config, "0006_planning_v6")
+    with engine.connect() as connection:
+        stored = connection.execute(sa.text(
+            "SELECT runtime_policy_json FROM projects WHERE id = 'legacy-policy'"
+        )).scalar_one()
+    expected = json.loads(json.dumps(legacy))
+    del expected["planning"]["use_llm_simulation"]
+    assert json.loads(stored) == expected
+    assert RuntimePolicy.model_validate_json(stored).planning.context_recency_window == 61
+    command.downgrade(config, "0005_world_plan_conflicts")
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(
+            "SELECT runtime_policy_json FROM projects WHERE id = 'legacy-policy'"
+        )).scalar_one() == stored
+    command.upgrade(config, "0006_planning_v6")
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(
+            "SELECT runtime_policy_json FROM projects WHERE id = 'legacy-policy'"
+        )).scalar_one() == stored

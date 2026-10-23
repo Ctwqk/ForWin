@@ -43,6 +43,8 @@ class AllowedReveal(_ViewModel):
     proposition: str
     # "reader" or the actor ref that comes to the target state.
     observer: str
+    # The actor observer's name; empty for the reader.
+    observer_name: str = ""
     target_state: str
 
 
@@ -69,6 +71,8 @@ class ViewClock(_ViewModel):
     label: str
     # Empty when the clock has no due time.
     remaining_label: str = ""
+    # A secret clock the POV knows as an insider: not for the reader.
+    secret: bool = False
 
 
 class ChapterWorldView(_ViewModel):

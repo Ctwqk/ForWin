@@ -2,11 +2,13 @@
 
 The view never carries the truth of a secret that the POV does not hold, the reader may not
 learn in this chapter and no reveal directive of the chapter permits: such a secret appears
-only as a forbidden topic named by its subjects.
+at most as a forbidden topic named by its subjects, and only when it concerns the chapter.
+Author-only nodes (agendas, intents, events, secrets, clocks) never appear by name.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -50,6 +52,10 @@ _READER_KNOWN_STATES = frozenset({"believes", "knows"})
 # intents may be named after the secret itself.
 _TOPIC_SUBJECT_TYPES = frozenset({*ACTOR_NODE_TYPES, "family", "institution", "item", "location", "region"})
 _HELD_NODE_TYPES = frozenset({"item", "resource"})
+# Node types a scene can show; other nodes carry author-only names such as an intent's summary.
+_ONSTAGE_TYPES = frozenset({*ACTOR_NODE_TYPES, *_HELD_NODE_TYPES})
+# The POV's node type, and so its cognition overlay's observer type.
+_POV_TYPE = "character"
 # Travel minutes absorb float noise before rounding up.
 _MINUTE_EPSILON = 1e-6
 
@@ -67,27 +73,37 @@ def build_chapter_world_view(
     allowed_reveals, hints, forbidden_topics and pov_location are never trimmed. The rest is
     trimmed in the order reader_known, locations (down to the chapter's), pov_knowledge (down
     to secrets and false beliefs), onstage held_items, until ``render_view_text`` fits
-    ``budget_chars``.
+    ``budget_chars``. Without ``runtime`` only the POV's and the reader's cognition overlays load.
     """
     if budget_chars < 0:
         raise ValueError("budget_chars must be nonnegative")
     chapter_number = int(chapter_plan.chapter_number)
     as_of_chapter = max(chapter_number - 1, 0)
+    pov_ref = str(chapter_plan.pov_ref or "")
     if runtime is None:
-        runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=as_of_chapter)
+        runtime = BookStateProjection(session).load_runtime_as_of(
+            project_id, as_of_chapter=as_of_chapter,
+            observer_keys=[(_READER, _READER), *([(_POV_TYPE, pov_ref)] if pov_ref else [])],
+        )
     calendar = StoryCalendarRepository(session).get(project_id)
     now = BookStateQuery(session).current_story_minute(project_id, as_of_chapter=as_of_chapter)
     if now is None:
         now = calendar.opening_minute if calendar is not None else 0
     world = runtime.world
-    pov_ref = str(chapter_plan.pov_ref or "")
     pov = world.get_node(pov_ref) if pov_ref else None
-    if pov_ref and pov is None:
-        logger.warning("Chapter %s of project %s plans an unknown POV %r", chapter_number, project_id, pov_ref)
-    onstage_refs = _refs(chapter_plan.onstage_refs_json)
+    if pov_ref and (pov is None or str(pov.node_type) != _POV_TYPE):
+        # Safe defaults: no POV knowledge, location or insider clocks.
+        logger.warning("Chapter %s of project %s plans POV %r, which is not a character; the view has no POV",
+                       chapter_number, project_id, pov_ref)
+        pov_ref, pov = "", None
     location_refs = _refs(chapter_plan.location_refs_json)
+    held = _holdings(world)
+    onstage = _onstage(runtime, _refs(chapter_plan.onstage_refs_json), pov_ref=pov_ref, held=held,
+                       chapter_number=chapter_number)
+    relevant_refs = {pov_ref, *(entity.ref for entity in onstage), *location_refs} - {""}
 
-    allowed = _allowed_reveals(world.facts_by_id, _directives(chapter_plan.reveal_directives_json), chapter_number)
+    allowed = _allowed_reveals(world, _directives(chapter_plan.reveal_directives_json), chapter_number)
+    hint_directives = _directives(chapter_plan.hint_directives_json)
     knowledge, reader_known, forbidden, secret_refs = _fact_parts(
         runtime,
         pov_ref=pov_ref,
@@ -95,7 +111,12 @@ def build_chapter_world_view(
         schedule=earliest_reveal_chapters(session, project_id),
         permitted={reveal.fact_ref for reveal in allowed},
         reader_permitted={reveal.fact_ref for reveal in allowed if reveal.observer == _READER},
-        relevant_refs={pov_ref, *onstage_refs, *location_refs} - {""},
+        relevant_refs=relevant_refs,
+        topic_refs=relevant_refs | {item.id for entity in onstage for item in held.get(entity.ref, ())},
+        hinted_refs={
+            f"{FACT_REF_PREFIX}{fact.id}" for item in hint_directives
+            if (fact := _fact_of(world.facts_by_id, item.get("fact_ref"))) is not None
+        },
     )
     pov_location, locations = _locations(
         runtime, BookLexiconRepository(session).get(project_id), pov_ref=pov_ref, location_refs=location_refs,
@@ -104,11 +125,11 @@ def build_chapter_world_view(
     view = ChapterWorldView(
         pov_ref=pov_ref,
         pov_name=pov.name if pov is not None else "",
-        onstage=_onstage(runtime, onstage_refs, pov_ref=pov_ref),
+        onstage=onstage,
         pov_knowledge=knowledge,
         reader_known=reader_known,
         allowed_reveals=allowed,
-        hints=_hints(world.facts_by_id, _directives(chapter_plan.hint_directives_json), chapter_number),
+        hints=_hints(world.facts_by_id, hint_directives, chapter_number),
         forbidden_topics=forbidden,
         locations=locations,
         pov_location=pov_location,
@@ -149,18 +170,25 @@ def _fact_of(facts_by_id: Mapping[str, FactNode], ref: Any) -> FactNode | None:
 
 
 def _allowed_reveals(
-    facts_by_id: Mapping[str, FactNode], directives: list[Mapping[str, Any]], chapter_number: int,
+    world: ObjectiveWorldGraph, directives: list[Mapping[str, Any]], chapter_number: int,
 ) -> list[AllowedReveal]:
+    """Directives with an observer and a known fact; the observer's name only for an actor."""
     allowed: list[AllowedReveal] = []
     for item in directives:
-        fact = _fact_of(facts_by_id, item.get("fact_ref"))
+        observer = str(item.get("observer") or "").strip()
+        if not observer:
+            logger.warning("Chapter %s reveal directive %r has no observer", chapter_number, item.get("id"))
+            continue
+        fact = _fact_of(world.facts_by_id, item.get("fact_ref"))
         if fact is None:
             logger.warning("Chapter %s reveal directive %r names an unknown fact %r",
                            chapter_number, item.get("id"), item.get("fact_ref"))
             continue
+        node = world.get_node(observer)
         allowed.append(AllowedReveal(
             directive_id=str(item.get("id") or ""), fact_ref=f"{FACT_REF_PREFIX}{fact.id}",
-            proposition=fact.proposition, observer=str(item.get("observer") or ""),
+            proposition=fact.proposition, observer=observer,
+            observer_name=node.name if node is not None and str(node.node_type) in ACTOR_NODE_TYPES else "",
             target_state=str(item.get("target_state") or ""),
         ))
     return allowed
@@ -187,14 +215,11 @@ def _hints(
 # facts
 
 
-def _observer_view(runtime: BookStateRuntime, ref: str) -> CognitionView | None:
-    """The cognition overlay of a world node; node ids are unique across observer types."""
+def _observer_key(runtime: BookStateRuntime, ref: str) -> tuple[str, str] | None:
+    """The cognition overlay key of a world node; node ids are unique across observer types."""
     if not ref:
         return None
-    return next(
-        (view for key, view in runtime.cognition_by_observer.items() if key[1] == ref and key[0] != _READER),
-        None,
-    )
+    return next((key for key in runtime.cognition_by_observer if key[1] == ref and key[0] != _READER), None)
 
 
 def _fact_parts(
@@ -206,13 +231,19 @@ def _fact_parts(
     permitted: set[str],
     reader_permitted: set[str],
     relevant_refs: set[str],
+    topic_refs: set[str],
+    hinted_refs: set[str],
 ) -> tuple[list[KnownFact], list[str], list[ForbiddenTopic], set[str]]:
     """POV knowledge, reader knowledge and forbidden topics, newest fact first, and the secret refs.
 
     A secret is a true fact that is hidden or has a reveal target. Only recorded states count,
     for the POV and for the reader alike: an unrecorded public fact is not known by default.
+    A forbidden topic needs a chapter-relevant secret: one whose subjects meet ``topic_refs``
+    or that a hint directive names. Only a hinted secret without nameable subjects falls back
+    to its fact id.
     """
-    pov_view = _observer_view(runtime, pov_ref)
+    key = _observer_key(runtime, pov_ref)
+    pov_view = runtime.cognition_by_observer[key] if key is not None else None
     pov_states = pov_view.knowledge_by_ref if pov_view is not None else {}
     false_refs = set(pov_view.false_beliefs(runtime.world.facts_by_id)) if pov_view is not None else set()
     reader = runtime.cognition_by_observer.get((_READER, _READER))
@@ -240,21 +271,25 @@ def _fact_parts(
             ))
         if reader_knows and relevant_refs.intersection(fact.related_node_refs):
             reader_known.append(f"{ref}: {fact.proposition}")
-        if secret and not (pov_holds or reader_knows or reveal_due or ref in permitted):
-            forbidden.append(ForbiddenTopic(
-                fact_ref=ref, topic=forbidden_topic_text(_subject_names(runtime, fact) or [fact.id]),
-            ))
+        hinted = ref in hinted_refs
+        if (secret and not (pov_holds or reader_knows or reveal_due or ref in permitted)
+                and (hinted or topic_refs.intersection(fact.related_node_refs))):
+            names = _subject_names(runtime, fact)
+            if names or hinted:
+                forbidden.append(ForbiddenTopic(fact_ref=ref, topic=forbidden_topic_text(names or [fact.id])))
     return knowledge, reader_known, forbidden, secret_refs
 
 
 def _subject_names(runtime: BookStateRuntime, fact: FactNode) -> list[str]:
+    """Names of the fact's subjects that a scene could show: no abstract or concealed nodes."""
     names: list[str] = []
     for ref in fact.related_node_refs:
         node = runtime.world.get_node(ref)
         place = runtime.map.nodes_by_id.get(ref)
-        if node is not None and str(node.node_type) in _TOPIC_SUBJECT_TYPES:
-            names.append(node.name.strip())
-        elif node is None and place is not None:
+        if node is not None:
+            if str(node.node_type) in _TOPIC_SUBJECT_TYPES and not _concealed(runtime.world, node):
+                names.append(node.name.strip())
+        elif place is not None:
             names.append(place.name.strip())
     return list(dict.fromkeys(name for name in names if name))
 
@@ -262,17 +297,26 @@ def _subject_names(runtime: BookStateRuntime, fact: FactNode) -> list[str]:
 # onstage, map and time
 
 
-def _onstage(runtime: BookStateRuntime, refs: list[str], *, pov_ref: str) -> list[OnstageEntity]:
-    world = runtime.world
+def _holdings(world: ObjectiveWorldGraph) -> dict[str, list[WorldNode]]:
+    """Active items and resources by holder, in id order."""
     held: dict[str, list[WorldNode]] = defaultdict(list)
     for node in sorted(world.nodes_by_id.values(), key=lambda item: item.id):
         holder = world.get_state(node.id).get("holder_id")
         if str(node.node_type) in _HELD_NODE_TYPES and node.is_active and isinstance(holder, str) and holder:
             held[holder].append(node)
+    return held
+
+
+def _onstage(
+    runtime: BookStateRuntime, refs: list[str], *, pov_ref: str, held: Mapping[str, list[WorldNode]],
+    chapter_number: int,
+) -> list[OnstageEntity]:
+    world = runtime.world
     entities: list[OnstageEntity] = []
     for ref in refs:
         node = world.get_node(ref)
-        if node is None:
+        if node is None or str(node.node_type) not in _ONSTAGE_TYPES:
+            logger.warning("Chapter %s onstage ref %r is not a perceptible world node; dropped", chapter_number, ref)
             continue
         state = world.get_state(ref)
         restraint = state.get("restraint")
@@ -306,6 +350,14 @@ def _locations(
     Travel runs on writer-visible routes only: a hidden route never reaches the writer, whether
     the POV knows it or has no cognition overlay to hide it.
     """
+    key = _observer_key(runtime, pov_ref)
+    cognition: dict[tuple[str, str], CognitionView] = {}
+    if key is not None:
+        # The POV's route beliefs still narrow its routes, but a believed false edge is a false
+        # belief, never a writer-visible route.
+        travel_view = copy.copy(runtime.cognition_by_observer[key])
+        travel_view.false_edges = {}
+        cognition[key] = travel_view
     graph = MapGraph(
         nodes=list(runtime.map.nodes_by_id.values()),
         # The graph rebuilds the reverse copies of bidirectional edges from their originals.
@@ -313,7 +365,7 @@ def _locations(
             edge for edge in runtime.map.edges_by_id.values()
             if "runtime_reverse_of" not in edge.metadata and is_writer_visible_map_edge(edge)
         ],
-        cognition_by_observer=runtime.cognition_by_observer,
+        cognition_by_observer=cognition,
     )
     origin = resolve_world_node_location_id(runtime.world, pov_ref) if pov_ref else ""
     minutes: dict[str, int] = {}
@@ -367,6 +419,7 @@ def _pov_clocks(
         clocks.append((due_at if due_at is not None else math.inf, node.id, ViewClock(
             label=str(node.profile.get("label") or node.name),
             remaining_label=_duration_label(calendar, max(0, due_at - now)) if due_at is not None else "",
+            secret=node.profile.get("scope") != "public",
         )))
     return [clock for *_key, clock in sorted(clocks, key=lambda item: item[:2])]
 
@@ -451,7 +504,7 @@ def render_view_text(view: ChapterWorldView) -> str:
         "reader_known": list(view.reader_known),
         "allowed_reveals": [
             _row(f"{reveal.fact_ref}: {reveal.proposition}", directive=reveal.directive_id,
-                 observer=reveal.observer, target_state=reveal.target_state)
+                 observer=reveal.observer, observer_name=reveal.observer_name, target_state=reveal.target_state)
             for reveal in view.allowed_reveals
         ],
         "hints": [_row(hint.hint_text, directive=hint.directive_id) for hint in view.hints],
@@ -459,7 +512,10 @@ def render_view_text(view: ChapterWorldView) -> str:
         "locations": [
             _row(f"{place.name} ({place.id})", minutes=place.minutes_from_pov) for place in view.locations
         ],
-        "pov_clocks": [_row(clock.label, remaining=clock.remaining_label) for clock in view.pov_clocks],
+        "pov_clocks": [
+            _row(clock.label, remaining=clock.remaining_label, secret="yes" if clock.secret else "")
+            for clock in view.pov_clocks
+        ],
     }
     for key, rows in sections.items():
         if rows:

@@ -31,7 +31,7 @@ FACTS = {
     "reader-secret": ("reader-secret-truth", "secret", "true", ["ally"], 0),
     "due-secret": ("due-truth", "secret", "true", ["ally"], 0),
     "due-pov": ("due-pov-truth", "secret", "true", [], 0),
-    "revealed": ("truth-of-revealed", "secret", "true", ["villain"], 0),
+    "revealed": ("truth-of-revealed", "secret", "true", ["ally", "villain"], 0),
     "pov-revealed": ("truth-of-pov-revealed", "secret", "true", [], 0),
     "actor-revealed": ("truth-of-actor-revealed", "must_not_reveal", "true", [], 0),
     "hinted": ("hinted-truth", "secret", "true", ["ally"], 0),
@@ -53,6 +53,7 @@ REVEALS = [
     {"id": "d-pov", "fact_ref": "fact:pov-revealed", "observer": "reader", "target_state": "suspects"},
     {"id": "d-actor", "fact_ref": "fact:actor-revealed", "observer": "ally", "target_state": "knows"},
     {"id": "d-missing", "fact_ref": "fact:absent", "observer": "reader", "target_state": "knows"},
+    {"id": "d-blank", "fact_ref": "fact:hinted", "observer": " ", "target_state": "knows"},
 ]
 HINTS = [{"id": "d-hint", "fact_ref": "fact:hinted", "hint_text": "hint-value"}]
 NEARBY = [f"n{index}" for index in range(10)]
@@ -155,7 +156,7 @@ def source(monkeypatch):
     monkeypatch.setattr(module, "earliest_reveal_chapters", lambda session, project_id: data.schedule)
 
     def load(self, project_id, *, as_of_chapter, **kwargs):
-        data.calls.append((project_id, as_of_chapter))
+        data.calls.append((project_id, as_of_chapter, kwargs.get("observer_keys")))
         return runtime
 
     monkeypatch.setattr(module.BookStateProjection, "load_runtime_as_of", load)
@@ -177,7 +178,8 @@ def test_view_lists_onstage_perceptible_state(source):
     from forwin.world_view.types import OnstageEntity, ViewLocation
 
     view = _build(source, supplied=False)
-    assert source.calls == [("p", CHAPTER - 1)]
+    # Only the reader's and the POV's cognition overlays load.
+    assert source.calls == [("p", CHAPTER - 1, [("reader", "reader"), ("character", "hero")])]
     assert (view.pov_ref, view.pov_name) == ("hero", "hero-name")
     assert view.pov_location == ViewLocation(id="home", name="home-name", minutes_from_pov=0)
     assert view.onstage == [
@@ -197,11 +199,12 @@ def test_view_lists_pov_clocks_and_story_time(source):
     view = _build(source)
     assert view.now_label == "epoch 1day1hour"
     assert view.expected_span_label == "3hour"
-    assert [(clock.label, clock.remaining_label) for clock in view.pov_clocks] == [
-        ("overdue-clock-label", "0hour"),
-        ("public-clock-label", "2hour"),
-        ("insider-clock-label", "1day1hour"),
-        ("own-clock-label", ""),
+    # Secret clocks the POV knows as an insider are marked as not for the reader.
+    assert [(clock.label, clock.remaining_label, clock.secret) for clock in view.pov_clocks] == [
+        ("overdue-clock-label", "0hour", False),
+        ("public-clock-label", "2hour", False),
+        ("insider-clock-label", "1day1hour", True),
+        ("own-clock-label", "", True),
     ]
     source.now = None
     view = _build(source, plan=_plan(expected_span_minutes=None))
@@ -245,21 +248,24 @@ def test_forbidden_topic_has_no_truth_text(source):
     from forwin.world_view.types import ForbiddenTopic
 
     view = _build(source)
+    # Chapter-relevant open secrets only: an onstage subject or a hint directive. Only entity names
+    # stand for the subjects; event and unknown refs do not, nor does the reader. The secret about
+    # an event alone concerns nothing in the chapter and gets no topic.
     assert view.forbidden_topics == [
-        # Only entity names stand for the subjects; event and unknown refs do not, nor does the reader.
         ForbiddenTopic(fact_ref="fact:forbidden", topic=forbidden_topic_text(["ally-name", "villain-name"])),
-        ForbiddenTopic(fact_ref="fact:forbidden-nameless", topic=forbidden_topic_text(["forbidden-nameless"])),
         ForbiddenTopic(fact_ref="fact:hinted", topic=forbidden_topic_text(["ally-name"])),
         ForbiddenTopic(fact_ref="fact:pov-disbelieved", topic=forbidden_topic_text(["hero-name"])),
     ]
     for text in _texts(view):
         for truth in ("forbidden-truth", "nameless-truth", "hinted-truth", "pov-disbelieved-truth", "due-truth",
-                      "poisoning-name"):
+                      "poisoning-name", "forbidden-nameless"):
             assert truth not in text
-    # Without the POV's knowledge its secrets become topics too, still without their truth.
+    # Without the POV's knowledge its onstage-relevant secrets become topics, still without their
+    # truth; its secret about the offstage villain does not.
     del source.runtime.cognition_by_observer[("character", "hero")]
     view = _build(source)
-    assert {"fact:pov-secret", "fact:pov-disbelieved"} <= {topic.fact_ref for topic in view.forbidden_topics}
+    topics = {topic.fact_ref for topic in view.forbidden_topics}
+    assert "fact:pov-disbelieved" in topics and "fact:pov-secret" not in topics
     assert all("pov-secret-truth" not in text for text in _texts(view))
 
 
@@ -267,15 +273,17 @@ def test_reveal_directive_gives_truth_for_that_fact_only(source, caplog):
     from forwin.world_view.types import AllowedReveal, ViewHint
 
     view = _build(source)
+    # An actor observer carries its name; a directive without an observer is skipped.
     assert view.allowed_reveals == [
         AllowedReveal(directive_id="d-reveal", fact_ref="fact:revealed", proposition="truth-of-revealed",
                       observer="reader", target_state="knows"),
         AllowedReveal(directive_id="d-pov", fact_ref="fact:pov-revealed", proposition="truth-of-pov-revealed",
                       observer="reader", target_state="suspects"),
         AllowedReveal(directive_id="d-actor", fact_ref="fact:actor-revealed", proposition="truth-of-actor-revealed",
-                      observer="ally", target_state="knows"),
+                      observer="ally", observer_name="ally-name", target_state="knows"),
     ]
     assert any("d-missing" in record.message for record in caplog.records)
+    assert any("d-blank" in record.message and "observer" in record.message for record in caplog.records)
     assert view.hints == [ViewHint(directive_id="d-hint", hint_text="hint-value")]
     # Every secret whose truth the view carries is held by the POV, known to the reader or permitted.
     permitted = {"revealed", "pov-revealed", "actor-revealed"}
@@ -297,6 +305,116 @@ def test_reveal_directive_gives_truth_for_that_fact_only(source, caplog):
     view = _build(source, plan=_plan(reveal_directives_json="[]"))
     assert "fact:revealed" in {topic.fact_ref for topic in view.forbidden_topics}
     assert all("truth-of-revealed" not in text for text in _texts(view))
+
+
+def _secret(ref, *related, sensitivity="secret"):
+    return FactNode(id=ref, project_id="p", proposition=f"{ref}-truth", sensitivity_level=sensitivity,
+                    related_node_refs=list(related))
+
+
+def _topics(view):
+    return {topic.fact_ref: topic.topic for topic in view.forbidden_topics}
+
+
+def test_onstage_and_pov_accept_only_perceptible_nodes(source, caplog):
+    world = source.runtime.world
+    world.add_node(_node("plot-intent", "intent", profile={"owner_ref": "villain", "summary": "plot-intent-name"},
+                         status="due"))
+    onstage = ["hero", "ally", "villain-agenda", "plot-intent", "poisoning", "public-clock", "blade"]
+    view = _build(source, plan=_plan(onstage_refs_json=json.dumps(onstage)))
+    # Actors, items and resources only: agendas, intents, events and clocks carry author-only names.
+    assert [entity.ref for entity in view.onstage] == ["hero", "ally", "blade"]
+    for text in _texts(view):
+        assert all(name not in text for name in ("villain-agenda-name", "plot-intent-name", "poisoning-name"))
+    assert sum("not a perceptible world node" in record.message for record in caplog.records) == 4
+    # A dropped event ref does not make the secret about it chapter-relevant.
+    assert "fact:forbidden-nameless" not in _topics(view)
+    # A POV that is not a character gives an empty POV with the safe defaults.
+    for pov in ("plot-intent", "blade", "ghost"):
+        view = _build(source, plan=_plan(pov_ref=pov, onstage_refs_json=json.dumps(["ally", pov])))
+        assert (view.pov_ref, view.pov_name, view.pov_location, view.pov_knowledge) == ("", "", None, [])
+        assert [clock.label for clock in view.pov_clocks] == ["overdue-clock-label", "public-clock-label"]
+        assert all("plot-intent-name" not in text and "pov-secret-truth" not in text for text in _texts(view))
+
+
+def test_forbidden_topic_skips_concealed_subjects(source):
+    world = source.runtime.world
+    world.add_node(_node("society", "institution", visibility_level="secret"))
+    world.add_fact(_secret("society-secret", "ally", "society", "vial"))
+    world.add_fact(_secret("vial-secret", "vial"))
+    view = _build(source)
+    topics = _topics(view)
+    # The concealed vial and the secret society never stand for a subject.
+    assert topics["fact:society-secret"] == forbidden_topic_text(["ally-name"])
+    # The vial is relevant through its onstage holder, but with only concealed subjects and no
+    # hint the secret gets no topic and no fact-id fallback.
+    assert "fact:vial-secret" not in topics
+    for text in _texts(view):
+        assert all(name not in text for name in ("society-name", "vial-name", "vial-secret", "society-secret-truth"))
+    # A hint keeps it as a topic, named by its fact id.
+    hint = {"id": "d-vial", "fact_ref": "fact:vial-secret", "hint_text": "vial-hint"}
+    view = _build(source, plan=_plan(hint_directives_json=json.dumps([*HINTS, hint])))
+    assert _topics(view)["fact:vial-secret"] == forbidden_topic_text(["vial-secret"])
+    assert all("vial-name" not in text for text in _texts(view))
+
+
+def test_offstage_only_secret_produces_no_topic(source):
+    world = source.runtime.world
+    world.add_fact(_secret("offstage-secret", "villain", "poisoning"))
+    world.add_fact(_secret("held-secret", "blade", "villain"))
+    world.add_fact(_secret("place-secret", "chapter-place"))
+    world.add_fact(_secret("nearby-secret", "n0"))
+    view = _build(source)
+    topics = _topics(view)
+    # The villain is offstage and n0 is only a nearby place: those secrets concern the chapter not at all.
+    assert "fact:offstage-secret" not in topics and "fact:nearby-secret" not in topics
+    # An item an onstage entity holds and a chapter location do make a secret relevant.
+    assert topics["fact:held-secret"] == forbidden_topic_text(["blade-name", "villain-name"])
+    assert topics["fact:place-secret"] == forbidden_topic_text(["chapter-place-name"])
+    for text in _texts(view):
+        assert all(truth not in text for truth in ("offstage-secret", "held-secret-truth", "nearby-secret"))
+    # Bringing the villain onstage makes its secret relevant.
+    view = _build(source, plan=_plan(onstage_refs_json=json.dumps(["hero", "ally", "villain"])))
+    assert _topics(view)["fact:offstage-secret"] == forbidden_topic_text(["villain-name"])
+
+
+def test_hint_named_secret_keeps_a_topic(source):
+    world = source.runtime.world
+    world.add_fact(_secret("offstage-secret", "villain"))
+    hints = [
+        {"id": "d-offstage", "fact_ref": "fact:offstage-secret", "hint_text": "offstage-hint"},
+        {"id": "d-nameless", "fact_ref": "fact:forbidden-nameless", "hint_text": "nameless-hint"},
+    ]
+    view = _build(source, plan=_plan(hint_directives_json=json.dumps([*HINTS, *hints])))
+    topics = _topics(view)
+    # A hinted secret stays a topic however offstage its subjects: hint it, never settle it.
+    assert topics["fact:offstage-secret"] == forbidden_topic_text(["villain-name"])
+    # Without a nameable subject a hinted secret falls back to its fact id.
+    assert topics["fact:forbidden-nameless"] == forbidden_topic_text(["forbidden-nameless"])
+    assert [hint.directive_id for hint in view.hints] == ["d-hint", "d-offstage", "d-nameless"]
+    for text in _texts(view):
+        assert "offstage-secret-truth" not in text and "nameless-truth" not in text
+
+
+def test_view_map_ignores_pov_false_edges(source):
+    from forwin.world_view.types import ViewLocation
+
+    pov = source.runtime.cognition_by_observer[("character", "hero")]
+    pov.false_edges = {
+        "false-route": MapEdge(id="false-route", project_id="p", from_node_id="home", to_node_id="n7",
+                               edge_type="hidden_route", travel_time=0.1),
+        "false-road": MapEdge(id="false-road", project_id="p", from_node_id="home", to_node_id="n6",
+                              edge_type="road", travel_time=0.1),
+        "false-den": MapEdge(id="false-den", project_id="p", from_node_id="home", to_node_id="isolated",
+                             edge_type="road", travel_time=0.1),
+    }
+    view = _build(source)
+    # A believed route is a false belief, not a writer-visible route: times stay on real roads.
+    minutes = {location.id: location.minutes_from_pov for location in view.locations}
+    assert (minutes["n6"], minutes["n7"]) == (210, 240) and "isolated" not in minutes
+    assert ViewLocation(id="n0", name="n0-name", minutes_from_pov=30) in view.locations
+    # The runtime's own overlay keeps its false edges.
+    assert set(pov.false_edges) == {"false-route", "false-road", "false-den"}
 
 
 def test_reader_known_uses_recorded_states_only(source, monkeypatch):
@@ -381,7 +499,8 @@ def test_view_map_excludes_hidden_edges_for_pov_without_overlay():
         # The rival does not know the scheduled secret; the hero does and keeps it from the reader.
         topics = {topic.fact_ref: topic.topic for topic in view.forbidden_topics}
         assert topics[world.fact("fact-secret")] == forbidden_topic_text(["甲"])
-        assert topics[world.fact("fact-unscheduled")] == forbidden_topic_text([world.node("fact", "fact-unscheduled")])
+        # The unscheduled secret has no subject in the chapter, so it gets no topic.
+        assert world.fact("fact-unscheduled") not in topics
         assert all("proposition-secret" not in text for text in _texts(view))
         known = {fact.fact_ref: fact for fact in hero_view.pov_knowledge}
         assert known[world.fact("fact-secret")].pov_only_secret is True

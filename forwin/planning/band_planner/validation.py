@@ -37,9 +37,10 @@ def band_plan_issues(
     carriers = response_carriers(output.chapters, offered.pending)
     for response in offered.pending:
         if response.conflict_id not in carriers:
+            how = (f"put its goal in a chapter's goals or bind one of {sorted(response.refs)}" if response.refs
+                   else "copy its goal text into a chapter's goals")
             issues.append(_issue("pending_response_unaddressed", None, response.conflict_id, (
-                f"pending response {response.conflict_id} is carried by no chapter: put its goal in a chapter's "
-                f"goals or bind one of {sorted(response.refs)}"
+                f"pending response {response.conflict_id} is carried by no chapter: {how}"
             )))
     return issues
 

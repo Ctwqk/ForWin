@@ -57,7 +57,7 @@ def persist_band_plan(
     plot-response patch on the chapter that carries it, listed in its result_refs.
     """
     band_plan = _new_band_plan_version(session, project_id=project_id, arc_plan_id=arc_plan.id,
-                                       beat_sheet_id=beat_sheet_id, draft=draft, notes=notes)
+                                       beat_sheet_id=beat_sheet_id, draft=draft, rows=rows, notes=notes)
     updater = StateUpdater(session)
     experience = ExperiencePersistence()
     if inputs.schedule_is_new:
@@ -137,11 +137,12 @@ def reapply_active_patches(session: Session, plan: ChapterPlan) -> list[str]:
 
 def _new_band_plan_version(
     session: Session, *, project_id: str, arc_plan_id: str, beat_sheet_id: str, draft: BandPlanDraft,
-    notes: Sequence[str],
+    rows: Mapping[int, ChapterPlan], notes: Sequence[str],
 ) -> BandPlanRow:
     """The band's next version as the active one; the version it replaces becomes superseded.
 
-    Its plan_json holds the whole band: the replaced version's chapters this draft does not plan, and the draft's.
+    Its plan_json holds the whole band: the draft's chapters, the replaced version's other chapters, and an entry
+    from its plan row for any other chapter of the band that has one (a band first planned around written rows).
     """
     band = draft.band
     same_band = (BandPlanRow.project_id == project_id, BandPlanRow.arc_plan_id == arc_plan_id,
@@ -154,6 +155,9 @@ def _new_band_plan_version(
     planned = {chapter.chapter_number for chapter in draft.chapters}
     kept = [chapter for chapter in (json.loads(active.plan_json).get("chapters", []) if active is not None else [])
             if chapter.get("chapter_number") not in planned]
+    listed = planned | {chapter.get("chapter_number") for chapter in kept}
+    kept += [_row_entry(plan) for number, plan in sorted(rows.items())
+             if number not in listed and band.chapter_start <= number <= band.chapter_end]
     chapters = sorted([*kept, *(chapter.model_dump(mode="json") for chapter in draft.chapters)],
                       key=lambda chapter: chapter["chapter_number"])
     row = BandPlanRow(
@@ -168,6 +172,19 @@ def _new_band_plan_version(
     session.add(row)
     session.flush()
     return row
+
+
+def _row_entry(plan: ChapterPlan) -> dict:
+    """A band plan entry for a chapter planned outside this band plan: its plan row's own fields."""
+    return {
+        "chapter_number": plan.chapter_number, "title": plan.title, "one_line": plan.one_line,
+        "goals": json.loads(plan.goals_json or "[]"), "pov_ref": plan.pov_ref,
+        **{field: json.loads(getattr(plan, f"{field}_json") or "[]") for field in (
+            "onstage_refs", "location_refs", "world_bindings", "reveal_directives", "hint_directives",
+            "intended_changes", "milestone_ids",
+        )},
+        "expected_span_minutes": plan.expected_span_minutes, "hook": plan.hook,
+    }
 
 
 def _location_subworlds(runtime: BookStateRuntime, location_refs: Sequence[str]) -> list[str]:

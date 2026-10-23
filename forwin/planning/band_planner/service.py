@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.book_frame_repository import StoryCalendarRepository
 from forwin.book_state.knowledge import KNOWLEDGE_STATES
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
@@ -42,6 +43,10 @@ from forwin.writer.prompt_core.planning import build_band_plan_messages
 STAGE_KEY = "plan.band"
 # The failure reason when every answer was valid but the feasibility audit found errors in it.
 INFEASIBLE = "infeasible"
+# The failure reason when validating or auditing an answer raised; the exception reaches the caller.
+AUDIT_ERROR = "audit_error"
+# The failure reason, and the issue code, when the book has no story calendar to measure chapter spans in.
+NO_STORY_CALENDAR = "no_story_calendar"
 BAND_PLANNING_SOURCE = "band_planning"
 _TASK_FAMILY = "planning"
 _PARSER_NAME = "BandPlan JSON parser"
@@ -109,6 +114,7 @@ class BandPlanner:
 
         A row in any status comes back as it is. When the band cannot be planned this opens a ``band_planning``
         conflict that blocks the band and returns None; while that conflict is open it returns None at once.
+        A concurrent band plan that won the band without this chapter is followed by one more planning call.
         """
         existing = _chapter_plan(session, project_id, chapter_number)
         if existing is not None:
@@ -124,17 +130,31 @@ class BandPlanner:
             raise LookupError(f"beat sheet {beat_sheet_row.id} has no band for chapter {chapter_number}")
         if _open_band_conflict(session, project_id, band) is not None:
             return None
-        rows = _band_rows(session, project_id, band)
-        result = self._plan(
-            session, project_id=project_id, arc_plan=arc_plan, beat_sheet_row=beat_sheet_row, band=band,
-            chapter_numbers=_rewritable(band, rows, from_chapter=band.chapter_start), rows=rows, policy=policy,
-            notes=(), reason="ensure_plan",
-        )
-        if result.failed:
-            _band_planning_conflict(session, project_id=project_id, band=band, issues=result.outcome.issues,
-                                    as_of=result.as_of)
-            return None
-        return _chapter_plan(session, project_id, chapter_number)
+
+        def plan_rewritable(reason: str) -> _PlanResult:
+            rows = _band_rows(session, project_id, band, refresh=True)
+            return self._plan(
+                session, project_id=project_id, arc_plan=arc_plan, beat_sheet_row=beat_sheet_row, band=band,
+                chapter_numbers=_rewritable(band, rows, from_chapter=band.chapter_start), rows=rows, policy=policy,
+                notes=(), reason=reason,
+            )
+
+        result = plan_rewritable("ensure_plan")
+        if not result.failed and _chapter_plan(session, project_id, chapter_number) is None:
+            result = plan_rewritable("ensure_plan_retry")
+        if not result.failed and (plan := _chapter_plan(session, project_id, chapter_number)) is not None:
+            return plan
+        issues = result.outcome.issues if result.failed else [_error(
+            "chapter_unplanned", f"concurrent band plans left chapter {chapter_number} without a plan",
+        )]
+        # Serialize with other planners before blocking the band: one may have planned the chapter, or opened the
+        # conflict, since. No conflict row is locked here, so the project lock keeps the usual order.
+        session.execute(select(Project).where(Project.id == project_id).with_for_update(key_share=True)).scalar_one()
+        if (plan := _chapter_plan(session, project_id, chapter_number)) is not None:
+            return plan
+        if _open_band_conflict(session, project_id, band) is None:
+            _band_planning_conflict(session, project_id=project_id, band=band, issues=issues, as_of=result.as_of)
+        return None
 
     def replan_remaining(
         self, session: Session, *, project_id: str, band_plan_id: str, from_chapter: int, policy: RuntimePolicy,
@@ -170,9 +190,18 @@ class BandPlanner:
         band: BandSpan, chapter_numbers: list[int], rows: Mapping[int, ChapterPlan], policy: RuntimePolicy,
         notes: Sequence[str], reason: str,
     ) -> _PlanResult:
-        beat_sheet = ArcBeatSheetRepository(session).load(beat_sheet_row)
         # The refs are checked against the latest canon: chapter 0 at handoff.
         as_of = BookStateRepository(session).latest_canon_chapter(project_id) or 0
+        trace = _TraceContext(project_id=project_id, arc_plan_id=arc_plan.id, band=band,
+                              chapter_numbers=chapter_numbers, reason=reason)
+        if StoryCalendarRepository(session).get(project_id) is None:
+            # Chapter spans are story durations: without a calendar no answer could pass, so no model is asked.
+            call = _BandPlanCall(issues=[_error(NO_STORY_CALENDAR, "the book has no story calendar")],
+                                 failure_reason=NO_STORY_CALENDAR)
+            outcome = BandPlanOutcome(band_plan_id=None, issues=call.issues)
+            self.save_trace(session, self._prompt_trace(call, trace, outcome))
+            return _PlanResult(outcome=outcome, failed=True, as_of=as_of)
+        beat_sheet = ArcBeatSheetRepository(session).load(beat_sheet_row)
         runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=as_of)
         expected_active = _active_band_plan_id(session, project_id, arc_plan.id, band)
         inputs = build_band_inputs(
@@ -182,13 +211,18 @@ class BandPlanner:
         )
         call = self._call(session, project_id=project_id, inputs=inputs, band=band, chapter_numbers=chapter_numbers,
                           beat_sheet=beat_sheet, policy=policy)
-        trace = _TraceContext(project_id=project_id, arc_plan_id=arc_plan.id, band=band,
-                              chapter_numbers=chapter_numbers, reason=reason)
+        if call.error is not None:
+            # Saved in the caller's session: a caller that rolls back on the exception discards the trace too.
+            self.save_trace(session, self._prompt_trace(call, trace, BandPlanOutcome(band_plan_id=None)))
+            raise call.error
         if call.draft is None:
             outcome = BandPlanOutcome(band_plan_id=None, issues=call.issues)
             self.save_trace(session, self._prompt_trace(call, trace, outcome))
             return _PlanResult(outcome=outcome, failed=True, as_of=as_of)
 
+        # The write locks live in a savepoint, so a path that writes nothing releases them at once: the caller
+        # may plan again (a model call) in the same transaction.
+        lock_scope = session.begin_nested()
         conflicts = WorldConflictRepository(session)
         locked = [conflicts.get(project_id, item.conflict_id, for_update=True)
                   for item in sorted(inputs.offered.pending, key=lambda item: item.conflict_id)]
@@ -197,23 +231,31 @@ class BandPlanner:
         active = _active_band_plan_id(session, project_id, arc_plan.id, band)
         if active != expected_active:
             # Another planner wrote this band during the model call: its plan stands.
-            outcome = BandPlanOutcome(band_plan_id=active, issues=call.warnings)
+            lock_scope.rollback()
+            outcome = BandPlanOutcome(band_plan_id=active)
             self.save_trace(session, self._prompt_trace(call, trace, outcome, superseded=True))
             return _PlanResult(outcome=outcome, failed=False, as_of=as_of)
-        fresh = _band_rows(session, project_id, band, refresh=True)
+        # Locked, so a status change by a writer that does not take the project lock waits for this plan.
+        fresh = _band_rows(session, project_id, band, refresh=True, lock=True)
         writable = [chapter for chapter in call.draft.chapters
                     if chapter.chapter_number not in fresh
                     or fresh[chapter.chapter_number].status in REWRITABLE_PLAN_STATUSES]
         if not writable:
             # Every chapter was taken up for writing during the model call: nothing is left to plan.
-            outcome = BandPlanOutcome(band_plan_id=active, issues=call.warnings)
+            lock_scope.rollback()
+            outcome = BandPlanOutcome(band_plan_id=active)
             self.save_trace(session, self._prompt_trace(call, trace, outcome))
             return _PlanResult(outcome=outcome, failed=False, as_of=as_of)
-        persisted = persist_band_plan(
-            session, project_id=project_id, arc_plan=arc_plan, beat_sheet_id=beat_sheet_row.id,
-            draft=call.draft.model_copy(update={"chapters": writable}), rows=fresh, inputs=inputs,
-            pending_conflicts=[row for row in locked if row is not None and row.id in still_pending], notes=notes,
-        )
+        try:
+            persisted = persist_band_plan(
+                session, project_id=project_id, arc_plan=arc_plan, beat_sheet_id=beat_sheet_row.id,
+                draft=call.draft.model_copy(update={"chapters": writable}), rows=fresh, inputs=inputs,
+                pending_conflicts=[row for row in locked if row is not None and row.id in still_pending], notes=notes,
+            )
+        except Exception:
+            lock_scope.rollback()
+            raise
+        lock_scope.commit()
         outcome = BandPlanOutcome(band_plan_id=persisted.band_plan.id,
                                   chapter_plan_ids=[plan.id for plan in persisted.plans], issues=call.warnings)
         self.save_trace(session, self._prompt_trace(call, trace, outcome))
@@ -224,12 +266,15 @@ class BandPlanner:
         chapter_numbers: Sequence[int], beat_sheet: ArcBeatSheetData, policy: RuntimePolicy,
     ) -> _BandPlanCall:
         """Up to ``max_attempts`` calls. An invalid, malformed or infeasible answer goes back to the model as
-        feedback; a provider failure resends the same messages."""
+        feedback; a provider failure resends the same messages.
+
+        When validation or the audit raises, the call stops with ``error`` set, never sent to the model.
+        """
         call = _BandPlanCall()
         retry_feedback: list[str] = []
         allowed = {**_ALLOWED, "time_units": sorted(inputs.offered.time_units)}
-        # Whether any call returned an answer, valid or not.
-        answered = False
+        # The issues and failure reason of the last attempt that returned an answer.
+        last_answer: tuple[list[PlanIssue], str] | None = None
         for attempt_no in range(1, self.max_attempts + 1):
             call.messages = build_band_plan_messages(
                 payload=inputs.payload, digest_text=inputs.digest_text, output_schema=_OUTPUT_SCHEMA,
@@ -248,7 +293,6 @@ class BandPlanner:
             except Exception as exc:  # noqa: BLE001 - a provider failure is retried, then nothing is planned
                 call_error, provider_failed = exc, True
             else:
-                answered = True
                 try:
                     parsed = BandPlanOutput.model_validate(parse_llm_json(raw, error_prefix=_PARSER_NAME))
                 except Exception as exc:  # noqa: BLE001 - a malformed answer is sent back to the model
@@ -261,19 +305,26 @@ class BandPlanner:
                 code = LLM_UNAVAILABLE if provider_failed else INVALID_OUTPUT
                 call.issues = [_error(code, f"{type(call_error).__name__}: {call_error}")]
             else:
-                call.issues = band_plan_issues(
-                    parsed, chapter_numbers=chapter_numbers, offered=inputs.offered, runtime=inputs.runtime,
-                    calendar=inputs.calendar, lexicon=inputs.lexicon,
-                )
-                if not call.issues:
-                    chapters = sorted(parsed.chapters, key=lambda chapter: chapter.chapter_number)
-                    audit = self.feasibility.audit_plans(
-                        session, project_id=project_id, plans=chapters, beat_sheet=beat_sheet, policy=policy,
-                        runtime=inputs.runtime,
+                try:
+                    call.issues = band_plan_issues(
+                        parsed, chapter_numbers=chapter_numbers, offered=inputs.offered, runtime=inputs.runtime,
+                        calendar=inputs.calendar, lexicon=inputs.lexicon,
                     )
-                    call.issues = [issue for issue in audit if issue.severity == "error"]
-                    call.warnings = [issue for issue in audit if issue.severity != "error"]
-                    infeasible = bool(call.issues)
+                    if not call.issues:
+                        chapters = sorted(parsed.chapters, key=lambda chapter: chapter.chapter_number)
+                        audit = self.feasibility.audit_plans(
+                            session, project_id=project_id, plans=chapters, beat_sheet=beat_sheet, policy=policy,
+                            runtime=inputs.runtime,
+                        )
+                        call.issues = [issue for issue in audit if issue.severity == "error"]
+                        call.warnings = [issue for issue in audit if issue.severity != "error"]
+                        infeasible = bool(call.issues)
+                except Exception as exc:  # noqa: BLE001 - re-raised by the caller once the trace is saved
+                    call.error, call.failure_reason = exc, AUDIT_ERROR
+                    call.issues = [_error(AUDIT_ERROR, f"{type(exc).__name__}: {exc}")]
+                    mark_latest_attempt_workflow(self.llm_client, attempt_no=attempt_no, stage_key=STAGE_KEY)
+                    call.attempts.extend(self._drained_attempts(attempt_no, call.messages, raw, exc, str(exc)))
+                    return call
             feedback = [_feedback_line(issue) for issue in call.issues]
             mark_latest_attempt_workflow(self.llm_client, attempt_no=attempt_no, stage_key=STAGE_KEY)
             call.attempts.extend(self._drained_attempts(attempt_no, call.messages, raw, call_error, "\n".join(feedback)))
@@ -281,9 +332,16 @@ class BandPlanner:
                 call.draft = BandPlanDraft(band=band, chapters=chapters)
                 call.failure_reason = ""
                 return call
-            if not provider_failed:
+            if provider_failed:
+                call.failure_reason = LLM_UNAVAILABLE
+                if last_answer is not None:
+                    # The answered attempt's problems stay the reason; the provider error is only added.
+                    call.issues = [*last_answer[0], *call.issues]
+                    call.failure_reason = last_answer[1]
+            else:
                 retry_feedback = feedback
-            call.failure_reason = INFEASIBLE if infeasible else INVALID_OUTPUT if answered else LLM_UNAVAILABLE
+                call.failure_reason = INFEASIBLE if infeasible else INVALID_OUTPUT
+                last_answer = (call.issues, call.failure_reason)
             if attempt_no < self.max_attempts:
                 call.business_retries.append({
                     "stage": STAGE_KEY, "attempt_no": attempt_no, "max_attempts": self.max_attempts,
@@ -364,13 +422,16 @@ class _BandPlanCall:
     """One planning call's model attempts: the valid draft, if any, and what the trace records."""
 
     draft: BandPlanDraft | None = None
-    # The last attempt's errors; empty on success.
+    # The last answered attempt's errors, with a later provider error added; empty on success.
     issues: list[PlanIssue] = field(default_factory=list)
     # The feasibility warnings on the accepted draft.
     warnings: list[PlanIssue] = field(default_factory=list)
-    # LLM_UNAVAILABLE when no call returned an answer, INFEASIBLE when the last valid answer failed the audit,
-    # INVALID_OUTPUT otherwise; empty on success.
+    # LLM_UNAVAILABLE when no call returned an answer, INFEASIBLE when the last answer was valid but failed the
+    # audit, INVALID_OUTPUT when it was invalid, AUDIT_ERROR when checking it raised, NO_STORY_CALENDAR when no
+    # model was asked; empty on success.
     failure_reason: str = ""
+    # What validation or the audit raised; the caller re-raises it.
+    error: Exception | None = None
     messages: list[dict] = field(default_factory=list)
     attempts: list[dict[str, Any]] = field(default_factory=list)
     business_retries: list[dict[str, Any]] = field(default_factory=list)
@@ -438,12 +499,17 @@ def _chapter_plan(session: Session, project_id: str, chapter_number: int) -> Cha
     ))
 
 
-def _band_rows(session: Session, project_id: str, band: BandSpan, *, refresh: bool = False) -> dict[int, ChapterPlan]:
+def _band_rows(
+    session: Session, project_id: str, band: BandSpan, *, refresh: bool = False, lock: bool = False,
+) -> dict[int, ChapterPlan]:
+    """The band's plan rows; ``refresh`` re-reads loaded rows, ``lock`` also locks them ``FOR UPDATE``."""
     statement = select(ChapterPlan).where(
         ChapterPlan.project_id == project_id,
         ChapterPlan.chapter_number.between(band.chapter_start, band.chapter_end),
     )
-    if refresh:
+    if lock:
+        statement = statement.with_for_update()
+    if refresh or lock:
         statement = statement.execution_options(populate_existing=True)
     return {plan.chapter_number: plan for plan in session.scalars(statement)}
 
@@ -472,4 +538,4 @@ def _feedback_line(issue: PlanIssue) -> str:
     return f"{where}[{issue.code}] {issue.message}"
 
 
-__all__ = ["BAND_PLANNING_SOURCE", "INFEASIBLE", "STAGE_KEY", "BandPlanner"]
+__all__ = ["AUDIT_ERROR", "BAND_PLANNING_SOURCE", "INFEASIBLE", "NO_STORY_CALENDAR", "STAGE_KEY", "BandPlanner"]

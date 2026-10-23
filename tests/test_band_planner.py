@@ -192,15 +192,16 @@ def _feedback(client, call: int) -> str:
     return client.user_prompt(call).split("Retry validation feedback", 1)[1]
 
 
-def _pending_conflict(Session, world: _World, *, flag: bool = True, refs=("delta-1",)) -> str:
-    """A world conflict resolved with plot_responds; ``flag`` marks it as waiting for a plan."""
+def _pending_conflict(Session, world: _World, *, flag: bool = True, refs=("delta-1",), intent: bool = True) -> str:
+    """A world conflict resolved with plot_responds; ``flag`` marks it as waiting for a plan, ``intent`` names the
+    intent besides the acting rival."""
     with Session.begin() as session:
         repo = WorldConflictRepository(session)
         row = repo.create(ConflictDraft(
             project_id=world.project_id, source="world_tick", detected_after_chapter=0, story_time=OPENING,
-            involved_refs=[_intent(world), world.rival], violated="impact_review", impact_level="major",
-            summary="conflict-author-summary", proposed_change={}, intent_ref=_intent(world),
-            actor_ref=world.rival, blocks_from_chapter=1,
+            involved_refs=[_intent(world), world.rival] if intent else [world.rival], violated="impact_review",
+            impact_level="major", summary="conflict-author-summary", proposed_change={},
+            intent_ref=_intent(world) if intent else "", actor_ref=world.rival, blocks_from_chapter=1,
         ), required_decider="human", options=("plot_responds", "veto_world"))
         repo.mark_resolved(row, decision=ConflictDecision(
             option="plot_responds", decided_by="human", rationale="rationale", decided_at=datetime.now(UTC),
@@ -423,7 +424,7 @@ def test_hint_text_containing_truth_is_rejected(Session) -> None:
         assert json.loads(trace.output_summary_json)["failure_reason"] == "invalid_output"
 
 
-def test_replan_keeps_accepted_rows_and_reapplies_active_patches(Session) -> None:
+def test_replan_keeps_accepted_rows_and_reapplies_active_patches(Session, digest_calls) -> None:
     world, arc_id, sheet_id = _book(Session)
     conflict_id = _pending_conflict(Session, world)
     first = _band(world, range(1, 5), {3: {"goals": ["goal-3", PLOT_RESPONSE_GENERIC_GOAL]}})
@@ -456,6 +457,8 @@ def test_replan_keeps_accepted_rows_and_reapplies_active_patches(Session) -> Non
     assert payload["chapters_to_plan"] == [3, 4] and payload["notes"] == ["note-value"]
     assert payload["pending_responses"] == []
     assert [item["chapter_number"] for item in payload["kept_chapters"]] == [1, 2]
+    # Two chapters are planned, but the digest window still runs to the band's last chapter.
+    assert digest_calls[1]["window_end_minute"] == OPENING + 4 * DAY
     assert replan.band_plan_id not in (None, outcome.band_plan_id)
     with Session() as session:
         plans = _plans(session, world.project_id)
@@ -521,7 +524,8 @@ def test_pending_plot_response_is_bound_and_attached(Session) -> None:
 
     (pending,) = client.payload(0)["pending_responses"]
     assert (pending["id"], pending["goal"]) == (conflict_id, PLOT_RESPONSE_GENERIC_GOAL)
-    assert set(pending["refs"]) == {_intent(world), world.rival}
+    # The rival is an actor: no binding kind takes it, so only the intent is offered.
+    assert pending["refs"] == [_intent(world)]
     feedback = _feedback(client, 1)
     assert "pending_response_unaddressed" in feedback and conflict_id in feedback
     assert outcome.band_plan_id is not None
@@ -624,3 +628,255 @@ def test_ensure_plan_for_chapter_plans_its_band_from_the_previous_band(Session, 
         assert planner.ensure_plan_for_chapter(session, project_id=world.project_id, chapter_number=2,
                                                policy=POLICY).title == "old-2"
     assert len(client.calls) == 1
+
+
+def test_pending_response_with_no_bindable_ref_asks_for_its_goal(Session) -> None:
+    world, arc_id, sheet_id = _book(Session)
+    conflict_id = _pending_conflict(Session, world, intent=False)
+    carried = {1: {"goals": [PLOT_RESPONSE_GENERIC_GOAL, "goal-1"]}}
+    client = StubLLM(_band(world, range(1, 5)), _band(world, range(1, 5), carried))
+    outcome = _plan_band(Session, _planner(client), world, arc_id, sheet_id)
+
+    assert client.payload(0)["pending_responses"][0]["refs"] == []
+    feedback = _feedback(client, 1)
+    assert f"pending response {conflict_id} is carried by no chapter: copy its goal text into a chapter's goals" in feedback
+    assert outcome.band_plan_id is not None
+
+
+def test_failure_leaves_a_conflict_opened_during_the_model_call_alone(Session) -> None:
+    from forwin.planning.band_planner.types import PlanIssue
+
+    world, arc_id, _sheet_id = _book(Session)
+    issue = PlanIssue(code="onstage_unavailable", severity="error", chapter_number=2, ref=world.rival, message="m")
+    opened: list[str] = []
+
+    def open_conflict() -> None:
+        if not opened:
+            with Session.begin() as other:
+                opened.append(WorldConflictRepository(other).create(ConflictDraft(
+                    project_id=world.project_id, source="band_planning", detected_after_chapter=0,
+                    story_time=OPENING, involved_refs=[], violated="feasibility", impact_level="major",
+                    summary="opened elsewhere", proposed_change={}, blocks_from_chapter=1,
+                ), required_decider="human", options=("amend_plan",)).id)
+
+    client = HookedLLM(open_conflict, _band(world, range(1, 5)), _band(world, range(1, 5)))
+    with Session.begin() as session:
+        assert _planner(client, StubAudit([issue], [issue])).ensure_plan_for_chapter(
+            session, project_id=world.project_id, chapter_number=1, policy=POLICY,
+        ) is None
+
+    with Session() as session:
+        assert [row.id for row in WorldConflictRepository(session).list(world.project_id)] == opened
+
+
+@pytest.mark.parametrize("every_call", [False, True], ids=["replanned_once", "replanned_every_call"])
+def test_ensure_plans_again_when_a_concurrent_plan_leaves_the_chapter_out(Session, every_call) -> None:
+    world, arc_id, sheet_id = _book(Session)
+    first = _plan_band(Session, _planner(StubLLM(_band(world, range(1, 5)))), world, arc_id, sheet_id)
+    with Session.begin() as session:
+        session.delete(_plans(session, world.project_id)[2])
+    replans: list[str] = []
+
+    def replan_from_three() -> None:
+        if every_call or not replans:
+            with Session.begin() as other:
+                replans.append(_planner(StubLLM(_band(world, (3, 4)))).replan_remaining(
+                    other, project_id=world.project_id, band_plan_id=first.band_plan_id, from_chapter=3,
+                    policy=POLICY, notes=[],
+                ).band_plan_id)
+
+    client = HookedLLM(replan_from_three, _band(world, range(1, 5)), _band(world, range(1, 5)))
+    with Session.begin() as session:
+        plan = _planner(client).ensure_plan_for_chapter(session, project_id=world.project_id, chapter_number=2,
+                                                        policy=POLICY)
+        plan_id = plan.id if plan is not None else None
+
+    # The first answer lost the band to the concurrent replan; ensure asked once more.
+    assert len(client.calls) == 2
+    with Session() as session:
+        conflicts = WorldConflictRepository(session).list(world.project_id)
+        traces = [json.loads(trace.output_summary_json) for trace in _traces(session, world.project_id)]
+        if every_call:
+            # Both answers lost: the chapter is still unplanned, so the band is blocked.
+            assert plan_id is None and 2 not in _plans(session, world.project_id)
+            (conflict,) = conflicts
+            assert [item["code"] for item in json.loads(conflict.proposed_change_json)["issues"]] == [
+                "chapter_unplanned",
+            ]
+        else:
+            assert plan_id == _plans(session, world.project_id)[2].id and conflicts == []
+        assert sum(trace["superseded_by_concurrent_plan"] for trace in traces) == (2 if every_call else 1)
+
+
+def test_band_rows_stay_locked_from_the_re_read_until_the_plan_is_written(Session, monkeypatch) -> None:
+    from sqlalchemy import text
+    from sqlalchemy.exc import OperationalError
+
+    from forwin.planning.band_planner import service as module
+
+    world, arc_id, sheet_id = _book(Session)
+    first = _plan_band(Session, _planner(StubLLM(_band(world, range(1, 5)))), world, arc_id, sheet_id)
+    with Session() as session:
+        third_id = _plans(session, world.project_id)[3].id
+    attempts: list[str] = []
+    real = module.persist_band_plan
+
+    def persist_after_a_status_change(session, **kwargs):
+        # A writer that does not take the project lock tries to move chapter 3 on before the plan is written.
+        try:
+            with Session.begin() as other:
+                other.execute(text("SET LOCAL lock_timeout = '300ms'"))
+                other.get(ChapterPlan, third_id).status = "needs_review"
+            attempts.append("committed")
+        except OperationalError:
+            attempts.append("blocked")
+        return real(session, **kwargs)
+
+    monkeypatch.setattr(module, "persist_band_plan", persist_after_a_status_change)
+    with Session.begin() as session:
+        _planner(StubLLM(_band(world, (3, 4), {3: {"title": "title-3b"}}))).replan_remaining(
+            session, project_id=world.project_id, band_plan_id=first.band_plan_id, from_chapter=3,
+            policy=POLICY, notes=[],
+        )
+
+    assert attempts == ["blocked"]
+    with Session() as session:
+        third = session.get(ChapterPlan, third_id)
+        assert (third.status, third.title) == ("planned", "title-3b")
+
+
+def test_an_answered_attempt_keeps_its_issues_after_a_provider_failure(Session) -> None:
+    from forwin.planning.band_planner.types import PlanIssue
+
+    world, arc_id, _sheet_id = _book(Session)
+    issue = PlanIssue(code="onstage_unavailable", severity="error", chapter_number=2, ref=world.rival, message="m")
+    client = StubLLM(_band(world, range(1, 5)), RuntimeError("provider down"))
+    with Session.begin() as session:
+        assert _planner(client, StubAudit([issue])).ensure_plan_for_chapter(
+            session, project_id=world.project_id, chapter_number=1, policy=POLICY,
+        ) is None
+
+    with Session() as session:
+        (conflict,) = WorldConflictRepository(session).list(world.project_id)
+        assert [item["code"] for item in json.loads(conflict.proposed_change_json)["issues"]] == [
+            "onstage_unavailable", "llm_unavailable",
+        ]
+        (trace,) = _traces(session, world.project_id)
+        assert json.loads(trace.output_summary_json)["failure_reason"] == "infeasible"
+
+
+def test_a_raising_audit_saves_the_trace_before_the_error_surfaces(Session) -> None:
+    from forwin.planning.band_planner.service import BandPlanner
+
+    class RaisingAudit:
+        def audit_plans(self, session, **kwargs):
+            raise RuntimeError("audit broke")
+
+    world, arc_id, sheet_id = _book(Session)
+    saved: list[dict] = []
+
+    def save_trace(session, prompt_trace):
+        saved.append(prompt_trace)
+        return save_world_prompt_trace(session, prompt_trace)
+
+    client = StubLLM(_band(world, range(1, 5)), _band(world, range(1, 5)))
+    planner = BandPlanner(client, feasibility=RaisingAudit(), save_trace=save_trace)
+    with pytest.raises(RuntimeError, match="audit broke"):
+        _plan_band(Session, planner, world, arc_id, sheet_id)
+
+    # The error is never fed back: one model call, and its trace was saved before the error surfaced.
+    assert len(client.calls) == 1
+    (trace,) = saved
+    assert (trace["stage_key"], trace["output_summary"]["failure_reason"]) == ("plan.band", "audit_error")
+    assert len(trace["attempts"]) == 1
+
+
+def test_a_book_without_a_story_calendar_is_not_planned(Session) -> None:
+    from forwin.models.book_frame import StoryCalendarRow
+
+    world, arc_id, sheet_id = _book(Session)
+    with Session.begin() as session:
+        session.execute(StoryCalendarRow.__table__.delete().where(StoryCalendarRow.project_id == world.project_id))
+    client = StubLLM()
+    outcome = _plan_band(Session, _planner(client), world, arc_id, sheet_id)
+
+    assert client.calls == []
+    assert (outcome.band_plan_id, [issue.code for issue in outcome.issues]) == (None, ["no_story_calendar"])
+    with Session() as session:
+        (trace,) = _traces(session, world.project_id)
+        assert json.loads(trace.output_summary_json)["failure_reason"] == "no_story_calendar"
+
+
+def test_first_band_plan_over_a_written_chapter_lists_the_whole_band(Session) -> None:
+    world, arc_id, sheet_id = _book(Session)
+    with Session.begin() as session:
+        plan = StateUpdater(session).create_chapter_plan(world.project_id, arc_id, 1, "old-1", "old-line", ["old-goal"])
+        plan.status = "accepted"
+    client = StubLLM(_band(world, (2, 3, 4)))
+    outcome = _plan_band(Session, _planner(client), world, arc_id, sheet_id)
+
+    assert client.payload(0)["chapters_to_plan"] == [2, 3, 4]
+    with Session() as session:
+        chapters = json.loads(session.get(BandPlanRow, outcome.band_plan_id).plan_json)["chapters"]
+        assert [(item["chapter_number"], item["title"]) for item in chapters] == [
+            (1, "old-1"), (2, "title-2"), (3, "title-3"), (4, "title-4"),
+        ]
+        assert (chapters[0]["one_line"], chapters[0]["goals"], chapters[0]["onstage_refs"]) == (
+            "old-line", ["old-goal"], [],
+        )
+
+
+@pytest.mark.parametrize("undo", ["superseded_resolution", "conflict_not_resolved"])
+def test_replan_does_not_reapply_a_patch_no_longer_in_force(Session, undo) -> None:
+    world, arc_id, sheet_id = _book(Session)
+    conflict_id = _pending_conflict(Session, world)
+    first = _band(world, range(1, 5), {1: {"goals": [PLOT_RESPONSE_GENERIC_GOAL, "goal-1"]}})
+    client = StubLLM(first, _band(world, range(1, 5), {1: {"goals": ["goal-1b"]}}))
+    planner = _planner(client)
+    outcome = _plan_band(Session, planner, world, arc_id, sheet_id)
+    with Session.begin() as session:
+        if undo == "superseded_resolution":
+            supersede_resolutions(session, project_id=world.project_id, graph_delta_id="delta-1", reason="rewritten")
+        else:
+            session.get(WorldPlanConflictRow, conflict_id).status = "superseded"
+    with Session.begin() as session:
+        planner.replan_remaining(session, project_id=world.project_id, band_plan_id=outcome.band_plan_id,
+                                 from_chapter=1, policy=POLICY, notes=[])
+
+    with Session() as session:
+        assert json.loads(_plans(session, world.project_id)[1].goals_json) == ["goal-1b"]
+
+
+def test_concurrent_planners_write_one_band_plan(Session) -> None:
+    import threading
+
+    from forwin.planning.band_planner.types import PlanIssue
+
+    world, arc_id, sheet_id = _book(Session)
+    barrier = threading.Barrier(2, timeout=30)
+    warning = PlanIssue(code="clock_unanswered", severity="warning", message="w")
+    outcomes: list = []
+    errors: list[BaseException] = []
+
+    def plan() -> None:
+        try:
+            client = HookedLLM(barrier.wait, _band(world, range(1, 5)))
+            outcomes.append(_plan_band(Session, _planner(client, StubAudit([warning])), world, arc_id, sheet_id))
+        except BaseException as exc:  # noqa: BLE001 - surfaced by the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=plan) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(60)
+
+    assert errors == []
+    with Session() as session:
+        (band_plan,) = session.scalars(select(BandPlanRow).where(BandPlanRow.project_id == world.project_id))
+        traces = [json.loads(trace.output_summary_json) for trace in _traces(session, world.project_id)]
+    assert sorted(trace["superseded_by_concurrent_plan"] for trace in traces) == [False, True]
+    winner, loser = sorted(outcomes, key=lambda outcome: bool(outcome.chapter_plan_ids), reverse=True)
+    assert (winner.band_plan_id, [issue.code for issue in winner.issues]) == (band_plan.id, ["clock_unanswered"])
+    # The loser's draft was discarded, so are its warnings; it reports the plan that stands.
+    assert (loser.band_plan_id, loser.chapter_plan_ids, loser.issues) == (band_plan.id, [], [])

@@ -54,7 +54,10 @@ _THREAD_LIMIT = 20
 
 @dataclass(frozen=True)
 class PendingResponse:
-    """A plot response a chapter of the band must carry: by stating ``goal`` or by binding one of ``refs``."""
+    """A plot response a chapter of the band must carry: by stating ``goal`` or by binding one of ``refs``.
+
+    ``refs`` are the conflict's refs that some binding kind accepts; it is empty when only the goal can carry it.
+    """
 
     conflict_id: str
     goal: str
@@ -140,7 +143,8 @@ def build_band_inputs(
     query = BookStateQuery(session)
     now = query.current_story_minute(project_id, as_of_chapter=as_of) or 0
     per_chapter = _minutes_per_chapter(query, project_id, previous, as_of=as_of) or MINUTES_PER_DAY
-    window_end = now + len(chapter_numbers) * per_chapter
+    # The window runs to the band's last chapter, however many of its chapters are planned now.
+    window_end = now + max(1, band.chapter_end - as_of) * per_chapter
     digest = build_world_digest(
         session, project_id=project_id, as_of_chapter=as_of, protagonist_ref=beat_sheet.protagonist_ref,
         window_end_minute=window_end, budget_chars=policy.planning.digest_budget_chars, runtime=runtime,
@@ -162,12 +166,15 @@ def build_band_inputs(
     news = _news(session, project_id, window_end=window_end)
     facts = _facts(runtime)
     milestones = _nearby_milestones(beat_sheet, band)
+    bindable = {*(node.id for node in intents), *(node.id for node in events), *(node.id for node in clocks),
+                *(edge.id for edge in relations), *(item["fact_ref"] for item in news), *(item["ref"] for item in facts)}
     pending_rows = WorldConflictRepository(session).pending_plot_responses(project_id)
     pending = [
         PendingResponse(
             conflict_id=row.id, goal=writer_response_text(row),
-            refs=frozenset(ref for ref in [*json.loads(row.involved_refs_json or "[]"), row.intent_ref, row.actor_ref]
-                           if ref),
+            refs=frozenset(bindable.intersection(
+                [*json.loads(row.involved_refs_json or "[]"), row.intent_ref, row.actor_ref],
+            )),
         )
         for row in pending_rows
     ]

@@ -69,6 +69,38 @@ class PlanningPolicy(FrozenPolicyModel):
     plan_health: bool
     use_llm_simulation: bool
     context_recency_window: int = Field(ge=0, le=1000)
+    band_size: int = Field(default=6, ge=4, le=12)
+    max_replans_per_band: int = Field(default=2, ge=0, le=5)
+    digest_budget_chars: int = Field(default=8000, ge=2000, le=20000)
+
+    @classmethod
+    def for_profile(cls, quality_profile: str) -> PlanningPolicy:
+        if quality_profile == "pulp":
+            return cls(
+                future_constraints=False,
+                plan_health=False,
+                use_llm_simulation=False,
+                context_recency_window=50,
+                band_size=8,
+                max_replans_per_band=1,
+                digest_budget_chars=6000,
+            )
+        return cls(
+            future_constraints=True,
+            plan_health=True,
+            use_llm_simulation=True,
+            context_recency_window=0,
+        )
+
+
+class WriterPolicy(FrozenPolicyModel):
+    world_view_budget_chars: int = Field(default=6000, ge=1000, le=20000)
+
+    @classmethod
+    def for_profile(cls, quality_profile: str) -> WriterPolicy:
+        if quality_profile == "pulp":
+            return cls(world_view_budget_chars=4000)
+        return cls()
 
 
 class CanonPolicy(FrozenPolicyModel):
@@ -108,6 +140,7 @@ class RuntimePolicy(FrozenPolicyModel):
     pause: PausePolicy
     review: ReviewPolicy
     planning: PlanningPolicy
+    writer: WriterPolicy = Field(default_factory=WriterPolicy)
     canon: CanonPolicy
     world: WorldPolicy = Field(default_factory=WorldPolicy)
     models: ModelsPolicy = Field(default_factory=ModelsPolicy)
@@ -116,14 +149,28 @@ class RuntimePolicy(FrozenPolicyModel):
     @model_validator(mode="before")
     @classmethod
     def _load_world_defaults(cls, data: object) -> object:
-        if isinstance(data, dict) and "world" not in data:
-            return {
-                **data,
-                "world": WorldPolicy.for_profile(
-                    data.get("quality_profile", "standard")
-                ).model_dump(),
+        if not isinstance(data, dict):
+            return data
+        profile = data.get("quality_profile", "standard")
+        loaded = dict(data)
+        if "world" not in loaded:
+            loaded["world"] = WorldPolicy.for_profile(profile).model_dump()
+        if isinstance(data.get("planning"), dict):
+            defaults = PlanningPolicy.for_profile(profile)
+            loaded["planning"] = {
+                **{
+                    field: getattr(defaults, field)
+                    for field in ("band_size", "max_replans_per_band", "digest_budget_chars")
+                },
+                **data["planning"],
             }
-        return data
+        writer = data.get("writer", {})
+        if isinstance(writer, dict):
+            loaded["writer"] = {
+                **WriterPolicy.for_profile(profile).model_dump(),
+                **writer,
+            }
+        return loaded
 
     @classmethod
     def for_profile(cls, profile: QualityProfile, *, model_profile_id: str = "") -> Self:
@@ -140,7 +187,7 @@ class RuntimePolicy(FrozenPolicyModel):
                     blocking_rewrites=1,
                     repair_models=(),
                 ),
-                planning=PlanningPolicy(future_constraints=False, plan_health=False, use_llm_simulation=False, context_recency_window=50),
+                planning=PlanningPolicy.for_profile(profile),
                 canon=CanonPolicy(quality_gate="pulp_fatal"),
                 world=WorldPolicy.for_profile(profile),
                 writer_attention_retries=1,
@@ -156,7 +203,7 @@ class RuntimePolicy(FrozenPolicyModel):
                 max_rewrites=3,
                 repair_models=("deepseek-reasoner", "deepseek-reasoner", "gpt-5.3-codex-spark"),
             ),
-            planning=PlanningPolicy(future_constraints=True, plan_health=True, use_llm_simulation=True, context_recency_window=0),
+            planning=PlanningPolicy.for_profile(profile),
             canon=CanonPolicy(),
             world=WorldPolicy.for_profile(profile),
             writer_attention_retries=3,

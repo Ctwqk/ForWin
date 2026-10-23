@@ -6,6 +6,140 @@ from pydantic import ValidationError
 from forwin.runtime.policy import CanonPolicy, ReviewPolicy, RuntimePolicy, WorldPolicy, role_models
 
 
+@pytest.mark.parametrize(
+    "profile, expected",
+    [
+        ("standard", (6, 2, 8000, 6000)),
+        ("pulp", (8, 1, 6000, 4000)),
+    ],
+)
+def test_profile_defaults_for_planning_and_writer_knobs(profile, expected) -> None:
+    policy = RuntimePolicy.for_profile(profile)
+
+    assert (
+        policy.planning.band_size,
+        policy.planning.max_replans_per_band,
+        policy.planning.digest_budget_chars,
+        policy.writer.world_view_budget_chars,
+    ) == expected
+
+
+@pytest.mark.parametrize("band_size", [3, 13])
+def test_band_size_bounds_enforced(band_size) -> None:
+    stored = RuntimePolicy.for_profile("standard").model_dump(mode="json")
+    stored["planning"]["band_size"] = band_size
+
+    with pytest.raises(ValidationError) as exc:
+        RuntimePolicy.model_validate(stored)
+    assert exc.value.errors()[0]["loc"] == ("planning", "band_size")
+    assert exc.value.errors()[0]["type"] in {"greater_than_equal", "less_than_equal"}
+
+
+@pytest.mark.parametrize(
+    "section, field, value",
+    [
+        ("planning", "max_replans_per_band", -1),
+        ("planning", "max_replans_per_band", 6),
+        ("planning", "digest_budget_chars", 1999),
+        ("planning", "digest_budget_chars", 20001),
+        ("writer", "world_view_budget_chars", 999),
+        ("writer", "world_view_budget_chars", 20001),
+    ],
+)
+def test_planning_and_writer_budget_bounds_enforced(section, field, value) -> None:
+    stored = RuntimePolicy.for_profile("standard").model_dump(mode="json")
+    stored.setdefault(section, {})[field] = value
+
+    with pytest.raises(ValidationError) as exc:
+        RuntimePolicy.model_validate(stored)
+    assert exc.value.errors()[0]["loc"] == (section, field)
+    assert exc.value.errors()[0]["type"] in {"greater_than_equal", "less_than_equal"}
+
+
+@pytest.mark.parametrize(
+    "band_size, max_replans, digest_budget, world_view_budget",
+    [(4, 0, 2000, 1000), (12, 5, 20000, 20000)],
+)
+def test_planning_and_writer_knobs_accept_boundaries(
+    band_size, max_replans, digest_budget, world_view_budget,
+) -> None:
+    stored = RuntimePolicy.for_profile("standard").model_dump(mode="json")
+    stored["planning"].update(
+        band_size=band_size,
+        max_replans_per_band=max_replans,
+        digest_budget_chars=digest_budget,
+    )
+    stored["writer"] = {"world_view_budget_chars": world_view_budget}
+
+    policy = RuntimePolicy.model_validate(stored)
+
+    assert policy.planning.band_size == band_size
+    assert policy.planning.max_replans_per_band == max_replans
+    assert policy.planning.digest_budget_chars == digest_budget
+    assert policy.writer.world_view_budget_chars == world_view_budget
+
+
+@pytest.mark.parametrize(
+    "profile, expected",
+    [
+        ("standard", (6, 2, 8000, 6000)),
+        ("pulp", (8, 1, 6000, 4000)),
+    ],
+)
+def test_stored_policy_without_new_sections_loads(profile, expected) -> None:
+    stored = RuntimePolicy.for_profile(profile).model_dump(mode="json")
+    stored.pop("writer", None)
+    for field in ("band_size", "max_replans_per_band", "digest_budget_chars"):
+        stored["planning"].pop(field, None)
+    stored["planning"]["use_llm_simulation"] = True
+    stored["planning"]["context_recency_window"] = 73
+    original = json.dumps(stored)
+
+    policy = RuntimePolicy.model_validate(stored)
+
+    assert (
+        policy.planning.band_size,
+        policy.planning.max_replans_per_band,
+        policy.planning.digest_budget_chars,
+        policy.writer.world_view_budget_chars,
+    ) == expected
+    assert policy.planning.use_llm_simulation is True
+    assert policy.planning.context_recency_window == 73
+    assert json.dumps(stored) == original
+    assert RuntimePolicy.model_validate_json(policy.model_dump_json()) == policy
+
+
+@pytest.mark.parametrize(
+    "profile, expected_replans, expected_digest",
+    [("standard", 2, 8000), ("pulp", 1, 6000)],
+)
+def test_partial_planning_defaults_preserve_stored_knobs(
+    profile, expected_replans, expected_digest,
+) -> None:
+    stored = RuntimePolicy.for_profile(profile).model_dump(mode="json")
+    stored["planning"]["band_size"] = 10
+    stored["planning"].pop("max_replans_per_band", None)
+    stored["planning"].pop("digest_budget_chars", None)
+    stored["writer"] = {"world_view_budget_chars": 12000}
+
+    policy = RuntimePolicy.model_validate_json(json.dumps(stored))
+
+    assert policy.planning.band_size == 10
+    assert policy.planning.max_replans_per_band == expected_replans
+    assert policy.planning.digest_budget_chars == expected_digest
+    assert policy.writer.world_view_budget_chars == 12000
+
+
+@pytest.mark.parametrize("profile, expected_budget", [("standard", 6000), ("pulp", 4000)])
+def test_stored_empty_writer_section_uses_profile_defaults(profile, expected_budget) -> None:
+    stored = RuntimePolicy.for_profile(profile).model_dump(mode="json")
+    stored["writer"] = {}
+
+    policy = RuntimePolicy.model_validate(stored)
+
+    assert policy.writer.world_view_budget_chars == expected_budget
+
+
 @pytest.mark.parametrize("profile, actor_turns", [("standard", 6), ("pulp", 3)])
 def test_world_and_models_defaults_per_profile(profile, actor_turns) -> None:
     policy = RuntimePolicy.for_profile(profile)

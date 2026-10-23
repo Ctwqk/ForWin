@@ -17,7 +17,7 @@ from tests.postgres import postgres_empty_test_url
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_REVISION = "0005_world_plan_conflicts"
+EXPECTED_REVISION = "0006_planning_v6"
 PARALLEL_LEDGER_TABLES = {"character_state_transitions", "countdown_ledgers"}
 
 # Tables that exist only in the production database (left over from v4 and

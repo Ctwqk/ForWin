@@ -12,6 +12,7 @@ from .canon_quality import (
 from .entity import Entity, EntityAlias
 from .genesis import BookGenesisRevision, PromptTrace
 from .planning_control import BandCheckpoint, NarrativeConstraint
+from .planning_v6 import ArcBeatSheetRow, BandPlanRow
 from .audit import DecisionEvent
 from .book_frame import BookLexiconRow, StoryCalendarRow
 from .world_conflict import WorldPlanConflictRow
@@ -107,6 +108,8 @@ __all__ = [
     "Project",
     "ArcPlanVersion",
     "ChapterPlan",
+    "ArcBeatSheetRow",
+    "BandPlanRow",
     "ProjectProgressionRule",
     "GenerationTask",
     "SubWorld",

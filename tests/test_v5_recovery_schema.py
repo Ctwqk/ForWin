@@ -28,13 +28,21 @@ RECOVERY_TABLES = {
 }
 # Schema added by migrations after 0001. The baseline comparison below only
 # checks what 0001 itself creates, so these are removed from the ORM side.
-TABLES_ADDED_AFTER_BASELINE = {"story_calendars", "book_lexicons", "world_plan_conflicts"}
+TABLES_ADDED_AFTER_BASELINE = {
+    "story_calendars", "book_lexicons", "world_plan_conflicts",
+    "arc_beat_sheets", "band_plans",
+}
 COLUMNS_ADDED_AFTER_BASELINE = {
     "graph_deltas": {"story_time_start", "story_time_end"},
     "world_node_states": {"name", "aliases_json", "profile_json", "is_active"},
     "cognition_overlays": {"knowledge_by_ref_json"},
     "world_snapshots": {"narrative_node_index_json", "narrative_edge_index_json"},
     "arc_plan_versions": {"title", "goal", "stakes", "payoff_direction"},
+    "chapter_plans": {
+        "band_plan_id", "pov_ref", "onstage_refs_json", "location_refs_json",
+        "world_bindings_json", "reveal_directives_json", "hint_directives_json",
+        "intended_changes_json", "milestone_ids_json", "expected_span_minutes", "hook",
+    },
 }
 
 
@@ -594,6 +602,7 @@ def test_baseline_revision_is_rotated_and_followed_only_by_later_migrations() ->
         "0003_book_state_v6.py",
         "0004_drop_parallel_ledgers.py",
         "0005_world_plan_conflicts.py",
+        "0006_planning_v6.py",
     ]
     assert migration.revision == "0001_v5_recovery"
     assert migration.down_revision is None

@@ -70,7 +70,7 @@ class ArcPlanVersion(Base):
 class ChapterPlan(Base):
     __tablename__ = "chapter_plans"
     __table_args__ = (
-        Index("ix_chapter_plans_project_chapter", "project_id", "chapter_number"),
+        Index("uq_chapter_plans_project_chapter", "project_id", "chapter_number", unique=True),
         Index("ix_chapter_plans_project_status", "project_id", "status"),
     )
 
@@ -82,6 +82,19 @@ class ChapterPlan(Base):
         String, ForeignKey("arc_plan_versions.id"), nullable=False
     )
     chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    band_plan_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("band_plans.id", name="fk_chapter_plans_band_plan"), nullable=True
+    )
+    pov_ref: Mapped[str] = mapped_column(String, nullable=False, default="", server_default="")
+    onstage_refs_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    location_refs_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    world_bindings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    reveal_directives_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    hint_directives_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    intended_changes_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    milestone_ids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    expected_span_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hook: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     title: Mapped[str] = mapped_column(String, default="")
     one_line: Mapped[str] = mapped_column(Text, default="")
     goals_json: Mapped[str] = mapped_column(Text, default="[]")

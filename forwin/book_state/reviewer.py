@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from collections.abc import Iterable
 from copy import copy, deepcopy
@@ -7,6 +8,7 @@ from functools import cached_property
 from typing import Any
 
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.book_frame_repository import BookLexiconRepository
@@ -22,6 +24,7 @@ from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.book_state.schema import validate_graph_delta
+from forwin.models.project import ChapterPlan
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
     GraphDelta,
@@ -71,6 +74,7 @@ class BookStateReviewGate:
         *,
         base_chapter: int | None = None,
         travel_tolerance: float = DEFAULT_TRAVEL_TOLERANCE,
+        reveal_directives: list[dict[str, Any]] | None = None,
     ) -> BookStateReviewVerdict:
         if base_chapter is None:
             base_chapter = self.projection.repo.compile_base_chapter(
@@ -92,7 +96,8 @@ class BookStateReviewGate:
             elif delta.source_type in _V6_SOURCE_TYPES:
                 issues.extend(
                     _ChapterExtractionChecks(
-                        self.session, runtime, delta, travel_tolerance=travel_tolerance
+                        self.session, runtime, delta, travel_tolerance=travel_tolerance,
+                        reveal_directives=reveal_directives,
                     ).run()
                 )
             else:
@@ -305,6 +310,16 @@ def _is_location_patch(patch: NodePatch) -> bool:
     return str(patch.op) in {"set", "replace"} and patch.field_path == "state.location_id"
 
 
+def chapter_reveal_directives(session: Session, project_id: str, chapter_number: int) -> list[dict[str, Any]]:
+    plan = session.scalar(select(ChapterPlan).where(
+        ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == chapter_number,
+    ))
+    try:
+        return _records(json.loads(plan.reveal_directives_json or "[]")) if plan is not None else []
+    except (TypeError, json.JSONDecodeError):
+        return []
+
+
 class _ChapterExtractionChecks:
     """World gate v6: one chapter_extraction or world_engine delta against the runtime it builds on.
 
@@ -321,6 +336,7 @@ class _ChapterExtractionChecks:
         delta: GraphDelta,
         *,
         travel_tolerance: float,
+        reveal_directives: list[dict[str, Any]] | None = None,
     ) -> None:
         self.session = session
         self.runtime = runtime
@@ -332,6 +348,7 @@ class _ChapterExtractionChecks:
         self.facts = _fact_traits(runtime, delta)
         self.issues: list[BookStateReviewIssue] = []
         self._reveal_schedule: dict[str, int] | None = None
+        self._reveal_directives = reveal_directives
 
     def run(self) -> list[BookStateReviewIssue]:
         self._movement_issues()
@@ -605,6 +622,20 @@ class _ChapterExtractionChecks:
             None,
         )
 
+    @cached_property
+    def _allowed_reader_reveals(self) -> set[str]:
+        from forwin.planning.beat_sheet.types import READER_OBSERVER
+
+        if self.delta.source_type != CHAPTER_EXTRACTION_SOURCE_TYPE:
+            return set()
+        directives = self._reveal_directives
+        if directives is None:
+            directives = chapter_reveal_directives(self.session, self.delta.project_id, self.delta.chapter_number)
+        return {
+            directive["fact_ref"] for directive in directives
+            if directive.get("observer") == READER_OBSERVER and isinstance(directive.get("fact_ref"), str)
+        }
+
     def _reveal_issues(self, fact_ref: str) -> None:
         if self._reveal_schedule is None:
             self._reveal_schedule = earliest_reveal_chapters(self.session, self.delta.project_id)
@@ -614,7 +645,7 @@ class _ChapterExtractionChecks:
                 "warning", "unscheduled_reveal", fact_ref,
                 f"the reader advances on {fact_ref}, which has no reveal schedule",
             )
-        elif self.delta.chapter_number < earliest:
+        elif self.delta.chapter_number < earliest and fact_ref not in self._allowed_reader_reveals:
             self._issue(
                 "error", "premature_reveal", fact_ref,
                 f"the reader advances on {fact_ref} in chapter {self.delta.chapter_number}; "

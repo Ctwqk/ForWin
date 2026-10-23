@@ -42,19 +42,8 @@ def build_quality_analysis_cache_key(
             ChapterPlan.chapter_number == int(chapter_number or 0),
         )
     ).scalar_one_or_none()
-    plan_payload = (
-        {
-            "id": str(plan.id or ""),
-            "arc_plan_id": str(plan.arc_plan_id or ""),
-            "title": str(plan.title or ""),
-            "one_line": str(plan.one_line or ""),
-            "goals_json": str(plan.goals_json or "[]"),
-            "task_contract_json": str(plan.task_contract_json or "[]"),
-            "experience_plan_json": str(plan.experience_plan_json or "{}"),
-        }
-        if plan is not None
-        else {"chapter_plan": "absent"}
-    )
+    from forwin.planning.band_planner.persistence import plan_fingerprint
+
     analyzer_payload = {
         "quality_analysis_version": QUALITY_ANALYSIS_VERSION,
         "form_schema_version": FORM_SCHEMA_VERSION,
@@ -74,7 +63,7 @@ def build_quality_analysis_cache_key(
         "project_id": project_id,
         "chapter_number": int(chapter_number or 0),
         "content_hash": _stable_hash(content_payload),
-        "plan_fingerprint": _stable_hash(plan_payload),
+        "plan_fingerprint": plan_fingerprint(plan) if plan is not None else "",
         "analysis_mode": mode,
         "analyzer_fingerprint": _stable_hash(analyzer_payload),
     }

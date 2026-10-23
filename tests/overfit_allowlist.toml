@@ -1009,3 +1009,11 @@ checks = ["cjk_collection"]
 category = "prompt_text"
 justification = "POV world view section: writer-facing labels of the six knowledge-state tokens; every story fact in the section comes from the view's fields."
 max_literals = 6
+
+[[entry]]
+path = "forwin/writer/prompt_core/chapter_delta.py"
+symbol = "EXTRACTION_INPUT_LABELS"
+checks = ["cjk_collection"]
+category = "prompt_text"
+justification = "Extraction prompt label identifying writer-declared scene locations as non-evidence."
+max_literals = 1

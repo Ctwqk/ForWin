@@ -762,6 +762,8 @@ def test_review_policy_travel_tolerance() -> None:
 
 
 def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
     delta = GraphDelta(id="delta-3", project_id="project-1", chapter_number=3, source_type="chapter_extraction")
     calls: list[dict[str, Any]] = []
 
@@ -796,7 +798,7 @@ def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.Mo
             _record_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
             _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
         ),
-        session=object(),  # type: ignore[arg-type]
+        session=SimpleNamespace(scalar=lambda query: None),
         candidate_id="candidate-1",
         project_id="project-1",
         chapter_number=3,
@@ -814,7 +816,7 @@ def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.Mo
     assert [(item.id, item.metadata) for item in outcome.approved_changes.graph_deltas] == [
         ("delta-3", {"translation_warnings": []}),
     ]
-    assert calls == [{"approved_by": ["chapter_extraction"], "base_chapter": 2, "travel_tolerance": 0.35}]
+    assert calls == [{"approved_by": ["chapter_extraction"], "base_chapter": 2, "travel_tolerance": 0.35, "reveal_directives": []}]
 
 
 @pytest.mark.parametrize("payload", [
@@ -884,5 +886,59 @@ def test_beat_sheet_reader_target_moves_premature_reveal_boundary():
             ]})
             repo.create(world.project_id, current.arc_plan_id, data, source="llm", reason="earlier reveal")
         assert _check(Session, world, 7, reader_learns) == []
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("observer,exempt", [("reader", True), ("actor", False)])
+def test_reveal_directive_exempts_premature_reveal(monkeypatch, observer, exempt):
+    from types import SimpleNamespace
+    from forwin.book_state import reviewer
+    from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+    from forwin.models.project import ChapterPlan
+    from forwin.protocol.book_state import FactNode
+
+    from forwin.book_state.map_graph import MapGraph
+
+    runtime = BookStateRuntime(project_id="p", as_of_chapter=0, map_graph=MapGraph(), world=ObjectiveWorldGraph(facts=[
+        FactNode(id="secret", project_id="p", proposition="Secret", sensitivity_level="secret", truth_value="true"),
+        FactNode(id="public", project_id="p", proposition="Public", sensitivity_level="public", truth_value="true"),
+    ]))
+    plan = ChapterPlan(reveal_directives_json=json.dumps([
+        {"id": "r", "fact_ref": "fact:secret", "observer": observer, "target_state": "knows"},
+    ]))
+    session = SimpleNamespace(scalar=lambda query: plan)
+    gate = BookStateReviewGate(session)
+    monkeypatch.setattr(gate.projection, "load_runtime_as_of", lambda *args, **kwargs: runtime)
+    monkeypatch.setattr(reviewer, "earliest_reveal_chapters", lambda *args: {"secret": 6})
+    delta = GraphDelta(id="delta", project_id="p", chapter_number=1, source_type="chapter_extraction", metadata={
+        "knowledge_tags": [{"observer_type": "reader", "observer_id": "reader", "fact_ref": "fact:public",
+                            "touches_secret_ref": "fact:secret", "contradicts_ref": "fact:secret",
+                            "state": "knows", "channel": "inferred"}],
+    })
+    verdict = gate.review(ApprovedGraphDeltaSet(project_id="p", chapter_number=1, graph_deltas=[delta]), base_chapter=0)
+    codes = [issue.code for issue in verdict.issues]
+    assert ("premature_reveal" not in codes) is exempt
+    assert "contradicts_hidden_fact" in codes
+
+
+def test_reveal_directive_exemption_uses_current_chapter_plan_postgres():
+    from forwin.models.project import ChapterPlan
+    from forwin.planning.beat_sheet.types import READER_OBSERVER
+
+    engine, Session = _session_factory()
+    try:
+        world = _seed_world(Session, reveal_candidates=[{"fact_id": "fact-secret", "arc_number": 2}])
+        secret = world.fact("fact-secret")
+        fields = {"knowledge_events": [_knowledge(READER_OBSERVER, secret, channel="inferred")]}
+        assert _check(Session, world, 1, fields) == [("error", "premature_reveal")]
+        with Session.begin() as session:
+            arc = session.scalars(select(ArcPlanVersion).where(ArcPlanVersion.project_id == world.project_id,
+                                                              ArcPlanVersion.arc_number == 1)).one()
+            session.add(ChapterPlan(project_id=world.project_id, arc_plan_id=arc.id, chapter_number=1,
+                reveal_directives_json=json.dumps([{"id": "r", "fact_ref": secret,
+                                                   "observer": READER_OBSERVER, "target_state": "knows"}])))
+        assert _check(Session, world, 1, fields) == []
+        assert _check(Session, world, 2, fields) == [("error", "premature_reveal")]
     finally:
         engine.dispose()

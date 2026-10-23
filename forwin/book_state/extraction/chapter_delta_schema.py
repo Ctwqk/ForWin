@@ -165,6 +165,7 @@ class EntityMention(_ExtractionModel):
 class ChapterDeltaExtraction(_ExtractionModel):
     schema_version: Literal["v1"] = "v1"
     body_sha256: str
+    plan_fingerprint: str = ""
     time: ChapterTime
     entity_changes: list[EntityChange] = Field(default_factory=list)
     relation_changes: list[RelationChange] = Field(default_factory=list)

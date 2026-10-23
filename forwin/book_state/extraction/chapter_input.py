@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, get_args
@@ -16,6 +17,9 @@ from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.protocol.experience import RewardTag
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,7 @@ class ChapterExtractionInput:
     intents: tuple[IntentRow, ...]
     secrets: tuple[SecretRow, ...]
     travel_modes: tuple[str, ...]
+    scene_location_hints: tuple[str, ...] = ()
 
 
 def _loads(raw: str | None, default: Any) -> Any:
@@ -85,6 +90,15 @@ def plan_goal_targets(goals: Any) -> list[tuple[str, str]]:
     ]
 
 
+def plan_binding_targets(plan: ChapterPlan | None) -> list[tuple[str, str]]:
+    bindings = _loads(plan.world_bindings_json, []) if plan is not None else []
+    return [
+        (f"bind:{index}", json.dumps(binding, ensure_ascii=False, sort_keys=True))
+        for index, binding in enumerate(bindings if isinstance(bindings, list) else [])
+        if isinstance(binding, dict)
+    ]
+
+
 def _fulfillment_targets(
     session: Session, project_id: str, plan: ChapterPlan | None,
     *, judged_obligations: Sequence[NarrativeObligation] = (),
@@ -96,6 +110,16 @@ def _fulfillment_targets(
         FulfillmentTarget(target_id, goal)
         for target_id, goal in plan_goal_targets(goals)
     ]
+    targets.extend(FulfillmentTarget(*target) for target in plan_binding_targets(plan))
+    if plan is not None:
+        for prefix, raw in (("reveal", plan.reveal_directives_json), ("hint", plan.hint_directives_json)):
+            directives = _loads(raw, [])
+            for directive in directives if isinstance(directives, list) else []:
+                if isinstance(directive, dict) and directive.get("id"):
+                    targets.append(FulfillmentTarget(
+                        f"{prefix}:{directive['id']}",
+                        json.dumps(directive, ensure_ascii=False, sort_keys=True),
+                    ))
     obligation_ids: list[str] = []
     # Existing obligation patches store this key in the experience plan.
     for payload in (contract, experience):
@@ -142,6 +166,7 @@ def _fulfillment_targets(
 
 def build_chapter_extraction_input(
     session: Session, *, project_id: str, chapter_number: int,
+    scene_location_hints: Sequence[str] = (),
 ) -> ChapterExtractionInput:
     runtime = BookStateProjection(session).load_runtime_as_of(
         project_id, as_of_chapter=chapter_number - 1,
@@ -174,6 +199,14 @@ def build_chapter_extraction_input(
                     node.id, str(node.profile.get("owner_ref", "")),
                     str(node.profile.get("summary") or node.summary or node.name), str(status),
                 ))
+    location_hints = []
+    for hint in scene_location_hints:
+        if isinstance(hint, str) and (
+            hint in runtime.map.nodes_by_id or (hint.startswith("new:") and hint[4:].strip())
+        ):
+            location_hints.append(hint)
+        else:
+            logger.warning("Dropping invalid scene_location_hint %r for project %s", hint, project_id)
     return ChapterExtractionInput(
         project_id=project_id,
         chapter_number=chapter_number,
@@ -192,4 +225,5 @@ def build_chapter_extraction_input(
             if fact.sensitivity_level in {"hidden", "secret"}
         ),
         travel_modes=tuple(mode.id for mode in lexicon.travel_modes),
+        scene_location_hints=tuple(location_hints),
     )

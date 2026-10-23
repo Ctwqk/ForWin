@@ -27,6 +27,7 @@ from forwin.models.project import ChapterPlan, Project
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.naming import EntityRegistrar
+from forwin.planning.band_planner.persistence import plan_fingerprint
 from forwin.protocol.book_state import WorldNode
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
@@ -47,6 +48,11 @@ def _sha(text: str) -> str:
 
 def _payload(**fields: Any) -> dict[str, Any]:
     return {"body_sha256": "0" * 64, "time": {"elapsed": None, "evidence": ""}, **fields}
+
+
+def _extraction(chapter: ChapterPlan, payload: dict[str, Any]) -> ChapterDeltaExtraction:
+    """An extraction of ``chapter``'s current plan, which canon reuses instead of extracting again."""
+    return ChapterDeltaExtraction.model_validate({**payload, "plan_fingerprint": plan_fingerprint(chapter)})
 
 
 class ExtractionClient:
@@ -310,9 +316,7 @@ def test_admission_reads_new_refs_from_chapter_delta() -> None:
 
 def test_canon_commits_translated_delta(runtime) -> None:
     pipeline, session, chapter = runtime
-    output = _output(chapter, chapter_delta=ChapterDeltaExtraction.model_validate(
-        {**_chapter_payload(), "body_sha256": _sha(BODY)}
-    ))
+    output = _output(chapter, chapter_delta=_extraction(chapter, {**_chapter_payload(), "body_sha256": _sha(BODY)}))
     planned, candidate_id = _persist_candidate(session, chapter, output)
     client = ExtractionClient()
 
@@ -335,11 +339,14 @@ def test_canon_commits_translated_delta(runtime) -> None:
 
 def _commit(pipeline, session, chapter: ChapterPlan, output: WriterOutput):
     planned, candidate_id = _persist_candidate(session, chapter, output)
-    preparation = _prepare(pipeline, session, chapter, planned, candidate_id, llm_client=ExtractionClient())
+    client = ExtractionClient()
+    preparation = _prepare(pipeline, session, chapter, planned, candidate_id, llm_client=client)
     assert preparation.plan is not None, preparation.blocked_path
     session.commit()
     outcome = pipeline.canon_admission.commit_plan(preparation.plan)
     assert not outcome.blocked, outcome.blocked_path
+    # The attached extraction is what canon committed: it was current, so nothing re-extracted.
+    assert client.extraction_calls() == 0
     session.expire_all()
     return planned, session.scalars(select(GraphDeltaRow).where(GraphDeltaRow.project_id == chapter.project_id)).all()
 
@@ -353,7 +360,7 @@ def test_off_stage_new_characters_in_relations_and_knowledge_are_admitted_and_co
     )
     session.commit()
     body = "林夜读完王五的信，才知道赵六是他失散多年的兄长。"
-    output = _output(chapter, body=body, chapter_delta=ChapterDeltaExtraction.model_validate(_payload(
+    output = _output(chapter, body=body, chapter_delta=_extraction(chapter, _payload(
         body_sha256=_sha(body),
         relation_changes=[{
             "source_ref": hero, "target_ref": "new:赵六", "edge_type": "family_of", "op": "create",
@@ -385,7 +392,7 @@ def _dropped(path: str) -> dict[str, Any]:
 def test_valid_empty_extraction_commits_patchless_delta(runtime, dropped) -> None:
     pipeline, session, chapter = runtime
     output = _output(
-        chapter, chapter_delta=ChapterDeltaExtraction.model_validate(_payload(body_sha256=_sha(BODY))),
+        chapter, chapter_delta=_extraction(chapter, _payload(body_sha256=_sha(BODY))),
         generation_meta={"chapter_delta_issues": dropped},
     )
 
@@ -401,7 +408,7 @@ def test_valid_empty_extraction_commits_patchless_delta(runtime, dropped) -> Non
 def test_extraction_whose_every_fact_lost_its_evidence_blocks_canon(runtime) -> None:
     pipeline, session, chapter = runtime
     output = _output(
-        chapter, chapter_delta=ChapterDeltaExtraction.model_validate(_payload(body_sha256=_sha(BODY))),
+        chapter, chapter_delta=_extraction(chapter, _payload(body_sha256=_sha(BODY))),
         generation_meta={"chapter_delta_issues": [_dropped("events[0]"), _dropped("movements[0]")]},
     )
     planned, candidate_id = _persist_candidate(session, chapter, output)
@@ -450,7 +457,7 @@ def test_human_accept_keeps_rejecting_a_review_with_another_error_beside_the_mis
 
 def test_canon_records_translation_warnings_on_the_delta(runtime) -> None:
     pipeline, session, chapter = runtime
-    output = _output(chapter, chapter_delta=ChapterDeltaExtraction.model_validate(_payload(
+    output = _output(chapter, chapter_delta=_extraction(chapter, _payload(
         body_sha256=_sha(BODY), time={"elapsed": {"amount": 1, "unit": "年"}, "evidence": "两日后才赶到渡口"},
     )))
 
@@ -484,16 +491,19 @@ def test_extraction_failure_blocks_canon_without_regex_fallback(runtime) -> None
 
 def test_translation_error_blocks_canon(runtime) -> None:
     pipeline, session, chapter = runtime
-    output = _output(chapter, chapter_delta=ChapterDeltaExtraction.model_validate(_payload(
+    output = _output(chapter, chapter_delta=_extraction(chapter, _payload(
         body_sha256=_sha(BODY),
         movements=[{"entity_ref": "unknown-node", "from_ref": "", "to_ref": "nowhere", "evidence": "赶到渡口"}],
     )))
     planned, candidate_id = _persist_candidate(session, chapter, output)
+    client = ExtractionClient()
 
-    preparation = _prepare(pipeline, session, chapter, planned, candidate_id, llm_client=ExtractionClient())
+    preparation = _prepare(pipeline, session, chapter, planned, candidate_id, llm_client=client)
 
     assert preparation.blocked
     assert preparation.blocked_path == "chapter-delta-translation-blocked"
+    # Blocked on the attached extraction itself, not on a stale one canon extracted again.
+    assert client.extraction_calls() == 0
     payload = _blocked_payloads(session, chapter.project_id)[-1]
     assert {issue["code"] for issue in payload["issues"]} == {"unresolved_ref"}
     gate = parse_gate_outcome(payload)
@@ -503,7 +513,8 @@ def test_translation_error_blocks_canon(runtime) -> None:
 @pytest.mark.parametrize("with_llm", [True, False])
 def test_human_accept_with_stale_extraction_reextracts_or_blocks(runtime, monkeypatch, with_llm: bool) -> None:
     pipeline, session, chapter = runtime
-    stale = ChapterDeltaExtraction.model_validate({**_chapter_payload(), "body_sha256": _sha("an earlier body")})
+    # Current for the plan, stale for the body alone.
+    stale = _extraction(chapter, {**_chapter_payload(), "body_sha256": _sha("an earlier body")})
     planned, candidate_id = _persist_candidate(session, chapter, _output(chapter, chapter_delta=stale))
     chapter.status = "needs_review"
     session.add(chapter)

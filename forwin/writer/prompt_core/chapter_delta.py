@@ -12,6 +12,11 @@ from forwin.book_state.knowledge import KNOWLEDGE_CHANNELS, KNOWLEDGE_STATES
 from forwin.protocol.book_state import WORLD_EDGE_TYPES
 
 
+EXTRACTION_INPUT_LABELS = {
+    "scene_location_hints": "写作者声明的场景地点，只辅助定位，不是证据",
+}
+
+
 def build_plan_fulfillment_feedback(target_ids: Sequence[str]) -> str:
     return (
         "plan_fulfillment_absent at plan_fulfillment: " + ", ".join(target_ids)
@@ -68,6 +73,7 @@ def build_chapter_delta_messages(
         "thread_beats 记录 thread_ref 或 new_thread_title、beat_type；"
         "intent_interactions 记录 intent_ref、effect；"
         "plan_fulfillment 逐项记录 target_id、status(done/partial/missing)，missing 可无证据；"
+        "goal:、obligation:、bind: 目标必须逐项报告；reveal:、hint: 目标为可选记录，不强制兑现。"
         "计划目标里标 planned 的 reward 目标是本章计划的回报，"
         "标 optional 的 reward 目标只在正文确实兑现时记录（done 或 partial，附证据），否则省略；"
         "entity_mentions 记录 name、kind、is_named、is_on_stage。\n"
@@ -84,6 +90,8 @@ def build_chapter_delta_messages(
         f"body_sha256: {hashlib.sha256(chapter_body.encode('utf-8')).hexdigest()}\n\n"
         "实体表：\n" + json.dumps(tables["entities"], ensure_ascii=False)
         + "\n\n地点表：\n" + json.dumps(tables["locations"], ensure_ascii=False)
+        + "\n\nscene_location_hints（" + EXTRACTION_INPUT_LABELS["scene_location_hints"] + "）：\n"
+        + json.dumps(tables["scene_location_hints"], ensure_ascii=False)
         + "\n\n日历单位与别名：\n" + json.dumps({
             "calendar_units": tables["calendar_units"], "time_aliases": tables["time_aliases"],
         }, ensure_ascii=False)

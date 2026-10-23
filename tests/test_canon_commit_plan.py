@@ -32,6 +32,7 @@ from forwin.models.entity import Entity, EntityAlias
 from forwin.models.outbox import OutboxEvent
 from forwin.naming import EntityAdmissionPlan
 from forwin.naming.entity_registrar import writer_output_admission_fingerprint
+from forwin.planning.band_planner.persistence import plan_fingerprint
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta
 from forwin.protocol.writer import WriterOutput
@@ -361,7 +362,9 @@ def test_prepare_uses_pretransaction_collaborators_without_compiling(extracted, 
             body="协作者准备正文",
             char_count=7,
             end_of_chapter_summary="准备完成",
-            chapter_delta=chapter_delta("协作者准备正文") if extracted else None,
+            chapter_delta=chapter_delta(
+                "协作者准备正文", plan_fingerprint=plan_fingerprint(chapter),
+            ) if extracted else None,
         )
         entity_plan = EntityAdmissionPlan(
             project_id=project.id,

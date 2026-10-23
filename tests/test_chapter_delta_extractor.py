@@ -474,3 +474,232 @@ def test_client_without_output_schema_or_attempt_events_is_supported():
     result = extract(LegacyLLM())
     assert result.extraction is not None
     assert len(result.prompt_trace["attempts"]) == 1
+
+
+@pytest.mark.parametrize("field,value", [
+    ("goals_json", '["changed"]'), ("experience_plan_json", '{"planned_reward_tags":["mystery"]}'),
+    ("band_plan_id", "band-new"), ("pov_ref", "actor-new"),
+    ("onstage_refs_json", '["actor-new"]'), ("location_refs_json", '["site-new"]'),
+    ("expected_span_minutes", 60),
+    ("world_bindings_json", '[{"kind":"intent","ref":"intent-1","how":"advance"}]'),
+    ("reveal_directives_json", '[{"id":"r","fact_ref":"fact:secret-1","observer":"reader","target_state":"knows"}]'),
+    ("hint_directives_json", '[{"id":"h","fact_ref":"fact:secret-1","hint_text":"clue"}]'),
+    ("intended_changes_json", '[{"ref":"actor-new","field":"state.status","value":"active"}]'),
+    ("milestone_ids_json", '["milestone-new"]'), ("hook", "A new hook"),
+])
+def test_plan_fingerprint_changes_with_new_columns_and_invalidates_extraction_cache(monkeypatch, field, value):
+    from types import SimpleNamespace
+    from forwin.book_state.extraction import chapter_delta_extractor as module
+    from forwin.models.project import ChapterPlan
+    from forwin.candidate_drafts import candidate_plan_revision
+    from forwin.protocol.writer import WriterOutput
+
+    plan = ChapterPlan(id="plan", project_id="project", chapter_number=2, goals_json='["Open the gate"]')
+    session = SimpleNamespace(scalar=lambda query: plan)
+    monkeypatch.setattr(module, "build_chapter_extraction_input", lambda *args, **kwargs: INPUT)
+    monkeypatch.setattr(module.StoryCalendarRepository, "get", lambda *args: CALENDAR)
+    monkeypatch.setattr(module.BookLexiconRepository, "get", lambda *args: LEXICON)
+    client = StubLLM(payload(), payload())
+    output = WriterOutput(chapter_number=2, title="Gate", body=BODY, end_of_chapter_summary="Summary")
+    revision = candidate_plan_revision(plan)
+    first, result = module.ensure_chapter_delta(session, llm_client=client, project_id="project", chapter_number=2, writer_output=output)
+    reused, result = module.ensure_chapter_delta(session, llm_client=client, project_id="project", chapter_number=2, writer_output=first)
+    assert reused is first and result is None
+    setattr(plan, field, value)
+    second, result = module.ensure_chapter_delta(session, llm_client=client, project_id="project", chapter_number=2, writer_output=first)
+    assert result is not None, "An unchanged body must be re-extracted when its plan changes"
+    assert len(client.calls) == 2
+    assert candidate_plan_revision(plan) != revision
+    assert first.chapter_delta.plan_fingerprint != second.chapter_delta.plan_fingerprint
+
+
+def test_bindings_are_required_but_directives_are_optional():
+    extraction_input = replace(INPUT, fulfillment_targets=(
+        *INPUT.fulfillment_targets, FulfillmentTarget("bind:0", "Advance intent-1"),
+        FulfillmentTarget("reveal:r", "Reveal secret"), FulfillmentTarget("hint:h", "Hint secret"),
+    ))
+    complete = payload()
+    complete["plan_fulfillment"].append({"target_id": "bind:0", "status": "missing"})
+    client = StubLLM(payload(), complete)
+    result = extract(client, extraction_input=extraction_input)
+    assert result.attempts == 2
+    assert "bind:0" in client.calls[1][0][-1]["content"]
+    assert {row.target_id for row in result.extraction.plan_fulfillment} == {"goal:1", "bind:0"}
+
+
+def test_prompt_marks_scene_locations_as_non_evidence():
+    extraction_input = replace(INPUT, scene_location_hints=("site-1", "new:Harbor"))
+    messages = build_chapter_delta_messages(extraction_input=extraction_input, chapter_title="Gate", chapter_body=BODY, chapter_summary="Summary")
+    user = messages[-1]["content"]
+    assert "写作者声明的场景地点，只辅助定位，不是证据" in user
+    assert "new:Harbor" in user
+
+
+def test_fingerprint_is_canonical_and_shared_with_quality_cache():
+    from types import SimpleNamespace
+    from forwin.candidate_drafts import candidate_plan_revision
+    from forwin.canon_quality.cache import build_quality_analysis_cache_key
+    from forwin.config import InfrastructureConfig
+    from forwin.models.project import ChapterPlan
+    from forwin.planning.band_planner.persistence import plan_fingerprint
+    from forwin.protocol.writer import WriterOutput
+
+    plan = ChapterPlan(id="plan", chapter_number=2, goals_json='["Open the gate"]',
+                       world_bindings_json='[{"kind":"intent","ref":"intent-1","how":"Advance"}]')
+    output = WriterOutput(chapter_number=2, title="Gate", body=BODY, end_of_chapter_summary="Summary")
+    session = SimpleNamespace(execute=lambda query: SimpleNamespace(scalar_one_or_none=lambda: plan))
+    def key():
+        return build_quality_analysis_cache_key(session=session, project_id="project", chapter_number=2,
+            writer_output=output, mode="primary", llm_client=None, config=InfrastructureConfig(), quality_context={})
+    original = plan_fingerprint(plan)
+    assert candidate_plan_revision(plan) == key()["plan_fingerprint"] == original
+    plan.world_bindings_json = '[ {"how": "Advance", "ref": "intent-1", "kind": "intent"} ]'
+    assert plan_fingerprint(plan) == original
+    plan.hook = "A new hook"
+    assert candidate_plan_revision(plan) == key()["plan_fingerprint"] != original
+
+
+def test_canon_preparation_preserves_quality_order_for_current_plan(monkeypatch):
+    from types import SimpleNamespace
+    from forwin.canon import preparation
+    from forwin.candidate_drafts import candidate_body_hash, candidate_plan_revision
+    from forwin.models.project import ChapterPlan
+    from forwin.naming.types import EntityAdmissionPlan
+    from forwin.protocol.review import ReviewVerdict
+    from forwin.protocol.writer import WriterOutput
+
+    plan = ChapterPlan(id="plan", chapter_number=2)
+    delta = ChapterDeltaExtraction.model_validate(payload())
+    delta.body_sha256 = candidate_body_hash(BODY)
+    delta.plan_fingerprint = candidate_plan_revision(plan)
+    output = WriterOutput(chapter_number=2, title="Gate", body=BODY, end_of_chapter_summary="Summary", chapter_delta=delta)
+    candidate = SimpleNamespace(id="candidate", project_id="project", chapter_number=2, chapter_plan_id="plan",
+                                body_hash=candidate_body_hash(BODY), policy_version=1)
+    monkeypatch.setattr(preparation.CandidateDraftRepository, "get", lambda *args: candidate)
+    monkeypatch.setattr(preparation, "_mark_candidate_needs_review", lambda *args, **kwargs: None)
+    monkeypatch.setattr(preparation, "_verify_admission", lambda *args, **kwargs: EntityAdmissionPlan(
+        project_id="project", chapter_number=2, candidate_fingerprint=""))
+    events = []
+    def quality(**kwargs):
+        events.append("quality")
+        return SimpleNamespace(blocked=True, blocked_path="quality-stop", gate_result=None)
+    service = preparation.CanonPreparationService(quality_evaluator=quality)
+    def world(**kwargs):
+        events.append("world")
+        return preparation.BookStatePreparationOutcome(extraction=delta)
+    monkeypatch.setattr(service, "_prepare_book_state", world)
+    result = service.prepare(
+        context=SimpleNamespace(_record_decision_event=lambda **kwargs: None),
+        session=SimpleNamespace(get=lambda *args: plan), repo=None, updater=None,
+        candidate_id="candidate", project_id="project", chapter_number=2, writer_output=output,
+        verdict=ReviewVerdict(verdict="pass"), acceptance_mode="auto", repair_attempt_count=0,
+        residual_review_issues=[], canon_risk_level="",
+    )
+    assert result.blocked_path == "quality-stop"
+    assert events == ["quality"]
+
+
+def _exercise_persisted_plan_cache(engine):
+    from sqlalchemy.orm import Session
+    from forwin.book_state.extraction.chapter_delta_extractor import ensure_chapter_delta
+    from forwin.candidate_drafts import candidate_plan_revision
+    from forwin.canon_quality.cache import build_quality_analysis_cache_key
+    from forwin.config import InfrastructureConfig
+    from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+    from forwin.protocol.writer import WriterOutput
+
+    with Session(engine) as session:
+        project = Project(title="Cache", premise="test", genre="test")
+        session.add(project)
+        session.flush()
+        arc = ArcPlanVersion(project_id=project.id, arc_synopsis="arc")
+        session.add(arc)
+        session.flush()
+        plan = ChapterPlan(project_id=project.id, arc_plan_id=arc.id, chapter_number=1,
+                           goals_json='["Open the gate"]')
+        session.add(plan)
+        session.flush()
+        response = {"body_sha256": "untrusted", "plan_fingerprint": "untrusted",
+                    "time": {"elapsed": None, "evidence": ""}, "plan_fulfillment": [
+                        {"target_id": "goal:1", "status": "done", "evidence": BODY},
+                    ]}
+        changed = {**response, "plan_fulfillment": [*response["plan_fulfillment"],
+                    {"target_id": "bind:0", "status": "missing"}]}
+        client = StubLLM(response, changed)
+        output = WriterOutput(project_id=project.id, chapter_number=1, title="Gate", body=BODY,
+                              end_of_chapter_summary="Summary", scene_location_hints=["new:Harbor", "invalid-location-hint"])
+        def ensure(current):
+            return ensure_chapter_delta(session, llm_client=client, project_id=project.id,
+                                        chapter_number=1, writer_output=current)
+        def quality_key():
+            return build_quality_analysis_cache_key(session=session, project_id=project.id, chapter_number=1,
+                writer_output=output, mode="primary", llm_client=None, config=InfrastructureConfig(), quality_context={})
+        first, result = ensure(output)
+        assert result is not None
+        original_key = quality_key()
+        assert first.chapter_delta.plan_fingerprint == candidate_plan_revision(plan) == original_key["plan_fingerprint"]
+        assert "new:Harbor" in client.calls[0][0][-1]["content"]
+        assert "invalid-location-hint" not in client.calls[0][0][-1]["content"]
+        reused, result = ensure(first)
+        assert reused is first and result is None
+        plan.world_bindings_json = '[{"kind":"event","ref":"event-1","how":"Witness"}]'
+        session.flush()
+        second, result = ensure(first)
+        assert result is not None and len(client.calls) == 2
+        assert second.chapter_delta.plan_fingerprint != first.chapter_delta.plan_fingerprint
+        assert quality_key()["plan_fingerprint"] != original_key["plan_fingerprint"]
+        assert {item.target_id for item in second.chapter_delta.plan_fulfillment} == {"goal:1", "bind:0"}
+
+
+def test_extraction_reloads_persisted_plan_and_scene_hints_sqlite():
+    from sqlalchemy import create_engine
+    from forwin.models.base import Base
+
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        Base.metadata.create_all(engine)
+        _exercise_persisted_plan_cache(engine)
+    finally:
+        engine.dispose()
+
+
+def test_extraction_reloads_persisted_plan_and_scene_hints_postgres():
+    from forwin.models.base import get_engine, init_db
+    from tests.postgres import postgres_test_url
+
+    engine = get_engine(postgres_test_url("task13-extraction-cache"))
+    try:
+        init_db(engine)
+        _exercise_persisted_plan_cache(engine)
+    finally:
+        engine.dispose()
+
+
+def test_no_plan_reuses_legacy_extraction_with_empty_fingerprint():
+    from types import SimpleNamespace
+    from forwin.book_state.extraction.chapter_delta_extractor import ensure_chapter_delta
+    from forwin.protocol.writer import WriterOutput
+
+    delta = ChapterDeltaExtraction.model_validate(payload())
+    delta.body_sha256 = hashlib.sha256(BODY.encode()).hexdigest()
+    output = WriterOutput(chapter_number=2, title="Gate", body=BODY, end_of_chapter_summary="Summary", chapter_delta=delta)
+    reused, result = ensure_chapter_delta(SimpleNamespace(scalar=lambda query: None), llm_client=None,
+        project_id="project", chapter_number=2, writer_output=output)
+    assert reused is output and result is None
+    assert delta.plan_fingerprint == ""
+
+
+def test_plan_change_without_client_discards_stale_extraction():
+    from types import SimpleNamespace
+    from forwin.book_state.extraction.chapter_delta_extractor import ensure_chapter_delta
+    from forwin.models.project import ChapterPlan
+    from forwin.protocol.writer import WriterOutput
+
+    delta = ChapterDeltaExtraction.model_validate(payload())
+    delta.body_sha256 = hashlib.sha256(BODY.encode()).hexdigest()
+    output = WriterOutput(chapter_number=2, title="Gate", body=BODY, end_of_chapter_summary="Summary", chapter_delta=delta)
+    plan = ChapterPlan(id="plan", chapter_number=2, goals_json='["Open the gate"]')
+    refreshed, result = ensure_chapter_delta(SimpleNamespace(scalar=lambda query: plan), llm_client=None,
+        project_id="project", chapter_number=2, writer_output=output)
+    assert refreshed.chapter_delta is None
+    assert [issue.code for issue in result.issues] == ["extraction_unavailable"]

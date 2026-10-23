@@ -308,7 +308,7 @@ def test_input_without_planned_rewards_still_offers_every_reward_target() -> Non
         engine.dispose()
 
 
-def test_input_builder_filters_prior_runtime_without_database(monkeypatch) -> None:
+def test_input_builder_filters_prior_runtime_without_database(monkeypatch, caplog) -> None:
     from types import SimpleNamespace
 
     from forwin.book_state.extraction import chapter_input
@@ -347,7 +347,12 @@ def test_input_builder_filters_prior_runtime_without_database(monkeypatch) -> No
     monkeypatch.setattr(chapter_input.BookLexiconRepository, "get", lambda _self, _project: BookLexicon())
     monkeypatch.setattr(chapter_input.NarrativeObligationRepository, "list_active_for_context", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(chapter_input.NarrativeObligationRepository, "list_planned_for_chapter", lambda *_args, **_kwargs: [])
-    result = build_chapter_extraction_input(SimpleNamespace(scalar=lambda _query: None), project_id="p", chapter_number=3)
+    result = build_chapter_extraction_input(
+        SimpleNamespace(scalar=lambda _query: None), project_id="p", chapter_number=3,
+        scene_location_hints=["map", "new:Harbor", "unknown", "new:", "new:   ", "other-project-map"],
+    )
+    assert result.scene_location_hints == ("map", "new:Harbor")
+    assert "unknown" in caplog.text and "other-project-map" in caplog.text
     assert seen == [("p", 2)]
     assert {row.kind for row in result.entities} == {"character", "faction", "organization", "group", "item", "location"}
     assert all(row.aliases == ("alias",) for row in result.entities)
@@ -408,3 +413,29 @@ def test_input_offers_unplanned_active_and_current_chapter_obligations(with_plan
                 assert targets[0].target_id == "obligation:listed"
     finally:
         engine.dispose()
+
+
+def test_extraction_targets_include_bindings_and_directives():
+    from forwin.book_state.extraction.chapter_input import _fulfillment_targets
+    from forwin.models.project import ChapterPlan
+
+    plan = ChapterPlan(
+        goals_json='["Deliver"]',
+        world_bindings_json=json.dumps([
+            {"kind": "intent", "ref": "intent-1", "how": "Advance the delivery"},
+            {"kind": "event", "ref": "event-1", "how": "Witness the arrival"},
+        ]),
+        reveal_directives_json=json.dumps([{
+            "id": "reveal-1", "fact_ref": "fact:secret", "observer": "reader", "target_state": "knows",
+        }]),
+        hint_directives_json=json.dumps([{"id": "hint-1", "fact_ref": "fact:secret", "hint_text": "A clue"}]),
+    )
+    targets = {row.target_id: row.description for row in _fulfillment_targets(None, "p", plan)}
+    assert {"goal:1", "bind:0", "bind:1", "reveal:reveal-1", "hint:hint-1"} <= targets.keys()
+    assert "intent-1" in targets["bind:0"] and "Advance the delivery" in targets["bind:0"]
+    assert "fact:secret" in targets["reveal:reveal-1"]
+    assert "A clue" in targets["hint:hint-1"]
+
+
+def test_extraction_legacy_payload_defaults_plan_fingerprint():
+    assert _extraction().plan_fingerprint == ""

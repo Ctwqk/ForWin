@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
+from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict, chapter_reveal_directives
 from forwin.naming.types import EntityAdmissionPlan
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 
@@ -72,6 +72,7 @@ def review_chapter_extraction(
         changes,
         base_chapter=max(chapter_number - 1, 0),
         travel_tolerance=travel_tolerance,
+        reveal_directives=chapter_reveal_directives(session, project_id, chapter_number),
     )
     return ChapterWorldReview(translation=translation, gate=gate)
 

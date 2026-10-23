@@ -215,6 +215,8 @@ class DraftReviewService:
                 self.plan_reviewer.review,
                 review_context,
                 writer_output,
+                session=session,
+                project_id=project_id,
             )
             span.metric("issue_count", len(getattr(plan_review, "issues", []) or []))
         world_consistency = ReviewVerdict(verdict="pass", issues=[])

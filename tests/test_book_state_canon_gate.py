@@ -33,6 +33,7 @@ from forwin.protocol.book_state import (
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.naming import EntityAdmissionPlan, EntityRegistrar
+from forwin.planning.band_planner.persistence import plan_fingerprint
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
@@ -59,8 +60,12 @@ def _build_pipeline(database_url: str, artifact_root: str):
     ).build_chapter_pipeline()
 
 
-def _chapter_output(project_id: str, **overrides) -> WriterOutput:
-    """WriterOutput whose chapter delta reports the repaired comms console."""
+def _chapter_output(chapter: ChapterPlan, **overrides) -> WriterOutput:
+    """WriterOutput whose chapter delta reports the repaired comms console.
+
+    The delta is stamped with the chapter plan's fingerprint, so canon reuses it instead
+    of extracting the chapter again.
+    """
     body = overrides.pop("body", "防线修复后，通讯台传出乱码和父亲旧部呼号。")
     delta = overrides.pop("delta", {
         "entity_changes": [{
@@ -71,12 +76,12 @@ def _chapter_output(project_id: str, **overrides) -> WriterOutput:
         }],
     })
     fields = {
-        "project_id": project_id,
-        "chapter_number": 1,
+        "project_id": chapter.project_id,
+        "chapter_number": chapter.chapter_number,
         "title": "乱码呼号",
         "body": body,
         "end_of_chapter_summary": "收到异常通讯。",
-        "chapter_delta": chapter_delta(body, **delta),
+        "chapter_delta": chapter_delta(body, plan_fingerprint=plan_fingerprint(chapter), **delta),
     }
     fields.update(overrides)
     return WriterOutput(**fields)
@@ -185,7 +190,7 @@ def test_canon_admission_commits_book_state_without_projection_compatibility_eve
                 session,
                 project,
                 chapter,
-                _chapter_output(project.id),
+                _chapter_output(chapter),
                 ReviewVerdict(verdict="pass", issues=[]),
             )
             assert preparation.plan is not None
@@ -233,7 +238,7 @@ def test_canon_admission_blocks_rule_rewrite_before_book_state_commit() -> None:
                 project,
                 chapter,
                 _chapter_output(
-                    project.id,
+                    chapter,
                     title="改写规则",
                     body="众人误称通行协议会让门右移两格。",
                     end_of_chapter_summary="正文改写了既有规则。",
@@ -256,6 +261,8 @@ def test_canon_admission_blocks_rule_rewrite_before_book_state_commit() -> None:
         assert isinstance(outcome, CanonPreparationOutcome)
         assert outcome.blocked
         assert outcome.block_kind == "book_state"
+        # Blocked by the review of the attached extraction, not by a re-extraction.
+        assert outcome.blocked_path == "book-state-review-gate-blocked"
         assert graph_deltas == 0
 
 
@@ -285,7 +292,7 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
                 session,
                 project,
                 chapter,
-                _chapter_output(project.id),
+                _chapter_output(chapter),
                 ReviewVerdict(verdict="pass", issues=[]),
             )
             assert preparation.plan is not None

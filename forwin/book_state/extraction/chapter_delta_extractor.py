@@ -5,6 +5,8 @@ import inspect
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy import select
+
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.story_clock import (
@@ -14,6 +16,7 @@ from forwin.observability.llm_trace import (
     RAW_REQUEST_KEY, RAW_RESPONSE_KEY, mark_latest_attempt_parse_failure,
     mark_latest_attempt_workflow,
 )
+from forwin.models.project import ChapterPlan
 from forwin.skills import serialize_prompt_layers
 from forwin.utils import parse_llm_json
 from forwin.writer.prompt_core.chapter_delta import (
@@ -56,10 +59,11 @@ def elapsed_minutes(
     )
 
 
-def chapter_delta_is_current(writer_output: WriterOutput) -> bool:
-    """The output carries an extraction of its current body."""
+def chapter_delta_is_current(writer_output: WriterOutput, *, plan_fingerprint: str = "") -> bool:
+    """The output carries an extraction of its current body and plan."""
     current = writer_output.chapter_delta
-    return current is not None and current.body_sha256 == _sha256(writer_output.body)
+    return (current is not None and current.body_sha256 == _sha256(writer_output.body)
+            and current.plan_fingerprint == plan_fingerprint)
 
 
 def ensure_chapter_delta(
@@ -72,10 +76,16 @@ def ensure_chapter_delta(
 ) -> tuple[WriterOutput, ChapterDeltaExtractionResult | None]:
     """The output with an extraction of its current body; None when the attached one still matches.
 
-    A changed body is re-extracted. Without a usable LLM client the output comes back with no
-    chapter_delta and an error issue, so a stale extraction never survives a body change.
+    A changed body or plan is re-extracted. Without a usable LLM client the output comes back
+    with no chapter_delta and an error issue, so a stale extraction never survives a change.
     """
-    if chapter_delta_is_current(writer_output):
+    from forwin.planning.band_planner.persistence import plan_fingerprint
+
+    plan = session.scalar(select(ChapterPlan).where(
+        ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == chapter_number,
+    ))
+    fingerprint = plan_fingerprint(plan) if plan is not None else ""
+    if chapter_delta_is_current(writer_output, plan_fingerprint=fingerprint):
         return writer_output, None
     if not callable(getattr(llm_client, "chat", None)):
         result = ChapterDeltaExtractionResult(
@@ -91,12 +101,14 @@ def ensure_chapter_delta(
         result = ChapterDeltaExtractor(llm_client).extract(
             extraction_input=build_chapter_extraction_input(
                 session, project_id=project_id, chapter_number=chapter_number,
+                scene_location_hints=writer_output.scene_location_hints,
             ),
             chapter_title=writer_output.title,
             chapter_body=writer_output.body,
             chapter_summary=writer_output.end_of_chapter_summary,
             calendar=StoryCalendarRepository(session).get(project_id),
             lexicon=BookLexiconRepository(session).get(project_id),
+            plan_fingerprint=fingerprint,
         )
     generation_meta = {
         **(writer_output.generation_meta or {}),
@@ -127,6 +139,7 @@ class ChapterDeltaExtractor:
         chapter_summary: str,
         calendar: StoryCalendar | None,
         lexicon: BookLexicon,
+        plan_fingerprint: str = "",
     ) -> ChapterDeltaExtractionResult:
         feedback: list[str] = []
         attempts: list[dict[str, Any]] = []
@@ -137,7 +150,7 @@ class ChapterDeltaExtractor:
         refs_retried = False
         required_targets = {
             target.target_id for target in extraction_input.fulfillment_targets
-            if target.target_id.startswith(("goal:", "obligation:"))
+            if target.target_id.startswith(("goal:", "obligation:", "bind:"))
         }
         # Keep the best validated candidate if a later retry fails, names more unknown refs
         # or omits more targets.
@@ -193,6 +206,7 @@ class ChapterDeltaExtractor:
 
             if call_error is None:
                 parsed.body_sha256 = body_hash
+                parsed.plan_fingerprint = plan_fingerprint
                 candidate, candidate_issues = validate_evidence(parsed, chapter_body)
                 absent_targets = required_targets - {item.target_id for item in candidate.plan_fulfillment}
                 if absent_targets and not fulfillment_retried and attempt_no < self.max_attempts:
@@ -273,6 +287,7 @@ class ChapterDeltaExtractor:
             "input_snapshot": {
                 "project_id": extraction_input.project_id, "chapter_number": extraction_input.chapter_number,
                 "chapter_title": chapter_title, "body_sha256": body_hash,
+                "plan_fingerprint": extraction.plan_fingerprint if extraction is not None else "",
                 "stage_key": _STAGE_KEY, "selected_skills": [],
             },
             "model_profile": {key: getattr(self.llm_client, key, "") for key in (

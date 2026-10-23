@@ -16,10 +16,16 @@ def body_sha256(body: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def chapter_delta(body: str, **fields: Any) -> ChapterDeltaExtraction:
-    """A validated extraction of ``body``: no elapsed time and only the given sections."""
+def chapter_delta(body: str, *, plan_fingerprint: str = "", **fields: Any) -> ChapterDeltaExtraction:
+    """A validated extraction of ``body``: no elapsed time and only the given sections.
+
+    ``plan_fingerprint`` names the plan it was extracted against, as ``plan_fingerprint(plan)``
+    does; canon only reuses an extraction whose body and plan are both current, so an
+    extraction attached to a chapter that has a plan must carry that plan's fingerprint.
+    """
     return ChapterDeltaExtraction.model_validate({
         "body_sha256": body_sha256(body),
+        "plan_fingerprint": plan_fingerprint,
         "time": {"elapsed": None, "evidence": ""},
         **fields,
     })
@@ -36,9 +42,13 @@ def stub_chapter_delta_extraction(monkeypatch) -> list[str]:  # noqa: ANN001
     """
     bodies: list[str] = []
 
-    def extract(self, *, chapter_body: str, **_kwargs: Any) -> ChapterDeltaExtractionResult:  # noqa: ANN001
+    def extract(
+        self, *, chapter_body: str, plan_fingerprint: str = "", **_kwargs: Any,  # noqa: ANN001
+    ) -> ChapterDeltaExtractionResult:
         bodies.append(chapter_body)
-        return ChapterDeltaExtractionResult(chapter_delta(chapter_body), (), 1, {})
+        # Like the real extractor, stamp the plan it was asked about: canon reuses an
+        # extraction only while both its body and plan are current.
+        return ChapterDeltaExtractionResult(chapter_delta(chapter_body, plan_fingerprint=plan_fingerprint), (), 1, {})
 
     monkeypatch.setattr(ChapterDeltaExtractor, "extract", extract)
     return bodies

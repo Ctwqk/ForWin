@@ -36,23 +36,9 @@ def candidate_body_hash(body: str) -> str:
 
 
 def candidate_plan_revision(chapter_plan: ChapterPlan) -> str:
-    payload = {
-        "chapter_plan_id": str(chapter_plan.id or ""),
-        "arc_plan_id": str(chapter_plan.arc_plan_id or ""),
-        "chapter_number": int(chapter_plan.chapter_number or 0),
-        "title": str(chapter_plan.title or ""),
-        "one_line": str(chapter_plan.one_line or ""),
-        "goals_json": str(chapter_plan.goals_json or "[]"),
-        "task_contract_json": str(chapter_plan.task_contract_json or "[]"),
-        "experience_plan_json": str(chapter_plan.experience_plan_json or "{}"),
-    }
-    encoded = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    from forwin.planning.band_planner.persistence import plan_fingerprint
+
+    return plan_fingerprint(chapter_plan)
 
 
 def candidate_writer_output_admission_fingerprint(

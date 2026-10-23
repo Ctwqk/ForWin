@@ -221,12 +221,11 @@ def test_runtime_scenario_rehearsal_feature_family_stays_removed() -> None:
     assert "scenario_plan_patches" not in baseline
 
     arc_envelope_source = _read("forwin/planning/arc_envelope.py")
-    world_contracts = arc_envelope_source.index("world_contracts.ensure_for_arc_band")
     resolution = arc_envelope_source.index("arc_envelope_resolver.ensure_resolution")
     band_plan = arc_envelope_source.index(
         "self._ensure_current_band_plan_for_state(", resolution
     )
-    assert world_contracts < resolution < band_plan
+    assert resolution < band_plan
 
 
 def test_planning_runtime_has_one_explicit_composition_service() -> None:
@@ -1230,3 +1229,52 @@ def test_simulation_import_guard_catches_import_forms(tmp_path, monkeypatch, sou
     monkeypatch.setitem(globals(), "ROOT", tmp_path)
     with pytest.raises(AssertionError):
         test_removed_simulation_package_cannot_be_imported()
+
+
+def test_world_contract_modules_and_tables_are_gone() -> None:
+    from forwin.models import Base
+
+    modules = (
+        "forwin/planning/world_" + "contracts.py",
+        "forwin/planning/world_" + "contract_service.py",
+        "forwin/models/world_" + "contract.py",
+    )
+    tables = ("arc_world_" + "contracts", "band_world_" + "contracts", "chapter_world_delta_intents")
+    assert not [path for path in modules if (ROOT / path).exists()]
+    assert set(tables).isdisjoint(Base.metadata.tables)
+    production = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "forwin").rglob("*.py")
+        if "migrations" not in path.parts
+    )
+    for module in modules:
+        assert module.removesuffix(".py").replace("/", ".") not in production
+    assert not [table for table in tables if table in production]
+    migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
+    for table in tables:
+        assert f'op.drop_table("{table}")' in inspect.getsource(migration.upgrade)
+        assert f'"{table}"' in inspect.getsource(migration.downgrade)
+
+
+def test_broker_has_no_world_model_pack() -> None:
+    from forwin.protocol import context
+    from forwin.retrieval.broker_core.broker import RetrievalBroker
+
+    for method in (
+        "build_world_" + "model_pack", "_load_reveal_ladder",
+        "_filter_writer_safe_world_context", "_merge_writer_world_model_pack",
+        "_augment_v46_context",
+    ):
+        assert not hasattr(RetrievalBroker, method)
+    assert not hasattr(context, "WorldModel" + "RetrievalPack")
+    removed_fields = {
+        "knowledge_system_" + "context", "active_world_lines", "visible_world_lines",
+        "hidden_world_lines", "recent_world_deltas", "recent_offscreen_deltas",
+        "active_knowledge_gaps", "planned_reveal_ladder", "reader_cognition_state",
+        "character_cognition_states", "observer_visibility_states", "promise_debts",
+        "recent_reader_experience_deltas", "must_not_reveal",
+        "fair_misdirection_requirements", "chapter_world_delta_intent",
+    }
+    assert removed_fields.isdisjoint(context.ChapterContextPack.model_fields)
+    for path in ("forwin/http/routes.py", "forwin/http/adapters/api_llm_kb_routes.py"):
+        assert "context-" + "pack" not in _read(path)

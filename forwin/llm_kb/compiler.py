@@ -12,8 +12,6 @@ from forwin.book_state.narrative import reader_promises_from_graph
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
 from forwin.protocol.book_state import FactNode, GraphDelta, WorldNode
-from forwin.retrieval.broker_core import RetrievalBroker
-from forwin.state.repo import StateRepository
 
 from .store import DEFAULT_LLM_KB_ROOT
 from .vector_index import LLM_KB_PROJECTION_VERSION, LLMKBVectorIndex
@@ -71,7 +69,6 @@ class LLMKnowledgeBaseCompiler:
         as_of = self._resolve_as_of(project_id, as_of_chapter)
         project_root = self.root / project_id
         project_root.mkdir(parents=True, exist_ok=True)
-        (project_root / "packs").mkdir(exist_ok=True)
         runtime = BookStateProjection(self.session).load_runtime_as_of(project_id, as_of_chapter=as_of)
         nodes = list(runtime.world.nodes_by_id.values())
         facts = list(runtime.world.facts_by_id.values())
@@ -139,7 +136,6 @@ class LLMKnowledgeBaseCompiler:
         }
         (project_root / "retrieval_index.json").write_text(json.dumps(retrieval_index, ensure_ascii=False, indent=2), encoding="utf-8")
         files.append("retrieval_index.json")
-        self._write_role_packs(project_id, as_of, project_root)
         vector_store = LLMKBVectorIndex(
             self.root,
             qdrant_url=self.qdrant_url,
@@ -286,43 +282,6 @@ class LLMKnowledgeBaseCompiler:
         if len(lines) == 1:
             lines.append("_empty_")
         return "\n".join(lines).rstrip() + "\n"
-
-    def _write_role_packs(self, project_id: str, as_of: int, project_root: Path) -> None:
-        broker = RetrievalBroker(
-            llm_kb_root=self.root,
-            llm_kb_qdrant_url=self.qdrant_url,
-            llm_kb_qdrant_collection=self.qdrant_collection,
-            llm_kb_qdrant_client=self.qdrant_client,
-            llm_kb_qdrant_models=self.qdrant_models,
-        )
-        repo = StateRepository(self.session)
-        role_map = {
-            "writer": "writing",
-            "reviewer": "review",
-            "planner": "planning",
-            "compiler": "compiler",
-        }
-        try:
-            for role, pack_kind in role_map.items():
-                role_root = project_root / "packs" / role
-                role_root.mkdir(parents=True, exist_ok=True)
-                try:
-                    pack = broker.build_world_model_pack(
-                        repo, project_id, as_of + 1, pack_kind
-                    )
-                    payload = pack.model_dump(mode="json")
-                except Exception as exc:  # noqa: BLE001 - role packs are best effort.
-                    payload = {
-                        "project_id": project_id,
-                        "role": role,
-                        "error": str(exc),
-                    }
-                (role_root / "context.json").write_text(
-                    json.dumps(payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-        finally:
-            broker.close()
 
 
 def _hidden_node(node: WorldNode) -> bool:

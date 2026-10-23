@@ -16,7 +16,6 @@ from forwin.planning.band_plan.contract_templates import contract_for_role
 from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.planning.band_window import BandWindowResolver
 from forwin.planning.progression_rules import active_progression_rules_for_chapter
-from forwin.planning.world_contract_service import WorldContractPlanningService
 from forwin.protocol.subworld import ChapterEntryTarget
 
 
@@ -45,7 +44,6 @@ class BandPlanService:
         self,
         *,
         subworld_manager: Any | None = None,
-        world_contract_service: WorldContractPlanningService | None = None,
         experience_service: ExperiencePlanningService | None = None,
         scheduler: BandExperienceScheduler | None = None,
         chapter_planner: ChapterExperiencePlanner | None = None,
@@ -58,7 +56,6 @@ class BandPlanService:
 
             subworld_manager = SubWorldManager()
         self.subworld_manager = subworld_manager or SubWorldManager()
-        self.world_contract_service = world_contract_service or WorldContractPlanningService()
         self.experience_service = experience_service or ExperiencePlanningService()
         self.scheduler = scheduler or BandExperienceScheduler()
         self.chapter_planner = chapter_planner or ChapterExperiencePlanner()
@@ -199,14 +196,6 @@ class BandPlanService:
             )
             session.add(plan)
             updated_numbers.append(int(plan.chapter_number or 0))
-        self.world_contract_service.ensure_for_arc_band(
-            session=session,
-            project_id=request.project_id,
-            arc_id=request.arc_id,
-            chapter_plans=request.chapter_plans,
-            activation_chapter=request.activation_chapter,
-            detailed_band_size=request.detailed_band_size,
-        )
         session.flush()
         return BandPlanningResult(
             band_id=window.band_id,

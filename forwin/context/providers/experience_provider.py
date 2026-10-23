@@ -5,7 +5,6 @@ import logging
 
 from forwin.context.request import ContextDraft, ContextRequest
 from forwin.knowledge_system.context import KnowledgeContextQuery
-from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.context import ArcEnvelopeView
 from forwin.protocol.world_model import WorldContextPack
 
@@ -57,24 +56,6 @@ class ExperienceContextProvider:
             goals = []
 
         repo_session = getattr(repo, "session", None)
-        chapter_world_delta_intent = None
-        arc_world_contract = None
-        band_world_contract = None
-        if repo_session is not None:
-            world_contract_repo = WorldContractRepository(repo_session)
-            arc_world_contract = world_contract_repo.get_arc_contract(
-                project_id,
-                chapter_plan.arc_plan_id,
-            )
-            band_world_contract = world_contract_repo.get_band_contract_for_chapter(
-                project_id,
-                chapter_plan.chapter_number,
-            )
-            chapter_world_delta_intent = world_contract_repo.get_chapter_intent(
-                project_id,
-                chapter_plan.chapter_number,
-            )
-
         world_context = WorldContextPack()
         if repo_session is not None:
             try:
@@ -152,8 +133,5 @@ class ExperienceContextProvider:
                     else None
                 ),
                 "world_context": world_context,
-                "arc_world_contract": arc_world_contract,
-                "band_world_contract": band_world_contract,
-                "chapter_world_delta_intent": chapter_world_delta_intent,
             }
         )

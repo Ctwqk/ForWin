@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from .arc_envelope_resolver import ArcEnvelopeResolver
     from .arc_structure_service import ArcStructurePlanningService
     from .band_plan_service import BandPlanService
-    from .world_contract_service import WorldContractPlanningService
 
 
 @dataclass(slots=True)
@@ -35,7 +34,6 @@ class PlanningService:
     band_scheduler: BandExperienceScheduler
     chapter_planner: ChapterExperiencePlanner
     band_plan: BandPlanService
-    world_contracts: WorldContractPlanningService
 
     @classmethod
     def build_default(
@@ -56,12 +54,10 @@ class PlanningService:
         from .arc_envelope_resolver import ArcEnvelopeResolver
         from .arc_structure_service import ArcStructurePlanningService
         from .band_plan_service import BandPlanService
-        from .world_contract_service import WorldContractPlanningService
 
         resolved_subworld_manager = subworld_manager or SubWorldManager(
             director=director
         )
-        world_contracts = WorldContractPlanningService()
         experience = ExperiencePlanningService()
         persistence = ExperiencePersistence()
         band_scheduler = BandExperienceScheduler()
@@ -78,14 +74,12 @@ class PlanningService:
             chapter_planner=chapter_planner,
             band_plan=BandPlanService(
                 subworld_manager=resolved_subworld_manager,
-                world_contract_service=world_contracts,
                 experience_service=experience,
                 scheduler=band_scheduler,
                 chapter_planner=chapter_planner,
                 persistence=persistence,
                 trope_cost_ceiling=trope_cost_ceiling,
             ),
-            world_contracts=world_contracts,
         )
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -92,10 +93,6 @@ def _old_surfaces(*truths: str) -> dict:
                                                  markdown=" ".join(rest) or first)],
             active_secrets=[WorldModelPage(page_key="s", title="secret-page", markdown=first)],
         ),
-        "active_knowledge_gaps": list(truths),
-        "visible_world_lines": list(truths),
-        "hidden_world_lines": list(truths),
-        "must_not_reveal": list(truths),
         "current_arc_envelope": {"source_policy_tier": "tier", "resolved_target_size": 30},
     }
 
@@ -295,11 +292,10 @@ def test_planner_prompts_mark_the_fields_that_reach_the_writer():
         assert instruction in system
 
 
-def test_personality_section_only_onstage():
+def test_personality_section_only_onstage(monkeypatch):
     from forwin.context.providers.personality_provider import PersonalityContextProvider
     from forwin.context.request import ContextDraft, ContextRequest
     from forwin.retrieval.broker_core import RetrievalBroker
-    from forwin.protocol.context import WorldModelRetrievalPack
 
     loadout = {"dominant": {"skill": "trait-loyal-protector", "weight": 0.72}, "secondary": [], "social_mask": [],
                "stress_modes": [], "relationship_patterns": [], "overrides": {}}
@@ -325,13 +321,15 @@ def test_personality_section_only_onstage():
     draft.data["world_view"] = None
     PersonalityContextProvider().contribute(request, draft)
     assert draft.data["active_personality_contexts"] == []
-    # The broker's world-model pack no longer replaces them with every character.
+    # Retrieval preserves the provider's onstage-only personality context.
     pack = _context(None, active_personality_contexts=contexts)
-    world_pack = WorldModelRetrievalPack(pack_kind="writing", project_id="p", active_personality_contexts=[
-        {"character_id": "villain", "character_name": "villain-name"},
-    ])
-    merged = RetrievalBroker()._merge_writer_world_model_pack(pack, world_pack)
-    assert merged.active_personality_contexts == contexts
+    monkeypatch.setattr(
+        "forwin.retrieval.broker_core.broker._assemble_context",
+        lambda *_args: pack,
+    )
+    memory_index = SimpleNamespace(search=lambda **_kwargs: [])
+    selected = RetrievalBroker(memory_index=memory_index).build_chapter_context(None, "p", None)
+    assert selected.active_personality_contexts == contexts
 
 
 def test_world_view_is_outside_the_broker_context_budget(source):

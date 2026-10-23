@@ -88,9 +88,6 @@ class ChapterContextAssembler:
         data = draft.data
         project = data["project"]
         chapter_experience_plan = data.get("chapter_experience_plan")
-        arc_world_contract = data.get("arc_world_contract")
-        band_world_contract = data.get("band_world_contract")
-        chapter_world_delta_intent = data.get("chapter_world_delta_intent")
         return ChapterContextPack(
             project_id=project_id,
             project_title=project.title,
@@ -143,59 +140,6 @@ class ChapterContextAssembler:
             next_band_summary=data.get("next_band_summary"),
             world_context=data.get("world_context", WorldContextPack()),
             map_context=data.get("map_context", {}),
-            active_world_lines=list(
-                dict.fromkeys(
-                    [
-                        *data.get("book_state_world_lines", []),
-                        *(arc_world_contract.primary_world_line_ids if arc_world_contract else []),
-                        *(arc_world_contract.hidden_world_line_ids if arc_world_contract else []),
-                    ]
-                )
-            ),
-            visible_world_lines=(
-                list(arc_world_contract.primary_world_line_ids)
-                if arc_world_contract is not None
-                else []
-            ),
-            hidden_world_lines=(
-                list(arc_world_contract.hidden_world_line_ids)
-                if arc_world_contract is not None
-                else []
-            ),
-            active_knowledge_gaps=list(
-                dict.fromkeys(
-                    [
-                        *data.get("book_state_knowledge_gaps", []),
-                        *(arc_world_contract.major_gap_ids if arc_world_contract else []),
-                    ]
-                )
-            ),
-            planned_reveal_ladder=(
-                list(arc_world_contract.reveal_ladder)
-                if arc_world_contract is not None
-                else []
-            ),
-            reader_cognition_state=(
-                band_world_contract.band_exit_reader_state
-                if band_world_contract is not None
-                else ""
-            ),
-            observer_visibility_states=(
-                dict(chapter_world_delta_intent.expected_observer_state_changes)
-                if chapter_world_delta_intent is not None
-                else {}
-            ),
-            must_not_reveal=(
-                list(chapter_world_delta_intent.must_not_reveal)
-                if chapter_world_delta_intent is not None
-                else []
-            ),
-            fair_misdirection_requirements=(
-                list(band_world_contract.required_hints)
-                if band_world_contract is not None
-                else []
-            ),
-            chapter_world_delta_intent=chapter_world_delta_intent,
             active_personality_contexts=data.get("active_personality_contexts", []),
             personality_integrity_issues=data.get("personality_integrity_issues", []),
             canon_quality_context=_build_canon_quality_context(

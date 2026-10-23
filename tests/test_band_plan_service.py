@@ -32,19 +32,10 @@ class _SubworldManager:
         )
 
 
-class _WorldContracts:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def ensure_for_arc_band(self, **_kwargs) -> None:
-        self.calls += 1
-
-
 def test_band_plan_service_persists_band_and_chapter_experience_overlay() -> None:
     engine = get_engine(postgres_test_url("band-plan-service"))
     init_db(engine)
     Session = get_session_factory(engine)
-    contracts = _WorldContracts()
 
     with Session.begin() as session:
         updater = StateUpdater(session)
@@ -62,7 +53,6 @@ def test_band_plan_service_persists_band_and_chapter_experience_overlay() -> Non
 
         result = BandPlanService(
             subworld_manager=_SubworldManager(),
-            world_contract_service=contracts,
         ).ensure_current_band_plan(
             session=session,
             request=BandPlanningRequest(
@@ -97,7 +87,6 @@ def test_band_plan_service_persists_band_and_chapter_experience_overlay() -> Non
     assert band_payload["active_subworld_ids"] == ["global-core"]
     assert chapter_payload["entity_admission_rule"] == "strict_named_character"
     assert chapter_payload["active_subworld_ids"] == ["global-core"]
-    assert contracts.calls == 1
 
 
 def test_band_plan_service_does_not_infer_named_entry_target_from_chapter_goal() -> None:
@@ -138,7 +127,6 @@ def test_band_plan_service_does_not_infer_named_entry_target_from_chapter_goal()
 
         BandPlanService(
             subworld_manager=_SubworldManager(),
-            world_contract_service=_WorldContracts(),
         ).ensure_current_band_plan(
             session=session,
             request=BandPlanningRequest(
@@ -207,7 +195,6 @@ def test_band_plan_service_does_not_use_reference_classifier_for_entry_targets()
 
         BandPlanService(
             subworld_manager=_SubworldManager(),
-            world_contract_service=_WorldContracts(),
         ).ensure_current_band_plan(
             session=session,
             request=BandPlanningRequest(

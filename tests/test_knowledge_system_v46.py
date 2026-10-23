@@ -38,8 +38,6 @@ from forwin.protocol.book_state import (
     WorldEdge,
     WorldNode,
 )
-from forwin.retrieval.broker_core import RetrievalBroker
-from forwin.state.repo import StateRepository
 from tests.postgres import postgres_test_url
 from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
@@ -1256,7 +1254,7 @@ def test_llm_kb_rebuild_is_writer_safe_and_allowlisted(tmp_path: Path) -> None:
         engine.dispose()
 
 
-def test_llm_kb_vector_payloads_enforce_role_visibility_scopes(tmp_path: Path) -> None:
+def test_llm_kb_vector_payloads_keep_writer_safe_scope_without_role_packs(tmp_path: Path) -> None:
     Session, engine = _session_factory()
     qdrant_client = FakeQdrantClient()
     try:
@@ -1310,11 +1308,7 @@ def test_llm_kb_vector_payloads_enforce_role_visibility_scopes(tmp_path: Path) -
             and payload["visibility_scope"] == "writer_safe"
             for payload in payloads
         )
-        assert any(
-            payload["role_scope"] == "reviewer"
-            and payload["visibility_scope"] == "reviewer_only"
-            for payload in payloads
-        )
+        assert all(not payload["file_key"].startswith("packs/") for payload in payloads)
 
         retriever = LLMKnowledgeBaseRetriever(
             root=tmp_path / "kb",
@@ -1328,11 +1322,8 @@ def test_llm_kb_vector_payloads_enforce_role_visibility_scopes(tmp_path: Path) -
         assert all(item["role_scope"] == "writer" for item in writer_results)
 
         reviewer_results = retriever.search(project_id, "context", role="reviewer", limit=200)
-        assert any(
-            item["role_scope"] == "reviewer"
-            and item["visibility_scope"] == "reviewer_only"
-            for item in reviewer_results
-        )
+        assert reviewer_results
+        assert all(item["visibility_scope"] == "writer_safe" for item in reviewer_results)
     finally:
         engine.dispose()
 
@@ -1494,14 +1485,7 @@ def test_obsidian_human_index_searches_manual_notes_without_writer_context(tmp_p
         assert canon_results["results"][0]["index_kind"] == "canon"
         assert canon_results["results"][0]["canon_status"] == "canon_projection"
 
-        with Session() as session:
-            writer_pack = RetrievalBroker().build_world_model_pack(
-                StateRepository(session),
-                project_id,
-                1,
-                "writing",
-            )
-        assert "只给编辑看的伏笔线索" not in str(writer_pack.model_dump(mode="json"))
+        assert "只给编辑看的伏笔线索" not in str(writer_all_results)
     finally:
         engine.dispose()
 
@@ -1579,19 +1563,12 @@ mode: instruction_only
         )["results"]
         assert all(item["index_kind"] != "skill" for item in writer_results)
 
-        with Session() as session:
-            writer_pack = RetrievalBroker().build_world_model_pack(
-                StateRepository(session),
-                project_id,
-                1,
-                "writing",
-            )
-        assert "疑心幸存者只相信可验证线索" not in str(writer_pack.model_dump(mode="json"))
+        assert "疑心幸存者只相信可验证线索" not in str(writer_results)
     finally:
         engine.dispose()
 
 
-def test_active_personality_context_enters_world_model_and_llm_kb_role_packs(tmp_path: Path) -> None:
+def test_llm_kb_has_character_memory_without_role_packs(tmp_path: Path) -> None:
     Session, engine = _session_factory()
     qdrant_client = FakeQdrantClient()
     try:
@@ -1617,17 +1594,6 @@ def test_active_personality_context_enters_world_model_and_llm_kb_role_packs(tmp
                 version_chapter=0,
             )
 
-        with Session() as session:
-            writer_pack = RetrievalBroker().build_world_model_pack(
-                StateRepository(session),
-                project_id,
-                1,
-                "writing",
-            )
-        assert writer_pack.active_personality_contexts
-        assert writer_pack.active_personality_contexts[0]["character_id"] == "char_lin"
-        assert "trait-suspicious-survivor" in writer_pack.active_personality_contexts[0]["active_skills"]["dominant"]
-
         with Session.begin() as session:
             result = LLMKnowledgeBaseCompiler(
                 session,
@@ -1637,22 +1603,21 @@ def test_active_personality_context_enters_world_model_and_llm_kb_role_packs(tmp
             ).rebuild(project_id, as_of_chapter=1)
 
         root = Path(result.root)
-        writer_context = json.loads((root / "packs" / "writer" / "context.json").read_text(encoding="utf-8"))
-        reviewer_context = json.loads((root / "packs" / "reviewer" / "context.json").read_text(encoding="utf-8"))
-        assert writer_context["active_personality_contexts"][0]["character_id"] == "char_lin"
-        assert reviewer_context["active_personality_contexts"][0]["character_id"] == "char_lin"
+        assert not (root / "packs").exists()
+        assert "char_lin" in (root / "CHARACTER_MEMORY.md").read_text(encoding="utf-8")
 
         reviewer_results = LLMKnowledgeBaseRetriever(
             root=tmp_path / "kb",
             qdrant_client=qdrant_client,
             qdrant_models=FakeQdrantModels,
         ).search(project_id, "trait-suspicious-survivor", role="reviewer", limit=100)
-        assert any("trait-suspicious-survivor" in item["text"] for item in reviewer_results)
+        assert reviewer_results
+        assert all("trait-suspicious-survivor" not in item["text"] for item in reviewer_results)
     finally:
         engine.dispose()
 
 
-def test_retrieval_pack_merges_v46_sources_without_writer_hidden_leak(tmp_path: Path) -> None:
+def test_llm_kb_retrieval_keeps_public_facts_without_hidden_truth(tmp_path: Path) -> None:
     Session, engine = _session_factory()
     qdrant_client = FakeQdrantClient()
     try:
@@ -1709,24 +1674,48 @@ def test_retrieval_pack_merges_v46_sources_without_writer_hidden_leak(tmp_path: 
                 qdrant_models=FakeQdrantModels,
             ).rebuild(project_id, as_of_chapter=1)
 
-        with Session() as session:
-            broker = RetrievalBroker(
-                llm_kb_root=tmp_path / "kb",
-                llm_kb_qdrant_client=qdrant_client,
-                llm_kb_qdrant_models=FakeQdrantModels,
-            )
-            state_repo = StateRepository(session)
-            writer_pack = broker.build_world_model_pack(state_repo, project_id, 1, "writing")
-            review_pack = broker.build_world_model_pack(state_repo, project_id, 1, "review")
-
-        writer_dump = str(writer_pack.model_dump(mode="json"))
-        review_dump = str(review_pack.model_dump(mode="json"))
-        assert "王都密令导致矿难" not in writer_dump
-        assert any(item["proposition"] == "林烬抵达矿门。" for item in writer_pack.book_state_facts)
-        assert "CURRENT_STATE.md" in writer_pack.llm_kb_context["files"]
-        assert writer_pack.obsidian_pages
-        assert writer_pack.metadata["knowledge_system_v46"] is True
-        assert "王都密令导致矿难" in review_dump
-        assert any(item["proposition"] == "王都密令导致矿难。" for item in review_pack.book_state_facts)
+        retriever = LLMKnowledgeBaseRetriever(
+            root=tmp_path / "kb",
+            qdrant_client=qdrant_client,
+            qdrant_models=FakeQdrantModels,
+        )
+        try:
+            results = retriever.search(project_id, "林烬抵达矿门", role="writer", limit=100)
+        finally:
+            retriever.close()
+        assert results
+        assert "王都密令导致矿难" not in str(results)
+        assert any("林烬抵达矿门" in item["text"] for item in results)
+        assert all(item["visibility_scope"] == "writer_safe" for item in results)
+        store = LLMKnowledgeBaseStore(root=tmp_path / "kb")
+        facts = store.read_file(project_id, "facts.jsonl")
+        assert "林烬抵达矿门" in facts
+        assert "王都密令导致矿难" not in facts
     finally:
         engine.dispose()
+
+
+def test_llm_kb_rebuild_ignores_retired_role_pack_files(tmp_path: Path) -> None:
+    from forwin.llm_kb.vector_index import LLMKBVectorIndex
+
+    root = tmp_path / "project-1"
+    root.mkdir()
+    (root / "CURRENT_STATE.md").write_text("# Current State\n\nPublic memory.\n", encoding="utf-8")
+    for role in ("writer", "reviewer", "planner", "compiler"):
+        role_root = root / "packs" / role
+        role_root.mkdir(parents=True)
+        (role_root / "context.json").write_text(json.dumps({
+            "hidden_objective_truths": ["retired-secret-truth"],
+            "active_personality_contexts": [{"character_id": "offstage", "constraints": ["retired-personality"]}],
+        }), encoding="utf-8")
+    client = FakeQdrantClient()
+    index = LLMKBVectorIndex(tmp_path, qdrant_client=client, qdrant_models=FakeQdrantModels)
+    try:
+        index.rebuild_project("project-1", source_digest="digest", as_of_chapter=1)
+        payloads = [point.payload for point in client.collections["llm_kb_vectors"]["points"].values()]
+        assert payloads
+        assert all(not payload["file_key"].startswith("packs/") for payload in payloads)
+        assert "retired-secret-truth" not in str(payloads)
+        assert "retired-personality" not in str(payloads)
+    finally:
+        index.close()

@@ -296,10 +296,6 @@ def test_band_plan_service_passes_trope_cost_ceiling_to_scheduler() -> None:
         def save_chapter_experience_plan(self, **_kwargs) -> None:
             return None
 
-    class _WorldContractService:
-        def ensure_for_arc_band(self, **_kwargs) -> None:
-            return None
-
     class _Session:
         def get(self, *_args, **_kwargs):
             return None
@@ -313,7 +309,6 @@ def test_band_plan_service_passes_trope_cost_ceiling_to_scheduler() -> None:
     scheduler = _Scheduler()
     service = BandPlanService(
         subworld_manager=_SubworldManager(),
-        world_contract_service=_WorldContractService(),
         experience_service=_ExperienceService(),
         scheduler=scheduler,
         chapter_planner=_ChapterPlanner(),

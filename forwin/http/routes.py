@@ -1067,12 +1067,6 @@ def register_api_routes(
             {"response_model": PostCanonMaintenanceStatusResponse},
         ),
         (
-            "/api/projects/{project_id}/context-pack/{role}",
-            ["GET"],
-            handlers["get_context_pack"],
-            {},
-        ),
-        (
             "/api/projects/{project_id}/chapters",
             ["GET"],
             handlers["list_chapters"],

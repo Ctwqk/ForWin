@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 from forwin.planning.checkpoints import NextBandSummary
 from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.planning.contracts import PlanTaskItem
-from forwin.planning.world_contracts import ChapterWorldDeltaIntent, RevealLadderStep
 from forwin.world_view.types import ChapterWorldView
 
 from .experience import (
@@ -221,96 +220,12 @@ class ChapterContextPack(BaseModel):
     )
     next_band_summary: NextBandSummary | None = None
     world_context: WorldContextPack = Field(default_factory=WorldContextPack)
-    knowledge_system_context: dict[str, Any] = Field(default_factory=dict)
     map_context: dict[str, Any] = Field(default_factory=dict)
-    active_world_lines: list[str] = Field(default_factory=list)
-    visible_world_lines: list[str] = Field(default_factory=list)
-    hidden_world_lines: list[str] = Field(default_factory=list)
-    recent_world_deltas: list[str] = Field(default_factory=list)
-    recent_offscreen_deltas: list[str] = Field(default_factory=list)
-    active_knowledge_gaps: list[str] = Field(default_factory=list)
-    planned_reveal_ladder: list[RevealLadderStep] = Field(default_factory=list)
-    reader_cognition_state: str = ""
-    character_cognition_states: dict[str, str] = Field(default_factory=dict)
-    observer_visibility_states: dict[str, str] = Field(default_factory=dict)
-    promise_debts: list[str] = Field(default_factory=list)
-    recent_reader_experience_deltas: list[str] = Field(default_factory=list)
-    must_not_reveal: list[str] = Field(default_factory=list)
-    fair_misdirection_requirements: list[str] = Field(default_factory=list)
-    chapter_world_delta_intent: ChapterWorldDeltaIntent | None = None
     active_personality_contexts: list[dict[str, Any]] = Field(default_factory=list)
     personality_integrity_issues: list[dict[str, Any]] = Field(default_factory=list)
     canon_quality_context: dict[str, Any] = Field(default_factory=dict)
     active_narrative_obligations: list[dict[str, Any]] = Field(default_factory=list)
     future_plan_audit_summary: dict[str, Any] = Field(default_factory=dict)
-
-
-class WorldModelRetrievalPack(BaseModel):
-    """Role-scoped v4 world-model context.
-
-    These packs are read-side views. They must not be treated as canon writes.
-    """
-
-    pack_kind: str
-    project_id: str
-    as_of_chapter: int = 0
-    active_world_lines: list[str] = Field(default_factory=list)
-    visible_world_lines: list[str] = Field(default_factory=list)
-    hidden_world_lines: list[str] = Field(default_factory=list)
-    recent_world_deltas: list[str] = Field(default_factory=list)
-    recent_offscreen_deltas: list[str] = Field(default_factory=list)
-    active_knowledge_gaps: list[str] = Field(default_factory=list)
-    hidden_objective_truths: list[str] = Field(default_factory=list)
-    planned_reveal_ladder: list[RevealLadderStep] = Field(default_factory=list)
-    reader_cognition_state: dict[str, Any] = Field(default_factory=dict)
-    character_cognition_states: dict[str, Any] = Field(default_factory=dict)
-    observer_visibility_states: dict[str, str] = Field(default_factory=dict)
-    promise_debts: list[str] = Field(default_factory=list)
-    recent_reader_experience_deltas: list[str] = Field(default_factory=list)
-    must_not_reveal: list[str] = Field(default_factory=list)
-    fair_misdirection_requirements: list[str] = Field(default_factory=list)
-    accepted_delta_ids: list[str] = Field(default_factory=list)
-    rejected_delta_ids: list[str] = Field(default_factory=list)
-    book_state_snapshot: dict[str, Any] = Field(default_factory=dict)
-    book_state_nodes: list[dict[str, Any]] = Field(default_factory=list)
-    book_state_edges: list[dict[str, Any]] = Field(default_factory=list)
-    book_state_facts: list[dict[str, Any]] = Field(default_factory=list)
-    book_state_map: dict[str, Any] = Field(default_factory=dict)
-    obsidian_pages: list[dict[str, Any]] = Field(default_factory=list)
-    llm_kb_context: dict[str, Any] = Field(default_factory=dict)
-    review_conflicts: list[dict[str, Any]] = Field(default_factory=list)
-    active_personality_contexts: list[dict[str, Any]] = Field(default_factory=list)
-    source_refs: list[str] = Field(default_factory=list)
-    source_digest: str = ""
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class PlanningPack(WorldModelRetrievalPack):
-    pack_kind: Literal["planning"] = "planning"
-
-
-class WritingPack(WorldModelRetrievalPack):
-    pack_kind: Literal["writing"] = "writing"
-
-
-class ReviewPack(WorldModelRetrievalPack):
-    pack_kind: Literal["review"] = "review"
-
-
-class CompilerPack(WorldModelRetrievalPack):
-    pack_kind: Literal["compiler"] = "compiler"
-
-
-class ReaderExperiencePack(WorldModelRetrievalPack):
-    pack_kind: Literal["reader_experience"] = "reader_experience"
-
-
-class CognitionPack(WorldModelRetrievalPack):
-    pack_kind: Literal["cognition"] = "cognition"
-
-
-class RevealPack(WorldModelRetrievalPack):
-    pack_kind: Literal["reveal"] = "reveal"
 
 
 class ReviewContextPack(BaseModel):

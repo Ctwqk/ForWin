@@ -282,3 +282,56 @@ def test_0006_upgrade_strips_stored_policy_key_and_preserves_other_fields(legacy
         assert connection.execute(sa.text(
             "SELECT runtime_policy_json FROM projects WHERE id = 'legacy-policy'"
         )).scalar_one() == stored
+
+
+@pytest.mark.parametrize("table_name", [
+    "arc_world_" + "contracts", "band_world_" + "contracts", "chapter_world_delta_intents",
+])
+def test_0006_drops_contract_tables_and_restores_baseline_schema(legacy_database, table_name) -> None:
+    config, engine = legacy_database
+
+    def schema():
+        inspector = sa.inspect(engine)
+        return {
+            "columns": [(c["name"], str(c["type"]), c["nullable"], c["default"])
+                        for c in inspector.get_columns(table_name)],
+            "pk": inspector.get_pk_constraint(table_name),
+            "fk": inspector.get_foreign_keys(table_name),
+            "indexes": inspector.get_indexes(table_name),
+            "unique": inspector.get_unique_constraints(table_name),
+        }
+
+    original = schema()
+    command.upgrade(config, "0006_planning_v6")
+    assert table_name not in sa.inspect(engine).get_table_names()
+    command.downgrade(config, "0005_world_plan_conflicts")
+    assert schema() == original
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(f"SELECT count(*) FROM {table_name}")).scalar_one() == 0
+    command.upgrade(config, "0006_planning_v6")
+    assert table_name not in sa.inspect(engine).get_table_names()
+
+
+def test_0006_contract_downgrade_definitions_match_baseline() -> None:
+    import ast
+    import inspect
+
+    baseline = importlib.import_module("forwin.migrations.versions.0001_v5_baseline")
+    migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
+    tables = {"arc_world_" + "contracts", "band_world_" + "contracts", "chapter_world_delta_intents"}
+
+    def definitions(function):
+        result = {}
+        for node in ast.walk(ast.parse(inspect.getsource(function))):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in {"create_table", "create_index"}:
+                continue
+            table_arg = node.args[0 if node.func.attr == "create_table" else 1]
+            if isinstance(table_arg, ast.Constant) and table_arg.value in tables:
+                result[node.args[0].value] = ast.dump(node, include_attributes=False)
+        return result
+
+    expected = definitions(baseline.upgrade)
+    assert len(expected) == 6  # Three tables and their three indexes.
+    assert definitions(migration.downgrade) == expected

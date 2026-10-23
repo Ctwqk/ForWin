@@ -92,6 +92,10 @@ def upgrade() -> None:
     op.execute("UPDATE post_canon_maintenance_runs SET step_name = 'plan' WHERE step_name = 'planning'")
     op.execute("DELETE FROM post_canon_maintenance_runs WHERE step_name = 'arc'")
 
+    op.drop_table("arc_world_contracts")
+    op.drop_table("band_world_contracts")
+    op.drop_table("chapter_world_delta_intents")
+
     op.drop_table("world_simulation_turns")
     _drop_simulation_from_policies()
 
@@ -116,6 +120,74 @@ def _drop_simulation_from_policies() -> None:
 
 def downgrade() -> None:
     """Revert schema; the maintenance step data rewrite is not reversed."""
+    op.create_table(
+        "arc_world_contracts",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("arc_id", sa.String(), nullable=False),
+        sa.Column("arc_number", sa.Integer(), nullable=False),
+        sa.Column("contract_json", sa.Text(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_arc_world_contracts_project_arc",
+        "arc_world_contracts",
+        ["project_id", "arc_id"],
+        unique=False,
+    )
+    op.create_table(
+        "band_world_contracts",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("arc_id", sa.String(), nullable=False),
+        sa.Column("band_id", sa.String(), nullable=False),
+        sa.Column("chapter_start", sa.Integer(), nullable=False),
+        sa.Column("chapter_end", sa.Integer(), nullable=False),
+        sa.Column("contract_json", sa.Text(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_band_world_contracts_project_arc_band",
+        "band_world_contracts",
+        ["project_id", "arc_id", "band_id"],
+        unique=False,
+    )
+    op.create_table(
+        "chapter_world_delta_intents",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("chapter_plan_id", sa.String(), nullable=False),
+        sa.Column("chapter_number", sa.Integer(), nullable=False),
+        sa.Column("intent_json", sa.Text(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_chapter_world_intents_project_chapter",
+        "chapter_world_delta_intents",
+        ["project_id", "chapter_number"],
+        unique=False,
+    )
     op.create_table(
         "world_simulation_turns",
         sa.Column("id", sa.String(), nullable=False),

@@ -84,7 +84,7 @@ def _pack_with_memories(memories: list[SimpleNamespace]) -> ChapterContextPack:
 
 
 def test_trim_pack_prunes_low_priority_memories_before_obligations() -> None:
-    broker = RetrievalBroker(context_budget_chars=2920)
+    broker = RetrievalBroker()
     pack = _pack_with_memories(
         [
             _typed_memory("recent " + "x" * 260, "recent"),
@@ -93,13 +93,14 @@ def test_trim_pack_prunes_low_priority_memories_before_obligations() -> None:
         ]
     )
 
+    broker.context_budget_chars = broker._estimate_pack_with_components(pack) - 1
     trimmed = broker._trim_pack(pack)
 
     assert [item.memory_type for item in trimmed.retrieved_memories] == ["promise", "enemy"]
 
 
 def test_finalize_context_summary_reports_memory_pruning() -> None:
-    broker = RetrievalBroker(context_budget_chars=2920)
+    broker = RetrievalBroker()
     base_pack = _pack_with_memories(
         [
             _typed_memory("recent " + "x" * 260, "recent"),
@@ -107,6 +108,7 @@ def test_finalize_context_summary_reports_memory_pruning() -> None:
             _typed_memory("enemy " + "x" * 260, "enemy"),
         ]
     )
+    broker.context_budget_chars = broker._estimate_pack_with_components(base_pack) - 1
     trimmed = broker._trim_pack(base_pack)
 
     broker._finalize_context_summary(

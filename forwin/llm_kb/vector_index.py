@@ -453,33 +453,6 @@ def _collect_project_sections(
                     projection_version=projection_version,
                 )
             )
-    packs_root = project_root / "packs"
-    for role in ("reviewer", "planner", "compiler"):
-        path = packs_root / role / "context.json"
-        if path.exists() and path.is_file():
-            raw_text = path.read_text(encoding="utf-8")
-            text = _trim(raw_text, 6000)
-            sections.append(
-                _section_record(
-                    file_key=f"packs/{role}/context.json",
-                    section_key="context",
-                    role_scope=role,
-                    text=text,
-                    source_refs=[f"llm_kb:pack:{role}"],
-                    source_digest=source_digest,
-                    as_of_chapter=as_of_chapter,
-                    projection_version=projection_version,
-                )
-            )
-            sections.extend(
-                _active_personality_sections(
-                    role,
-                    raw_text,
-                    source_digest=source_digest,
-                    as_of_chapter=as_of_chapter,
-                    projection_version=projection_version,
-                )
-            )
     return [section for section in sections if section["text"].strip()]
 
 def _existing_points_by_normalized_id(
@@ -644,53 +617,6 @@ def _jsonl_sections(
                 as_of_chapter=as_of_chapter,
                 projection_version=projection_version,
                 raw_payload=payload if isinstance(payload, dict) else None,
-            )
-        )
-    return sections
-
-
-def _active_personality_sections(
-    role: str,
-    raw_text: str,
-    *,
-    source_digest: str,
-    as_of_chapter: int,
-    projection_version: str,
-) -> list[dict[str, Any]]:
-    try:
-        payload = json.loads(raw_text or "{}")
-    except json.JSONDecodeError:
-        return []
-    contexts = payload.get("active_personality_contexts") if isinstance(payload, dict) else None
-    if not isinstance(contexts, list):
-        return []
-    sections: list[dict[str, Any]] = []
-    for index, context in enumerate(contexts, start=1):
-        if not isinstance(context, dict):
-            continue
-        character_id = str(context.get("character_id") or index)
-        text = json.dumps(
-            {
-                "character_id": context.get("character_id", ""),
-                "character_name": context.get("character_name", ""),
-                "active_skills": context.get("active_skills", {}),
-                "current_behavior_bias": context.get("current_behavior_bias", {}),
-                "constraints": context.get("constraints", []),
-                "source_refs": context.get("source_refs", []),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-        sections.append(
-            _section_record(
-                file_key=f"packs/{role}/active_personality_context.json",
-                section_key=character_id,
-                role_scope=role,
-                text=_trim(text, 2400),
-                source_refs=[f"llm_kb:pack:{role}:active_personality_context:{character_id}"],
-                source_digest=source_digest,
-                as_of_chapter=as_of_chapter,
-                projection_version=projection_version,
             )
         )
     return sections

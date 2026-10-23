@@ -211,14 +211,6 @@ class ArcEnvelopeManager:
         state: ArcResolutionPlanningState,
         activation_chapter: int,
     ) -> ArcEnvelope:
-        self.planning.world_contracts.ensure_for_arc_band(
-            session=session,
-            project_id=project_id,
-            arc_id=state.active_arc.id,
-            chapter_plans=state.chapter_plans,
-            activation_chapter=activation_chapter,
-            detailed_band_size=state.base_context.provisional_band_size,
-        )
         envelope = self.planning.arc_envelope_resolver.ensure_resolution(
             session=session,
             project=project,
@@ -455,25 +447,6 @@ class ArcEnvelopeManager:
                 structure=_to_core_structure(structure),
                 arc_experience=_experience_from_compat_structure(structure),
             ),
-        )
-
-    def _persist_world_contracts(
-        self,
-        *,
-        session: Session,
-        project_id: str,
-        arc_id: str,
-        chapter_plans: list[ChapterPlan],
-        activation_chapter: int,
-        detailed_band_size: int,
-    ) -> None:
-        self.planning.world_contracts.ensure_for_arc_band(
-            session=session,
-            project_id=project_id,
-            arc_id=arc_id,
-            chapter_plans=chapter_plans,
-            activation_chapter=activation_chapter,
-            detailed_band_size=detailed_band_size,
         )
 
     def _build_audience_calibration_profile(

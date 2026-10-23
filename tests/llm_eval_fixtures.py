@@ -1,4 +1,4 @@
-"""Sample story fixtures for the llm_eval harness and context-pack tests.
+"""Sample story fixtures for the llm_eval harness and context tests.
 
 The story text lives in ``tests/fixtures/llm_eval/*.json``; the runtime package
 ``forwin/llm_eval`` only loads such files and carries no story content of its own.

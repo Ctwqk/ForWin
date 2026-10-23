@@ -257,47 +257,6 @@ def _experience_overlay_section(context: ChapterContextPack) -> str | None:
     return "\n".join(["【读者体验 Overlay】", *lines])
 
 
-def _world_intent_section(context: ChapterContextPack) -> str | None:
-    intent = getattr(context, "chapter_world_delta_intent", None)
-    if not any(
-        (
-            getattr(context, "active_world_lines", None),
-            getattr(context, "active_knowledge_gaps", None),
-            getattr(context, "must_not_reveal", None),
-            intent,
-        )
-    ):
-        return None
-    lines = ["【世界状态意图】"]
-    if getattr(context, "visible_world_lines", None):
-        lines.append("  · 台前 world lines：" + "、".join(context.visible_world_lines))
-    if getattr(context, "hidden_world_lines", None):
-        lines.append("  · 幕后 world lines（只按允许的 hint 写，不要直说真相）：" + "、".join(context.hidden_world_lines))
-    if getattr(context, "active_knowledge_gaps", None):
-        lines.append("  · active gaps：" + "、".join(context.active_knowledge_gaps))
-    if intent is not None:
-        if intent.visible_delta_intents:
-            lines.append("  · 本章台前推进：" + "、".join(intent.visible_delta_intents))
-        if intent.hint_delta_intents:
-            lines.append("  · 本章允许线索：" + "、".join(intent.hint_delta_intents))
-        if intent.knowledge_delta_intents:
-            lines.append("  · 本章认知推进：" + "、".join(intent.knowledge_delta_intents))
-        if intent.reader_experience_intents:
-            lines.append("  · 读者体验目标：" + "、".join(intent.reader_experience_intents))
-        if intent.expected_observer_state_changes:
-            transitions = [
-                f"{observer}:{transition}"
-                for observer, transition in intent.expected_observer_state_changes.items()
-            ]
-            lines.append("  · 预期 observer state：" + "、".join(transitions))
-    if getattr(context, "must_not_reveal", None):
-        lines.append("  · 绝对不得揭示：" + "、".join(context.must_not_reveal))
-    if getattr(context, "fair_misdirection_requirements", None):
-        lines.append("  · 公平误导证据：" + "、".join(context.fair_misdirection_requirements))
-    lines.append("  · 注意：这些是写作意图，最终 canon 只由 extractor/reviewer/compiler 决定。")
-    return "\n".join(lines)
-
-
 def _previous_summaries_section(context: ChapterContextPack, *, limit: int) -> str | None:
     if not context.previous_chapter_summaries:
         return None
@@ -512,7 +471,6 @@ __all__ = [
     '_extract_protagonist_name',
     '_chapter_plan_section',
     '_experience_overlay_section',
-    '_world_intent_section',
     '_previous_summaries_section',
     '_active_entities_section',
     '_personality_context_section',

@@ -7,16 +7,9 @@ from fastapi import HTTPException
 
 from forwin.http.request_support import require_project
 from forwin.llm_kb import LLMKnowledgeBaseCompiler, LLMKnowledgeBaseRetriever, LLMKnowledgeBaseStore
-from forwin.retrieval.broker_core import RetrievalBroker
-from forwin.state.repo import StateRepository
 
 
-ROLE_PACK_KIND = {
-    "writer": "writing",
-    "reviewer": "review",
-    "planner": "planning",
-    "compiler": "compiler",
-}
+SEARCH_ROLES = {"writer", "reviewer", "planner", "compiler"}
 
 
 def build_handlers(
@@ -88,7 +81,7 @@ def build_handlers(
         visibility_scope: str = "",
     ) -> dict[str, Any]:
         role_key = str(role or "").strip().lower()
-        if role_key not in ROLE_PACK_KIND:
+        if role_key not in SEARCH_ROLES:
             raise HTTPException(status_code=404, detail="search role must be writer, reviewer, planner, or compiler")
         with get_session() as session:
             require_project(session, project_id)
@@ -112,39 +105,9 @@ def build_handlers(
                 retriever.close()
             return {"project_id": project_id, "role": role_key, "query": query, "results": results}
 
-    def get_context_pack(project_id: str, role: str, chapter_number: int = 0, query: str = "") -> dict[str, Any]:
-        role_key = str(role or "").strip().lower()
-        if role_key not in ROLE_PACK_KIND:
-            raise HTTPException(status_code=404, detail="context pack role must be writer, reviewer, planner, or compiler")
-        with get_session() as session:
-            require_project(session, project_id)
-            pack_kind = ROLE_PACK_KIND[role_key]
-            broker = RetrievalBroker(
-                llm_kb_root=llm_kb_root,
-                llm_kb_qdrant_url=_qdrant_url(),
-                llm_kb_qdrant_collection=_llm_kb_qdrant_collection(),
-                llm_kb_qdrant_client=qdrant_client,
-                llm_kb_qdrant_models=qdrant_models,
-            )
-            try:
-                pack = broker.build_world_model_pack(
-                    StateRepository(session),
-                    project_id,
-                    chapter_number,
-                    pack_kind,
-                    query=query,
-                )
-            finally:
-                broker.close()
-            payload = pack.model_dump(mode="json")
-            payload["requested_role"] = role_key
-            payload["pack_kind"] = pack_kind
-            return payload
-
     return {
         "rebuild_llm_kb": rebuild_llm_kb,
         "list_llm_kb_files": list_llm_kb_files,
         "get_llm_kb_file": get_llm_kb_file,
         "search_llm_kb": search_llm_kb,
-        "get_context_pack": get_context_pack,
     }

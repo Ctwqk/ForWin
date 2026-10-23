@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -106,9 +108,9 @@ def source(monkeypatch):
     return data
 
 
-def _build(source, *, budget=100_000, supplied=True):
+def _build(source, *, budget=100_000, supplied=True, as_of_chapter=5):
     from forwin.planning.world_digest import build_world_digest
-    return build_world_digest(object(), project_id="p", as_of_chapter=5, protagonist_ref="hero",
+    return build_world_digest(object(), project_id="p", as_of_chapter=as_of_chapter, protagonist_ref="hero",
                               window_end_minute=180, budget_chars=budget,
                               runtime=source.runtime if supplied else None)
 
@@ -432,3 +434,152 @@ def test_realistic_digest_fits_default_budget(source):
     assert {"protagonist", "actors", "news_in_transit", "offscreen_events"} <= {section.key for section in digest.sections}
     assert len(_lines(digest, "actors")) == 8
     assert _lines(digest, "news_in_transit") and _lines(digest, "offscreen_events")
+
+
+def test_digest_tension_types_are_explicit_schema_members():
+    from forwin.planning.world_digest import DIGEST_TENSION_EDGE_TYPES
+    from forwin.protocol.book_state import WORLD_EDGE_TYPES
+
+    assert DIGEST_TENSION_EDGE_TYPES == frozenset({"enemy_of", "rival_of", "distrusts", "owes_debt_to", "opposes"})
+    assert DIGEST_TENSION_EDGE_TYPES <= WORLD_EDGE_TYPES
+
+
+@pytest.mark.parametrize("edge_type", ["ally_of", "family_of", "romantic_with", "trusts", "serves", "allied_with", "mentor_of"])
+def test_digest_excludes_friendly_tensions(source, edge_type):
+    family = "loyalty_conflict" if edge_type in {"serves", "allied_with"} else "social"
+    edge = WorldEdge(id="friendly", project_id="p", source_id="hero", target_id="a-plain",
+                     edge_family=family, edge_type=edge_type)
+    source.runtime.world.edges_by_id = {edge.id: edge}
+    assert _lines(_build(source), "tensions") == []
+
+
+def test_digest_friendly_edges_do_not_crowd_out_hostile_edges(source):
+    types = ["ally_of", "family_of", "romantic_with", "trusts", "serves", "allied_with"] * 2
+    edges = [WorldEdge(id=f"edge-{i:02}", project_id="p", source_id="hero", target_id="a-plain",
+                       edge_family="loyalty_conflict" if kind in {"serves", "allied_with"} else "social",
+                       edge_type=kind) for i, kind in enumerate([*types, "enemy_of", "rival_of"])]
+    world = source.runtime.world
+    world.edges_by_id = {edge.id: edge for edge in edges}
+    lines = _lines(_build(source), "tensions")
+    assert lines == ["hero-name — enemy_of — a-plain-name", "hero-name — rival_of — a-plain-name"]
+    world.edges_by_id = dict(reversed(list(world.edges_by_id.items())))
+    assert _lines(_build(source), "tensions") == lines
+
+
+@pytest.mark.parametrize("known_scheduled", [15, 23])
+def test_digest_prioritizes_unrevealed_secrets_in_long_books(source, monkeypatch, known_scheduled):
+    def forbidden(*args):
+        pytest.fail("Reader progress must use recorded states only")
+
+    monkeypatch.setattr(CognitionView, "knowledge_state", forbidden)
+    scheduled = [FactNode(id=f"scheduled-{i:02}", project_id="p", proposition=f"scheduled-secret-{i:02}",
+                          sensitivity_level="secret") for i in range(30)]
+    hidden = [FactNode(id=f"hidden-{i}", project_id="p", proposition=f"hidden-unscheduled-{i}",
+                       sensitivity_level="secret") for i in range(5)]
+    public = [FactNode(id=f"public-{i:03}", project_id="p", proposition=f"public-known-{i:03}") for i in range(150)]
+    world = source.runtime.world
+    world.facts_by_id = {fact.id: fact for fact in [*scheduled, *hidden, *public]}
+    source.reveals = {fact.id: 2 + 2 * i for i, fact in enumerate(scheduled)}
+    reader = source.runtime.cognition_by_observer[("reader", "reader")]
+    reader.knowledge_by_ref = {f"fact:{fact.id}": "knows" for fact in [*scheduled[:known_scheduled], *public]}
+    reader.knowledge_by_ref[f"fact:{scheduled[known_scheduled].id}"] = "suspects"
+    lines = _lines(_build(source, as_of_chapter=40), "secrets_progress")
+    expected = [*scheduled[known_scheduled:], *hidden][:12]
+    assert len(lines) == 12
+    assert [line.split(" | ")[0] for line in lines] == [fact.proposition for fact in expected]
+    assert all("reader_state=knows" not in line for line in lines)
+    assert "reader_state=suspects" in lines[0]
+    world.facts_by_id = dict(reversed(list(world.facts_by_id.items())))
+    assert _lines(_build(source, as_of_chapter=40), "secrets_progress") == lines
+
+
+@pytest.mark.parametrize("length", [59, 60, 61, 118])
+def test_digest_bounds_free_text_fields(source, length):
+    from forwin.planning.world_digest import DIGEST_TEXT_FIELD_LIMIT
+
+    assert DIGEST_TEXT_FIELD_LIMIT == 60
+    text = "x" * length
+    expected = text if length <= 60 else text[:59] + "…"
+    world = source.runtime.world
+    world.nodes_by_id["agenda"].profile["goal"] = text
+    world.nodes_by_id["hidden-intent"].profile["summary"] = text
+    world.nodes_by_id["visible-intent"].profile.pop("summary")
+    world.nodes_by_id["visible-intent"] = world.nodes_by_id["visible-intent"].model_copy(update={"summary": text})
+    world.nodes_by_id["recent"] = world.nodes_by_id["recent"].model_copy(update={"summary": text})
+    world.nodes_by_id["clock"].profile["label"] = text
+    digest = _build(source)
+    assert f'agendas={json.dumps([expected], ensure_ascii=False)}' in _lines(digest, "protagonist")[0]
+    for actor in _lines(digest, "actors")[:2]:
+        intents = json.loads(actor.split(" | intents=", 1)[1].split(" | ", 1)[0])
+        assert intents[0]["summary"] == expected
+    assert _lines(digest, "offscreen_events")[0].split(" | ")[0] == expected
+    assert _lines(digest, "clocks")[0].split(" | ")[0] == expected
+    assert world.nodes_by_id["agenda"].profile["goal"] == text
+
+
+def test_digest_renders_unknown_locations(source):
+    world = source.runtime.world
+    for ref in ("hero", "far-linked"):
+        world.states_by_node_id[ref].pop("location_id")
+    digest = _build(source)
+    assert " | location=unknown | " in _lines(digest, "protagonist")[0]
+    actor = next(line for line in _lines(digest, "actors") if line.startswith("far-linked-name |"))
+    assert " | location=unknown | " in actor
+    assert " | location=unknown | " in _lines(digest, "offscreen_events")[0]
+
+
+def test_digest_long_english_prose_keeps_core_sections(source, monkeypatch):
+    from forwin.planning import world_digest as module
+
+    def hid(kind, index):
+        return f"{kind}-{hashlib.sha256(f'{kind}{index}'.encode()).hexdigest()[:20]}"
+
+    goal = "Uncover the truth behind her father's disappearance before the clan tournament and keep her seat in the family council"
+    summary = "Slip into the scripture archive at night to search the entry ledgers from three years ago and bribe the elder on guard"
+    assert len(goal) == 118
+    locations = [hid("loc", i) for i in range(5)]
+    actors = [hid("character", "hero"), *[hid("character", i) for i in range(12)]]
+    nodes = []
+    for i, ref in enumerate(actors):
+        nodes.append(_node(ref, location_id=locations[i % 5], alive_status="alive", restraint={"state": "free"},
+                           actor_tier="major").model_copy(update={"name": f"Character {i} {'Lin Xuewei' if i % 2 else 'Lu Chengyuan'}"}))
+        nodes.append(_node(hid("agenda", i), "agenda", profile={"owner_ref": ref, "goal": goal}, status="active"))
+        for j in range(2):
+            nodes.append(_node(hid("intent", f"{i}-{j}"), "intent", profile={
+                "owner_ref": ref, "action_type": "investigate", "summary": summary,
+                "target_refs": [actors[(i + 1) % len(actors)], actors[(i + 2) % len(actors)]],
+            }, status="planned", scheduled_at=100000 + i * 600 + j * 1440))
+    for i in range(3):
+        nodes.append(_node(hid("clock", i), "clock", profile={
+            "label": f"Opening of the sect tournament round {i}", "scope": "public",
+        }, status="running", due_at=100000 + 3000 * (i + 1)))
+        nodes.append(_node(hid("event", i), "event", profile={"location_id": locations[i]}).model_copy(update={
+            "created_at_chapter": 4, "metadata": {"source": "world_engine"},
+            "summary": "Enforcement hall disciples stopped a night caravan outside the mountain gate and seized all of its cargo",
+        }))
+    types = ["ally_of", "family_of", "mentor_of", "trusts", "romantic_with", "serves", "allied_with",
+             "enemy_of", "owes_debt_to", "rival_of", "distrusts", "opposes"]
+    edges = [WorldEdge(id=hid("edge", i), project_id="p", source_id=actors[0], target_id=actors[i + 1],
+                       edge_family="loyalty_conflict" if kind in {"serves", "allied_with", "opposes"} else "social",
+                       edge_type=kind) for i, kind in enumerate(types)]
+    facts = [FactNode(id=hid("fact", i), project_id="p",
+                     proposition=f"The sect leader has long known the true origin of the object hidden in secret chamber number {i}",
+                     sensitivity_level="secret" if i < 4 else "public") for i in range(30)]
+    source.runtime.world = ObjectiveWorldGraph(nodes=nodes, edges=edges, facts=facts)
+    source.runtime.map = MapGraph(
+        nodes=[MapNode(id=ref, project_id="p", node_type="site", name=f"Mountain Gate Outpost {i}")
+               for i, ref in enumerate(locations)],
+        edges=[MapEdge(id=hid("road", i), project_id="p", from_node_id=locations[0], to_node_id=locations[i],
+                       edge_type="road", bidirectional=True, travel_time=i) for i in range(1, 5)],
+    )
+    source.runtime.cognition_by_observer[("reader", "reader")].knowledge_by_ref = {f"fact:{facts[5].id}": "knows"}
+    source.reveals = {facts[i].id: 3 + i for i in range(4)}
+    source.news = [NewsItem(fact_ref=f"fact:{facts[8 + i].id}", observer_ref=actors[0], arrive_at=100100 + i) for i in range(3)]
+    monkeypatch.setattr(module.StoryCalendarRepository, "get", lambda *args: StoryCalendar(
+        "Year of Origin", 0, (CalendarUnit("d", 1440), CalendarUnit("h", 60))))
+    digest = module.build_world_digest(object(), project_id="p", as_of_chapter=5, protagonist_ref=actors[0],
+                                       window_end_minute=101000, budget_chars=8000, runtime=source.runtime)
+    assert len(digest.text) <= 8000
+    assert [section.key for section in digest.sections[:4]] == KEYS[:4]
+    assert len(_lines(digest, "actors")) == 8
+    assert len(_lines(digest, "news_in_transit")) == len(_lines(digest, "offscreen_events")) == 3

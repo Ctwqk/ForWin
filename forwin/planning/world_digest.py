@@ -16,7 +16,7 @@ from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
-from forwin.book_state.schema import ACTOR_NODE_TYPES, WORLD_EDGE_TYPES_BY_FAMILY
+from forwin.book_state.schema import ACTOR_NODE_TYPES
 from forwin.book_state.story_clock import StoryCalendar, format_story_time
 from forwin.book_state.thread_sampling import sample_active_threads
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
@@ -37,8 +37,9 @@ DIGEST_TOP_ACTORS = 8
 DIGEST_INTENTS_PER_ACTOR = 3
 DIGEST_SECRETS_LIMIT = 12
 DIGEST_TENSIONS_LIMIT = 10
+DIGEST_TENSION_EDGE_TYPES = frozenset({"enemy_of", "rival_of", "distrusts", "owes_debt_to", "opposes"})
+DIGEST_TEXT_FIELD_LIMIT = 60
 _PROTAGONIST_RELATIONS_LIMIT = 6
-_TENSION_TYPES = WORLD_EDGE_TYPES_BY_FAMILY["social"] | WORLD_EDGE_TYPES_BY_FAMILY["loyalty_conflict"]
 _RECENT_CHAPTERS = 3
 _STALE_THREAD_WINDOW = 3
 _THREAD_LIMIT = 20
@@ -98,7 +99,7 @@ def build_world_digest(
                                [edge for edge in relations if protagonist_ref in (edge.source_id, edge.target_id)]
                                [:_PROTAGONIST_RELATIONS_LIMIT])
     lines["tensions"] = [_relation_line(runtime, edge) for edge in relations
-                         if edge.edge_type in _TENSION_TYPES][:DIGEST_TENSIONS_LIMIT]
+                         if edge.edge_type in DIGEST_TENSION_EDGE_TYPES][:DIGEST_TENSIONS_LIMIT]
     lines["actors"] = _actors(runtime, lexicon, calendar, protagonist_ref, location_id, owned)
 
     for news in sorted(latest_news_in_transit(session, project_id),
@@ -121,8 +122,8 @@ def build_world_digest(
               and max(0, as_of_chapter - _RECENT_CHAPTERS + 1) <= node.created_at_chapter <= as_of_chapter]
     for event in sorted(events, key=lambda node: (-node.created_at_chapter, node.id)):
         lines["offscreen_events"].append(_line(
-            event.summary or event.profile.get("public_summary") or event.name or event.id,
-            location=_name(runtime, event.profile.get("location_id") or resolve_world_node_location_id(runtime.world, event.id)),
+            _text_field(event.summary or event.profile.get("public_summary") or event.name or event.id),
+            location=_name(runtime, event.profile.get("location_id") or resolve_world_node_location_id(runtime.world, event.id)) or "unknown",
             chapter=event.created_at_chapter,
         ))
 
@@ -132,7 +133,9 @@ def build_world_digest(
     secrets = [fact for fact in runtime.world.facts_by_id.values()
                if fact.sensitivity_level in HIDDEN_SENSITIVITY or fact.id in targets
                or f"{FACT_REF_PREFIX}{fact.id}" in recorded]
-    for fact in sorted(secrets, key=lambda item: (targets.get(item.id, float("inf")), item.id))[:DIGEST_SECRETS_LIMIT]:
+    for fact in sorted(secrets, key=lambda item: (
+        recorded.get(f"{FACT_REF_PREFIX}{item.id}") == "knows", targets.get(item.id) or float("inf"), item.id,
+    ))[:DIGEST_SECRETS_LIMIT]:
         ref = f"{FACT_REF_PREFIX}{fact.id}"
         lines["secrets_progress"].append(_line(
             fact.proposition, sensitivity=fact.sensitivity_level,
@@ -147,7 +150,7 @@ def build_world_digest(
             due_at = state.get("due_at")
             remaining = max(0, due_at - window_end_minute) if type(due_at) is int else None
             lines["clocks"].append(_line(
-                node.profile.get("label") or node.name or node.id,
+                _text_field(node.profile.get("label") or node.name or node.id),
                 remaining=_duration(calendar, remaining), scope=node.profile.get("scope"),
             ))
 
@@ -243,12 +246,12 @@ def _actor_line(runtime: BookStateRuntime, actor: WorldNode, calendar: StoryCale
     restraint = state.get("restraint")
     return _line(
         actor.name or actor.id,
-        location=_name(runtime, resolve_world_node_location_id(runtime.world, actor.id)),
+        location=_name(runtime, resolve_world_node_location_id(runtime.world, actor.id)) or "unknown",
         alive_status=state.get("alive_status"),
         restraint=restraint.get("state") if isinstance(restraint, dict) else restraint,
         tier=state.get("actor_tier"),
-        agendas=[node.profile.get("goal") for node in owned.get((actor.id, "agenda"), ())],
-        intents=[{"action_type": node.profile.get("action_type"), "summary": node.profile.get("summary") or node.summary,
+        agendas=[_text_field(node.profile.get("goal")) for node in owned.get((actor.id, "agenda"), ())],
+        intents=[{"action_type": node.profile.get("action_type"), "summary": _text_field(node.profile.get("summary") or node.summary),
                   "targets": [_name(runtime, ref) for ref in node.profile.get("target_refs", ())],
                   "scheduled_at": _time(calendar, runtime.world.get_state(node.id).get("scheduled_at"))}
                  for node in owned.get((actor.id, "intent"), ())[:DIGEST_INTENTS_PER_ACTOR]],
@@ -281,6 +284,12 @@ def _fields(**fields: Any) -> str:
     return " | ".join(f"{key}={_value(value)}" for key, value in fields.items())
 
 
+def _text_field(value: str | None) -> str | None:
+    if value is None or len(value) <= DIGEST_TEXT_FIELD_LIMIT:
+        return value
+    return value[:DIGEST_TEXT_FIELD_LIMIT - 1] + "…"
+
+
 def _value(value: Any) -> str:
     if value is None:
         return "unknown"
@@ -300,5 +309,6 @@ def render_digest_sections(sections: list[DigestSection]) -> str:
 
 __all__ = [
     "DIGEST_SECTION_KEYS", "DIGEST_TOP_ACTORS", "DIGEST_INTENTS_PER_ACTOR", "DIGEST_SECRETS_LIMIT",
-    "DIGEST_TENSIONS_LIMIT", "DigestSection", "WorldDigest", "build_world_digest", "render_digest_sections",
+    "DIGEST_TENSIONS_LIMIT", "DIGEST_TENSION_EDGE_TYPES", "DIGEST_TEXT_FIELD_LIMIT",
+    "DigestSection", "WorldDigest", "build_world_digest", "render_digest_sections",
 ]

@@ -552,6 +552,10 @@ class RuntimeContainer:
                 comment_analyzer=generation.comment_analyzer,
                 artifact_store=core.artifact_store,
                 llm_client=generation.llm_client,
+                plan_step=self._plan_step_service(
+                    generation.llm_client if _llm_available(core.infrastructure, core.policy) else None,
+                    core.artifact_store, core.policy,
+                ),
                 world_tick=build_world_tick_service(
                     llm_client=generation.llm_client,
                     session_factory=core.session_factory,
@@ -639,6 +643,9 @@ class RuntimeContainer:
                 comment_analyzer=comment_analyzer,
                 artifact_store=core.artifact_store,
                 llm_client=llm_client,
+                plan_step=self._plan_step_service(
+                    llm_client if llm_available else None, core.artifact_store, policy,
+                ),
                 world_tick=build_world_tick_service(
                     llm_client=llm_client,
                     session_factory=core.session_factory,
@@ -754,6 +761,16 @@ class RuntimeContainer:
         )
         setattr(service, "artifact_store", artifact_store)
         return service
+
+    def _plan_step_service(self, llm_client, artifact_store, policy: RuntimePolicy):
+        from forwin.planning.feasibility import FeasibilityAuditor
+        from forwin.planning.plan_step import PlanStepService
+
+        return PlanStepService(
+            self._band_planner(llm_client, artifact_store, policy),
+            FeasibilityAuditor(),
+            ArcProgressionService(self._beat_sheet_service(llm_client, artifact_store)),
+        )
 
     @staticmethod
     def _beat_sheet_service(llm_client, artifact_store):

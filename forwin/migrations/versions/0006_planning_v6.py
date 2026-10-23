@@ -90,6 +90,11 @@ def upgrade() -> None:
     op.create_index("uq_chapter_plans_project_chapter", "chapter_plans", ["project_id", "chapter_number"], unique=True)
 
     op.execute("UPDATE post_canon_maintenance_runs SET step_name = 'plan' WHERE step_name = 'planning'")
+    op.execute(
+        "UPDATE post_canon_maintenance_runs SET idempotency_key = "
+        "left(idempotency_key, length(idempotency_key) - length('planning')) || 'plan' "
+        "WHERE step_name = 'plan' AND idempotency_key LIKE '%planning'"
+    )
     op.execute("DELETE FROM post_canon_maintenance_runs WHERE step_name = 'arc'")
 
     op.drop_table("arc_world_contracts")

@@ -26,7 +26,7 @@ from forwin.planning.band_planner.inputs import BandPlanInputs, build_band_input
 from forwin.planning.band_planner.persistence import persist_band_plan
 from forwin.planning.band_planner.types import (
     REWRITABLE_PLAN_STATUSES, WORLD_BINDING_KINDS, BandPlanDraft, BandPlanOutcome, BandPlanOutput,
-    ChapterPlanDraft, FeasibilityAuditor, PlanIssue,
+    BandPlanningAuditError, ChapterPlanDraft, FeasibilityAuditor, PlanIssue,
 )
 from forwin.planning.band_planner.validation import band_plan_issues
 from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
@@ -200,7 +200,7 @@ class BandPlanner:
             # Chapter spans are story durations: without a calendar no answer could pass, so no model is asked.
             call = _BandPlanCall(issues=[_error(NO_STORY_CALENDAR, "the book has no story calendar")],
                                  failure_reason=NO_STORY_CALENDAR)
-            outcome = BandPlanOutcome(band_plan_id=None, issues=call.issues)
+            outcome = BandPlanOutcome(band_plan_id=None, issues=call.issues, failure_reason=call.failure_reason)
             self.save_trace(session, self._prompt_trace(call, trace, outcome))
             return _PlanResult(outcome=outcome, failed=True, as_of=as_of)
         beat_sheet = ArcBeatSheetRepository(session).load(beat_sheet_row)
@@ -216,9 +216,9 @@ class BandPlanner:
         if call.error is not None:
             # Saved in the caller's session: a caller that rolls back on the exception discards the trace too.
             self.save_trace(session, self._prompt_trace(call, trace, BandPlanOutcome(band_plan_id=None)))
-            raise call.error
+            raise BandPlanningAuditError(str(call.error), call.issues) from call.error
         if call.draft is None:
-            outcome = BandPlanOutcome(band_plan_id=None, issues=call.issues)
+            outcome = BandPlanOutcome(band_plan_id=None, issues=call.issues, failure_reason=call.failure_reason)
             self.save_trace(session, self._prompt_trace(call, trace, outcome))
             return _PlanResult(outcome=outcome, failed=True, as_of=as_of)
 

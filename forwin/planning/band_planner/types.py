@@ -101,6 +101,14 @@ class PlanIssue(_Frozen):
     message: str
 
 
+class BandPlanningAuditError(RuntimeError):
+    """Validation/audit raised before any plans were written; its prompt trace has been saved."""
+
+    def __init__(self, message: str, issues: Sequence[PlanIssue]) -> None:
+        super().__init__(message)
+        self.issues = list(issues)
+
+
 @dataclass(frozen=True)
 class BandPlanOutcome:
     # The band plan version written; None when nothing was written.
@@ -108,6 +116,7 @@ class BandPlanOutcome:
     chapter_plan_ids: list[str] = field(default_factory=list)
     issues: list[PlanIssue] = field(default_factory=list)
     conflict_id: str | None = None
+    failure_reason: str = ""
 
 
 class FeasibilityAuditor(Protocol):
@@ -135,6 +144,7 @@ __all__ = [
     "WORLD_BINDING_KINDS",
     "BandPlanDraft",
     "BandPlanOutcome",
+    "BandPlanningAuditError",
     "BandPlanOutput",
     "ChapterPlanDraft",
     "ExpectedSpan",

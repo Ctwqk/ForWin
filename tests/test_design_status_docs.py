@@ -177,6 +177,6 @@ def test_p3_docs_describe_world_conflict_contracts() -> None:
         text = _read(DOC_ROOT / name)
         for marker in (
             "0005_world_plan_conflicts", "world_conflict_pending", "commit_world_tick",
-            '("world", "planning", "arc", "feedback")', "world_model_signal_list",
+            '("world", "plan", "feedback")', "world_model_signal_list",
         ):
             assert marker in text, (name, marker)

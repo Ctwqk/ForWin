@@ -26,7 +26,7 @@ class UnavailableStore(LocalObjectStore):
         return super().write_text(relative_path, content, content_type=content_type)
 
 
-@pytest.mark.parametrize("phase", ["world", "feedback", "order_controls"])
+@pytest.mark.parametrize("phase", ["world", "plan", "feedback", "order_controls"])
 def test_storage_outage_preserves_business_and_replays_only_frozen_trace(
     tmp_path, phase
 ):
@@ -53,7 +53,7 @@ def test_storage_outage_preserves_business_and_replays_only_frozen_trace(
         )
         return {"business": "done"}
 
-    if phase in {"world", "feedback"}:
+    if phase in {"world", "plan", "feedback"}:
         service._step_runners[phase] = business
     service.run(canon_commit_id="canon-1", worker_id="business-worker")
     service.run_order_controls(
@@ -64,8 +64,8 @@ def test_storage_outage_preserves_business_and_replays_only_frozen_trace(
         assert session.get(Project, "project-1").setting_summary == "business committed"
         rows = list(session.scalars(select(PostCanonMaintenanceRun)))
         assert all(row.status == "succeeded" and row.attempts == 1 for row in rows)
-        if phase == "world":
-            world_run = next(row for row in rows if row.step_name == "world")
+        if phase in {"world", "plan"}:
+            world_run = next(row for row in rows if row.step_name == phase)
             assert json.loads(world_run.result_json) == {"business": "done"}
         if phase == "feedback":
             from forwin.models import PromptTrace
@@ -309,7 +309,7 @@ def test_upload_acknowledgement_crash_reclaims_same_frozen_payload(
         row = session.scalars(select(OutboxEvent)).one()
         assert row.payload_json == payload
         assert row.attempts == 2 and row.lease_epoch == 2
-    assert calls == ["world", "planning", "arc", "feedback"]
+    assert calls == ["world", "plan", "feedback"]
     assert len(list(tmp_path.rglob("*.json"))) == 1
 
 
@@ -341,3 +341,27 @@ def test_failed_completion_rolls_back_business_and_already_enqueued_trace():
         assert not list(session.scalars(select(OutboxEvent)))
         assert session.get(Project, "project-1").setting_summary != "uncommitted"
     assert service.barrier_blocking_reasons("canon-1")
+
+
+@pytest.mark.parametrize("step", ["plan", "planning", "arc"])
+def test_new_and_legacy_step_traces_keep_their_frozen_identity(tmp_path, step):
+    from forwin.maintenance.trace_upload import enqueue_trace_upload, build_trace_upload_outbox_handlers
+
+    _, sessions, _ = _durable_service()
+    with sessions.begin() as session:
+        enqueue_trace_upload(session, trace={
+            "schema_version": "post-canon-trace-v1",
+            "canon_commit_id": "canon-1", "project_id": "project-1", "chapter_number": 1,
+            "step_name": step, "attempts": [{"attempt_no": 1}],
+        })
+        frozen = session.scalars(select(OutboxEvent)).one().payload_json
+    handlers = build_trace_upload_outbox_handlers(artifact_store_provider=lambda: ArtifactStore(str(tmp_path)))
+    assert run_one_outbox_event(session_factory=sessions, worker_id="trace-worker", handlers=handlers).processed
+    with sessions() as session:
+        row = session.scalars(select(OutboxEvent)).one()
+        assert row.payload_json == frozen
+        payload = json.loads(frozen)
+        assert payload["step_name"] == step
+        assert f"/{step}/" in payload["artifact_key"]
+    path = tmp_path / "projects/project-1/keyed" / payload["artifact_key"]
+    assert path.read_text() == payload["content"]

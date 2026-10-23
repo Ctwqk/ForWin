@@ -69,6 +69,7 @@ def test_status_handler_uses_live_checkpoint_state() -> None:
 
     response = handler("project-1")
 
+    assert [run["step_name"] for run in response["chapters"][0]["runs"]] == ["world", "plan", "feedback"]
     assert response["ready"] is True
     assert response["chapters"][0]["checkpoint_status"] == "overridden"
     assert response["chapters"][0]["ready"] is True

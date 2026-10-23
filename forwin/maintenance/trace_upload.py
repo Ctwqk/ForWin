@@ -26,7 +26,7 @@ class TraceUploadPayload(BaseModel):
     project_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
     canon_commit_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
     chapter_number: int = Field(gt=0)
-    step_name: Literal["planning", "arc", "world", "feedback", "order_controls"]
+    step_name: Literal["world", "plan", "feedback", "planning", "arc", "order_controls"]
     content: str = Field(min_length=1)
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     artifact_key: str = Field(min_length=1)

@@ -144,12 +144,14 @@ def test_post_canon_phase3_has_one_durable_owner() -> None:
     handlers = _source("forwin/outbox/handlers.py")
 
     for method in (
-        "def _run_planning_step(",
-        "def _run_arc_step(",
+        "def _run_plan_step(",
         "def _run_world_step(",
         "def _run_feedback_step(",
     ):
         assert method in service
+
+    assert "def _run_planning_step(" not in service
+    assert "def _run_arc_step(" not in service
 
     assert "post_canon_idempotency_key(" in service
     assert "commit.idempotency_key" in service

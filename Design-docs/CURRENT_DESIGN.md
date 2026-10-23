@@ -212,7 +212,7 @@ S4-S8 的读者留存、多样性、认知/张力及完整体验度量仍是未�
 
 ### P3 世界推进与冲突闭环
 
-`POST_CANON_STEP_NAMES = ("world", "planning", "arc", "feedback")`；world 只运行 tick。`WorldTickService.run` 的结果以 `tick_id`、`graph_delta_ids`、`conflict_ids`、`dropped_candidate_ids`、`postponed_candidate_ids`、`warnings`、`skipped_reason` 写入 step `result_json`，与 tick 的 `step_result()` 完全一致。
+`POST_CANON_STEP_NAMES = ("world", "plan", "feedback")`；world 只运行 tick。`WorldTickService.run` 的结果以 `tick_id`、`graph_delta_ids`、`conflict_ids`、`dropped_candidate_ids`、`postponed_candidate_ids`、`warnings`、`skipped_reason` 写入 step `result_json`，与 tick 的 `step_result()` 完全一致。
 
 1. 用 `tick-<commit id>`、本章 `story_time_start..story_time_end` 整数分钟窗口与确定性 seed 建上下文。world disabled、非最新章、同 tick 已提交或该章已有 tick 都跳过；最新章重写也不重复推进世界。`target_total_chapters > 0` 且本章达到或超过目标时，以 `skipped_reason="book_complete"` 跳过。
 2. 从本章 intent interactions、clock 到期、due intents、onstage bookkeeping 与 actor turns 收集候选。`WorldAdjudicator` 每 tick 先尝试一批最多 20 个 due offstage intents；超 prompt guard 后逐 intent 调用，单个仍超限则 DROPPED `prompt_too_large`，后续 due intent 补位；超 cap 未询问者以 `adjudication:<intent>` 进入 `postponed_candidate_ids`。`ActorTurnRunner` 按 actor 视图行动。已 due 的 onstage intent 若未出现在本章 interactions，顺延至当前时间并增加 slip_count，超过 `world.max_onstage_slips` 产生 `onstage_slip` 冲突；这是 P3 临时规则，由 P4 band 规划器替换。

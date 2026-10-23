@@ -599,7 +599,7 @@ def test_tick_saves_prompt_traces_with_stage_keys(monkeypatch) -> None:
     engine.dispose()
 
 
-def test_world_step_runs_before_planning_and_records_tick_result() -> None:
+def test_world_step_runs_before_plan_and_records_tick_result() -> None:
     engine, Session = _session_factory()
     world = _seed_world(Session)
     chapter = _chapter(Session, world, 1, days=1)
@@ -657,15 +657,15 @@ def test_world_step_runs_before_planning_and_records_tick_result() -> None:
         "world": lambda session, commit: calls.append("world") or world_step(session, commit),
         **{
             name: (lambda _session, _commit, name=name: calls.append(name) or {"step": name})
-            for name in ("planning", "arc", "feedback")
+            for name in ("plan", "feedback")
         },
     }
 
     service.run(canon_commit_id=commit_id, worker_id="worker-1")
 
-    assert POST_CANON_STEP_NAMES == ("world", "planning", "arc", "feedback")
+    assert POST_CANON_STEP_NAMES == ("world", "plan", "feedback")
     # The world step completes its tick before downstream maintenance.
-    assert calls == ["world", "tick", "planning", "arc", "feedback"]
+    assert calls == ["world", "tick", "plan", "feedback"]
     with Session() as session:
         run = session.scalars(select(PostCanonMaintenanceRun).where(
             PostCanonMaintenanceRun.canon_commit_id == commit_id, PostCanonMaintenanceRun.step_name == "world",

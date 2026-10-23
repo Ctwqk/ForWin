@@ -252,7 +252,7 @@ def test_failure_write_is_fenced_by_unexpired_lease() -> None:
         project_id="project-1",
         chapter_number=1,
         candidate_id="candidate-1",
-        step_name="planning",
+        step_name="plan",
         worker_id="worker-1",
         lease_epoch=2,
         lease_seconds=300,
@@ -335,7 +335,7 @@ def test_stale_completion_fence_is_rejected() -> None:
         project_id="project-1",
         chapter_number=1,
         candidate_id="candidate-1",
-        step_name="planning",
+        step_name="plan",
         worker_id="stale-worker",
         lease_epoch=1,
         lease_seconds=300,
@@ -398,7 +398,7 @@ def test_stale_completion_cannot_enqueue_trace() -> None:
     assert trace_writes == []
 
 
-def test_barrier_requires_exactly_the_four_canonical_steps() -> None:
+def test_barrier_requires_exactly_the_three_canonical_steps() -> None:
     rows = _completed_rows()
     rows.append(_run("obsolete-step"))
 
@@ -524,8 +524,8 @@ def test_pipeline_uses_canonical_top_level_control_blockers() -> None:
 
 
 def test_natural_key_uses_canon_idempotency_identity() -> None:
-    assert post_canon_idempotency_key("canon-key-1", "planning") == (
-        "post-canon-maintenance:v1:canon-key-1:planning"
+    assert post_canon_idempotency_key("canon-key-1", "plan") == (
+        "post-canon-maintenance:v1:canon-key-1:plan"
     )
 
 

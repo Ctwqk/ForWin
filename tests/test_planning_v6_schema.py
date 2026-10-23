@@ -157,16 +157,16 @@ def test_0006_upgrade_rewrites_legacy_step_rows(legacy_database) -> None:
             session.add(models.PostCanonMaintenanceRun(
                 id=f"run-{step}", canon_commit_id="canon-1", project_id="project-1",
                 chapter_number=1, candidate_id="candidate-1", step_name=step,
-                idempotency_key=f"canon-1:{step}", result_json='{"kept":true}',
+                idempotency_key=f"post-canon-maintenance:v1:canon-1:{step}", result_json='{"kept":true}',
             ))
     command.upgrade(config, "0006_planning_v6")
     with engine.connect() as connection:
         rows = connection.execute(sa.text(
-            "SELECT id, step_name, result_json FROM post_canon_maintenance_runs ORDER BY id"
+            "SELECT id, step_name, result_json, idempotency_key FROM post_canon_maintenance_runs ORDER BY id"
         )).all()
     assert rows == [
-        ("run-feedback", "feedback", '{"kept":true}'),
-        ("run-planning", "plan", '{"kept":true}'),
+        ("run-feedback", "feedback", '{"kept":true}', "post-canon-maintenance:v1:canon-1:feedback"),
+        ("run-planning", "plan", '{"kept":true}', "post-canon-maintenance:v1:canon-1:plan"),
     ]
 
 

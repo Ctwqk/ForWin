@@ -33,7 +33,6 @@ from forwin.maintenance.state import (
 from forwin.maintenance.trace_upload import enqueue_trace_upload
 from forwin.observability.llm_trace import build_llm_decision_event_payloads, prepare_prompt_trace_payload
 from forwin.observability.payloads import safe_error_summary
-from forwin.planning.stage_analysis import save_stage_analysis
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.audience.comment_analysis import analyze_recent_comments
 from forwin.state.updater import StateUpdater
@@ -41,6 +40,7 @@ from forwin.state.updater import StateUpdater
 if TYPE_CHECKING:
     from forwin.canon.admission import CanonAdmissionService
     from forwin.world_engine.tick import WorldTickService
+    from forwin.planning.plan_step import PlanStepService
 
 
 MAX_ERROR_LENGTH = 4000
@@ -140,7 +140,7 @@ class _ClaimHeartbeat:
 
 
 class PostCanonMaintenanceService:
-    """Runs the four ordered post-Canon steps behind durable fenced leases."""
+    """Runs the three ordered post-Canon steps behind durable fenced leases."""
 
     def __init__(
         self,
@@ -154,6 +154,7 @@ class PostCanonMaintenanceService:
         artifact_store: Any,
         llm_client: Any,
         world_tick: WorldTickService | None = None,
+        plan_step: PlanStepService | None = None,
         lease_seconds: float = 300.0,
         heartbeat_interval_seconds: float | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -168,6 +169,7 @@ class PostCanonMaintenanceService:
         self.llm_client = llm_client
         # Built from llm_client on the first world step when not given.
         self.world_tick = world_tick
+        self.plan_step = plan_step
         self.lease_seconds = _positive_seconds(lease_seconds, "lease_seconds")
         default_heartbeat = min(30.0, self.lease_seconds / 3.0)
         resolved_heartbeat = (
@@ -186,8 +188,7 @@ class PostCanonMaintenanceService:
         self._clock = clock or utcnow
         self._step_runners: dict[str, StepRunner] = {
             "world": self._run_world_step,
-            "planning": self._run_planning_step,
-            "arc": self._run_arc_step,
+            "plan": self._run_plan_step,
             "feedback": self._run_feedback_step,
         }
 
@@ -656,7 +657,9 @@ class PostCanonMaintenanceService:
         try:
             self.heartbeat(claim)
             heartbeat.start()
-            with self.session_factory.begin() as session:
+            # Arc activation and band planning commit separate units before the completion fence.
+            scope = self.session_factory() if claim.step_name == "plan" else self.session_factory.begin()
+            with scope as session:
                 commit = session.get(CanonCommitRecord, claim.canon_commit_id)
                 if commit is None or commit.status != "committed":
                     raise ValueError("maintenance Canon commit is unavailable")
@@ -673,9 +676,11 @@ class PostCanonMaintenanceService:
                     step_name=claim.step_name,
                     attempts=attempts,
                 )
-                if trace and claim.step_name != "world":
+                if trace and claim.step_name not in {"world", "plan"}:
                     result["trace"] = trace
                 self._complete_claim_in_session(session, claim, result)
+                if claim.step_name == "plan":
+                    session.commit()
         except Exception as exc:
             heartbeat.stop_and_join()
             self._discard_llm_attempts()
@@ -878,62 +883,31 @@ class PostCanonMaintenanceService:
                 or ""
             )
 
-    def _run_planning_step(
-        self,
-        session: Session,
-        commit: CanonCommitRecord,
+    def _run_plan_step(
+        self, session: Session, commit: CanonCommitRecord,
     ) -> Mapping[str, Any]:
-        stage = self.stage_analyzer.analyze(
-            session=session,
-            project_id=commit.project_id,
-            chapter_number=commit.chapter_number,
-        )
-        pacing = self.pacing_strategist.analyze(
-            session=session,
-            project_id=commit.project_id,
-            chapter_number=commit.chapter_number,
-        )
-        analysis = save_stage_analysis(
-            session=session,
-            project_id=commit.project_id,
-            chapter_number=commit.chapter_number,
-            stage=stage,
-            pacing=pacing,
-        )
-        replan = self.replan_governor.apply_if_needed(
-            session=session,
-            project_id=commit.project_id,
-            chapter_number=commit.chapter_number,
-            stage=stage,
-            pacing=pacing,
-        )
-        return {
-            "stage_analysis_id": analysis.id,
-            "replan_event_id": str(getattr(replan, "id", "") or ""),
-            "stage_label": stage.stage_label,
-            "pacing_verdict": pacing.verdict,
-        }
+        project = session.get(Project, commit.project_id)
+        if project is None:
+            raise ValueError(f"Project not found: {commit.project_id}")
+        policy = ProjectPolicyStore(session).load(project).policy
+        if self.plan_step is None:
+            from forwin.planning.arc_progression import ArcProgressionService
+            from forwin.planning.band_planner.service import BandPlanner
+            from forwin.planning.beat_sheet.service import ArcBeatSheetService
+            from forwin.planning.feasibility import FeasibilityAuditor
+            from forwin.planning.plan_step import PlanStepService
 
-    def _run_arc_step(
-        self,
-        session: Session,
-        commit: CanonCommitRecord,
-    ) -> Mapping[str, Any]:
-        envelope = self.arc_envelope_manager.ensure_active_arc_resolution(
-            session=session,
-            project_id=commit.project_id,
-            activation_chapter=commit.chapter_number + 1,
-        )
-        promotion = self.arc_envelope_manager.record_provisional_promotion(
-            session=session,
-            project_id=commit.project_id,
-            chapter_number=commit.chapter_number,
-            reason="accepted-into-canon",
-        )
-        return {
-            "arc_envelope_id": str(getattr(envelope, "id", "") or ""),
-            "provisional_promotion_id": str(getattr(promotion, "id", "") or ""),
-        }
+            save_trace = partial(save_world_prompt_trace, artifact_store=self.artifact_store)
+            feasibility = FeasibilityAuditor()
+            self.plan_step = PlanStepService(
+                BandPlanner(
+                    self.llm_client, feasibility=feasibility, save_trace=save_trace,
+                    trope_cost_ceiling=2 if policy.quality_profile == "pulp" else 3,
+                ),
+                feasibility,
+                ArcProgressionService(ArcBeatSheetService(self.llm_client, save_trace=save_trace)),
+            )
+        return self.plan_step.run(session, commit, policy=policy)
 
     def _run_world_step(
         self,
@@ -1051,6 +1025,7 @@ def build_world_tick_service(
     from forwin.world_engine.adjudicator import WorldAdjudicator
     from forwin.world_engine.conflict_delegate import WorldConflictDelegate
     from forwin.world_engine.tick import WorldTickService
+    from forwin.planning.plan_step import PlanStepService
 
     def save_prompt_trace(session: Session, prompt_trace: dict) -> str:
         return save_world_prompt_trace(session, prompt_trace, artifact_store=artifact_store)

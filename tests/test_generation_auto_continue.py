@@ -134,13 +134,13 @@ def test_controller_continues_to_future_arc_when_no_blocker() -> None:
 
         assert decision == AutoContinueDecision(
             decision="continue",
-            reason="future_arc_materialized",
+            reason="chapter_completed_no_blocker",
             next_task_id="task-next",
             next_chapter=4,
             run_until_chapter=6,
             target_total_chapters=6,
             requested_chapters=3,
-            workset_reason="future_arc_materialization_required",
+            workset_reason="chapters_pending",
         )
         assert calls[0]["project_id"] == "project-auto"
         assert calls[0]["requested_chapters"] == 3
@@ -274,7 +274,7 @@ def test_controller_ignores_paused_marker_for_already_accepted_chapter() -> None
             run_until_chapter=3,
             target_total_chapters=6,
             requested_chapters=2,
-            workset_reason="active_arc_pending",
+            workset_reason="chapters_pending",
         )
         assert calls[0]["project_id"] == "project-auto"
         assert calls[0]["requested_chapters"] == 2
@@ -348,7 +348,7 @@ def test_controller_ignores_safe_paused_status_for_already_accepted_chapter() ->
             run_until_chapter=3,
             target_total_chapters=6,
             requested_chapters=2,
-            workset_reason="active_arc_pending",
+            workset_reason="chapters_pending",
         )
         assert calls[0]["project_id"] == "project-auto"
         assert calls[0]["requested_chapters"] == 2
@@ -676,7 +676,7 @@ def test_controller_auto_retries_system_block_review_once() -> None:
             run_until_chapter=6,
             target_total_chapters=6,
             requested_chapters=2,
-            workset_reason="active_arc_pending",
+            workset_reason="chapters_pending",
         )
         assert calls[0]["project_id"] == "project-auto"
         assert calls[0]["requested_chapters"] == 2

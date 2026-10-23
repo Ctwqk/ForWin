@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from forwin.models.genesis import (
     BookGenesisRevision,
     PromptTrace,
@@ -51,6 +51,9 @@ from forwin.genesis.normalize import (
 )
 from forwin.genesis.planning import _refine_support_context, _plan_arc_chapters
 
+if TYPE_CHECKING:
+    from forwin.planning.beat_sheet.service import ArcBeatSheetService
+
 
 class BookGenesisService:
     def __init__(
@@ -62,7 +65,9 @@ class BookGenesisService:
         skill_router: SkillRouter | None = None,
         skill_prompt_layer_builder: SkillPromptLayerBuilder | None = None,
         artifact_store: object | None = None,
+        beat_sheets: ArcBeatSheetService | None = None,
     ) -> None:
+        """``beat_sheets`` writes the arc-1 beat sheet at start-writing; without one it is the fallback sheet."""
         self.llm_client = llm_client
         self.max_tokens = max_tokens
         self.world_seed_max_tokens = world_seed_max_tokens
@@ -72,7 +77,7 @@ class BookGenesisService:
         self.observability = NullObservability()
         self.trace_service = GenesisTraceService(self)
         self.workspace = GenesisWorkspaceService(self)
-        self.handoff = GenesisHandoffService(self)
+        self.handoff = GenesisHandoffService(self, beat_sheets=beat_sheets)
 
     def create_initial_revision(
         self,

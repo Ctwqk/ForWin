@@ -794,11 +794,7 @@ def approve_chapter_review(
     if req.continue_generation and accepted_status == "accepted":
         session = get_session()
         try:
-            workset = build_continue_generation_workset(
-                session,
-                project_id,
-                source="review_approve_continue",
-            )
+            workset = build_continue_generation_workset(session, project_id)
         finally:
             session.close()
         if workset.requested_chapters <= 0:
@@ -897,11 +893,7 @@ def _auto_retry_review_approve_blocker(
             system_block=True,
             frozen_artifact=frozen_artifact,
         )
-        workset = build_continue_generation_workset(
-            session,
-            project_id,
-            source="review_approve_auto_retry",
-        )
+        workset = build_continue_generation_workset(session, project_id)
         requested_chapters = int(workset.requested_chapters or 0)
         session.commit()
     finally:
@@ -1029,11 +1021,7 @@ def retry_chapter_review(
                 related_object_id=str(plan.id),
             )
         if req.continue_generation:
-            workset = build_continue_generation_workset(
-                session,
-                project_id,
-                source="review_retry_continue",
-            )
+            workset = build_continue_generation_workset(session, project_id)
             continue_requested_chapters = int(workset.requested_chapters or 0)
         session.commit()
     finally:

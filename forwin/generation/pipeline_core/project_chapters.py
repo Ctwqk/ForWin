@@ -44,7 +44,13 @@ class ChapterExecutionStage:
         project_id: str,
         chapter_numbers: list[int],
         requested_chapters: int,
+        plan_bands: bool = True,
     ) -> RunResult:
+        """Write the chapters in order; each band is planned just in time unless ``plan_bands`` is False.
+
+        The ``run`` entry passes False: its arc director planned every chapter up front, in a book without a
+        Genesis world to plan from.
+        """
         completed_chapters: list[int] = []
         failed_chapters: list[int] = []
         paused_chapters: list[int] = []
@@ -130,7 +136,22 @@ class ChapterExecutionStage:
             conflict = WorldConflictRepository(session).open_blocking(
                 project_id, next_chapter=chapter_num
             )
-            if conflict is not None:
+            chapter_plan = None
+            if conflict is None and not plan_bands:
+                chapter_plan = repo.get_chapter_plan(project_id, chapter_num)
+            elif conflict is None:
+                chapter_plan = self._ensure_chapter_plan(
+                    session=session,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                    policy=policy,
+                )
+                if chapter_plan is None:
+                    # The band could not be planned: its band_planning conflict blocks the chapter.
+                    conflict = WorldConflictRepository(session).open_blocking(
+                        project_id, next_chapter=chapter_num
+                    )
+            if chapter_plan is None:
                 paused_chapters.append(chapter_num)
                 pause_reason = "world_conflict"
                 self._emit_progress(
@@ -143,7 +164,10 @@ class ChapterExecutionStage:
                     failed_chapters=failed_chapters,
                     paused_chapters=paused_chapters,
                     frozen_artifacts=frozen_artifacts,
-                    payload={"reason": "world_conflict", "conflict_id": conflict.id},
+                    payload={
+                        "reason": "world_conflict",
+                        "conflict_id": conflict.id if conflict is not None else "",
+                    },
                 )
                 break
 
@@ -151,11 +175,6 @@ class ChapterExecutionStage:
             print(f"正在生成第 {chapter_num} 章...")
             print(f"{'─' * 60}")
 
-            chapter_plan = repo.get_chapter_plan(project_id, chapter_num)
-            if chapter_plan is None:
-                logger.error("Chapter plan %d not found, skipping.", chapter_num)
-                failed_chapters.append(chapter_num)
-                continue
             block_code, block_band_id, block_message = self._strict_progression_block(
                 session=session,
                 repo=repo,

@@ -29,6 +29,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.audit import DecisionEvent
 from forwin.models.book_state import GraphDeltaRow
+from forwin.models.planning_v6 import ArcBeatSheetRow
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.runtime.policy_store import ProjectPolicyStore
@@ -44,37 +45,6 @@ from tests.postgres import postgres_test_url
 
 
 api_module: HttpRuntimeHarness
-
-
-def _fake_single_arc_genesis_call(
-    self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None
-):
-    if str(stage_key).startswith("launch_arc_"):
-        return (
-            {
-                "chapters": [
-                    {"title": "雨夜", "one_line": "主角进入旧城。", "goals": ["建立危机"]},
-                    {"title": "债务", "one_line": "势力围拢。", "goals": ["扩大冲突"]},
-                    {"title": "遗迹", "one_line": "得到遗迹坐标。", "goals": ["转入下一阶段"]},
-                ]
-            },
-            {
-                "effective_system_prompt": "launch arc planner",
-                "prompt_layers": [],
-                "input_snapshot": {"stage_key": stage_key},
-                "model_profile": {"model": "fake-model"},
-                "attempts": [{"attempt": 1, "status": "success"}],
-                "output_summary": {"mode": "success"},
-            },
-        )
-    return fallback, {
-        "effective_system_prompt": "fallback",
-        "prompt_layers": [],
-        "input_snapshot": {},
-        "model_profile": {"model": "fake-model"},
-        "attempts": [{"attempt": 1, "status": "fallback"}],
-        "output_summary": {"mode": "fallback"},
-    }
 
 
 class BookGenesisFlowTests(unittest.TestCase):
@@ -325,7 +295,7 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(detail.pack.stage_states["map"].status, "edited")
         self.assertEqual(detail.pack.world["map_atlas"]["overview"], "细化后的地图")
 
-    def test_start_writing_materializes_arc_skeletons_and_active_arc_chapters(
+    def test_start_writing_materializes_arc_skeletons_and_the_arc_one_beat_sheet(
         self,
     ) -> None:
         created = api_module.create_project(
@@ -396,54 +366,14 @@ class BookGenesisFlowTests(unittest.TestCase):
         ):
             api_module.lock_project_genesis_stage(created.project_id, stage_key)
 
-        def fake_genesis_call(
-            self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None
-        ):
-            if str(stage_key).startswith("launch_arc_"):
-                return (
-                    {
-                        "chapters": [
-                            {
-                                "title": "雨夜开端",
-                                "one_line": "主角在雨夜第一次正面撞上禁术代价。",
-                                "goals": ["建立危机", "种下旧术线索"],
-                            },
-                            {
-                                "title": "债务浮现",
-                                "one_line": "旧城势力开始围拢主角，代价被迫升级。",
-                                "goals": ["扩大冲突", "抬高关系风险"],
-                            },
-                            {
-                                "title": "遗迹坐标",
-                                "one_line": "主角得到通往下一 Arc 的遗迹入口。",
-                                "goals": ["给出阶段性揭秘", "推到下一段世界舞台"],
-                            },
-                        ]
-                    },
-                    {
-                        "effective_system_prompt": "launch arc planner",
-                        "prompt_layers": [
-                            {"role": "system", "content": "launch arc planner"}
-                        ],
-                        "input_snapshot": {"stage_key": stage_key},
-                        "model_profile": {"model": "fake-model"},
-                        "attempts": [{"attempt": 1, "status": "success"}],
-                        "output_summary": {"mode": "success"},
-                    },
-                )
-            return fallback, {
-                "effective_system_prompt": "fallback",
-                "prompt_layers": [],
-                "input_snapshot": {},
-                "model_profile": {"model": "fake-model"},
-                "attempts": [{"attempt": 1, "status": "fallback"}],
-                "output_summary": {"mode": "fallback"},
-            }
+        def beat_sheet_model_down(_service, _messages):
+            # No network in tests: arc 1 gets the deterministic fallback sheet.
+            raise ConnectionError("beat sheet model unavailable")
 
         with (
             patch(
-                "forwin.genesis.BookGenesisService._call_json_with_trace",
-                new=fake_genesis_call,
+                "forwin.planning.beat_sheet.service.ArcBeatSheetService._chat",
+                new=beat_sheet_model_down,
             ),
             patch(
                 "forwin.http.app._create_continue_generation_task",
@@ -481,6 +411,15 @@ class BookGenesisFlowTests(unittest.TestCase):
                     select(PromptTrace)
                     .where(PromptTrace.project_id == created.project_id)
                     .order_by(PromptTrace.created_at.asc())
+                )
+                .scalars()
+                .all()
+            )
+            sheets = (
+                session.execute(
+                    select(ArcBeatSheetRow).where(
+                        ArcBeatSheetRow.project_id == created.project_id
+                    )
                 )
                 .scalars()
                 .all()
@@ -540,8 +479,13 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(arcs[0].status, "active")
         self.assertEqual(arcs[0].planned_target_size, 3)
         self.assertEqual(arcs[1].status, "planned")
-        self.assertEqual([plan.chapter_number for plan in plans], [1, 2, 3])
-        self.assertTrue(any(trace.trace_scope == "start_writing" for trace in traces))
+        # Arc 1's beat sheet and no chapter plan: run control plans each band before its first chapter.
+        self.assertEqual(plans, [])
+        self.assertEqual(
+            [(sheet.arc_plan_id, sheet.source) for sheet in sheets],
+            [(arcs[0].id, "fallback")],
+        )
+        self.assertTrue(any(trace.stage_key == "plan.arc_beats" for trace in traces))
         self.assertTrue(map_runs)
         self.assertTrue(map_region_count)
         self.assertTrue(map_node_count)
@@ -620,10 +564,6 @@ class BookGenesisFlowTests(unittest.TestCase):
         )
         with (
             patch(
-                "forwin.genesis.BookGenesisService._call_json_with_trace",
-                new=_fake_single_arc_genesis_call,
-            ),
-            patch(
                 "forwin.genesis.handoff.map_bootstrap.create_or_update_book_map",
                 return_value=invalid_map,
             ),
@@ -669,10 +609,6 @@ class BookGenesisFlowTests(unittest.TestCase):
             premise="初始世界无法落地时不能进入写作。",
         )
         with (
-            patch(
-                "forwin.genesis.BookGenesisService._call_json_with_trace",
-                new=_fake_single_arc_genesis_call,
-            ),
             # The generated book map lost every Genesis node the seed is placed at.
             patch(
                 "forwin.genesis.handoff.world_seed_committer.map_node_ids_by_genesis_ref",
@@ -770,44 +706,14 @@ class BookGenesisFlowTests(unittest.TestCase):
         ):
             api_module.lock_project_genesis_stage(created.project_id, stage_key)
 
-        def fake_genesis_call(
-            self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None
-        ):
-            if str(stage_key).startswith("launch_arc_"):
-                return (
-                    {
-                        "chapters": [
-                            {"title": "第1章", "one_line": "起势", "goals": ["推进"]},
-                            {"title": "第2章", "one_line": "升级", "goals": ["推进"]},
-                            {"title": "第3章", "one_line": "加压", "goals": ["推进"]},
-                            {"title": "第4章", "one_line": "转折", "goals": ["推进"]},
-                            {"title": "第5章", "one_line": "收束", "goals": ["推进"]},
-                        ]
-                    },
-                    {
-                        "effective_system_prompt": "launch arc planner",
-                        "prompt_layers": [
-                            {"role": "system", "content": "launch arc planner"}
-                        ],
-                        "input_snapshot": {"stage_key": stage_key},
-                        "model_profile": {"model": "fake-model"},
-                        "attempts": [{"attempt": 1, "status": "success"}],
-                        "output_summary": {"mode": "success"},
-                    },
-                )
-            return fallback, {
-                "effective_system_prompt": "fallback",
-                "prompt_layers": [],
-                "input_snapshot": {},
-                "model_profile": {"model": "fake-model"},
-                "attempts": [{"attempt": 1, "status": "fallback"}],
-                "output_summary": {"mode": "fallback"},
-            }
+        def beat_sheet_model_down(_service, _messages):
+            # No network in tests: arc 1 gets the deterministic fallback sheet.
+            raise ConnectionError("beat sheet model unavailable")
 
         with (
             patch(
-                "forwin.genesis.BookGenesisService._call_json_with_trace",
-                new=fake_genesis_call,
+                "forwin.planning.beat_sheet.service.ArcBeatSheetService._chat",
+                new=beat_sheet_model_down,
             ),
             patch(
                 "forwin.http.app._create_continue_generation_task",

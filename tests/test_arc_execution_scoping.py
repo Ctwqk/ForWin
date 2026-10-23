@@ -233,7 +233,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
         self.assertEqual(captured["requested_chapters"], 2)
         self.assertEqual(len(plans), 4)
 
-    def test_continue_project_only_runs_active_arc_pending_chapters(self) -> None:
+    def test_continue_project_runs_every_unwritten_chapter_up_to_the_last_arc(self) -> None:
         with TemporaryDirectory():
             db_path = postgres_test_url("continue-scope")
             engine = get_engine(db_path)
@@ -249,9 +249,11 @@ class ArcExecutionScopingTests(unittest.TestCase):
                     target_total_chapters=20,
                     runtime_policy=RuntimePolicy.for_profile("standard"),
                 )
-                arc_one = updater.create_arc_plan(project.id, "开篇弧", status="active")
+                arc_one = updater.create_arc_plan(
+                    project.id, "开篇弧", status="active", chapter_start=1, chapter_end=2
+                )
                 arc_two = updater.create_arc_plan(
-                    project.id, "第二弧", status="planned"
+                    project.id, "第二弧", status="planned", chapter_start=3, chapter_end=4
                 )
                 for chapter_number in (1, 2):
                     updater.create_chapter_plan(
@@ -302,8 +304,9 @@ class ArcExecutionScopingTests(unittest.TestCase):
                 pipeline.engine.dispose()
                 engine.dispose()
 
-        self.assertEqual(captured["chapter_numbers"], [1, 2])
-        self.assertEqual(captured["requested_chapters"], 2)
+        # Past the active arc too: run control activates arc two when the run reaches it.
+        self.assertEqual(captured["chapter_numbers"], [1, 2, 3, 4])
+        self.assertEqual(captured["requested_chapters"], 4)
         resolving_payload = next(
             payload
             for event, payload in progress_events
@@ -311,7 +314,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
             and payload.get("stage") == "resolving_arc_envelope"
         )
         self.assertNotIn("requested_chapters", resolving_payload)
-        self.assertEqual(resolving_payload["pending_chapter_count"], 2)
+        self.assertEqual(resolving_payload["pending_chapter_count"], 4)
 
     def test_arc_resolution_activates_target_arc_and_uses_project_total(self) -> None:
         with TemporaryDirectory():

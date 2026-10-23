@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -10,8 +11,9 @@ from forwin.audit.events import (
     DecisionEventType,
 )
 from forwin.canon_quality.rule_provenance import build_rule_handoff_summary
-from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.project import ArcPlanVersion, Project
 from forwin.observability.payloads import event_error_payload
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.updater import StateUpdater
 
 from .arc_materializer import GenesisArcMaterializer
@@ -20,16 +22,21 @@ from .commands import HandoffStageError, StartWritingCommand, StartWritingHandof
 from .map_bootstrap import GenesisMapBootstrap, GenesisMapBootstrapError
 from .world_seed_committer import WorldSeedCommitError, WorldSeedCommitter
 
+if TYPE_CHECKING:
+    # The beat sheet service imports from forwin.genesis: imported where it is built.
+    from forwin.planning.beat_sheet.service import ArcBeatSheetService
+
 
 class GenesisHandoffService:
     """Executes the explicit manual handoff from Genesis into writing runtime."""
 
-    def __init__(self, owner) -> None:  # noqa: ANN001
+    def __init__(self, owner, *, beat_sheets: ArcBeatSheetService | None = None) -> None:  # noqa: ANN001
         self.owner = owner
         self.arc_materializer = GenesisArcMaterializer(owner)
         self.chapter_materializer = GenesisChapterMaterializer(owner)
         self.map_bootstrap = GenesisMapBootstrap()
         self.world_seed_committer = WorldSeedCommitter()
+        self.beat_sheets = beat_sheets if beat_sheets is not None else _fallback_beat_sheets()
 
     def start_writing(
         self,
@@ -38,10 +45,12 @@ class GenesisHandoffService:
         updater: StateUpdater,
         command: StartWritingCommand,
     ) -> StartWritingHandoffResult:
-        """Arcs, then the book map, then the chapter-0 world seed, then arc-1 chapter plans.
+        """Arcs, then the book map, then the chapter-0 world seed, then arc 1's beat sheet.
 
-        Only flushes. On a ``HandoffStageError`` the session is rolled back and holds
-        just the stage's failure event, flushed, when the error is re-raised.
+        Creates no chapter plan: run control plans each band before its first chapter. Only
+        flushes. On a ``HandoffStageError`` the session is rolled back and holds just the
+        stage's failure event, flushed, when the error is re-raised. The beat sheet's model
+        call runs inside this transaction, so the handoff stays all-or-nothing.
         """
         actor_type = str(command.actor_type or "").strip()
         if actor_type != "manual_ui":
@@ -102,29 +111,19 @@ class GenesisHandoffService:
                 pack=pack,
                 decision_event_id=decision.id,
             )
-            # The seed places actors on map nodes, and arc-1 planning reads the seeded BookState.
+            # The seed places actors on map nodes, and arc 1's beat sheet reads the seeded BookState.
             seed_summary = self.world_seed_committer.commit(
                 session=session,
                 project=project,
                 revision=revision,
                 pack=pack,
             )
-            existing_chapter_count = int(
-                session.execute(
-                    select(func.count(ChapterPlan.id)).where(
-                        ChapterPlan.arc_plan_id == active_arc.id
-                    )
-                ).scalar_one()
-                or 0
-            )
-            self.chapter_materializer.materialize_arc_chapter_plans(
-                session=session,
-                updater=updater,
-                project=project,
-                revision=revision,
-                arc_number=active_arc.arc_number,
-                decision_event_id=decision.id,
-                ensure_arc_map=False,
+            # Commits the sheet's protections to canon at chapter 0.
+            self.beat_sheets.ensure_for_arc(
+                session,
+                project_id=project.id,
+                arc_plan=active_arc,
+                policy=ProjectPolicyStore(session).load(project).policy,
             )
             world = pack.get("world") if isinstance(pack.get("world"), dict) else {}
             world_bible = (
@@ -140,24 +139,15 @@ class GenesisHandoffService:
             session.add(revision)
             project.creation_status = "writing"
             session.add(project)
-            active_chapter_count = int(
-                session.execute(
-                    select(func.count(ChapterPlan.id)).where(
-                        ChapterPlan.arc_plan_id == active_arc.id
-                    )
-                ).scalar_one()
-                or 0
-            )
             session.flush()
             return StartWritingHandoffResult(
                 project_id=project.id,
                 active_arc_id=active_arc.id,
                 active_arc_number=int(active_arc.arc_number or 0),
                 created_arc_count=max(0, len(arcs) - existing_arc_count),
-                created_chapter_plan_count=max(
-                    0, active_chapter_count - existing_chapter_count
+                active_arc_chapter_count=(
+                    int(active_arc.chapter_end) - int(active_arc.chapter_start) + 1
                 ),
-                active_chapter_plan_count=active_chapter_count,
                 map_bootstrap_summary=map_summary,
                 world_seed_summary=asdict(seed_summary),
                 project_status="writing",
@@ -173,6 +163,14 @@ class GenesisHandoffService:
             )
             session.flush()
             raise
+
+
+def _fallback_beat_sheets() -> ArcBeatSheetService:
+    """A beat sheet service without a model: every sheet is the deterministic fallback."""
+    from forwin.maintenance.post_canon import save_world_prompt_trace
+    from forwin.planning.beat_sheet.service import ArcBeatSheetService
+
+    return ArcBeatSheetService(None, save_trace=save_world_prompt_trace)
 
 
 def _stage_failure_event(

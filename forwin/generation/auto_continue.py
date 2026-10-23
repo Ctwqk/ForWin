@@ -177,7 +177,6 @@ class GenerationAutoContinueController:
                 session,
                 project_id,
                 max_chapters=target.effective_max_chapters,
-                source="auto_continue",
                 preloaded_plans=plans,
             )
             if workset.requested_chapters <= 0:
@@ -204,17 +203,12 @@ class GenerationAutoContinueController:
             subtitle=f"自动续跑 · {project_genre}",
             message="前一批完成，无阻断，自动继续生成。",
         )
-        reason = (
-            "future_arc_materialized"
-            if workset.reason == "future_arc_materialization_required"
-            else "chapter_completed_no_blocker"
-        )
         return self._record_decision(
             project_id=project_id,
             parent_task_id=parent_task_id,
             decision=AutoContinueDecision(
                 decision="continue",
-                reason=reason,
+                reason="chapter_completed_no_blocker",
                 next_task_id=next_task_id,
                 next_chapter=workset.chapter_numbers[0]
                 if workset.chapter_numbers
@@ -387,7 +381,6 @@ class GenerationAutoContinueController:
                 session,
                 project_id,
                 max_chapters=target.effective_max_chapters,
-                source="auto_continue_review_retry",
                 preloaded_plans=plans,
             )
             if workset.requested_chapters <= 0:

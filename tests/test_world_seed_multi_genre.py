@@ -41,6 +41,8 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_frame import BookLexiconRow, StoryCalendarRow
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.project import Project
+from forwin.runtime.policy import RuntimePolicy
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
 
@@ -51,7 +53,8 @@ KINSHIP_EDGE_TYPES = ("kin_of", "family_of", "master_of", "mentor_of")
 HIDDEN_SENSITIVITIES = ("hidden", "secret")
 KNOWER_STATES = ("knows", "believes", "suspects")
 FALSE_BELIEF_STATES = ("knows", "believes")
-SHARED_PIPELINE = ["validate_world_seed", "build_world_seed_deltas", "review", "commit_world_seed"]
+# The last review is the gate the arc-1 beat sheet's protections pass.
+SHARED_PIPELINE = ["validate_world_seed", "build_world_seed_deltas", "review", "commit_world_seed", "review"]
 
 
 def load_fixture(genre: str) -> dict[str, Any]:
@@ -79,26 +82,8 @@ class _NoApiKeyClient:
     base_url = ""
     last_call_result = None
 
-    def chat(self, *_args, **_kwargs):  # pragma: no cover - the stubbed planner never reaches the client
+    def chat(self, *_args, **_kwargs):  # pragma: no cover - start-writing makes no Genesis call
         raise AssertionError("the multi-genre tests must not call a real LLM")
-
-
-def stub_chapter_planning(_owner, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
-    """Stands in for the chapter-planning LLM; structure only, no story content."""
-    assert str(stage_key).startswith("launch_arc_"), stage_key
-    chapters = [
-        {"title": f"stub chapter {number}", "one_line": f"stub outline {number}", "goals": [f"stub goal {number}"]}
-        for number in (1, 2, 3)
-    ]
-    trace = {
-        "effective_system_prompt": "launch arc planner",
-        "prompt_layers": [{"role": "system", "content": "launch arc planner"}],
-        "input_snapshot": {"stage_key": stage_key},
-        "model_profile": {"model": "fake-model"},
-        "attempts": [{"attempt": 1, "status": "success"}],
-        "output_summary": {"mode": "success"},
-    }
-    return {"chapters": chapters}, trace
 
 
 @pytest.fixture
@@ -130,11 +115,12 @@ def create_ready_project(session, service: BookGenesisService, fixture: dict[str
 
 
 def start_writing(session, service: BookGenesisService, project_id: str):
-    with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=stub_chapter_planning):
-        result = service.handoff.start_writing(
-            session=session, updater=StateUpdater(session),
-            command=StartWritingCommand(project_id=project_id, actor_type="manual_ui"),
-        )
+    # A project from project_create carries a runtime policy, which the arc-1 beat sheet reads.
+    ProjectPolicyStore(session).initialize(session.get(Project, project_id), RuntimePolicy.for_profile("standard"))
+    result = service.handoff.start_writing(
+        session=session, updater=StateUpdater(session),
+        command=StartWritingCommand(project_id=project_id, actor_type="manual_ui"),
+    )
     session.commit()
     return result
 
@@ -228,8 +214,9 @@ def test_fixture_flows_from_genesis_to_chapter_zero_book_state(genre: str, sessi
         create_ready_project(session, service, fixture, project_id)
         result = start_writing(session, service, project_id)
 
+        first_arc = fixture["pack"]["book_arc_blueprint"]["arcs"][0]
         assert result.project_status == "writing"
-        assert result.active_chapter_plan_count == 3
+        assert result.active_arc_chapter_count == first_arc["chapter_end"] - first_arc["chapter_start"] + 1
         assert result.world_seed_summary["skipped"] is False
         assert {key: result.world_seed_summary[key] for key in seed_counts(seed)} == seed_counts(seed)
 
@@ -276,7 +263,10 @@ def test_fixture_flows_from_genesis_to_chapter_zero_book_state(genre: str, sessi
         # The seed deltas carry the opening time in this book's own calendar units.
         label = format_story_time(calendar, opening)
         assert label and all(unit.name in label for unit in calendar.units)
-        deltas = session.execute(select(GraphDeltaRow).where(GraphDeltaRow.project_id == project_id)).scalars().all()
+        # The seed's deltas; arc 1's beat sheet adds its protections in one more.
+        deltas = session.execute(select(GraphDeltaRow).where(
+            GraphDeltaRow.project_id == project_id, GraphDeltaRow.source_type != "plan_constraint",
+        )).scalars().all()
         assert sorted(delta.id for delta in deltas) == sorted(world_seed_delta_ids(project_id))
         assert {(delta.story_time, delta.story_time_start, delta.story_time_end) for delta in deltas} == {(label, opening, opening)}
         assert query.current_story_minute(project_id, as_of_chapter=0) == opening

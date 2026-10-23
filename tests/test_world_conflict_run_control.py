@@ -119,6 +119,7 @@ def _run_chapters(factory, monkeypatch, *, chapters, block_at):
             _abort_requested=lambda: False,
             _pause_requested=lambda: False,
             _recover_post_canon_before_chapter=lambda **kwargs: recovered.append(kwargs["chapter_number"]),
+            _ensure_chapter_plan=lambda **kwargs: repo.get_chapter_plan(kwargs["project_id"], kwargs["chapter_number"]),
             _strict_progression_block=lambda **_kwargs: ("", "", ""),
             _manual_boundary_checkpoint=lambda *_args, **_kwargs: None,
             _emit_progress=lambda event, **payload: events.append((event, deepcopy(payload))),
@@ -344,7 +345,7 @@ def test_world_conflict_reason_blocks_next_arc_before_plans_exist():
     control = build_generation_control(
         plans=[SimpleNamespace(chapter_number=n, status="accepted") for n in range(1, 5)],
         latest_replan=None,
-        next_arc_chapter_start=5,
+        writable_chapters=range(1, 9),
         open_world_conflicts=[WorldConflictBlockInfo(conflict_id="next-arc", blocks_from_chapter=5, summary="Conflict")],
     )
     assert control.next_chapter == 5
@@ -392,6 +393,8 @@ def test_next_arc_conflict_blocks_read_models_and_continue_route(runtime, monkey
     with factory() as session:
         for n in range(1, 5):
             session.get(ChapterPlan, f"world-run-plan-{n}").status = "accepted"
+        # As extend-generation leaves it: the book's target reaches the new arc's end.
+        session.get(Project, "world-run-project").target_total_chapters = 8
         session.add(ArcPlanVersion(
             id="world-run-next-arc", project_id="world-run-project", arc_number=2,
             arc_synopsis="Next", status="planned", chapter_start=5, chapter_end=8,

@@ -97,26 +97,16 @@ class ProductionRepository:
             workset = build_continue_generation_workset(
                 self.session,
                 project_id,
-                source="scheduler_continue",
                 preloaded_plans=plans_by_project.get(project_id, []),
             )
-            if not workset.chapter_numbers:
-                backlog.planned_unwritten = []
-                backlog.failed = []
-                continue
-            selected = set(workset.chapter_numbers)
-            filtered_planned = [
-                number for number in backlog.planned_unwritten if number in selected
+            # The workset's chapters, planned or not: run control plans each band as it reaches it.
+            failed = set(backlog.failed)
+            backlog.planned_unwritten = [
+                number for number in workset.chapter_numbers if number not in failed
             ]
-            filtered_failed = [
-                number for number in backlog.failed if number in selected
+            backlog.failed = [
+                number for number in workset.chapter_numbers if number in failed
             ]
-            if filtered_planned or filtered_failed:
-                backlog.planned_unwritten = filtered_planned
-                backlog.failed = filtered_failed
-            else:
-                backlog.planned_unwritten = list(workset.chapter_numbers)
-                backlog.failed = []
 
     def _attach_scheduled_publish_jobs(
         self,

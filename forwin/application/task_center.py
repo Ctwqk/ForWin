@@ -12,7 +12,7 @@ from forwin.application.read_models import (
     WorldConflictBlockInfo,
     _recent_rows_by_project,
     build_generation_control,
-    load_next_planned_arc_starts,
+    load_writable_chapter_ranges,
     load_open_world_conflicts,
     load_open_world_conflicts_by_project,
 )
@@ -160,7 +160,7 @@ class TaskCenterService:
                 session,
                 [project.id for project in projects],
             )
-            next_arc_start_map = load_next_planned_arc_starts(
+            writable_chapters_map = load_writable_chapter_ranges(
                 session, [project.id for project in projects]
             )
             open_world_conflicts_map = load_open_world_conflicts_by_project(
@@ -177,7 +177,7 @@ class TaskCenterService:
                         latest_band_checkpoint=latest_checkpoint_map.get(project.id),
                         decision_events=decision_timeline_map.get(project.id, []),
                         open_world_conflicts=open_world_conflicts_map.get(project.id, []),
-                        next_arc_chapter_start=next_arc_start_map.get(project.id, 0),
+                        writable_chapters=writable_chapters_map.get(project.id, range(0)),
                     )
                 )
             return items
@@ -210,9 +210,9 @@ class TaskCenterService:
                 latest_band_checkpoint=latest_checkpoint_map.get(project.id),
                 decision_events=decision_timeline_map.get(project.id, []),
                 open_world_conflicts=load_open_world_conflicts(session, project.id),
-                next_arc_chapter_start=load_next_planned_arc_starts(
+                writable_chapters=load_writable_chapter_ranges(
                     session, [project.id]
-                ).get(project.id, 0),
+                ).get(project.id, range(0)),
             )
         finally:
             session.close()
@@ -252,7 +252,7 @@ class TaskCenterService:
         *,
         latest_band_checkpoint: BandCheckpoint | None,
         decision_events: list[Any],
-        next_arc_chapter_start: int = 0,
+        writable_chapters: range = range(0),
         open_world_conflicts: Sequence[WorldConflictBlockInfo] = (),
     ) -> TaskCenterItemResponse:
         requested = len(plans)
@@ -267,7 +267,7 @@ class TaskCenterService:
             latest_band_checkpoint=latest_band_checkpoint,
             decision_events=decision_events,
             open_world_conflicts=open_world_conflicts,
-            next_arc_chapter_start=next_arc_chapter_start,
+            writable_chapters=writable_chapters,
         )
         accepted = list(generation_control.accepted_chapters)
         failed = list(generation_control.failed_chapters)
@@ -294,8 +294,8 @@ class TaskCenterService:
             if requested == 0
             else "项目入口（当前没有活跃生成任务）"
         )
-        # The control already blocks on review/acceptance and covers a planned arc
-        # awaiting activation, matching what continue_workset accepts.
+        # The control already blocks on review/acceptance and covers chapters that
+        # have no plan row yet, matching what continue_workset accepts.
         can_resume = generation_control.can_resume
         stage_history = [
             self.new_stage_history_entry(
@@ -307,9 +307,6 @@ class TaskCenterService:
         ]
         generation_control = generation_control.model_copy(
             update={
-                "plan_state": "none"
-                if requested == 0
-                else generation_control.plan_state,
                 "current_stage": current_stage,
                 "current_chapter": current_chapter,
                 "can_resume": can_resume,

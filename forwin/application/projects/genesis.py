@@ -458,7 +458,7 @@ def start_project_writing(
             session.rollback()
             raise HTTPException(409, str(exc) or "Genesis 交接失败，不能启动写作。") from exc
         try:
-            requested_chapters = int(handoff_result.active_chapter_plan_count or 0)
+            requested_chapters = int(handoff_result.active_arc_chapter_count or 0)
             task_max_chapters = max_chapters
             task_run_until_chapter = run_until_chapter
             if max_chapters is not None or run_until_chapter is not None:

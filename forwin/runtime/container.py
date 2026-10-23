@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import partial
 import logging
 import threading
 from typing import TYPE_CHECKING, Callable, Literal, cast
@@ -15,6 +16,7 @@ from forwin.llm.factory import maybe_wrap_with_codex_router
 from forwin.models.base import get_engine, get_session_factory, require_v5_schema
 from forwin.observability.service import ObservabilityService
 from forwin.planning.arc_envelope import ArcEnvelopeManager
+from forwin.planning.arc_progression import ArcProgressionService
 from forwin.planning.service import PlanningService
 from forwin.planning.stage_analysis import (
     PacingStrategist,
@@ -208,6 +210,8 @@ class RuntimeContainer:
                 canon_preparation=generation.canon_preparation,
                 canon_admission=generation.canon_admission,
                 gate_delegation=generation.gate_delegation,
+                band_planner=self.build_band_planner(),
+                arc_progression=ArcProgressionService(self.build_beat_sheet_service()),
                 post_canon_maintenance=self._resolve_post_canon_maintenance(
                     core=core,
                     generation=generation,
@@ -229,14 +233,14 @@ class RuntimeContainer:
         return self.core_services().generation_application
 
     def build_plan_amender(self):
-        """The amender amend_plan resolutions plan with: a band planner and a beat sheet service on the
-        generation LLM client, or on none when no model is configured."""
-        from forwin.maintenance.post_canon import save_world_prompt_trace
+        """The amender amend_plan resolutions plan with, from this container's band planner and beat sheet
+        service."""
         from forwin.planning.amend import PlanAmender
-        from forwin.planning.band_planner.service import BandPlanner
-        from forwin.planning.beat_sheet.service import ArcBeatSheetService
-        from forwin.planning.feasibility import FeasibilityAuditor
 
+        return PlanAmender(self.build_band_planner(), self.build_beat_sheet_service())
+
+    def build_band_planner(self):
+        """A band planner on the generation LLM client, or on none when no model is configured."""
         self._require_capability(
             "generation",
             allowed_roles={"api", "generation_worker"},
@@ -244,20 +248,27 @@ class RuntimeContainer:
         with self._lock:
             self._require_open()
             core = self.core_services()
-            llm_client = (
-                self.generation_services().llm_client
-                if _llm_available(core.infrastructure, core.policy)
-                else None
+            return self._band_planner(
+                self._planning_llm_client(core), core.artifact_store, core.policy
             )
-            return PlanAmender(
-                BandPlanner(
-                    llm_client,
-                    feasibility=FeasibilityAuditor(),
-                    save_trace=save_world_prompt_trace,
-                    trope_cost_ceiling=2 if core.policy.quality_profile == "pulp" else 3,
-                ),
-                ArcBeatSheetService(llm_client, save_trace=save_world_prompt_trace),
+
+    def build_beat_sheet_service(self):
+        """A beat sheet service on the generation LLM client, or on none when no model is configured."""
+        self._require_capability(
+            "generation",
+            allowed_roles={"api", "generation_worker"},
+        )
+        with self._lock:
+            self._require_open()
+            core = self.core_services()
+            return self._beat_sheet_service(
+                self._planning_llm_client(core), core.artifact_store
             )
+
+    def _planning_llm_client(self, core: CoreRuntimeServices):
+        if not _llm_available(core.infrastructure, core.policy):
+            return None
+        return self.generation_services().llm_client
 
     def build_book_genesis_service(self):
         self._require_capability(
@@ -276,6 +287,10 @@ class RuntimeContainer:
                     llm_client=llm_client,
                     skill_runtime=skill_runtime,
                     artifact_store=artifact_store,
+                    beat_sheets=self._beat_sheet_service(
+                        llm_client if _llm_available(infrastructure, self.policy) else None,
+                        artifact_store,
+                    ),
                 )
             except Exception:
                 llm_client.close()
@@ -352,11 +367,16 @@ class RuntimeContainer:
         llm_client = self._build_llm_client(infrastructure, policy)
         try:
             skill_runtime = self._build_skill_runtime(infrastructure)
+            # Built inline: build_beat_sheet_service resolves these generation services.
             book_genesis = self._build_book_genesis_service(
                 config=infrastructure,
                 llm_client=llm_client,
                 skill_runtime=skill_runtime,
                 artifact_store=core.artifact_store,
+                beat_sheets=self._beat_sheet_service(
+                    llm_client if _llm_available(infrastructure, policy) else None,
+                    core.artifact_store,
+                ),
             )
             book_genesis.observability = core.observability
 
@@ -722,6 +742,7 @@ class RuntimeContainer:
         llm_client,
         skill_runtime,
         artifact_store,
+        beat_sheets,
     ) -> BookGenesisService:
         service = BookGenesisService(
             llm_client=llm_client,
@@ -729,9 +750,35 @@ class RuntimeContainer:
             world_seed_max_tokens=config.max_tokens,
             skill_router=skill_runtime.router,
             skill_prompt_layer_builder=skill_runtime.prompt_layer_builder,
+            beat_sheets=beat_sheets,
         )
         setattr(service, "artifact_store", artifact_store)
         return service
+
+    @staticmethod
+    def _beat_sheet_service(llm_client, artifact_store):
+        """``llm_client`` is None when no model is configured: every sheet is then the fallback."""
+        from forwin.maintenance.post_canon import save_world_prompt_trace
+        from forwin.planning.beat_sheet.service import ArcBeatSheetService
+
+        return ArcBeatSheetService(
+            llm_client,
+            save_trace=partial(save_world_prompt_trace, artifact_store=artifact_store),
+        )
+
+    @staticmethod
+    def _band_planner(llm_client, artifact_store, policy: RuntimePolicy):
+        """``llm_client`` is None when no model is configured: no band is planned then."""
+        from forwin.maintenance.post_canon import save_world_prompt_trace
+        from forwin.planning.band_planner.service import BandPlanner
+        from forwin.planning.feasibility import FeasibilityAuditor
+
+        return BandPlanner(
+            llm_client,
+            feasibility=FeasibilityAuditor(),
+            save_trace=partial(save_world_prompt_trace, artifact_store=artifact_store),
+            trope_cost_ceiling=2 if policy.quality_profile == "pulp" else 3,
+        )
 
     @staticmethod
     def _build_artifact_store(config: InfrastructureConfig) -> ArtifactStore:

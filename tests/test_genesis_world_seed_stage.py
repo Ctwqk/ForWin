@@ -143,6 +143,7 @@ def test_container_gives_world_seed_the_full_configured_token_budget():
         llm_client=_StubLLM(),
         skill_runtime=SimpleNamespace(router=None, prompt_layer_builder=None),
         artifact_store=None,
+        beat_sheets=None,
     )
     assert (service.max_tokens, service.world_seed_max_tokens) == (1600, 20000)
     assert BookGenesisService(llm_client=_StubLLM()).world_seed_max_tokens == 16384

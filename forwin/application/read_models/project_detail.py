@@ -33,7 +33,7 @@ from .arc_snapshot import (
 from .generation import (
     build_generation_control,
     effective_target_total_chapters,
-    load_next_planned_arc_starts,
+    load_writable_chapter_ranges,
     load_open_world_conflicts,
 )
 from .genesis import (
@@ -262,9 +262,9 @@ def build_project_detail(
         decision_events=decision_timeline,
         open_world_conflicts=load_open_world_conflicts(session, project_id),
         future_constraints_enabled=policy_record.policy.planning.future_constraints,
-        next_arc_chapter_start=load_next_planned_arc_starts(
+        writable_chapters=load_writable_chapter_ranges(
             session, [project_id]
-        ).get(project_id, 0),
+        ).get(project_id, range(0)),
     )
 
     return ProjectDetail(

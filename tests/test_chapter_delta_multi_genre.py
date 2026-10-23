@@ -59,8 +59,8 @@ from tests.test_world_seed_multi_genre import (
     create_ready_project,
     load_fixture,
     spy,
-    stub_chapter_planning,
 )
+from tests.helpers.band_plans import stub_plan, write_band_plan
 
 
 _REF = re.compile(r"@(node|site):(.+)")
@@ -167,17 +167,6 @@ def _committed_refs(runtime: BookStateRuntime) -> dict[tuple[str, str], str]:
     return refs
 
 
-def _planning_with(chapter_one: dict[str, Any]):
-    """The multi-genre planning stub, with this book's own chapter-one plan."""
-
-    def plan(owner, **kwargs):  # noqa: ANN001, ANN003
-        payload, trace = stub_chapter_planning(owner, **kwargs)
-        payload["chapters"][0] = dict(chapter_one)
-        return payload, trace
-
-    return plan
-
-
 def _start_book(pipeline, genre: str) -> _Book:
     fixture = load_fixture(genre)
     chapter = fixture["chapter_1"]
@@ -189,14 +178,13 @@ def _start_book(pipeline, genre: str) -> _Book:
         ProjectPolicyStore(session).initialize(project, pipeline.policy)
         session.refresh(project)
         # Fix the layout independently of the project's stable seed formula.
-        with (
-            patch("forwin.map.genesis_adapter._stable_seed", return_value=15),
-            patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=_planning_with(chapter["plan"])),
-        ):
+        with patch("forwin.map.genesis_adapter._stable_seed", return_value=15):
             service.handoff.start_writing(
                 session=session, updater=StateUpdater(session),
                 command=StartWritingCommand(project_id=project_id, actor_type="manual_ui"),
             )
+        # Arc 1's first band, planned with this book's own chapter one.
+        write_band_plan(session, project_id, {1: chapter["plan"], 2: stub_plan(2), 3: stub_plan(3)})
         session.commit()
         runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=0)
     return _Book(project_id, chapter, _committed_refs(runtime))

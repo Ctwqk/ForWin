@@ -112,12 +112,14 @@ class BandPlanner:
     ) -> ChapterPlan | None:
         """The chapter's plan row, planning its whole band when it has none.
 
-        A row in any status comes back as it is. When the band cannot be planned this opens a ``band_planning``
-        conflict that blocks the band and returns None; while that conflict is open it returns None at once.
-        A concurrent band plan that won the band without this chapter is followed by one more planning call.
+        A row in any status comes back as it is, except one the old planner wrote (no band plan) that is still to
+        write: the band is planned, rewriting that row in place (Ruling P4a-R27). When the band cannot be planned
+        this opens a ``band_planning`` conflict that blocks the band and returns None; while that conflict is open
+        it returns None at once. A concurrent band plan that won the band without this chapter is followed by one
+        more planning call.
         """
         existing = _chapter_plan(session, project_id, chapter_number)
-        if existing is not None:
+        if _band_planned(existing):
             return existing
         arc_plan = _arc_for_chapter(session, project_id, chapter_number)
         repo = ArcBeatSheetRepository(session)
@@ -140,9 +142,9 @@ class BandPlanner:
             )
 
         result = plan_rewritable("ensure_plan")
-        if not result.failed and _chapter_plan(session, project_id, chapter_number) is None:
+        if not result.failed and not _band_planned(_chapter_plan(session, project_id, chapter_number)):
             result = plan_rewritable("ensure_plan_retry")
-        if not result.failed and (plan := _chapter_plan(session, project_id, chapter_number)) is not None:
+        if not result.failed and _band_planned(plan := _chapter_plan(session, project_id, chapter_number)):
             return plan
         issues = result.outcome.issues if result.failed else [_error(
             "chapter_unplanned", f"concurrent band plans left chapter {chapter_number} without a plan",
@@ -150,7 +152,7 @@ class BandPlanner:
         # Serialize with other planners before blocking the band: one may have planned the chapter, or opened the
         # conflict, since. No conflict row is locked here, so the project lock keeps the usual order.
         session.execute(select(Project).where(Project.id == project_id).with_for_update(key_share=True)).scalar_one()
-        if (plan := _chapter_plan(session, project_id, chapter_number)) is not None:
+        if _band_planned(plan := _chapter_plan(session, project_id, chapter_number)):
             return plan
         if _open_band_conflict(session, project_id, band) is None:
             _band_planning_conflict(session, project_id=project_id, band=band, issues=issues, as_of=result.as_of)
@@ -494,9 +496,15 @@ def _arc_for_chapter(session: Session, project_id: str, chapter_number: int) -> 
 
 
 def _chapter_plan(session: Session, project_id: str, chapter_number: int) -> ChapterPlan | None:
+    """Re-read: a concurrent planner may have rewritten an old planner's row this session has loaded."""
     return session.scalar(select(ChapterPlan).where(
         ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == chapter_number,
-    ))
+    ).execution_options(populate_existing=True))
+
+
+def _band_planned(plan: ChapterPlan | None) -> bool:
+    """Whether the row needs no planning: anything but an old planner's row (no band plan) still to write."""
+    return plan is not None and (plan.band_plan_id is not None or plan.status not in REWRITABLE_PLAN_STATUSES)
 
 
 def _band_rows(

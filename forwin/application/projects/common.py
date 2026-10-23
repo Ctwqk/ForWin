@@ -15,7 +15,7 @@ from forwin.api_schema import (
     ProjectExtendGenerationRequest,
 )
 from forwin.generation.continue_workset import (
-    ContinueGenerationWorkset,
+    ContinueWorkset,
 )
 from forwin.generation.task_repository import TERMINAL_GENERATION_STATUSES
 from forwin.audit.events import (
@@ -37,7 +37,7 @@ _DEFAULT_CHAPTER_PAGE_LIMIT = 60
 _MAX_CHAPTER_PAGE_LIMIT = 200
 
 
-def _continue_workset_http_error(workset: ContinueGenerationWorkset) -> HTTPException:
+def _continue_workset_http_error(workset: ContinueWorkset) -> HTTPException:
     if workset.reason == "pending_review_blocker":
         return HTTPException(409, "仍有章节等待 review")
     if workset.reason == "pending_acceptance_blocker":

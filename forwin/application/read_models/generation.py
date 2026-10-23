@@ -21,7 +21,8 @@ from forwin.audit.events import (
     DecisionEventType,
 )
 from forwin.models.planning_control import BandCheckpoint
-from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.generation.continue_workset import writable_chapter_ranges
+from forwin.models.project import ChapterPlan, Project
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.world_engine.conflict_repository import WorldConflictRepository
 from .arc_snapshot import _band_checkpoint_detail
@@ -325,37 +326,29 @@ def effective_target_total_chapters(project: Project, chapter_count: int) -> int
     return max(stored, planned)
 
 
-def load_next_planned_arc_starts(
+def load_writable_chapter_ranges(
     session: Session, project_ids: list[str]
-) -> dict[str, int]:
-    """Map writing projects to the chapter_start of their next planned arc.
+) -> dict[str, range]:
+    """Map writing projects to their chapters to write, as the continue workset counts them.
 
-    The next planned arc is the lowest arc_number with status "planned", the
-    same ordering continue_workset uses. Such an arc may have no chapter plans
-    yet (extend-generation, Genesis future arcs); activation plans them.
+    The chapters in range that have no plan row yet (Genesis future arcs, extend-generation,
+    bands not planned) are written by a continue run, which plans each band first.
     """
     ids = [str(item or "").strip() for item in project_ids if str(item or "").strip()]
     if not ids:
         return {}
-    rows = session.execute(
-        select(ArcPlanVersion.project_id, ArcPlanVersion.chapter_start)
-        .join(Project, Project.id == ArcPlanVersion.project_id)
-        .where(
-            ArcPlanVersion.project_id.in_(ids),
-            ArcPlanVersion.status == "planned",
-            Project.creation_status == "writing",
+    writing = list(
+        session.scalars(
+            select(Project.id).where(
+                Project.id.in_(ids), Project.creation_status == "writing"
+            )
         )
-        .order_by(
-            ArcPlanVersion.project_id.asc(),
-            ArcPlanVersion.arc_number.asc(),
-            ArcPlanVersion.created_at.asc(),
-            ArcPlanVersion.id.asc(),
-        )
-    ).all()
-    starts: dict[str, int] = {}
-    for project_id, chapter_start in rows:
-        starts.setdefault(str(project_id), int(chapter_start or 0))
-    return {project_id: start for project_id, start in starts.items() if start > 0}
+    )
+    return {
+        project_id: chapters
+        for project_id, chapters in writable_chapter_ranges(session, writing).items()
+        if chapters
+    }
 
 
 def build_generation_control(
@@ -370,7 +363,7 @@ def build_generation_control(
     latest_band_checkpoint: BandCheckpoint | None = None,
     decision_events: list[DecisionEventInfo] | None = None,
     future_constraints_enabled: bool = True,
-    next_arc_chapter_start: int = 0,
+    writable_chapters: range = range(0),
     open_world_conflicts: Sequence[WorldConflictBlockInfo] = (),
 ) -> GenerationControlInfo:
     accepted = [plan.chapter_number for plan in plans if plan.status == "accepted"]
@@ -387,28 +380,39 @@ def build_generation_control(
     ]
     next_candidates = planned + failed
     next_chapter = min(next_candidates) if next_candidates else 0
-    # Nothing left to write in materialized plans, but a planned arc is waiting
-    # for activation: the book is resumable from that arc's first chapter.
-    resume_from_next_arc = not next_candidates and int(next_arc_chapter_start or 0) > 0
-    if resume_from_next_arc:
-        next_chapter = int(next_arc_chapter_start)
-    if not plans:
-        plan_state = "none"
-    elif pending_review:
+    # As the continue workset counts: the first writable chapter not accepted. Without
+    # a plan row it waits for run control to plan its band.
+    statuses = {plan.chapter_number: plan.status for plan in plans}
+    first_unwritten = next(
+        (number for number in writable_chapters if statuses.get(number) != "accepted"),
+        0,
+    )
+    pending_band_plan = (
+        not next_candidates and first_unwritten > 0 and first_unwritten not in statuses
+    )
+    if pending_band_plan:
+        next_chapter = first_unwritten
+    if pending_review:
         plan_state = "needs_review"
     elif drafted:
         plan_state = "pending_acceptance"
+    elif pending_band_plan:
+        plan_state = "pending_band_plan"
+    elif not plans:
+        plan_state = "none"
     elif len(accepted) == len(plans):
         plan_state = "completed"
     elif failed and not planned:
         plan_state = "failed"
     else:
         plan_state = "in_progress"
-    if resume_from_next_arc and plan_state == "completed":
-        plan_state = "in_progress"
     writing_state = "not_started"
     if generated:
-        writing_state = "completed" if len(accepted) == len(plans) else "started"
+        writing_state = (
+            "completed"
+            if len(accepted) == len(plans) and not pending_band_plan
+            else "started"
+        )
     if pending_review:
         review_state = "pending"
     elif drafted:
@@ -440,14 +444,14 @@ def build_generation_control(
         next_chapter=next_chapter,
     )
     can_resume = bool(
-        (next_candidates or resume_from_next_arc)
+        (next_candidates or pending_band_plan)
         and not pending_review
         and not drafted
         and blocking_reason.code != "world_conflict_pending"
     )
     next_gate = _derive_next_gate(plans=plans, blocking_reason=blocking_reason)
-    if resume_from_next_arc and can_resume and next_gate in {"", "completed"}:
-        next_gate = "next_arc_ready"
+    if pending_band_plan and next_gate == "completed":
+        next_gate = f"chapter_{next_chapter}_write"
     return GenerationControlInfo(
         plan_state=plan_state,
         writing_state=writing_state,
@@ -480,6 +484,6 @@ __all__ = [
     "_derive_blocking_reason",
     "_derive_next_gate",
     "effective_target_total_chapters",
-    "load_next_planned_arc_starts",
+    "load_writable_chapter_ranges",
     "build_generation_control",
 ]

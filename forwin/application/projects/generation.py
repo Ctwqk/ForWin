@@ -158,7 +158,6 @@ def continue_project_generation(
             session,
             project_id,
             max_chapters=max_chapters,
-            source="direct_continue",
         )
         if workset.requested_chapters <= 0:
             raise _continue_workset_http_error(workset)
@@ -181,7 +180,6 @@ def continue_project_generation(
                 session,
                 project_id,
                 max_chapters=task_max_chapters,
-                source="direct_continue",
             )
             if workset.requested_chapters <= 0:
                 raise _continue_workset_http_error(workset)

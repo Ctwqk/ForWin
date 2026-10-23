@@ -40,23 +40,8 @@ class _NoApiKeyClient:
     base_url = ""
     last_call_result = None
 
-    def chat(self, *_args, **_kwargs):  # pragma: no cover - the launch-arc call is patched
+    def chat(self, *_args, **_kwargs):  # pragma: no cover - start-writing makes no Genesis call
         raise AssertionError("handoff tests must not call the LLM")
-
-
-def _fake_launch_arc_call(_owner, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
-    trace = {
-        "effective_system_prompt": "",
-        "prompt_layers": [],
-        "input_snapshot": {"stage_key": stage_key},
-        "model_profile": {"model": "fake-model"},
-        "attempts": [{"attempt": 1, "status": "success"}],
-        "output_summary": {"mode": "success"},
-    }
-    if str(stage_key).startswith("launch_arc_"):
-        chapters = [{"title": f"Chapter {n}", "one_line": f"Beat {n}.", "goals": [f"goal {n}"]} for n in (1, 2, 3)]
-        return {"chapters": chapters}, trace
-    return fallback, trace
 
 
 @pytest.fixture
@@ -72,8 +57,7 @@ def db():
         minimax_model="MiniMax-M2.7",
     )
     harness = HttpRuntimeHarness(session_factory=session_factory, config=config, engine=engine)
-    with patch("forwin.genesis.BookGenesisService._call_json_with_trace", new=_fake_launch_arc_call):
-        yield SimpleNamespace(session_factory=session_factory, harness=harness, config=config)
+    yield SimpleNamespace(session_factory=session_factory, harness=harness, config=config)
     engine.dispose()
 
 

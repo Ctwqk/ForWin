@@ -15,6 +15,8 @@ from forwin.audit.events import DecisionEventType
 from forwin.observability.context import OperationContext
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from forwin.runtime.policy import RuntimePolicy
+from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 import time
 
@@ -183,6 +185,7 @@ class RunControlStage:
                 project_id=project_id,
                 chapter_numbers=chapter_numbers,
                 requested_chapters=len(chapter_numbers),
+                plan_bands=False,
             )
             print(f"\n{'=' * 60}")
             if result.status == "needs_review":
@@ -374,39 +377,42 @@ class RunControlStage:
                 chapter_number=chapter_number,
             )
 
-    def _materialize_next_genesis_arc_if_needed(
+    def _ensure_chapter_plan(
         self,
         *,
         session: Session,
-        updater: StateUpdater,
-        project: Project,
-    ) -> bool:
-        if str(getattr(project, "creation_status", "") or "").strip() != "writing":
-            return False
-        if not str(getattr(project, "active_genesis_revision_id", "") or "").strip():
-            return False
-        revision = self.book_genesis.active_revision(session, project)
-        if revision is None:
-            return False
-        remaining_pending = session.execute(
-            select(ChapterPlan.chapter_number)
-            .where(
-                ChapterPlan.project_id == project.id,
-                ChapterPlan.status.in_(("planned", "failed")),
+        project_id: str,
+        chapter_number: int,
+        policy: RuntimePolicy,
+    ) -> ChapterPlan | None:
+        """The chapter's plan row, after activating its arc and planning its band when needed.
+
+        None when the band cannot be planned; the planner has then opened, or found, the band_planning
+        conflict that blocks the chapter. Both steps may call a model, so nothing is left locked first.
+        """
+        session.commit()
+        active = StateRepository(session).get_active_arc_plan(project_id)
+        if active is None or not active.chapter_start <= chapter_number <= active.chapter_end:
+            self.arc_progression.activate_next_arc_if_needed(
+                session, project_id=project_id, after_chapter=chapter_number - 1, policy=policy
             )
-            .limit(1)
-        ).scalar_one_or_none()
-        if remaining_pending is not None:
-            return False
-        promoted = self.book_genesis.promote_next_arc_if_needed(
-            session=session,
-            updater=updater,
-            project=project,
-            revision=revision,
-        )
-        if promoted:
-            session.commit()
-        return promoted
+        try:
+            plan = self.band_planner.ensure_plan_for_chapter(
+                session, project_id=project_id, chapter_number=chapter_number, policy=policy
+            )
+        except LookupError:
+            # The active arc has no beat sheet: it was activated before beat sheets, or by an
+            # activation that stopped before writing one. Without an active arc there is nothing to plan from.
+            session.rollback()
+            if self.arc_progression.ensure_beat_sheet(
+                session, project_id=project_id, chapter_number=chapter_number, policy=policy
+            ) is None:
+                raise
+            plan = self.band_planner.ensure_plan_for_chapter(
+                session, project_id=project_id, chapter_number=chapter_number, policy=policy
+            )
+        session.commit()
+        return plan
 
     def continue_project(
         self,
@@ -422,14 +428,13 @@ class RunControlStage:
             if project is None:
                 raise ValueError(f"项目不存在: {project_id}")
 
+            # Chapters without a plan row are planned band by band as the run reaches them.
             chapter_plans = (
                 session.query(ChapterPlan)
                 .filter(ChapterPlan.project_id == project_id)
                 .order_by(ChapterPlan.chapter_number)
                 .all()
             )
-            if not chapter_plans:
-                raise ValueError(f"项目没有章节规划: {project_id}")
 
             waiting_review: list[int] = []
             for plan in chapter_plans:
@@ -461,7 +466,6 @@ class RunControlStage:
                 project_id,
                 max_chapters=max_chapters,
                 resume_from_chapter=resume_from_chapter,
-                source="pipeline_continue",
             )
             self._record_decision_event(
                 updater=updater,
@@ -474,28 +478,12 @@ class RunControlStage:
                 related_object_id=project_id,
                 payload={
                     "resolved_workset_count": workset.requested_chapters,
-                    "materialized_plan_count": workset.materialized_plan_count,
                     "workset_reason": workset.reason,
                 },
             )
             session.commit()
 
             pending_chapter_numbers = list(workset.chapter_numbers)
-            if workset.reason == "future_arc_materialization_required":
-                if self._materialize_next_genesis_arc_if_needed(
-                    session=session,
-                    updater=updater,
-                    project=project,
-                ):
-                    repo, updater, checker = self._make_state_helpers(session)
-                    workset = build_continue_generation_workset(
-                        session,
-                        project_id,
-                        max_chapters=max_chapters,
-                        resume_from_chapter=resume_from_chapter,
-                        source="pipeline_continue",
-                    )
-                    pending_chapter_numbers = list(workset.chapter_numbers)
             if not pending_chapter_numbers:
                 return RunResult(
                     project_id=project_id,
@@ -522,7 +510,6 @@ class RunControlStage:
                 session,
                 project_id,
                 max_chapters=max_chapters,
-                source="pipeline_continue",
             )
             chapter_numbers = list(workset.chapter_numbers)
             if not chapter_numbers:

@@ -24,7 +24,7 @@ from .arc_snapshot import (
 from .generation import (
     build_generation_control,
     effective_target_total_chapters,
-    load_next_planned_arc_starts,
+    load_writable_chapter_ranges,
     load_open_world_conflicts_by_project,
 )
 from .genesis import (
@@ -85,7 +85,7 @@ def build_project_summaries(
     genesis_revision_map = _load_latest_genesis_revision_by_project(
         session, project_ids
     )
-    next_arc_start_map = load_next_planned_arc_starts(session, project_ids)
+    writable_chapters_map = load_writable_chapter_ranges(session, project_ids)
     open_world_conflicts_map = load_open_world_conflicts_by_project(
         session, project_ids
     )
@@ -158,7 +158,7 @@ def build_project_summaries(
             decision_events=decision_timeline_map.get(project.id, []),
             open_world_conflicts=open_world_conflicts_map.get(project.id, []),
             future_constraints_enabled=policy_record.policy.planning.future_constraints,
-            next_arc_chapter_start=next_arc_start_map.get(project.id, 0),
+            writable_chapters=writable_chapters_map.get(project.id, range(0)),
         )
         payload.append(
             ProjectSummary(

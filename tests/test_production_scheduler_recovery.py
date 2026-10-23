@@ -50,7 +50,7 @@ def sessions():
         engine.dispose()
 
 
-def _project(sessions, *, status="planned", automation=None):
+def _project(sessions, *, status="planned", automation=None, chapter_end=1):
     project_id = new_id()
     with sessions.begin() as session:
         project = Project(
@@ -77,6 +77,8 @@ def _project(sessions, *, status="planned", automation=None):
             version=1,
             arc_synopsis="开篇",
             status="active",
+            chapter_start=1,
+            chapter_end=chapter_end,
         )
         session.add(arc)
         session.flush()
@@ -325,6 +327,7 @@ def test_review_callback_can_lock_project_and_refreshed_settings_control_dispatc
             "daily_review_quota": 1,
             "stop_when_review_pending": False,
         },
+        chapter_end=3,
     )
 
     with sessions.begin() as session:

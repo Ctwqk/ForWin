@@ -1,23 +1,28 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 
 
 @dataclass(frozen=True)
-class ContinueGenerationWorkset:
-    project_id: str
+class ContinueWorkset:
+    """The chapters a continue run writes, in order, and why the list is what it is.
+
+    ``reason`` is ``chapters_pending`` with chapters to write; otherwise ``project_completed``,
+    ``pending_review_blocker``, ``pending_acceptance_blocker`` or ``project_not_found``.
+    """
+
     chapter_numbers: tuple[int, ...]
-    requested_chapters: int
-    materialized_plan_count: int
-    active_arc_id: str
-    active_arc_number: int
-    source: str
     reason: str
+
+    @property
+    def requested_chapters(self) -> int:
+        return len(self.chapter_numbers)
 
 
 def build_continue_generation_workset(
@@ -26,181 +31,66 @@ def build_continue_generation_workset(
     *,
     max_chapters: int | None = None,
     resume_from_chapter: int | None = None,
-    include_failed: bool = True,
-    source: str = "direct_continue",
-    preloaded_plans: list[ChapterPlan] | None = None,
-) -> ContinueGenerationWorkset:
-    normalized_project_id = str(project_id or "").strip()
-    normalized_source = str(source or "direct_continue").strip() or "direct_continue"
+    preloaded_plans: Sequence[ChapterPlan] | None = None,
+) -> ContinueWorkset:
+    """The book's chapters from the first one not accepted, consecutively up to its last writable chapter.
+
+    Whether a chapter has a plan row does not matter: run control plans each band just in time. A chapter
+    waiting for review or acceptance blocks the run. ``resume_from_chapter`` is the lowest chapter to list;
+    ``preloaded_plans`` are the project's plan rows when the caller has them.
+    """
     if max_chapters is not None and int(max_chapters) < 1:
         raise ValueError("max_chapters must be positive when provided")
-    resume_floor = int(resume_from_chapter or 0)
-
-    project = session.get(Project, normalized_project_id)
+    project = session.get(Project, project_id)
     if project is None:
-        return _empty_workset(
-            normalized_project_id,
-            source=normalized_source,
-            reason="project_not_found",
+        return ContinueWorkset((), "project_not_found")
+    if str(project.creation_status or "") == "completed":
+        return ContinueWorkset((), "project_completed")
+    plans = preloaded_plans if preloaded_plans is not None else session.scalars(
+        select(ChapterPlan).where(ChapterPlan.project_id == project_id)
+    ).all()
+    statuses = {int(plan.chapter_number or 0): str(plan.status or "") for plan in plans}
+    if "needs_review" in statuses.values():
+        return ContinueWorkset((), "pending_review_blocker")
+    if "drafted" in statuses.values():
+        return ContinueWorkset((), "pending_acceptance_blocker")
+    book = writable_chapter_ranges(session, [project_id]).get(project_id, range(0))
+    first = max(book.start, int(resume_from_chapter or 0))
+    while statuses.get(first) == "accepted":
+        first += 1
+    numbers = tuple(range(first, book.stop))
+    if max_chapters is not None:
+        numbers = numbers[: int(max_chapters)]
+    return ContinueWorkset(numbers, "chapters_pending" if numbers else "project_completed")
+
+
+def writable_chapter_ranges(session: Session, project_ids: Sequence[str]) -> dict[str, range]:
+    """Each project's chapters to write, from its first arc's ``chapter_start`` to
+    ``min(target_total_chapters, its arcs' furthest chapter_end)``.
+
+    No arc holds a chapter outside the range, so none could be planned. Superseded arcs do not count; a
+    ``target_total_chapters`` of 0 leaves the arcs uncapped. Projects without an arc are left out.
+    """
+    if not project_ids:
+        return {}
+    rows = session.execute(
+        select(
+            ArcPlanVersion.project_id,
+            func.min(ArcPlanVersion.chapter_start),
+            func.max(ArcPlanVersion.chapter_end),
+            Project.target_total_chapters,
         )
-    if str(getattr(project, "creation_status", "") or "").strip() == "completed":
-        return _empty_workset(
-            normalized_project_id,
-            source=normalized_source,
-            reason="project_completed",
-        )
-
-    plans = list(preloaded_plans) if preloaded_plans is not None else list(
-        session.execute(
-            select(ChapterPlan)
-            .where(ChapterPlan.project_id == normalized_project_id)
-            .order_by(ChapterPlan.chapter_number.asc(), ChapterPlan.id.asc())
-        ).scalars()
-    )
-    if any(str(plan.status or "") == "needs_review" for plan in plans):
-        return _empty_workset(
-            normalized_project_id,
-            source=normalized_source,
-            reason="pending_review_blocker",
-        )
-    if any(str(plan.status or "") == "drafted" for plan in plans):
-        return _empty_workset(
-            normalized_project_id,
-            source=normalized_source,
-            reason="pending_acceptance_blocker",
-        )
-
-    active_arc = _active_arc(session, normalized_project_id)
-    pending_statuses = {"planned", "failed"} if include_failed else {"planned"}
-    materialized_candidates = [
-        plan
-        for plan in plans
-        if str(plan.status or "") in pending_statuses
-        and int(plan.chapter_number or 0) > 0
-        and (resume_floor <= 0 or int(plan.chapter_number or 0) >= resume_floor)
-    ]
-    if active_arc is not None:
-        active_candidates = [
-            int(plan.chapter_number or 0)
-            for plan in plans
-            if str(plan.arc_plan_id or "") == str(active_arc.id)
-            and str(plan.status or "") in pending_statuses
-            and int(plan.chapter_number or 0) > 0
-            and (resume_floor <= 0 or int(plan.chapter_number or 0) >= resume_floor)
-        ]
-        earliest_materialized = min(
-            (int(plan.chapter_number or 0) for plan in materialized_candidates),
-            default=0,
-        )
-        earliest_active = min(active_candidates, default=0)
-        if active_candidates and (
-            earliest_materialized <= 0 or earliest_active <= earliest_materialized
-        ):
-            selected = _apply_max(active_candidates, max_chapters)
-            return ContinueGenerationWorkset(
-                project_id=normalized_project_id,
-                chapter_numbers=tuple(selected),
-                requested_chapters=len(selected),
-                materialized_plan_count=len(active_candidates),
-                active_arc_id=str(active_arc.id or ""),
-                active_arc_number=int(active_arc.arc_number or 0),
-                source=normalized_source,
-                reason="active_arc_pending",
-            )
-
-    if materialized_candidates:
-        candidate_numbers = [int(plan.chapter_number or 0) for plan in materialized_candidates]
-        selected = _apply_max(candidate_numbers, max_chapters)
-        selected_arc_id = str(getattr(materialized_candidates[0], "arc_plan_id", "") or "")
-        selected_arc = session.get(ArcPlanVersion, selected_arc_id) if selected_arc_id else None
-        return ContinueGenerationWorkset(
-            project_id=normalized_project_id,
-            chapter_numbers=tuple(selected),
-            requested_chapters=len(selected),
-            materialized_plan_count=len(candidate_numbers),
-            active_arc_id=str(getattr(selected_arc, "id", "") or selected_arc_id),
-            active_arc_number=int(getattr(selected_arc, "arc_number", 0) or 0),
-            source=normalized_source,
-            reason="materialized_pending",
-        )
-
-    future_arc = _next_planned_arc(session, normalized_project_id)
-    if future_arc is not None:
-        predicted = [
-            number
-            for number in _future_arc_chapter_numbers(future_arc)
-            if resume_floor <= 0 or number >= resume_floor
-        ]
-        selected = _apply_max(predicted, max_chapters)
-        return ContinueGenerationWorkset(
-            project_id=normalized_project_id,
-            chapter_numbers=tuple(selected),
-            requested_chapters=len(selected),
-            materialized_plan_count=0,
-            active_arc_id=str(future_arc.id or ""),
-            active_arc_number=int(future_arc.arc_number or 0),
-            source=normalized_source,
-            reason="future_arc_materialization_required" if selected else "no_remaining_chapters",
-        )
-
-    return _empty_workset(
-        normalized_project_id,
-        source=normalized_source,
-        reason="no_remaining_chapters",
-    )
+        .join(Project, Project.id == ArcPlanVersion.project_id)
+        .where(ArcPlanVersion.project_id.in_(list(project_ids)), ArcPlanVersion.status != "superseded")
+        .group_by(ArcPlanVersion.project_id, Project.target_total_chapters)
+    ).all()
+    result: dict[str, range] = {}
+    for project_id, arc_start, arc_end, target in rows:
+        last = int(arc_end or 0)
+        if int(target or 0) > 0:
+            last = min(last, int(target))
+        result[str(project_id)] = range(max(1, int(arc_start or 0)), last + 1)
+    return result
 
 
-def _empty_workset(project_id: str, *, source: str, reason: str) -> ContinueGenerationWorkset:
-    return ContinueGenerationWorkset(
-        project_id=project_id,
-        chapter_numbers=(),
-        requested_chapters=0,
-        materialized_plan_count=0,
-        active_arc_id="",
-        active_arc_number=0,
-        source=source,
-        reason=reason,
-    )
-
-
-def _active_arc(session: Session, project_id: str) -> ArcPlanVersion | None:
-    return session.execute(
-        select(ArcPlanVersion)
-        .where(
-            ArcPlanVersion.project_id == project_id,
-            ArcPlanVersion.status == "active",
-        )
-        .order_by(ArcPlanVersion.created_at.desc(), ArcPlanVersion.id.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-
-
-def _next_planned_arc(session: Session, project_id: str) -> ArcPlanVersion | None:
-    return session.execute(
-        select(ArcPlanVersion)
-        .where(
-            ArcPlanVersion.project_id == project_id,
-            ArcPlanVersion.status == "planned",
-        )
-        .order_by(ArcPlanVersion.arc_number.asc(), ArcPlanVersion.created_at.asc(), ArcPlanVersion.id.asc())
-        .limit(1)
-    ).scalar_one_or_none()
-
-
-def _apply_max(chapter_numbers: list[int], max_chapters: int | None) -> list[int]:
-    if max_chapters is None:
-        return list(chapter_numbers)
-    return list(chapter_numbers)[: int(max_chapters)]
-
-
-def _future_arc_chapter_numbers(arc: ArcPlanVersion) -> list[int]:
-    start = int(getattr(arc, "chapter_start", 0) or 0)
-    end = int(getattr(arc, "chapter_end", 0) or 0)
-    target_size = int(getattr(arc, "planned_target_size", 0) or 0)
-    if start <= 0:
-        return []
-    if end >= start:
-        return list(range(start, end + 1))
-    if target_size > 0:
-        return list(range(start, start + target_size))
-    return [start]
+__all__ = ["ContinueWorkset", "build_continue_generation_workset", "writable_chapter_ranges"]

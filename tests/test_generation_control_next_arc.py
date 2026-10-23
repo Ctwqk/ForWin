@@ -4,8 +4,9 @@ from forwin.application.read_models import (
     build_generation_control,
     build_project_detail,
     build_project_summaries,
-    load_next_planned_arc_starts,
+    load_writable_chapter_ranges,
 )
+from forwin.application.read_models.generation import WorldConflictBlockInfo
 from forwin.application.task_center import TaskCenterService
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
@@ -27,36 +28,45 @@ def _plan(chapter_number: int, status: str) -> ChapterPlan:
     )
 
 
-def test_fully_accepted_book_with_next_arc_is_resumable_from_arc_start() -> None:
+def test_unwritten_chapters_without_plan_rows_are_pending_band_plan() -> None:
     control = build_generation_control(
         plans=[_plan(1, "accepted"), _plan(2, "accepted")],
         latest_replan=None,
-        next_arc_chapter_start=3,
+        writable_chapters=range(1, 7),
     )
 
     assert control.next_chapter == 3
     assert control.can_resume is True
-    assert control.plan_state == "in_progress"
-    assert control.next_gate == "next_arc_ready"
+    assert control.plan_state == "pending_band_plan"
+    assert control.writing_state == "started"
+    assert control.next_gate == "chapter_3_write"
     assert control.planned_chapters == []
 
 
-def test_fully_accepted_book_without_next_arc_stays_completed() -> None:
+def test_book_without_plan_rows_is_pending_band_plan_from_chapter_one() -> None:
+    control = build_generation_control(plans=[], latest_replan=None, writable_chapters=range(1, 7))
+
+    assert (control.next_chapter, control.plan_state, control.can_resume) == (1, "pending_band_plan", True)
+
+
+def test_fully_accepted_book_stays_completed() -> None:
     control = build_generation_control(
         plans=[_plan(1, "accepted"), _plan(2, "accepted")],
         latest_replan=None,
+        writable_chapters=range(1, 3),
     )
 
     assert control.next_chapter == 0
     assert control.can_resume is False
     assert control.plan_state == "completed"
+    assert control.writing_state == "completed"
 
 
-def test_pending_plans_take_precedence_over_next_arc_start() -> None:
+def test_pending_plans_take_precedence_over_unplanned_chapters() -> None:
     control = build_generation_control(
         plans=[_plan(1, "accepted"), _plan(2, "planned")],
         latest_replan=None,
-        next_arc_chapter_start=9,
+        writable_chapters=range(1, 10),
     )
 
     assert control.next_chapter == 2
@@ -64,22 +74,38 @@ def test_pending_plans_take_precedence_over_next_arc_start() -> None:
     assert control.plan_state == "in_progress"
 
 
-def test_review_and_acceptance_blockers_still_block_next_arc_resume() -> None:
+def test_review_and_acceptance_blockers_still_block_unplanned_chapters() -> None:
     needs_review = build_generation_control(
         plans=[_plan(1, "accepted"), _plan(2, "needs_review")],
         latest_replan=None,
-        next_arc_chapter_start=3,
+        writable_chapters=range(1, 7),
     )
     drafted = build_generation_control(
         plans=[_plan(1, "accepted"), _plan(2, "drafted")],
         latest_replan=None,
-        next_arc_chapter_start=3,
+        writable_chapters=range(1, 7),
     )
 
     assert needs_review.can_resume is False
     assert needs_review.plan_state == "needs_review"
     assert drafted.can_resume is False
     assert drafted.plan_state == "pending_acceptance"
+
+
+def test_open_conflict_blocks_an_unplanned_chapter() -> None:
+    control = build_generation_control(
+        plans=[_plan(1, "accepted")],
+        latest_replan=None,
+        writable_chapters=range(1, 7),
+        open_world_conflicts=[
+            WorldConflictBlockInfo(conflict_id="conflict-band", blocks_from_chapter=2, summary="unplannable band"),
+        ],
+    )
+
+    assert control.plan_state == "pending_band_plan"
+    assert control.blocking_reason.code == "world_conflict_pending"
+    assert control.blocking_reason.chapter_number == 2
+    assert control.can_resume is False
 
 
 def _task_center_service(session_factory=None) -> TaskCenterService:
@@ -94,20 +120,20 @@ def _task_center_service(session_factory=None) -> TaskCenterService:
     )
 
 
-def _project_item(plans: list[ChapterPlan], *, next_arc_chapter_start: int):
+def _project_item(plans: list[ChapterPlan], *, writable_chapters: range):
     project = Project(id="project-next-arc", title="Item", premise="前提", genre="玄幻")
     return _task_center_service()._build_project_task_center_item(
         project,
         plans,
         latest_band_checkpoint=None,
         decision_events=[],
-        next_arc_chapter_start=next_arc_chapter_start,
+        writable_chapters=writable_chapters,
     )
 
 
-def test_task_center_drafted_chapter_blocks_next_arc_resume() -> None:
+def test_task_center_drafted_chapter_blocks_resume() -> None:
     item = _project_item(
-        [_plan(1, "accepted"), _plan(2, "drafted")], next_arc_chapter_start=3
+        [_plan(1, "accepted"), _plan(2, "drafted")], writable_chapters=range(1, 7)
     )
 
     assert item.generation_control.can_resume is False
@@ -115,18 +141,18 @@ def test_task_center_drafted_chapter_blocks_next_arc_resume() -> None:
     assert item.generation_control.plan_state == "pending_acceptance"
 
 
-def test_task_center_pending_review_blocks_next_arc_resume() -> None:
+def test_task_center_pending_review_blocks_resume() -> None:
     item = _project_item(
-        [_plan(1, "accepted"), _plan(2, "needs_review")], next_arc_chapter_start=3
+        [_plan(1, "accepted"), _plan(2, "needs_review")], writable_chapters=range(1, 7)
     )
 
     assert item.generation_control.can_resume is False
     assert item.resumable is False
 
 
-def test_task_center_accepted_book_with_next_arc_is_resumable() -> None:
+def test_task_center_accepted_band_with_unplanned_chapters_is_resumable() -> None:
     item = _project_item(
-        [_plan(1, "accepted"), _plan(2, "accepted")], next_arc_chapter_start=3
+        [_plan(1, "accepted"), _plan(2, "accepted")], writable_chapters=range(1, 7)
     )
 
     assert item.generation_control.can_resume is True
@@ -134,18 +160,18 @@ def test_task_center_accepted_book_with_next_arc_is_resumable() -> None:
     assert item.generation_control.next_chapter == 3
 
 
-def test_task_center_writing_project_without_plans_resumes_from_next_arc() -> None:
-    item = _project_item([], next_arc_chapter_start=1)
+def test_task_center_writing_project_without_plans_resumes_from_chapter_one() -> None:
+    item = _project_item([], writable_chapters=range(1, 7))
 
     assert item.requested_chapters == 0
-    assert item.generation_control.plan_state == "none"
+    assert item.generation_control.plan_state == "pending_band_plan"
     assert item.generation_control.next_chapter == 1
     assert item.generation_control.can_resume is True
     assert item.resumable is True
 
 
-def test_task_center_book_without_plans_or_next_arc_is_not_resumable() -> None:
-    item = _project_item([], next_arc_chapter_start=0)
+def test_task_center_book_without_plans_or_arcs_is_not_resumable() -> None:
+    item = _project_item([], writable_chapters=range(0))
 
     assert item.generation_control.can_resume is False
     assert item.resumable is False
@@ -187,8 +213,8 @@ def _seed_genesis_book_between_arcs(session, *, project_id: str, status: str) ->
                 status="accepted",
             )
         )
-    # Genesis future arcs are skeleton rows without chapter plans; the lowest
-    # arc_number is the next one to activate.
+    # Genesis future arcs are skeleton rows without chapter plans; the book ends at
+    # the furthest arc end, capped by target_total_chapters.
     session.add(
         ArcPlanVersion(
             id=f"{project_id}-arc-3",
@@ -226,8 +252,8 @@ def test_genesis_book_between_arcs_is_resumable_in_every_read_model() -> None:
             )
             session.commit()
 
-            assert load_next_planned_arc_starts(session, [project.id]) == {
-                project.id: 11
+            assert load_writable_chapter_ranges(session, [project.id]) == {
+                project.id: range(1, 21)
             }
 
             detail = build_project_detail(
@@ -248,13 +274,13 @@ def test_genesis_book_between_arcs_is_resumable_in_every_read_model() -> None:
         ):
             assert control.next_chapter == 11
             assert control.can_resume is True
-            assert control.plan_state == "in_progress"
+            assert control.plan_state == "pending_band_plan"
             assert control.planned_chapters == []
     finally:
         engine.dispose()
 
 
-def test_next_arc_start_is_ignored_for_projects_that_are_not_writing() -> None:
+def test_unwritten_chapters_are_ignored_for_projects_that_are_not_writing() -> None:
     engine = get_engine(postgres_test_url("generation_control_next_arc_genesis"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -265,7 +291,7 @@ def test_next_arc_start_is_ignored_for_projects_that_are_not_writing() -> None:
             )
             session.commit()
 
-            assert load_next_planned_arc_starts(session, [project.id]) == {}
+            assert load_writable_chapter_ranges(session, [project.id]) == {}
             detail = build_project_detail(
                 session=session, project=project, display_datetime=str
             )

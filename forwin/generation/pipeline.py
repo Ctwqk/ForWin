@@ -30,6 +30,8 @@ from forwin.maintenance.post_canon import PostCanonMaintenanceService
 from forwin.observability.ports import SpanHandle
 from forwin.observability.service import ObservabilityService
 from forwin.planning.arc_envelope import ArcEnvelopeManager
+from forwin.planning.arc_progression import ArcProgressionService
+from forwin.planning.band_planner.service import BandPlanner
 from forwin.planning.stage_analysis import (
     PacingStrategist,
     ReplanGovernor,
@@ -88,6 +90,8 @@ class ChapterPipeline(
         canon_preparation: CanonPreparationService,
         canon_admission: CanonAdmissionService,
         gate_delegation: GateDelegationService,
+        band_planner: BandPlanner,
+        arc_progression: ArcProgressionService,
         post_canon_maintenance: PostCanonMaintenanceService | None = None,
         progress_callback: Callable[[str, dict[str, object]], None] | None = None,
         should_abort: Callable[[], bool] | None = None,
@@ -132,6 +136,8 @@ class ChapterPipeline(
         self.canon_preparation = canon_preparation
         self.canon_admission = canon_admission
         self.gate_delegation = gate_delegation
+        self.band_planner = band_planner
+        self.arc_progression = arc_progression
         self.post_canon_maintenance = (
             post_canon_maintenance
             or PostCanonMaintenanceService(

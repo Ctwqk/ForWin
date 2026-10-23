@@ -630,6 +630,38 @@ def test_ensure_plan_for_chapter_plans_its_band_from_the_previous_band(Session, 
     assert len(client.calls) == 1
 
 
+@pytest.mark.parametrize("status", ["planned", "failed"])
+def test_ensure_replans_a_legacy_row_in_place(Session, status) -> None:
+    """A row the old planner wrote (no band plan) that is still to write is planned again (Ruling P4a-R27)."""
+    world, arc_id, _sheet_id = _book(Session)
+    with Session.begin() as session:
+        updater = StateUpdater(session)
+        written = updater.create_chapter_plan(world.project_id, arc_id, 1, "legacy-1", "", ["legacy-goal"])
+        written.status = "accepted"
+        legacy = updater.create_chapter_plan(world.project_id, arc_id, 2, "legacy-2", "", ["legacy-goal"])
+        legacy.status = status
+        written_id, legacy_id = written.id, legacy.id
+    client = StubLLM(_band(world, range(2, 5)))
+    planner = _planner(client)
+    with Session.begin() as session:
+        plan = planner.ensure_plan_for_chapter(session, project_id=world.project_id, chapter_number=2, policy=POLICY)
+        # Rewritten in place: same row and status, the band plan's content.
+        assert (plan.id, plan.title, plan.status) == (legacy_id, "title-2", status)
+        band_plan_id = plan.band_plan_id
+        assert band_plan_id is not None
+
+    # The accepted legacy row stays as it is; the band's rows to write are planned around it.
+    assert client.payload(0)["chapters_to_plan"] == [2, 3, 4]
+    with Session.begin() as session:
+        plans = _plans(session, world.project_id)
+        assert (plans[1].id, plans[1].title, plans[1].band_plan_id) == (written_id, "legacy-1", None)
+        assert {number: plans[number].band_plan_id for number in (2, 3, 4)} == dict.fromkeys((2, 3, 4), band_plan_id)
+        # Now band-planned, the row comes back without another model call.
+        assert planner.ensure_plan_for_chapter(session, project_id=world.project_id, chapter_number=2,
+                                               policy=POLICY).id == legacy_id
+    assert len(client.calls) == 1
+
+
 def test_pending_response_with_no_bindable_ref_asks_for_its_goal(Session) -> None:
     world, arc_id, sheet_id = _book(Session)
     conflict_id = _pending_conflict(Session, world, intent=False)

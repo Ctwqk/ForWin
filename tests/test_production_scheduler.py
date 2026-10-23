@@ -204,7 +204,8 @@ def test_scheduler_runs_due_projects_and_preserves_actions() -> None:
             if command.root_event_type == "continue_requested"
         )
         assert initial_command.requested_chapters == 2
-        assert continue_command.requested_chapters == 1
+        # Both of the book's arcs: the continue run activates arc 2 when it reaches it.
+        assert continue_command.requested_chapters == 2
         assert (
             projects["自动调度-首批"]["last_scheduler_action"]
             == "started_initial_generation"

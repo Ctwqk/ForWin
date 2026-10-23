@@ -268,7 +268,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         control = detail.generation_control
         self.assertEqual(control.next_chapter, 25)
         self.assertTrue(control.can_resume)
-        self.assertEqual(control.plan_state, "in_progress")
+        self.assertEqual(control.plan_state, "pending_band_plan")
         self.assertEqual(control.planned_chapters, [])
         with self.session_factory() as session:
             plan_count_after = (
@@ -293,7 +293,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(new_arc.planned_soft_min, 10)
         self.assertEqual(new_arc.planned_soft_max, 14)
         self.assertIn("第24章 canon 已确认剩余79分钟。", new_arc.arc_synopsis)
-        self.assertEqual(workset.reason, "future_arc_materialization_required")
+        self.assertEqual(workset.reason, "chapters_pending")
         self.assertEqual(workset.chapter_numbers, tuple(range(25, 37)))
 
     def test_extend_generation_starts_after_last_genesis_arc(self) -> None:
@@ -909,7 +909,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
                     session.add(project)
                     session.flush()
                     return SimpleNamespace(
-                        active_chapter_plan_count=1,
+                        active_arc_chapter_count=1,
                         project_status="writing",
                     )
 
@@ -1075,7 +1075,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
                     session.add(project)
                     session.flush()
                     return SimpleNamespace(
-                        active_chapter_plan_count=6,
+                        active_arc_chapter_count=6,
                         project_status="writing",
                     )
 
@@ -1166,7 +1166,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
                     session.add(project)
                     session.flush()
                     return SimpleNamespace(
-                        active_chapter_plan_count=12,
+                        active_arc_chapter_count=12,
                         project_status="writing",
                     )
 
@@ -1506,6 +1506,8 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 project_id=project.id,
                 arc_synopsis="测试弧线",
                 status="active",
+                chapter_start=1,
+                chapter_end=36,
             )
             session.add(arc)
             session.flush()
@@ -1740,7 +1742,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         self.assertEqual(response.task_id, "task-continue-strict-factory")
 
-    def test_continue_generation_count_is_scoped_to_active_arc(self) -> None:
+    def test_continue_generation_count_runs_on_to_the_last_arc(self) -> None:
         project = self._create_project(project_id="proj-continue-active-arc-only")
         with self.session_factory() as session:
             project_row = session.get(Project, project.id)
@@ -1806,8 +1808,10 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 ProjectContinueGenerationRequest(max_chapters=10),
             )
 
-        self.assertEqual(response.requested_chapters, 1)
-        self.assertEqual(captured["requested_chapters"], 1)
+        # Every chapter from the first unwritten one to the last arc's end, planned or not:
+        # run control activates arc 2 and plans its band when the run reaches it.
+        self.assertEqual(response.requested_chapters, 4)
+        self.assertEqual(captured["requested_chapters"], 4)
         self.assertEqual(captured["max_chapters"], 10)
 
     def test_project_continue_generation_request_rejects_non_positive_run_limits(

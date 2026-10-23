@@ -307,6 +307,9 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
             ),
             _abort_requested=abort_after_first_acceptance,
             _pause_requested=lambda: False,
+            _ensure_chapter_plan=lambda **kwargs: StateRepository(kwargs["session"]).get_chapter_plan(
+                kwargs["project_id"], kwargs["chapter_number"],
+            ),
             _strict_progression_block=lambda **_kwargs: ("", "", ""),
             _manual_boundary_checkpoint=lambda *_args, **_kwargs: None,
             _audit_current_plan_before_write=lambda **kwargs: kwargs["context"],

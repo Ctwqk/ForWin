@@ -25,8 +25,7 @@ class StartWritingHandoffResult:
     active_arc_id: str
     active_arc_number: int
     created_arc_count: int
-    created_chapter_plan_count: int
-    active_chapter_plan_count: int
+    active_arc_chapter_count: int
     map_bootstrap_summary: dict[str, Any] = field(default_factory=dict)
     world_seed_summary: dict[str, Any] = field(default_factory=dict)
     project_status: str = "writing"

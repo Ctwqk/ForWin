@@ -1268,59 +1268,13 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
     def test_start_writing_continue_conflict_and_pause_via_mcp(self) -> None:
         project_id = self._create_ready_project()
 
-        def fake_launch_arc_call(
-            _service,
-            *,
-            messages,
-            fallback,
-            stage_key,
-            temperature=0.45,
-            max_tokens=None,
-        ):
-            if str(stage_key).startswith("launch_arc_"):
-                return (
-                    {
-                        "chapters": [
-                            {
-                                "title": "雨夜开端",
-                                "one_line": "主角在雨夜第一次正面撞上禁术代价。",
-                                "goals": ["建立危机", "种下旧术线索"],
-                            },
-                            {
-                                "title": "债务浮现",
-                                "one_line": "旧城势力开始围拢主角，代价被迫升级。",
-                                "goals": ["扩大冲突", "抬高关系风险"],
-                            },
-                            {
-                                "title": "遗迹坐标",
-                                "one_line": "主角得到通往下一 Arc 的遗迹入口。",
-                                "goals": ["给出阶段性揭秘", "推到下一段世界舞台"],
-                            },
-                        ]
-                    },
-                    {
-                        "effective_system_prompt": "launch arc planner",
-                        "prompt_layers": [
-                            {"role": "system", "content": "launch arc planner"}
-                        ],
-                        "input_snapshot": {"stage_key": stage_key},
-                        "model_profile": {"model": "fake-model"},
-                        "attempts": [{"attempt": 1, "status": "success"}],
-                        "output_summary": {"mode": "success"},
-                    },
-                )
-            return fallback, {
-                "effective_system_prompt": "fallback",
-                "prompt_layers": [],
-                "input_snapshot": {},
-                "model_profile": {"model": "fake-model"},
-                "attempts": [{"attempt": 1, "status": "fallback"}],
-                "output_summary": {"mode": "fallback"},
-            }
+        def beat_sheet_model_down(_service, _messages):
+            # No network in tests: arc 1 gets the deterministic fallback sheet.
+            raise ConnectionError("beat sheet model unavailable")
 
         with patch(
-            "forwin.genesis.BookGenesisService._call_json_with_trace",
-            new=fake_launch_arc_call,
+            "forwin.planning.beat_sheet.service.ArcBeatSheetService._chat",
+            new=beat_sheet_model_down,
         ):
             started = self._load_model(
                 MutationResult,
@@ -1330,8 +1284,10 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(started.task)
         self.assertEqual(started.project.creation_status, "writing")
         self.assertEqual(started.project.target_total_chapters, 6)
-        self.assertEqual(started.project.materialized_chapter_count, 3)
-        self.assertEqual(started.project.chapter_count, 3)
+        # Start-writing plans no chapter: run control plans arc 1's bands as it reaches them.
+        self.assertEqual(started.project.materialized_chapter_count, 0)
+        self.assertEqual(started.project.chapter_count, 0)
+        self.assertEqual(started.task.requested_chapters, 3)
         self.assertEqual(started.task.status, "queued")
         self.assertEqual(started.task.current_stage, "queued")
 

@@ -855,7 +855,7 @@ def test_tick_skips_a_chapter_that_is_no_longer_the_latest() -> None:
     engine.dispose()
 
 
-def test_codex_plot_response_runs_in_tick_or_escalates_without_an_unwritten_plan(monkeypatch) -> None:
+def test_plot_responds_without_next_plan_is_pending_not_escalated(monkeypatch) -> None:
     engine, Session = _session_factory()
 
     def ambushed(*, plan: bool) -> tuple[_World, GraphDelta]:
@@ -866,15 +866,17 @@ def test_codex_plot_response_runs_in_tick_or_escalates_without_an_unwritten_plan
         _tick(Session, _ambushing(world, chapter, "plot_responds"), chapter)
         return world, chapter
 
-    # Without an unwritten plan to respond in, the choice cannot run: a human decides and the change is held.
+    # The world change commits now; a later band plan will supply its response.
     world, _chapter_one = ambushed(plan=False)
     [conflict] = _conflicts(Session, world)
-    assert (conflict.status, conflict.required_decider) == ("open", "human")
-    [escalated] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_ESCALATED)
-    assert (_payload(escalated)["failure_reason"], _payload(escalated)["option"]) == (
-        "no_unaccepted_plan", "plot_responds",
-    )
-    assert _runtime(Session, world).world.get_state(world.rival)["alive_status"] != "dead"
+    assert (conflict.status, conflict.required_decider) == ("resolved", "codex")
+    assert json.loads(conflict.decision_json)["pending_plan_response"] is True
+    assert _events(Session, world, DecisionEventType.WORLD_CONFLICT_ESCALATED) == []
+    assert _runtime(Session, world).world.get_state(world.rival)["alive_status"] == "dead"
+    [resolved] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_RESOLVED)
+    assert _payload(resolved)["plan_patch_id"] == ""
+    with Session() as session:
+        assert [row.id for row in WorldConflictRepository(session).pending_plot_responses(world.project_id)] == [conflict.id]
 
     # With one, the held change commits in the tick's own delta, its news spreads and the next plan responds.
     world, chapter = ambushed(plan=True)
@@ -941,7 +943,15 @@ def test_failed_option_side_effect_rolls_back_and_escalates_and_slips_are_not_ra
                 obligation_type="motivation_gap", priority="P1", status="planned", summary="summary-existing",
                 hardness="design_debt", deadline_chapter=5, payoff_test="payoff-existing",
             ))
-    # No slip is allowed: the onstage intent, due after chapter 1, conflicts once chapter 2 leaves it alone.
+    with Session.begin() as session:
+        arc_id = session.scalar(select(ArcPlanVersion.id).where(ArcPlanVersion.project_id == world.project_id))
+        for number in (2, 3):
+            session.add(ChapterPlan(
+                project_id=world.project_id, arc_plan_id=arc_id, chapter_number=number,
+                title=f"bound-{number}", status="accepted",
+                world_bindings_json=json.dumps([{"kind": "intent", "ref": _onstage(world)}]),
+            ))
+    # No slip is allowed: chapters 2 and 3 bind the intent but leave it undelivered.
     policy = _policy(max_onstage_slips=0)
     llm = _WorldLLM(actor_turn=_quiet_turns, review=_review("accept_with_obligation"))
     _tick(Session, llm, _chapter(Session, world, 1, days=1), policy=policy)
@@ -1034,6 +1044,11 @@ def test_rewriting_the_latest_chapter_keeps_its_tick_and_runs_no_second_one(monk
     _complete_post_canon(Session, world.project_id, 1, first, world_delta_ids=tuple(ticked.graph_delta_ids))
     assert _runtime(Session, world).world.get_state(_onstage(world))["status"] == "due"
     calls = len(llm.calls)
+
+    with Session.begin() as session:
+        session.get(ChapterPlan, plan_id).world_bindings_json = json.dumps([
+            {"kind": "intent", "ref": _onstage(world)},
+        ])
 
     rewritten = _rewrite_chapter_one(Session, world, plan_id, original)
     again = tick(rewritten)
@@ -1657,3 +1672,135 @@ def test_world_step_result_is_tick_result_only() -> None:
     with patch("forwin.maintenance.post_canon.ProjectPolicyStore") as store:
         store.return_value.load.return_value.policy = _policy()
         assert service._run_world_step(session, commit) == result.step_result()
+
+
+def test_change_touching_hard_milestone_is_critical_and_goes_to_human():
+    from tests.test_world_tick_steps import _actor, _runtime as memory_runtime
+    from forwin.world_engine.constraints import classify_impact
+    from forwin.world_engine.conflict_routing import available_options, route_conflict
+    from forwin.world_engine.tick_conflicts import review_draft
+    from forwin.world_engine.types import EffectEntityChange, TickCandidate, TickContext, WorldEffects
+
+    runtime = memory_runtime(_actor("milestone-actor"))
+    candidate = TickCandidate(candidate_id="change", origin="adjudication", summary="change", effects=WorldEffects(
+        entity_changes=[EffectEntityChange(ref="milestone-actor", field="state.alive_status", new_value="dead")],
+    ))
+    refs = frozenset({"milestone-actor"})
+    candidate = candidate.model_copy(update={"impact_level": classify_impact(runtime, candidate, milestone_refs=refs)})
+    assert candidate.impact_level == "critical"
+    review = review_draft(candidate, runtime=runtime, milestone_refs=refs, context=TickContext(
+        project_id=runtime.project_id, chapter_number=3, now=100, window_start=0, seed=1,
+    ))
+    assert review.draft.violated == "milestone"
+    assert route_conflict(review.draft, policy=_policy()) == "human"
+    assert available_options(review.draft) == ("veto_world", "amend_plan")
+    unrelated = review_draft(candidate, runtime=runtime, milestone_refs=frozenset({"other"}), context=TickContext(
+        project_id=runtime.project_id, chapter_number=3, now=100, window_start=0, seed=1,
+    ))
+    assert unrelated.draft.violated == "impact_review"
+
+
+def test_tick_reads_next_chapters_hard_milestone_refs(monkeypatch):
+    from forwin.models.planning_v6 import ArcBeatSheetRow
+
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    _plan(Session, world, 2)
+    with Session.begin() as session:
+        arc_id = session.scalar(select(ArcPlanVersion.id).where(ArcPlanVersion.project_id == world.project_id))
+        session.add(ArcBeatSheetRow(
+            project_id=world.project_id, arc_plan_id=arc_id, protagonist_ref=world.hero,
+            milestones_json=json.dumps([{"id": "hard-1", "description": "milestone", "hard": True,
+                                         "target_range": [2, 2], "required_refs": [world.rival]}]),
+        ))
+    chapter = _chapter(Session, world, 1)
+    _tick(Session, _ambushing(world, chapter, "veto_world"), chapter, policy=_policy(max_major_events_per_tick=10))
+    [conflict] = [row for row in _conflicts(Session, world) if row.intent_ref == _later(world)]
+    assert (conflict.impact_level, conflict.violated, conflict.required_decider, conflict.status) == (
+        "critical", "milestone", "human", "open",
+    )
+    assert json.loads(conflict.options_json) == ["veto_world", "amend_plan"]
+    assert _runtime(Session, world).world.get_state(world.rival)["alive_status"] != "dead"
+    engine.dispose()
+
+
+@pytest.mark.parametrize("band_source", ["band_plan", "beat_sheet", "missing"])
+def test_tick_slips_unbound_intent_at_band_end_only(monkeypatch, band_source):
+    from forwin.models.planning_v6 import ArcBeatSheetRow, BandPlanRow
+
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    _plan(Session, world, 2)
+    with Session.begin() as session:
+        arc_id = session.scalar(select(ArcPlanVersion.id).where(ArcPlanVersion.project_id == world.project_id))
+        if band_source != "missing":
+            sheet = ArcBeatSheetRow(
+                project_id=world.project_id, arc_plan_id=arc_id, protagonist_ref=world.hero,
+                band_breakdown_json=json.dumps([{"band_index": 0, "chapter_start": 1,
+                                                 "chapter_end": 8 if band_source == "band_plan" else 2}]),
+            )
+            session.add(sheet)
+            session.flush()
+            if band_source == "band_plan":
+                session.add(BandPlanRow(project_id=world.project_id, arc_plan_id=arc_id, beat_sheet_id=sheet.id,
+                                        band_index=0, chapter_start=1, chapter_end=2))
+    llm = _WorldLLM(actor_turn=_quiet_turns)
+    _tick(Session, llm, _chapter(Session, world, 1, days=1))
+    assert _runtime(Session, world).world.get_state(_onstage(world))["slip_count"] == 0
+    _tick(Session, llm, _chapter(Session, world, 2, days=1))
+    assert _runtime(Session, world, 2).world.get_state(_onstage(world))["slip_count"] == (
+        0 if band_source == "missing" else 1
+    )
+    engine.dispose()
+
+
+def test_in_tick_accept_with_obligation_without_next_plan_records_obligation_only(monkeypatch):
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    _plan(Session, world, 2)
+    with Session.begin() as session:
+        plan = session.scalar(select(ChapterPlan).where(ChapterPlan.project_id == world.project_id))
+        plan.status = "accepted"
+        plan.world_bindings_json = json.dumps([{"kind": "intent", "ref": _onstage(world)}])
+    llm = _WorldLLM(actor_turn=_quiet_turns, review=_review("accept_with_obligation"))
+    policy = _policy(max_onstage_slips=0)
+    _tick(Session, llm, _chapter(Session, world, 1, days=1), policy=policy)
+    _tick(Session, llm, _chapter(Session, world, 2, days=1), policy=policy)
+    [conflict] = _conflicts(Session, world)
+    assert conflict.status == "resolved"
+    assert _events(Session, world, DecisionEventType.WORLD_CONFLICT_ESCALATED) == []
+    [resolved] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_RESOLVED)
+    payload = _payload(resolved)
+    assert payload["obligation_id"] and payload["plan_patch_id"] == ""
+    with Session() as session:
+        obligation = session.get(NarrativeObligationRow, payload["obligation_id"])
+        assert obligation.status == "proposed"
+        assert json.loads(obligation.linked_plan_patch_ids_json) == []
+    assert _runtime(Session, world, 2).world.get_state(_onstage(world))["slip_count"] == 1
+    engine.dispose()
+
+
+def test_onstage_slip_past_cap_touching_milestone_goes_to_human(monkeypatch):
+    from forwin.models.planning_v6 import ArcBeatSheetRow
+
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    _plan(Session, world, 2)
+    llm = _WorldLLM(actor_turn=_quiet_turns)
+    policy = _policy(max_onstage_slips=0)
+    _tick(Session, llm, _chapter(Session, world, 1, days=1), policy=policy)
+    with Session.begin() as session:
+        plan = session.scalar(select(ChapterPlan).where(ChapterPlan.project_id == world.project_id))
+        plan.world_bindings_json = json.dumps([{"kind": "intent", "ref": _onstage(world)}])
+        session.add(ArcBeatSheetRow(
+            project_id=world.project_id, arc_plan_id=plan.arc_plan_id, protagonist_ref=world.hero,
+            milestones_json=json.dumps([{"id": "hard-intent", "description": "milestone", "hard": True,
+                                         "target_range": [3, 3], "required_refs": [_onstage(world)]}]),
+        ))
+    _tick(Session, llm, _chapter(Session, world, 2, days=1), policy=policy)
+    [conflict] = [row for row in _conflicts(Session, world) if row.intent_ref == _onstage(world)]
+    assert (conflict.impact_level, conflict.violated, conflict.required_decider, conflict.status) == (
+        "critical", "milestone", "human", "open",
+    )
+    assert _runtime(Session, world, 2).world.get_state(_onstage(world))["slip_count"] == 0
+    engine.dispose()

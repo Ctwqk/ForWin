@@ -468,7 +468,8 @@ def test_dead_owner_chapter_disruption_is_not_action(checks):
 def test_dead_owner_onstage_slip_is_not_action(checks):
     runtime = _runtime(_node("a", alive_status="dead"))
     result = onstage_bookkeeping(runtime, onstage_due=[], already_due=[runtime.world.get_node("intent")],
-        interactions=[], now=NOW, max_slips=2, chapter_number=3)
+        interactions=[], now=NOW, max_slips=2, chapter_number=3,
+        bound_intent_refs=frozenset({"intent"}), band_ended=False)
     assert len(result.candidates) == 1
     assert result.candidates[0].slip_updates == {"intent": 1}
     assert checks.check_hard_rules(runtime, LEXICON, result.candidates[0],

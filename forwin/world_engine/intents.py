@@ -86,24 +86,42 @@ def onstage_bookkeeping(
     now: int,
     max_slips: int,
     chapter_number: int,
+    bound_intent_refs: frozenset[str],
+    band_ended: bool,
+    band_bound_intent_refs: frozenset[str] = frozenset(),
 ) -> OnstageResult:
-    """Newly due onstage intents become due; a due intent the chapter left untouched slips.
+    """Slip missed plan bindings, or due intents never bound in the band when the band ends.
 
     A slip counts one more ``slip_count`` and puts ``scheduled_at`` off to now (the tick
     builder writes both). A slip past ``max_slips`` is held in an ``onstage_slip`` conflict
     that blocks the next chapter.
     """
     touched = {str(interaction.get("intent_id") or "").strip() for interaction in interactions}
-    candidates = [
-        _onstage_candidate(intent, intent_status_changes={intent.id: "due"}) for intent in onstage_due
-    ]
+    newly_due = {intent.id for intent in onstage_due}
+    intents = {intent.id: intent for intent in [*onstage_due, *already_due]}
+    for ref in sorted(bound_intent_refs):
+        node = runtime.world.get_node(ref)
+        if (node is not None and str(node.node_type) == "intent"
+                and node.profile.get("requires_onstage") is True
+                and runtime.world.get_state(ref).get("status") in {"planned", "due"}):
+            intents.setdefault(ref, node)
+            if runtime.world.get_state(ref).get("status") == "planned" and ref not in touched:
+                newly_due.add(ref)
+    candidates: list[TickCandidate] = []
     conflicts: list[ConflictDraft] = []
-    for intent in already_due:
-        if intent.id in touched:
+    for intent in intents.values():
+        statuses = {intent.id: "due"} if intent.id in newly_due else {}
+        should_slip = intent.id not in touched and (
+            intent.id in bound_intent_refs
+            or (band_ended and intent.id not in band_bound_intent_refs)
+        )
+        if not should_slip:
+            if statuses:
+                candidates.append(_onstage_candidate(intent, intent_status_changes=statuses))
             continue
         current = runtime.world.get_state(intent.id).get("slip_count")
         slips = (current if type(current) is int else 0) + 1
-        candidate = _onstage_candidate(intent, slip_updates={intent.id: slips})
+        candidate = _onstage_candidate(intent, intent_status_changes=statuses, slip_updates={intent.id: slips})
         if slips <= max_slips:
             candidates.append(candidate)
             continue

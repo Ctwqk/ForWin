@@ -128,6 +128,12 @@ def _refs(value: Any, *, references: bool = False) -> Iterator[str]:
             yield from _refs(item, references=references)
 
 
+def candidate_references(candidate: TickCandidate) -> frozenset[str]:
+    """The refs touched by effects and bookkeeping changes, using the classifier's ref semantics."""
+    return frozenset(set(_refs(candidate.model_dump(mode="python"))) | candidate.intent_status_changes.keys()
+                     | candidate.slip_updates.keys() | candidate.next_turn_at.keys())
+
+
 def classify_impact(
     runtime: BookStateRuntime,
     candidate: TickCandidate,
@@ -135,8 +141,7 @@ def classify_impact(
     milestone_refs: frozenset[str] = frozenset(),
 ) -> str:
     level = IMPACT_LEVELS.index(candidate.impact_level)
-    references = (set(_refs(candidate.model_dump(mode="python"))) | candidate.intent_status_changes.keys()
-                  | candidate.slip_updates.keys() | candidate.next_turn_at.keys())
+    references = candidate_references(candidate)
     if milestone_refs.intersection(references):
         return "critical"
     if candidate.effects.relation_changes:

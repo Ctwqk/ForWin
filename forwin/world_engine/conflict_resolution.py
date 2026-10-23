@@ -88,6 +88,7 @@ class ConflictResolutionResult:
 class OptionSideEffects:
     obligation_id: str
     plan_patch_id: str
+    pending_plan_response: bool = False
 
 
 @dataclass(frozen=True)
@@ -126,6 +127,10 @@ def option_candidates(
     change that sets the status of an intent canon has since settled is stale (ConflictStale).
     """
     _check_decision(conflict, decision)
+    if conflict.violated in {"milestone", "reveal_schedule"} and decision.option not in {"veto_world", "amend_plan"}:
+        raise ConflictOptionUnavailable(
+            f"Conflict {conflict.id}: the held change breaks {conflict.violated}; veto it or amend the plan"
+        )
     if decision.option == "veto_world":
         veto = _veto_candidate(conflict, runtime, policy=policy, reroll_count=reroll_count, now=now)
         return [veto] if veto is not None else []
@@ -264,17 +269,15 @@ def record_option_side_effects(
 ) -> OptionSideEffects:
     """The obligation or plan goal the option leaves; call it once the option's world changes committed.
 
-    Both bind to the next unaccepted chapter plan after ``latest_chapter``. Without one, or when the
-    obligation ledger refuses the obligation, it raises ConflictOptionUnavailable and the caller rolls
-    back the committed changes with it.
+    Bind to the next unaccepted plan when present; otherwise leave a pending response or an unbound
+    obligation for the band planner. A refused obligation rolls back the committed changes with it.
     """
     _check_decision(conflict, decision)
     if decision.option == "accept_with_obligation":
         return _record_obligation(session, conflict, decision, latest_chapter=latest_chapter)
     if decision.option == "plot_responds":
-        return OptionSideEffects(
-            obligation_id="", plan_patch_id=_record_plot_response(session, conflict, latest_chapter=latest_chapter),
-        )
+        patch_id = _record_plot_response(session, conflict, latest_chapter=latest_chapter)
+        return OptionSideEffects(obligation_id="", plan_patch_id=patch_id, pending_plan_response=not patch_id)
     return OptionSideEffects(obligation_id="", plan_patch_id="")
 
 
@@ -292,11 +295,13 @@ def writer_response_text(conflict: WorldPlanConflictRow) -> str:
     return world_change_response(public, onstage_slip=conflict.violated == _ONSTAGE_SLIP)
 
 
-def _next_unaccepted_plan(session: Session, project_id: str, *, latest_chapter: int) -> ChapterPlan:
+def _next_unaccepted_plan(session: Session, project_id: str, *, latest_chapter: int) -> ChapterPlan | None:
+    project = session.get(Project, project_id)
+    total = int(project.target_total_chapters or 0) if project is not None else 0
+    if total <= latest_chapter:
+        raise ConflictOptionUnavailable(f"No chapter follows chapter {latest_chapter} within the book's {total}")
     plans = PlanningQuery().future_chapters(session, project_id=project_id, current_chapter=latest_chapter)
-    if not plans:
-        raise ConflictOptionUnavailable(f"No unaccepted chapter plan follows chapter {latest_chapter}")
-    return plans[0]
+    return plans[0] if plans else None
 
 
 def _record_obligation(
@@ -323,6 +328,9 @@ def _record_obligation(
         created_by=decision.decided_by,
         metadata={"conflict_id": conflict.id},
     )
+    if plan is None:
+        stored = NarrativeObligationRepository(session).create_obligation(obligation)
+        return OptionSideEffects(obligation_id=stored.id, plan_patch_id="")
     plan_patch = NarrativePlanPatch(
         id=new_id(),
         project_id=conflict.project_id,
@@ -362,7 +370,7 @@ def _record_obligation(
 def _record_plot_response(session: Session, conflict: WorldPlanConflictRow, *, latest_chapter: int) -> str:
     """Put the response goal first in the next unaccepted plan's goals and progress markers."""
     plan = _next_unaccepted_plan(session, conflict.project_id, latest_chapter=latest_chapter)
-    return record_plot_response_patch(session, conflict, plan)
+    return record_plot_response_patch(session, conflict, plan) if plan is not None else ""
 
 
 def record_plot_response_patch(session: Session, conflict: WorldPlanConflictRow, plan: ChapterPlan) -> str:
@@ -496,7 +504,10 @@ class ConflictResolutionService:
                     )
                 effects = record_option_side_effects(session, row, decision, latest_chapter=latest)
                 refs = [*graph_delta_ids, effects.obligation_id, effects.plan_patch_id]
-                repo.mark_resolved(row, decision=decision, result_refs=[ref for ref in refs if ref])
+                repo.mark_resolved(
+                    row, decision=decision, result_refs=[ref for ref in refs if ref],
+                    pending_plan_response=effects.pending_plan_response,
+                )
                 session.add(conflict_resolved_event(row, chapter_number=latest, extra={
                     "tick_id": tick_id if graph_delta_ids else "",
                     "graph_delta_ids": list(graph_delta_ids),

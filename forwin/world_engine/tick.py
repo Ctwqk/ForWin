@@ -209,9 +209,16 @@ class _Tick:
         self.unasked: list[str] = []
 
     def run(self) -> WorldTickResult:
+        from forwin.planning.beat_sheet.service import milestone_refs_for_chapter
+
+        milestone_refs = milestone_refs_for_chapter(
+            self.session, self.context.project_id, self.context.chapter_number + 1,
+        )
         checked = self._check(self._collect())
         classified = [
-            candidate.model_copy(update={"impact_level": classify_impact(self.runtime, candidate)})
+            candidate.model_copy(update={
+                "impact_level": classify_impact(self.runtime, candidate, milestone_refs=milestone_refs),
+            })
             for candidate in checked
         ]
         budget = apply_budgets(
@@ -228,13 +235,19 @@ class _Tick:
         for candidate in budget.kept:
             # Interactions mirror chapter text that is already canon: there is nothing to hold back.
             review = None if candidate.origin == "intent_interaction" else review_draft(
-                candidate, context=self.context, runtime=self.runtime,
+                candidate, context=self.context, runtime=self.runtime, milestone_refs=milestone_refs,
             )
             if review is not None:
                 held.add(candidate.candidate_id)
                 self._hold(candidate, review.draft, extra=review.extra)
         for draft in self.slip_conflicts:
             slip = TickCandidate.model_validate(draft.proposed_change)
+            slip = slip.model_copy(update={
+                "impact_level": classify_impact(self.runtime, slip, milestone_refs=milestone_refs),
+            })
+            review = review_draft(slip, context=self.context, runtime=self.runtime, milestone_refs=milestone_refs)
+            if review is not None and review.draft.violated == "milestone":
+                draft = review.draft
             self._hold(slip, draft, extra={"candidate_id": slip.candidate_id})
         base = [
             postponed.get(candidate.candidate_id, candidate) for candidate in classified
@@ -268,6 +281,9 @@ class _Tick:
         ]
         onstage_named = [node for node in named if node.profile.get("requires_onstage") is True]
         offstage_named = [node for node in named if node.profile.get("requires_onstage") is not True]
+        bound_intent_refs, band_ended, band_bound_intent_refs = _onstage_plan_bindings(
+            self.session, self.context.project_id, self.context.chapter_number,
+        )
         onstage = onstage_bookkeeping(
             runtime,
             onstage_due=_unique([*due.onstage, *onstage_named], excluded=touched),
@@ -276,6 +292,9 @@ class _Tick:
             now=now,
             max_slips=self.policy.world.max_onstage_slips,
             chapter_number=self.context.chapter_number,
+            bound_intent_refs=bound_intent_refs,
+            band_ended=band_ended,
+            band_bound_intent_refs=band_bound_intent_refs,
         )
         # A slip past the cap comes back only as a conflict draft holding the slip.
         self.slip_conflicts = onstage.conflicts
@@ -605,6 +624,43 @@ class _Tick:
             related_object_type="world_tick",
             related_object_id=self.tick_id,
         ))
+
+
+def _intent_bindings(plans: Sequence) -> frozenset[str]:
+    return frozenset(
+        binding["ref"] for plan in plans for binding in json.loads(plan.world_bindings_json or "[]")
+        if isinstance(binding, dict) and binding.get("kind") == "intent" and isinstance(binding.get("ref"), str)
+    )
+
+
+def _onstage_plan_bindings(
+    session: Session, project_id: str, chapter_number: int,
+) -> tuple[frozenset[str], bool, frozenset[str]]:
+    """Current bindings, whether the band ends, and every intent bound anywhere in that band."""
+    from forwin.models.planning_v6 import BandPlanRow
+    from forwin.models.project import ArcPlanVersion, ChapterPlan
+    from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+
+    plans = list(session.scalars(select(ChapterPlan).where(
+        ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == chapter_number,
+    )))
+    current = _intent_bindings(plans)
+    band = session.scalar(select(BandPlanRow).join(ArcPlanVersion, ArcPlanVersion.id == BandPlanRow.arc_plan_id).where(
+        BandPlanRow.project_id == project_id, BandPlanRow.status == "active",
+        ArcPlanVersion.status != "superseded",
+        BandPlanRow.chapter_start <= chapter_number, BandPlanRow.chapter_end >= chapter_number,
+    ).order_by(BandPlanRow.version.desc()).limit(1))
+    if band is None:
+        repo = ArcBeatSheetRepository(session)
+        band = next((span for sheet in repo.active_for_project(project_id) for span in repo.load(sheet).band_breakdown
+                     if span.chapter_start <= chapter_number <= span.chapter_end), None)
+    if band is None:
+        return current, False, frozenset()
+    band_plans = list(session.scalars(select(ChapterPlan).where(
+        ChapterPlan.project_id == project_id,
+        ChapterPlan.chapter_number >= band.chapter_start, ChapterPlan.chapter_number <= band.chapter_end,
+    )))
+    return current, chapter_number == band.chapter_end, _intent_bindings(band_plans)
 
 
 def _chapter_ticks(session: Session, project_id: str, chapter_number: int) -> list[tuple[str, str]]:

@@ -21,7 +21,6 @@ from forwin.book_state.schema import IMPACT_LEVELS
 from forwin.generation.gate_delegation import GateAuditWriter
 from forwin.models.audit import DecisionEvent
 from forwin.models.world_conflict import WorldPlanConflictRow
-from forwin.planning.query import PlanningQuery
 from forwin.runtime.policy import RuntimePolicy
 
 from .conflict_delegate import WorldConflictDelegate, build_conflict_context_snapshot
@@ -36,19 +35,16 @@ from .conflict_resolution import (
 )
 from .conflict_routing import AUTO_OPTION, available_options, route_conflict
 from .conflict_types import ConflictDecision, ConflictDraft
-from .constraints import check_narrative_boundaries
+from .constraints import candidate_references, check_narrative_boundaries
 from .types import TickCandidate, TickContext
 
 
 # What an auto decision gives as its rationale; auto and Codex decisions leave the operator's reason empty.
 AUTO_RATIONALE = "A minor conflict: the world gives way."
 # Why the tick handed a decided conflict to a human.
-NO_UNACCEPTED_PLAN = "no_unaccepted_plan"
 OPTION_UNAVAILABLE = "option_unavailable"
 CONFLICT_STALE = "conflict_stale"
 BUILD_ERROR = "build_error"
-# Options that bind the change to the next unwritten chapter plan.
-_PLAN_BOUND_OPTIONS = frozenset({"plot_responds", "accept_with_obligation"})
 _VETO_OPTION = "veto_world"
 _REVIEWED_IMPACT = IMPACT_LEVELS.index("major")
 
@@ -78,13 +74,17 @@ class ResolutionUnavailable(RuntimeError):
         self.conflict_id = conflict_id
 
 
-def review_draft(candidate: TickCandidate, *, context: TickContext, runtime: BookStateRuntime) -> HeldForReview | None:
+def review_draft(
+    candidate: TickCandidate, *, context: TickContext, runtime: BookStateRuntime,
+    milestone_refs: frozenset[str] = frozenset(),
+) -> HeldForReview | None:
     """The conflict that holds ``candidate`` back: it breaks a narrative boundary in the next chapter, or
     its impact is major or above."""
     next_chapter = context.chapter_number + 1
     violations = check_narrative_boundaries(runtime, candidate, next_chapter=next_chapter)
     if not violations and IMPACT_LEVELS.index(candidate.impact_level) < _REVIEWED_IMPACT:
         return None
+    milestone = candidate.impact_level == "critical" and bool(milestone_refs & candidate_references(candidate))
     effects = candidate.effects
     refs = [
         candidate.intent_id, candidate.actor_id, *(violation.ref for violation in violations),
@@ -98,7 +98,7 @@ def review_draft(candidate: TickCandidate, *, context: TickContext, runtime: Boo
         detected_after_chapter=context.chapter_number,
         story_time=context.now,
         involved_refs=[ref for ref in dict.fromkeys(ref.strip() for ref in refs) if ref],
-        violated="protection" if violations else "impact_review",
+        violated="milestone" if milestone else "protection" if violations else "impact_review",
         impact_level=candidate.impact_level,
         summary=candidate.summary.strip() or candidate.candidate_id,
         # A world-tick conflict holds the candidate itself; option_candidates rebuilds it (Ruling P20).
@@ -207,7 +207,10 @@ class TickConflicts:
                 raise ResolutionUnavailable(resolution.conflict_id, str(exc)) from exc
             delta_ids = list(graph_delta_ids) if resolution.candidates else []
             refs = [*delta_ids, effects.obligation_id, effects.plan_patch_id, resolution.trace_id]
-            self.repo.mark_resolved(row, decision=resolution.decision, result_refs=[ref for ref in refs if ref])
+            self.repo.mark_resolved(
+                row, decision=resolution.decision, result_refs=[ref for ref in refs if ref],
+                pending_plan_response=effects.pending_plan_response,
+            )
             self.session.add(conflict_resolved_event(row, chapter_number=chapter, extra={
                 "tick_id": self.tick_id,
                 "graph_delta_ids": delta_ids,
@@ -221,15 +224,6 @@ class TickConflicts:
         """Turn a decision into option candidates for this tick, or hand the conflict to a human."""
         context = self.context
         row = self._locked(conflict_id)
-        if decision.option in _PLAN_BOUND_OPTIONS and not PlanningQuery().future_chapters(
-            self.session, project_id=context.project_id, current_chapter=context.chapter_number,
-        ):
-            # The arc step plans the next arc after the world step, so an arc's last chapter has none yet.
-            self._escalate(
-                row, NO_UNACCEPTED_PLAN, option=decision.option, trace_id=trace_id,
-                detail=f"No unaccepted chapter plan follows chapter {context.chapter_number}.",
-            )
-            return
         reroll_count = 0
         if row.actor_ref.strip():
             reroll_count = self.repo.reroll_count(
@@ -290,7 +284,6 @@ __all__ = [
     "AUTO_RATIONALE",
     "BUILD_ERROR",
     "CONFLICT_STALE",
-    "NO_UNACCEPTED_PLAN",
     "OPTION_UNAVAILABLE",
     "HeldForReview",
     "InTickResolution",

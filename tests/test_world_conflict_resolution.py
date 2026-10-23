@@ -557,7 +557,7 @@ def test_plot_responds_adds_goal_to_next_unwritten_plan(monkeypatch) -> None:
     engine.dispose()
 
 
-def test_plot_responds_without_an_unwritten_plan_is_unavailable(monkeypatch) -> None:
+def test_plot_responds_without_an_unwritten_plan_is_pending(monkeypatch) -> None:
     engine, Session = _session_factory()
     book = _book(Session, monkeypatch)
     with Session.begin() as session:
@@ -565,9 +565,17 @@ def test_plot_responds_without_an_unwritten_plan_is_unavailable(monkeypatch) -> 
             session.get(ChapterPlan, book.plans[number]).status = "accepted"
     conflict_id = _conflict(Session, book, proposed_change=_held(book).model_dump(mode="json"))
 
-    _resolve_failing(Session, book, conflict_id, "plot_responds", ConflictOptionUnavailable)
+    result = _resolve(Session, book, conflict_id, "plot_responds")
 
-    assert _resolution_deltas(Session, book, conflict_id) == []
+    assert result.graph_delta_ids and result.plan_patch_id == ""
+    assert _runtime(Session, book).world.get_state(book.later)["status"] == "resolved"
+    with Session() as session:
+        row = WorldConflictRepository(session).get(book.project_id, conflict_id)
+        assert row.status == "resolved"
+        assert json.loads(row.decision_json)["pending_plan_response"] is True
+        assert session.scalars(select(NarrativePlanPatchRow).where(
+            NarrativePlanPatchRow.project_id == book.project_id,
+        )).all() == []
     engine.dispose()
 
 
@@ -1309,3 +1317,113 @@ def test_world_amend_plan_triggers_replan_of_unwritten_band_chapters() -> None:
         "resolved", [*result.graph_delta_ids, f"band_plan:{result.band_plan_id}"],
     )
     engine.dispose()
+
+
+@pytest.fixture
+def pending_side_effect_session():
+    """The response ledger needs SQL persistence, but no PostgreSQL canon locks."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from forwin.models.base import Base
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(Project(id="pending-project", title="Pending", premise="Pending", genre="test",
+                            target_total_chapters=20))
+        session.flush()
+        row = WorldConflictRepository(session).create(ConflictDraft(
+            project_id="pending-project", source="world_tick", detected_after_chapter=1,
+            story_time=100, involved_refs=[], violated="impact_review", impact_level="moderate",
+            summary="held", proposed_change={}, blocks_from_chapter=2,
+        ), required_decider="codex", options=ALL_OPTIONS)
+        yield session, row
+    engine.dispose()
+
+
+def test_pending_plot_response_side_effect_is_discoverable(pending_side_effect_session):
+    from forwin.world_engine.conflict_resolution import record_option_side_effects
+
+    session, row = pending_side_effect_session
+    decision = _decision("plot_responds")
+    effects = record_option_side_effects(session, row, decision, latest_chapter=1)
+    assert effects.plan_patch_id == effects.obligation_id == ""
+    repo = WorldConflictRepository(session)
+    repo.mark_resolved(row, decision=decision, result_refs=[], pending_plan_response=effects.pending_plan_response)
+    assert json.loads(row.decision_json)["pending_plan_response"] is True
+    assert repo.pending_plot_responses(row.project_id) == [row]
+    assert session.scalars(select(NarrativePlanPatchRow)).all() == []
+    repo.attach_result_refs(row, ["plan_patch:later-response"])
+    assert repo.pending_plot_responses(row.project_id) == []
+
+
+def test_accept_with_obligation_without_next_plan_records_obligation_only(pending_side_effect_session):
+    from forwin.world_engine.conflict_resolution import record_option_side_effects
+
+    session, row = pending_side_effect_session
+    effects = record_option_side_effects(session, row, _decision("accept_with_obligation"), latest_chapter=1)
+    assert effects.plan_patch_id == ""
+    obligation = session.get(NarrativeObligationRow, effects.obligation_id)
+    assert obligation.status == "proposed"
+    assert obligation.deadline_chapter == 7
+    assert json.loads(obligation.linked_plan_patch_ids_json) == []
+    assert session.scalars(select(NarrativePlanPatchRow)).all() == []
+
+
+@pytest.mark.parametrize("option", ["plot_responds", "accept_with_obligation"])
+def test_pending_response_still_refuses_the_books_last_chapter(pending_side_effect_session, option):
+    from forwin.world_engine.conflict_resolution import record_option_side_effects
+
+    session, row = pending_side_effect_session
+    with pytest.raises(ConflictOptionUnavailable, match="No chapter follows"):
+        record_option_side_effects(session, row, _decision(option), latest_chapter=20)
+    assert session.scalars(select(NarrativeObligationRow)).all() == []
+    assert session.scalars(select(NarrativePlanPatchRow)).all() == []
+
+
+@pytest.mark.parametrize("violated", ["milestone", "reveal_schedule"])
+@pytest.mark.parametrize("option", ["plot_responds", "accept_with_obligation"])
+def test_plan_boundary_defence_rejects_stale_offered_options(pending_side_effect_session, violated, option):
+    from tests.test_world_tick_steps import _runtime
+
+    _, row = pending_side_effect_session
+    row.violated = violated
+    row.proposed_change_json = TickCandidate(candidate_id="held", origin="adjudication", summary="held", effects=WorldEffects()).model_dump_json()
+    with pytest.raises(ConflictOptionUnavailable, match="veto.*amend"):
+        option_candidates(row, _decision(option), runtime=_runtime(), policy=POLICY, reroll_count=0, now=100)
+
+
+def test_onstage_plan_bindings_read_active_band_and_accepted_history(pending_side_effect_session):
+    from forwin.models.planning_v6 import ArcBeatSheetRow, BandPlanRow
+    from forwin.world_engine.tick import _onstage_plan_bindings
+
+    session, conflict = pending_side_effect_session
+    project_id = conflict.project_id
+    arc = ArcPlanVersion(project_id=project_id, arc_synopsis="arc", chapter_start=1, chapter_end=8, status="active")
+    session.add(arc)
+    session.flush()
+    session.add_all([
+        ChapterPlan(project_id=project_id, arc_plan_id=arc.id, chapter_number=1, title="one", status="accepted",
+                    world_bindings_json=json.dumps([{"kind": "intent", "ref": "earlier"}])),
+        ChapterPlan(project_id=project_id, arc_plan_id=arc.id, chapter_number=4, title="four", status="accepted",
+                    world_bindings_json=json.dumps([{"kind": "intent", "ref": "current"},
+                                                   {"kind": "entity", "ref": "not-an-intent"}])),
+    ])
+    sheet = ArcBeatSheetRow(project_id=project_id, arc_plan_id=arc.id, protagonist_ref="hero",
+                           band_breakdown_json=json.dumps([{"band_index": 0, "chapter_start": 1, "chapter_end": 8}]))
+    session.add(sheet)
+    session.flush()
+    band = BandPlanRow(project_id=project_id, arc_plan_id=arc.id, beat_sheet_id=sheet.id,
+                       band_index=0, chapter_start=1, chapter_end=4, status="active")
+    session.add(band)
+    session.flush()
+    assert _onstage_plan_bindings(session, project_id, 4) == (
+        frozenset({"current"}), True, frozenset({"earlier", "current"}),
+    )
+    band.status = "superseded"
+    assert _onstage_plan_bindings(session, project_id, 4)[1] is False
+    assert _onstage_plan_bindings(session, project_id, 8) == (
+        frozenset(), True, frozenset({"earlier", "current"}),
+    )
+    sheet.status = "superseded"
+    assert _onstage_plan_bindings(session, project_id, 8) == (frozenset(), False, frozenset())

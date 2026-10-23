@@ -87,10 +87,15 @@ class WorldConflictRepository:
         *,
         decision: ConflictDecision,
         result_refs: Sequence[str],
+        pending_plan_response: bool = False,
     ) -> None:
         if row.status != "open":
             raise ConflictNotOpen(f"Conflict {row.id} is {row.status}")
-        row.decision_json = decision.model_dump_json()
+        payload = decision.model_dump(mode="json")
+        if pending_plan_response:
+            payload["pending_plan_response"] = True
+        # Compact like model_dump_json: actor_turns.recent_vetoes matches the stored text with LIKE.
+        row.decision_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         row.result_refs_json = json.dumps(list(result_refs), ensure_ascii=False)
         row.status = "resolved"
         self.session.flush()

@@ -31,18 +31,20 @@ from forwin.book_state.schema import ACTOR_NODE_TYPES
 from forwin.book_state.story_clock import StoryCalendar, format_story_time
 from forwin.map.visibility import is_writer_visible_map_edge
 from forwin.models.project import ChapterPlan
-from forwin.protocol.book_state import FactNode, ObserverType, WorldNode
+from forwin.protocol.book_state import FactNode, ObserverType, WorldEdge, WorldNode
 from forwin.world_engine.travel import estimate_travel
-from forwin.writer.prompt_core.world_view import forbidden_topic_text
+from forwin.writer.prompt_core.world_view import forbidden_topic_text, render_world_view
 
 from .types import (
-    AllowedReveal, ChapterWorldView, ForbiddenTopic, KnownFact, OnstageEntity, ViewClock, ViewHint, ViewLocation,
+    AllowedReveal, ChapterWorldView, ForbiddenTopic, KnownFact, OnstageEntity, ViewClock, ViewEntity, ViewHint,
+    ViewLocation,
 )
 
 
 logger = logging.getLogger(__name__)
 
 VIEW_NEARBY_LOCATIONS = 8
+VIEW_KNOWN_ENTITIES = 12
 _READER = ObserverType.READER.value
 # States in which an observer holds a fact; disbelieving or being misled is not holding it.
 _HELD_STATES = frozenset({"heard", "suspects", "believes", "knows"})
@@ -56,6 +58,8 @@ _HELD_NODE_TYPES = frozenset({"item", "resource"})
 _ONSTAGE_TYPES = frozenset({*ACTOR_NODE_TYPES, *_HELD_NODE_TYPES})
 # The POV's node type, and so its cognition overlay's observer type.
 _POV_TYPE = "character"
+# Edge families whose two ends know each other; a target or a witness may be a stranger.
+_ACQUAINTANCE_FAMILIES = frozenset({"social", "kinship_training", "organization", "loyalty_conflict"})
 # Travel minutes absorb float noise before rounding up.
 _MINUTE_EPSILON = 1e-6
 
@@ -72,8 +76,9 @@ def build_chapter_world_view(
 
     allowed_reveals, hints, forbidden_topics and pov_location are never trimmed. The rest is
     trimmed in the order reader_known, locations (down to the chapter's), pov_knowledge (down
-    to secrets and false beliefs), onstage held_items, until ``render_view_text`` fits
-    ``budget_chars``. Without ``runtime`` only the POV's and the reader's cognition overlays load.
+    to secrets and false beliefs), onstage held_items, until ``render_world_view``, the text the
+    writer reads, fits ``budget_chars``; known_entities is rendered outside that text. Without
+    ``runtime`` only the POV's and the reader's cognition overlays load.
     """
     if budget_chars < 0:
         raise ValueError("budget_chars must be nonnegative")
@@ -102,7 +107,7 @@ def build_chapter_world_view(
                        chapter_number=chapter_number)
     relevant_refs = {pov_ref, *(entity.ref for entity in onstage), *location_refs} - {""}
 
-    allowed = _allowed_reveals(world, _directives(chapter_plan.reveal_directives_json), chapter_number)
+    allowed = _allowed_reveals(runtime, _directives(chapter_plan.reveal_directives_json), chapter_number)
     hint_directives = _directives(chapter_plan.hint_directives_json)
     knowledge, reader_known, forbidden, secret_refs = _fact_parts(
         runtime,
@@ -126,6 +131,7 @@ def build_chapter_world_view(
         pov_ref=pov_ref,
         pov_name=pov.name if pov is not None else "",
         onstage=onstage,
+        known_entities=_known_entities(runtime, pov_ref=pov_ref, knowledge=knowledge, onstage=onstage),
         pov_knowledge=knowledge,
         reader_known=reader_known,
         allowed_reveals=allowed,
@@ -170,9 +176,10 @@ def _fact_of(facts_by_id: Mapping[str, FactNode], ref: Any) -> FactNode | None:
 
 
 def _allowed_reveals(
-    world: ObjectiveWorldGraph, directives: list[Mapping[str, Any]], chapter_number: int,
+    runtime: BookStateRuntime, directives: list[Mapping[str, Any]], chapter_number: int,
 ) -> list[AllowedReveal]:
     """Directives with an observer and a known fact; the observer's name only for an actor."""
+    world = runtime.world
     allowed: list[AllowedReveal] = []
     for item in directives:
         observer = str(item.get("observer") or "").strip()
@@ -190,6 +197,7 @@ def _allowed_reveals(
             proposition=fact.proposition, observer=observer,
             observer_name=node.name if node is not None and str(node.node_type) in ACTOR_NODE_TYPES else "",
             target_state=str(item.get("target_state") or ""),
+            topic=forbidden_topic_text(names) if (names := _subject_names(runtime, fact)) else "",
         ))
     return allowed
 
@@ -292,6 +300,47 @@ def _subject_names(runtime: BookStateRuntime, fact: FactNode) -> list[str]:
         elif place is not None:
             names.append(place.name.strip())
     return list(dict.fromkeys(name for name in names if name))
+
+
+def _known_entities(
+    runtime: BookStateRuntime, *, pov_ref: str, knowledge: list[KnownFact], onstage: list[OnstageEntity],
+) -> list[ViewEntity]:
+    """Entities the POV knows of besides the onstage ones, most important first.
+
+    The POV itself, its open acquaintance relations and the subjects of the facts it holds;
+    never a concealed, inactive or abstract node.
+    """
+    if not pov_ref:
+        return []
+    world = runtime.world
+    refs = {pov_ref}
+    for edge_id in [*world.outgoing_edges.get(pov_ref, ()), *world.incoming_edges.get(pov_ref, ())]:
+        edge = world.edges_by_id.get(edge_id)
+        if edge is not None and _open_acquaintance(edge):
+            refs.add(edge.target_id if edge.source_id == pov_ref else edge.source_id)
+    for item in knowledge:
+        fact = _fact_of(world.facts_by_id, item.fact_ref)
+        if fact is not None:
+            refs.update(fact.related_node_refs)
+    refs -= {entity.ref for entity in onstage}
+    nodes = [
+        node for ref in refs
+        if (node := world.get_node(ref)) is not None and node.is_active and node.name.strip()
+        and str(node.node_type) in _TOPIC_SUBJECT_TYPES and not _concealed(world, node)
+    ]
+    nodes.sort(key=lambda node: (-node.importance, node.name, node.id))
+    return [ViewEntity(ref=node.id, name=node.name, aliases=list(node.aliases)) for node in nodes[:VIEW_KNOWN_ENTITIES]]
+
+
+def _open_acquaintance(edge: WorldEdge) -> bool:
+    """An active, true relation of an acquaintance family that nothing marks hidden."""
+    family = str(getattr(edge.edge_family, "value", edge.edge_family) or "")
+    visibility = str(edge.metadata.get("visibility") or "") if isinstance(edge.metadata, dict) else ""
+    hidden = (
+        any(str(value or "").lower() in HIDDEN_SENSITIVITY for value in (edge.status, edge.visibility, visibility))
+        or str(edge.visibility_default or "").lower() == "hidden"
+    )
+    return edge.is_active and edge.truth_relation == "true" and family in _ACQUAINTANCE_FAMILIES and not hidden
 
 
 # onstage, map and time
@@ -449,7 +498,7 @@ def _trim(
     """
 
     def fits() -> bool:
-        return len(render_view_text(view)) <= budget_chars
+        return len(render_world_view(view)) <= budget_chars
 
     def mark(key: str) -> None:
         if key not in view.trimmed:
@@ -479,53 +528,4 @@ def _trim(
     return False
 
 
-def render_view_text(view: ChapterWorldView) -> str:
-    """The view as plain structural text: the measure of its budget."""
-    location = view.pov_location
-    lines = [
-        f"pov: {view.pov_name} ({view.pov_ref})",
-        f"pov_location: {location.name} ({location.id})" if location is not None else "pov_location: none",
-        f"now: {view.now_label}",
-        f"expected_span: {view.expected_span_label}",
-    ]
-    sections: dict[str, list[str]] = {
-        "onstage": [
-            _row(f"{entity.name} ({entity.ref})", location=entity.location_name, alive=entity.alive_status,
-                 restraint=entity.restraint, health=entity.health, identity=entity.public_identity,
-                 items=", ".join(entity.held_items))
-            for entity in view.onstage
-        ],
-        "pov_knowledge": [
-            _row(f"{fact.fact_ref}: {fact.proposition}", state=fact.state,
-                 false_belief="yes" if fact.pov_believes_false else "",
-                 pov_only_secret="yes" if fact.pov_only_secret else "")
-            for fact in view.pov_knowledge
-        ],
-        "reader_known": list(view.reader_known),
-        "allowed_reveals": [
-            _row(f"{reveal.fact_ref}: {reveal.proposition}", directive=reveal.directive_id,
-                 observer=reveal.observer, observer_name=reveal.observer_name, target_state=reveal.target_state)
-            for reveal in view.allowed_reveals
-        ],
-        "hints": [_row(hint.hint_text, directive=hint.directive_id) for hint in view.hints],
-        "forbidden_topics": [_row(topic.topic, fact=topic.fact_ref) for topic in view.forbidden_topics],
-        "locations": [
-            _row(f"{place.name} ({place.id})", minutes=place.minutes_from_pov) for place in view.locations
-        ],
-        "pov_clocks": [
-            _row(clock.label, remaining=clock.remaining_label, secret="yes" if clock.secret else "")
-            for clock in view.pov_clocks
-        ],
-    }
-    for key, rows in sections.items():
-        if rows:
-            lines.extend([f"[{key}]", *(f"- {row}" for row in rows)])
-    return "\n".join(lines)
-
-
-def _row(head: str, **fields: Any) -> str:
-    """``head | key=value | ...`` without the empty fields."""
-    return " | ".join([head, *(f"{key}={value}" for key, value in fields.items() if value is not None and value != "")])
-
-
-__all__ = ["VIEW_NEARBY_LOCATIONS", "build_chapter_world_view", "render_view_text"]
+__all__ = ["VIEW_KNOWN_ENTITIES", "VIEW_NEARBY_LOCATIONS", "build_chapter_world_view"]

@@ -170,8 +170,8 @@ def _build(source, *, budget=100_000, supplied=True, plan=None):
 
 
 def _texts(view):
-    from forwin.world_view.builder import render_view_text
-    return view.model_dump_json(), render_view_text(view)
+    from forwin.writer.prompt_core.world_view import render_world_view
+    return view.model_dump_json(), render_world_view(view)
 
 
 def test_view_lists_onstage_perceptible_state(source):
@@ -275,8 +275,10 @@ def test_reveal_directive_gives_truth_for_that_fact_only(source, caplog):
     view = _build(source)
     # An actor observer carries its name; a directive without an observer is skipped.
     assert view.allowed_reveals == [
+        # The topic names the fact's subjects, for a reveal whose truth the writer may not state.
         AllowedReveal(directive_id="d-reveal", fact_ref="fact:revealed", proposition="truth-of-revealed",
-                      observer="reader", target_state="knows"),
+                      observer="reader", target_state="knows",
+                      topic=forbidden_topic_text(["ally-name", "villain-name"])),
         AllowedReveal(directive_id="d-pov", fact_ref="fact:pov-revealed", proposition="truth-of-pov-revealed",
                       observer="reader", target_state="suspects"),
         AllowedReveal(directive_id="d-actor", fact_ref="fact:actor-revealed", proposition="truth-of-actor-revealed",
@@ -510,16 +512,16 @@ def test_view_map_excludes_hidden_edges_for_pov_without_overlay():
 
 
 def test_view_trims_to_budget_but_keeps_untrimmable_parts(source, caplog):
-    from forwin.world_view.builder import render_view_text
+    from forwin.writer.prompt_core.world_view import render_world_view
 
     full = _build(source)
-    text = render_view_text(full)
+    text = render_world_view(full)
     assert full.trimmed == [] and len(text) <= 100_000
 
     one_less = _build(source, budget=len(text) - 1)
     assert one_less.trimmed == ["reader_known"]
     assert one_less.reader_known == full.reader_known[:-1]
-    assert len(render_view_text(one_less)) <= len(text) - 1
+    assert len(render_world_view(one_less)) <= len(text) - 1
 
     empty = _build(source, budget=0)
     assert empty.trimmed == ["reader_known", "locations", "pov_knowledge", "held_items"]
@@ -531,13 +533,52 @@ def test_view_trims_to_budget_but_keeps_untrimmable_parts(source, caplog):
     ]
     assert all(entity.held_items == [] for entity in empty.onstage)
     for key in ("allowed_reveals", "hints", "forbidden_topics", "pov_location", "pov_clocks", "now_label",
-                "expected_span_label"):
+                "expected_span_label", "known_entities"):
         assert getattr(empty, key) == getattr(full, key)
     assert [entity.ref for entity in empty.onstage] == [entity.ref for entity in full.onstage]
     assert any(record.levelname == "WARNING" and "budget" in record.message for record in caplog.records)
 
     with pytest.raises(ValueError, match="nonnegative"):
         _build(source, budget=-1)
+
+
+def test_view_lists_entities_the_pov_knows_of(source):
+    from forwin.protocol.book_state import WorldEdge
+    from forwin.world_view.builder import VIEW_KNOWN_ENTITIES
+    from forwin.world_view.types import ViewEntity
+
+    world = source.runtime.world
+    world.add_node(_node("mentor").model_copy(update={"aliases": ["mentor-alias"], "importance": 9}))
+    world.add_node(_node("stalker"))
+    world.add_node(_node("cult", "institution", visibility_level="secret"))
+    world.add_node(_node("former", "character").model_copy(update={"is_active": False}))
+    world.add_node(_node("hunter"))
+
+    def edge(ref, target, edge_type, family, **fields):
+        return WorldEdge(id=ref, project_id="p", source_id="hero", target_id=target, edge_type=edge_type,
+                         edge_family=family, **fields)
+
+    world.add_edge(edge("e-mentor", "mentor", "mentor_of", "social"))
+    world.add_edge(edge("e-stalker", "stalker", "enemy_of", "social", visibility="secret"))
+    world.add_edge(edge("e-cult", "cult", "member_of", "organization"))
+    world.add_edge(edge("e-former", "former", "ally_of", "social"))
+    world.add_edge(edge("e-target", "hunter", "targets", "activity_objective"))
+    world.add_fact(_secret("pov-cult", "cult", "poisoning"))
+    source.runtime.cognition_by_observer[("character", "hero")].knowledge_by_ref["fact:pov-cult"] = "knows"
+    view = _build(source)
+    # Open acquaintance relations and the subjects of facts the POV holds, onstage refs aside: never
+    # a secret relation, a one-sided one such as a target, a concealed or inactive node, or an
+    # abstract one.
+    assert view.known_entities == [
+        ViewEntity(ref="mentor", name="mentor-name", aliases=["mentor-alias"]),
+        ViewEntity(ref="villain", name="villain-name"),
+    ]
+    assert VIEW_KNOWN_ENTITIES == 12
+    # Offstage, the POV itself is a name the writer may use.
+    view = _build(source, plan=_plan(onstage_refs_json=json.dumps(["ally"])))
+    assert [entity.ref for entity in view.known_entities] == ["mentor", "hero", "villain"]
+    # Without a POV no entity is known.
+    assert _build(source, plan=_plan(pov_ref="")).known_entities == []
 
 
 def test_view_types_load_without_the_context_protocol():

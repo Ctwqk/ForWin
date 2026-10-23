@@ -15,22 +15,18 @@ from .sections import (
     _active_entities_section,
     _active_threads_section,
     _apply_skill_layers,
-    _arc_envelope_section,
     _audience_hints_section,
     _canon_name_anchor_section,
     _chapter_plan_section,
     _experience_overlay_section,
-    _map_runtime_section,
     _normalize_char_targets,
     _personality_context_section,
     _previous_summaries_section,
     _retrieved_memories_section,
     _story_basics_section,
     _subworld_control_section,
-    _timeline_section,
-    _world_model_section,
-    _world_intent_section,
 )
+from .world_view import SCENE_LOCATION_INSTRUCTION, _world_view_section
 
 
 def _chapter_hook_requirement(context: ChapterContextPack) -> str:
@@ -90,7 +86,6 @@ def _scene_prompt_sections(
     entity_limit: int,
     thread_limit: int,
     memory_limit: int,
-    envelope_compact: bool,
     extra_sections: list[str] | None = None,
 ) -> str:
     sections: list[str | None] = [
@@ -100,19 +95,15 @@ def _scene_prompt_sections(
         _active_entities_section(context, limit=entity_limit),
         _personality_context_section(context),
         _subworld_control_section(context),
-        _map_runtime_section(context),
+        _world_view_section(context),
         _active_threads_section(context, limit=thread_limit),
         _canon_name_anchor_section(
             context,
             anchors=[CanonNameAnchor(a.role_label, a.canonical_name) for a in context.canon_name_anchors],
         ),
         _experience_overlay_section(context),
-        _world_intent_section(context),
-        _arc_envelope_section(context, compact=envelope_compact),
-        _world_model_section(context),
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=memory_limit, excerpt_chars=80),
-        _timeline_section(context),
         _canon_quality_context_section(context),
     ]
     if extra_sections:
@@ -141,19 +132,15 @@ def build_single_chapter_draft_prompt(
         _active_entities_section(context, limit=6),
         _personality_context_section(context),
         _subworld_control_section(context),
-        _map_runtime_section(context),
+        _world_view_section(context),
         _active_threads_section(context, limit=8),
         _canon_name_anchor_section(
             context,
             anchors=[CanonNameAnchor(a.role_label, a.canonical_name) for a in context.canon_name_anchors],
         ),
         _experience_overlay_section(context),
-        _world_intent_section(context),
-        _arc_envelope_section(context, compact=False),
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=3, excerpt_chars=80),
-        _timeline_section(context),
-        _canon_quality_context_section(context),
     )
 
     user_content = (
@@ -200,18 +187,15 @@ def build_preview_chapter_prompt(
         _previous_summaries_section(context, limit=2),
         _active_entities_section(context, limit=5),
         _personality_context_section(context),
-        _map_runtime_section(context),
+        _world_view_section(context),
         _active_threads_section(context, limit=6),
         _canon_name_anchor_section(
             context,
             anchors=[CanonNameAnchor(a.role_label, a.canonical_name) for a in context.canon_name_anchors],
         ),
         _experience_overlay_section(context),
-        _world_intent_section(context),
-        _arc_envelope_section(context, compact=True),
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=2, excerpt_chars=60),
-        _timeline_section(context),
         _canon_quality_context_section(context),
     )
 
@@ -273,7 +257,6 @@ def build_scene_breakdown_prompt(
         entity_limit=6,
         thread_limit=6,
         memory_limit=3,
-        envelope_compact=False,
     )
     user_content = (
         f"你正在为《{context.project_title}》第 {context.chapter_number} 章拆分场景。\n\n"
@@ -305,7 +288,6 @@ def build_scene_generation_prompt(
         entity_limit=5,
         thread_limit=6,
         memory_limit=2,
-        envelope_compact=True,
         extra_sections=[_scene_task_section(scene_plan, include_target_chars=True)],
     )
     user_content = (
@@ -322,7 +304,7 @@ def build_scene_generation_prompt(
         "<<FORWIN_TIME>>\n"
         "这里写 scene 时间点，没有就写沿用上一场景\n"
         "<<FORWIN_LOCATION>>\n"
-        "这里写 scene 地点，没有就写沿用当前地点\n"
+        f"{SCENE_LOCATION_INSTRUCTION}\n"
         "<<FORWIN_ENTITIES>>\n"
         "这里只写本 scene 直接出场的命名人物；不要填写档案、录音、历史记录、组织、地点、物品或未直接到场的提及对象\n"
         "<<FORWIN_REWARD>>\n"
@@ -385,7 +367,6 @@ def build_scene_stitch_prompt(
         entity_limit=5,
         thread_limit=6,
         memory_limit=2,
-        envelope_compact=True,
         extra_sections=[
             f"请把以下 scenes 拼接成《{context.project_title}》第 {context.chapter_number} 章的完整章节。",
             "【待拼接 Scenes】\n" + stitched_input,

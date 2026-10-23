@@ -16,6 +16,7 @@ from .map_context import (
 
 from .book_state_overlay import (
     _book_state_context_overlay,
+    _load_book_state_context_runtime,
     _resolve_book_state_location_id,
     _book_state_neighbors,
     _merge_book_state_map_overlay,
@@ -51,6 +52,7 @@ __all__ = [
     '_map_node_payloads',
     '_map_edge_payload',
     '_book_state_context_overlay',
+    '_load_book_state_context_runtime',
     '_resolve_book_state_location_id',
     '_book_state_neighbors',
     '_merge_book_state_map_overlay',

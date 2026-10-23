@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 from forwin.model_adapter import ModelAdapter
 from forwin.protocol.context import ChapterContextPack
-from forwin.protocol.scene import SceneContinuation, SceneOutput, ScenePlan
+from forwin.protocol.scene import SceneContinuation, SceneOutput, ScenePlan, is_scene_location_ref
 from forwin.protocol.writer import WriterOutput
 from forwin.skills import serialize_prompt_layers, summarize_skill_layers
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
@@ -23,6 +23,7 @@ from .prompt_core import (
     build_scene_generation_prompt,
     build_scene_stitch_prompt,
 )
+from .prompt_core.world_view import view_location_rows
 from forwin.utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
@@ -392,6 +393,7 @@ class ChapterWriter:
             output = self._writer_output_from_dict(
                 context, stitched, scene_outputs=scene_outputs
             )
+            self._collect_scene_locations(context, output)
             output.generation_meta.update(
                 {
                     "mode": "scene",
@@ -466,6 +468,38 @@ class ChapterWriter:
             output.char_count,
         )
         return output
+
+    @staticmethod
+    def _collect_scene_locations(context: ChapterContextPack, output: WriterOutput) -> None:
+        """Gathers the scenes' declared locations as hints for extraction.
+
+        A location that is neither an id from the world view's location table nor ``new:<name>``
+        stays as written, with a writer warning.
+        """
+        view = getattr(context, "world_view", None)
+        location_ids = {row.id for row in view_location_rows(view)} if view is not None else set()
+        warnings: list[dict[str, object]] = []
+        for scene in output.scene_outputs:
+            value = scene.scene_location_id.strip()
+            if value and not is_scene_location_ref(value, location_ids):
+                logger.warning(
+                    "chapter %d scene %d location %r is neither a view location id nor new:<name>",
+                    context.chapter_number,
+                    scene.scene_no,
+                    value,
+                )
+                warnings.append(
+                    {"code": "scene_location_not_in_view", "scene_no": scene.scene_no, "value": value}
+                )
+        output.scene_location_hints = list(
+            dict.fromkeys(
+                scene.scene_location_id.strip()
+                for scene in output.scene_outputs
+                if scene.scene_location_id.strip()
+            )
+        )
+        if warnings:
+            output.generation_meta["writer_warnings"] = warnings
 
     def _plan_scenes(
         self,

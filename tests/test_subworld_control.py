@@ -42,6 +42,7 @@ from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.subworld_manager import SubWorldManager
+from forwin.world_view.types import ChapterWorldView, OnstageEntity
 from tests.chapter_delta_helpers import chapter_delta
 from tests.postgres import postgres_test_url
 from forwin.writer.prompt_core import (
@@ -624,7 +625,7 @@ class SubWorldControlTests(unittest.TestCase):
             band_delight_schedule=None,
             chapter_experience_plan=None,
             active_subworlds=[SubWorldSummary(id="sw1", name="global_core", scope="global_core")],
-            allowed_entities=["阿青"],
+            allowed_entities=["阿青", "未出场者"],
             chapter_entry_targets=[ChapterEntryTarget(chapter_hint=1, entity_name="沈知遥", subworld_id="sw2", role_hint="新盟友")],
             entity_admission_rule="strict_named_character",
             chapter_task_contract=[],
@@ -632,14 +633,17 @@ class SubWorldControlTests(unittest.TestCase):
             active_future_constraints=[],
             next_band_summary=None,
             retrieved_memories=[],
+            world_view=ChapterWorldView(onstage=[OnstageEntity(ref="char-a", name="阿青")]),
         )
 
         prompt = build_single_chapter_draft_prompt(context)
         content = prompt[1]["content"]
 
-        self.assertIn("当前允许直接使用的命名人物：阿青", content)
+        # The chapter's onstage list comes from the world view, not every active character.
+        self.assertIn("本章出场名单：阿青", content)
+        self.assertNotIn("未出场者", content)
         self.assertIn("沈知遥", content)
-        self.assertIn("命名人物只能使用允许名单里的名字", content)
+        self.assertIn("命名人物只能使用本章出场名单与【当前允许命名角色】里的名字", content)
 
     def test_writer_prompt_includes_recent_thread_beats_without_deriving_name_anchors(self) -> None:
         context = SimpleNamespace(

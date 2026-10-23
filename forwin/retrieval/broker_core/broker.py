@@ -783,8 +783,7 @@ class RetrievalBroker:
                 "must_not_reveal": world_pack.must_not_reveal or pack.must_not_reveal,
                 "fair_misdirection_requirements": world_pack.fair_misdirection_requirements
                 or pack.fair_misdirection_requirements,
-                "active_personality_contexts": world_pack.active_personality_contexts
-                or pack.active_personality_contexts,
+                # active_personality_contexts stays the provider's: the onstage characters only.
                 "map_context": map_context,
                 "knowledge_system_context": knowledge_system_context,
                 "world_context": pack.world_context.model_copy(
@@ -842,6 +841,8 @@ class RetrievalBroker:
                 "active_relations": [],
                 "retrieved_memories": [],
                 "world_context": WorldContextPack(),
+                # The world view keeps to its own budget.
+                "world_view": None,
             }
         )
         total = cls._estimate_chars(empty_pack)

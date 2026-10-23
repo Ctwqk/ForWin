@@ -22,10 +22,6 @@ role=user
 本章目标：
   · 推进隐藏控制室
 
-【Canon 质量连续性约束】
-· 当前生效的叙事义务，必须在 deadline 前偿还；must_resolve_now=true 的条目本章必须给出证据：
-    · P1 reader_promise_payoff obl-visible：解释隐藏控制室为何无人看守。；deadline=第17章；must_resolve_now=false；payoff_test=必须给出无人看守的可验证原因。
-
 【输出要求】
 1. 请写出一章可直接落稿的完整正文，目标正文长度 2800 到 3200 中文字，不得低于 2500 中文字。
 2. 正文必须是自然流畅的网文叙事，不要分点，不要写提纲。

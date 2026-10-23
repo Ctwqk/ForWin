@@ -109,6 +109,9 @@ class ChapterContextAssembler:
             ),
             chapter_plan_one_line=chapter_plan.one_line,
             chapter_goals=data.get("goals", []),
+            chapter_plan_hook=str(getattr(chapter_plan, "hook", "") or ""),
+            arc_phase_purpose=data.get("arc_phase_purpose", ""),
+            world_view=data.get("world_view"),
             previous_chapter_summaries=data.get("summaries", []),
             active_entities=data.get("entities", []),
             active_relations=data.get("relations", []),
@@ -215,6 +218,7 @@ class ChapterContextAssembler:
             MapContextProvider,
             PersonalityContextProvider,
             StateContextProvider,
+            WorldViewContextProvider,
         )
 
         return [
@@ -223,6 +227,7 @@ class ChapterContextAssembler:
             ExperienceContextProvider(),
             MapContextProvider(),
             BookStateContextProvider(),
+            WorldViewContextProvider(),
             PersonalityContextProvider(),
             FeedbackContextProvider(),
         ]

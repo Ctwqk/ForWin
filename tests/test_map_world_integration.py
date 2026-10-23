@@ -423,6 +423,7 @@ def test_genesis_book_map_feeds_context_and_writer_prompt() -> None:
             for node in subworld_result.map_nodes
             if node.metadata.get("source_node_id") == "node-city"
         )
+        chapter.location_refs_json = json.dumps([city_anchor.id])
         session.commit()
 
         context = assemble_context(StateRepository(session), "p1", chapter)
@@ -433,8 +434,9 @@ def test_genesis_book_map_feeds_context_and_writer_prompt() -> None:
     assert active_location["location_id"] == city_anchor.id
     assert active_location["location_name"] == "雨夜站台"
     assert active_location["source"] == "genesis_story_engine"
-    assert "【地图运行时】" in prompt[1]["content"]
-    assert "雨夜站台" in prompt[1]["content"]
+    # The writer reads the chapter's locations from the POV world view's location table.
+    assert "【地图运行时】" not in prompt[1]["content"]
+    assert f"    · {city_anchor.id}：雨夜站台（POV 没有已知路线）" in prompt[1]["content"]
 
 
 def create_or_update_subworld_map_for_test():

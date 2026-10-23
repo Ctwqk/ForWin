@@ -25,11 +25,11 @@ EXPECTED_PROMPT_REVISIONS = {
     "single_closed_countdown": "f837ab3593ef6ef1",
     "single_character_state": "f6d1c32f0e41202b",
     "single_pre_audit_suppression": "a9a994621c21025e",
-    "single_future_plan_audit": "f54386714e15c7b6",
+    "single_future_plan_audit": "345375148db9f19c",
     "preview_arc_rehearsal": "4a69e6d52e31b297",
     "scene_breakdown_basic": "f850d8f67a2ab110",
-    "single_final_chapter": "a728789abf7599ad",
-    "single_obligation_visible": "ef33a901958e292a",
+    "single_final_chapter": "99ba13c66fc3b92d",
+    "single_obligation_visible": "e2d92a093b20360c",
 }
 
 

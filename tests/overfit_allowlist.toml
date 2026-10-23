@@ -1001,3 +1001,11 @@ checks = ["cjk_collection"]
 category = "prompt_text"
 justification = "世界审查门 error 写给 writer 的修复说明（按 issue code 取用），不参与判定"
 max_literals = 15
+
+[[entry]]
+path = "forwin/writer/prompt_core/world_view.py"
+symbol = "KNOWLEDGE_STATE_LABELS"
+checks = ["cjk_collection"]
+category = "prompt_text"
+justification = "POV world view section: writer-facing labels of the six knowledge-state tokens; every story fact in the section comes from the view's fields."
+max_literals = 6

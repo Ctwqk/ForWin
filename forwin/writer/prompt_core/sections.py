@@ -112,13 +112,20 @@ def _extract_protagonist_name(context: ChapterContextPack) -> str:
 
 
 def _chapter_plan_section(context: ChapterContextPack, title: str) -> str:
-    return (
+    section = (
         f"【{title}】\n"
         f"章节编号：第 {context.chapter_number} 章\n"
         f"章节标题：{context.chapter_plan_title}\n"
         f"一句话概要：{context.chapter_plan_one_line}\n"
         "本章目标：\n" + "\n".join(f"  · {goal}" for goal in context.chapter_goals)
     )
+    hook = str(getattr(context, "chapter_plan_hook", "") or "").strip()
+    purpose = str(getattr(context, "arc_phase_purpose", "") or "").strip()
+    if hook:
+        section += f"\n本章钩子：{hook}"
+    if purpose:
+        section += f"\n当前阶段目的：{purpose}"
+    return section
 
 
 def _clip_trope_text(text: str, limit: int = 260) -> str:
@@ -300,12 +307,18 @@ def _previous_summaries_section(context: ChapterContextPack, *, limit: int) -> s
 
 
 def _active_entities_section(context: ChapterContextPack, *, limit: int) -> str | None:
-    if not context.active_entities:
+    """Names from the world view only: its onstage entities, then up to ``limit`` the POV knows of."""
+    view = getattr(context, "world_view", None)
+    if view is None:
         return None
-    return "【当前允许命名角色】\n" + "\n".join(
-        f"  · {item.name}：{item.description}"
-        for item in context.active_entities[:limit]
+    lines = [f"  · {entity.name}（在场）" for entity in view.onstage if entity.name]
+    lines.extend(
+        f"  · {entity.name}" + (f"（别名：{'、'.join(entity.aliases)}）" if entity.aliases else "")
+        for entity in view.known_entities[:limit]
     )
+    if not lines:
+        return None
+    return "【当前允许命名角色】\n" + "\n".join(lines)
 
 
 def _personality_context_section(context: ChapterContextPack, *, limit: int = 6) -> str | None:
@@ -349,10 +362,12 @@ def _personality_context_section(context: ChapterContextPack, *, limit: int = 6)
 
 
 def _subworld_control_section(context: ChapterContextPack) -> str | None:
+    view = getattr(context, "world_view", None)
+    onstage_names = [entity.name for entity in view.onstage if entity.name] if view is not None else []
     if not any(
         (
             getattr(context, "active_subworlds", None),
-            getattr(context, "allowed_entities", None),
+            onstage_names,
             getattr(context, "chapter_entry_targets", None),
             getattr(context, "entity_admission_rule", ""),
         )
@@ -364,11 +379,8 @@ def _subworld_control_section(context: ChapterContextPack) -> str | None:
             "  · 当前激活 subworld："
             + "、".join(item.name for item in context.active_subworlds if str(item.name or "").strip())
         )
-    if context.allowed_entities:
-        lines.append(
-            "  · 当前允许直接使用的命名人物："
-            + "、".join(context.allowed_entities[:10])
-        )
+    if onstage_names:
+        lines.append("  · 本章出场名单：" + "、".join(onstage_names))
     if context.chapter_entry_targets:
         lines.append("  · 本章允许首次引入的新人物：")
         lines.extend(
@@ -379,55 +391,12 @@ def _subworld_control_section(context: ChapterContextPack) -> str | None:
         lines.append(f"  · 准入模式：{context.entity_admission_rule}")
     lines.extend(
         [
-            "  · 规则1：命名人物只能使用允许名单里的名字。",
+            "  · 规则1：命名人物只能使用本章出场名单与【当前允许命名角色】里的名字。",
             "  · 规则2：若要引入新命名人物，只能使用上面的 chapter_entry_targets。",
             "  · 规则3：可以写无名泛称路人，但不要把无名角色写成新的专名人物。",
             "  · 规则4：不得把前情中已经出现的姓名扩写、替换或另造别名，必须逐字沿用上下文中的写法。",
         ]
     )
-    return "\n".join(lines)
-
-
-def _map_runtime_section(context: ChapterContextPack) -> str | None:
-    map_context = getattr(context, "map_context", {}) or {}
-    if not isinstance(map_context, dict) or not int(map_context.get("map_node_count") or 0):
-        return None
-    lines = [
-        "【地图运行时】",
-        f"  · 地图规模：{int(map_context.get('map_node_count') or 0)} 个地点，{int(map_context.get('map_edge_count') or 0)} 条路线",
-    ]
-    active_locations = map_context.get("active_locations") if isinstance(map_context.get("active_locations"), list) else []
-    if active_locations:
-        lines.append("  · 当前角色位置：")
-        for item in active_locations[:5]:
-            if not isinstance(item, dict):
-                continue
-            entity_name = str(item.get("entity_name", "") or "角色").strip()
-            location_name = str(item.get("location_name", "") or item.get("location_id", "") or "").strip()
-            region_name = str(item.get("region_name", "") or "").strip()
-            location_line = f"    · {entity_name}：{location_name}"
-            if region_name:
-                location_line += f" / {region_name}"
-            lines.append(location_line)
-            nearby_nodes = item.get("nearby_nodes") if isinstance(item.get("nearby_nodes"), list) else []
-            nearby = [
-                f"{str(node.get('name', '') or node.get('node_id', '')).strip()}({float(node.get('travel_time') or 0):.1f})"
-                for node in nearby_nodes[:5]
-                if isinstance(node, dict) and str(node.get("name", "") or node.get("node_id", "")).strip()
-            ]
-            if nearby:
-                lines.append("      · 附近可达：" + "、".join(nearby))
-    else:
-        anchors = map_context.get("visible_anchor_nodes") if isinstance(map_context.get("visible_anchor_nodes"), list) else []
-        if anchors:
-            lines.append(
-                "  · 公开锚点："
-                + "、".join(
-                    str(item.get("name", "") or item.get("node_id", "")).strip()
-                    for item in anchors[:8]
-                    if isinstance(item, dict) and str(item.get("name", "") or item.get("node_id", "")).strip()
-                )
-            )
     return "\n".join(lines)
 
 
@@ -494,34 +463,6 @@ def _arc_envelope_section(context: ChapterContextPack, *, compact: bool = False)
     )
 
 
-def _world_model_section(context: ChapterContextPack) -> str | None:
-    world_context = getattr(context, "world_context", None)
-    if not world_context or not world_context.snapshot_id:
-        return None
-    lines = [
-        "【WorldModel 当前世界状态】",
-        f"  · snapshot：第 {world_context.as_of_chapter} 章后 / {world_context.snapshot_id}",
-    ]
-    if world_context.active_world_conflicts:
-        lines.append("  · 禁止忽略的世界矛盾：")
-        lines.extend(
-            f"    - {item.severity} {item.conflict_type}：{item.description}"
-            for item in world_context.active_world_conflicts[:4]
-        )
-    if world_context.relevant_world_pages:
-        lines.append("  · 相关世界页：")
-        for page in world_context.relevant_world_pages[:6]:
-            summary = page.markdown.split("## Current State", 1)[0]
-            summary = summary.replace("\n", " ")[:220]
-            lines.append(f"    - {page.title}（{page.page_type}）：{summary}")
-    if world_context.active_promises:
-        lines.append("  · 当前读者承诺：")
-        lines.extend(f"    - {page.title}" for page in world_context.active_promises[:4])
-    if world_context.active_secrets:
-        lines.append("  · 秘密可见性：不得提前揭示 secret 页面中的 hidden truth，除非本章计划明确要求。")
-    return "\n".join(lines)
-
-
 def _audience_hints_section(context: ChapterContextPack) -> str | None:
     hints = getattr(context, "audience_hints", None)
     if not hints:
@@ -559,12 +500,6 @@ def _retrieved_memories_section(
     )
 
 
-def _timeline_section(context: ChapterContextPack) -> str | None:
-    if not context.timeline:
-        return None
-    return "【当前时间】\n" f"  · {context.timeline.current_time_label}"
-
-
 __all__ = [
     '_apply_skill_layers',
     '_normalize_char_targets',
@@ -577,12 +512,9 @@ __all__ = [
     '_active_entities_section',
     '_personality_context_section',
     '_subworld_control_section',
-    '_map_runtime_section',
     '_active_threads_section',
     '_canon_name_anchor_section',
     '_arc_envelope_section',
-    '_world_model_section',
     '_audience_hints_section',
     '_retrieved_memories_section',
-    '_timeline_section',
 ]

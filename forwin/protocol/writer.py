@@ -15,6 +15,8 @@ class WriterOutput(BaseModel):
     end_of_chapter_summary: str  # 1-2 sentence recap in Chinese
     draft_blob_path: str = ""
     scene_outputs: list[SceneOutput] = Field(default_factory=list)
+    # The scenes' declared locations, in order without repeats: hints for extraction, not evidence.
+    scene_location_hints: list[str] = Field(default_factory=list)
     chapter_delta: ChapterDeltaExtraction | None = None
     prompt_revision_hash: str = ""
     generation_meta: dict[str, object] = Field(default_factory=dict)

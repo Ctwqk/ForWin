@@ -7,6 +7,7 @@ from .genesis_provider import GenesisContextProvider
 from .map_provider import MapContextProvider
 from .personality_provider import PersonalityContextProvider
 from .state_provider import StateContextProvider
+from .world_view_provider import WorldViewContextProvider
 
 __all__ = [
     "BookStateContextProvider",
@@ -16,4 +17,5 @@ __all__ = [
     "MapContextProvider",
     "PersonalityContextProvider",
     "StateContextProvider",
+    "WorldViewContextProvider",
 ]

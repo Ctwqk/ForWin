@@ -8,6 +8,7 @@ from forwin.planning.checkpoints import NextBandSummary
 from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.planning.contracts import PlanTaskItem
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent, RevealLadderStep
+from forwin.world_view.types import ChapterWorldView
 
 from .experience import (
     ArcPayoffMap,
@@ -184,6 +185,11 @@ class ChapterContextPack(BaseModel):
     chapter_plan_title: str
     chapter_plan_one_line: str
     chapter_goals: list[str]
+    chapter_plan_hook: str = ""
+    # The purpose of the arc beat sheet's phase that covers the chapter.
+    arc_phase_purpose: str = ""
+    # What the chapter's POV perceives and knows; it has its own budget, outside the broker's.
+    world_view: ChapterWorldView | None = None
 
     # History
     previous_chapter_summaries: list[str] = Field(

@@ -14,7 +14,9 @@ class PersonalityContextProvider:
     def contribute(self, request: ContextRequest, draft: ContextDraft) -> None:
         active_personality_contexts: list[dict] = []
         library = draft.data.setdefault("personality_library", CharacterPersonalityLibrary())
-        allowed_entities = draft.data.get("allowed_entities", [])
+        # Only the chapter's onstage characters, as the world view resolved them.
+        view = draft.data.get("world_view")
+        onstage_refs = {entity.ref for entity in view.onstage} if view is not None else set()
         try:
             active_personality_contexts = [
                 item.model_dump(mode="json")
@@ -22,8 +24,7 @@ class PersonalityContextProvider:
                     [
                         item
                         for item in (draft.data.get("book_state_overlay", {}).get("personality_characters") or [])
-                        if str(item.get("character_name") or "") in allowed_entities
-                        or str(item.get("character_id") or "") in allowed_entities
+                        if str(item.get("character_id") or "") in onstage_refs
                     ],
                     library=library,
                     scene_flags=["chapter_generation"],

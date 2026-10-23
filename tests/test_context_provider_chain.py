@@ -163,13 +163,7 @@ def test_assemble_context_uses_default_provider_chain() -> None:
                 version_chapter=0,
             )
             repo = _FakeRepo(session)
-            chapter_plan = SimpleNamespace(
-                chapter_number=2,
-                title="第二章",
-                one_line="陆沉确认天门有旧王痕迹",
-                goals_json=json.dumps(["找到线索"], ensure_ascii=False),
-                arc_plan_id="arc-1",
-            )
+            chapter_plan = _plan(pov_ref="char-1", onstage_refs_json=json.dumps(["char-1"]))
 
             context = assemble_context(repo, "project-1", chapter_plan)
             provider_names = ChapterContextAssembler().provider_names
@@ -182,9 +176,13 @@ def test_assemble_context_uses_default_provider_chain() -> None:
         "experience",
         "map",
         "book_state",
+        "world_view",
         "personality",
         "feedback",
     ]
+    assert context.world_view is not None
+    assert (context.world_view.pov_ref, context.world_view.pov_name) == ("char-1", "陆沉")
+    assert [item["character_id"] for item in context.active_personality_contexts] == ["char-1"]
     assert context.genesis_context_refs["genesis_revision_id"] == "genesis-1"
     assert context.genesis_world_overview == "天门之后是旧王朝残影"
     assert "临时渡口" in context.genesis_map_overview
@@ -193,6 +191,70 @@ def test_assemble_context_uses_default_provider_chain() -> None:
     assert context.band_delight_schedule is not None
     assert context.chapter_experience_plan is not None
     assert context.allowed_entities == ["陆沉"]
+
+
+def _plan(**fields):
+    """A chapter plan with the planner columns the world view reads."""
+    payload = {
+        "chapter_number": 2,
+        "title": "第二章",
+        "one_line": "陆沉确认天门有旧王痕迹",
+        "goals_json": json.dumps(["找到线索"], ensure_ascii=False),
+        "arc_plan_id": "arc-1",
+        "hook": "",
+        "pov_ref": "",
+        "onstage_refs_json": "[]",
+        "location_refs_json": "[]",
+        "reveal_directives_json": "[]",
+        "hint_directives_json": "[]",
+        "expected_span_minutes": None,
+    }
+    return SimpleNamespace(**{**payload, **fields})
+
+
+def test_world_view_provider_builds_once_with_policy_budget_and_shared_runtime(monkeypatch) -> None:
+    from forwin.book_state.runtime import BookStateRuntime
+    from forwin.models import ArcPlanVersion
+    from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+    from forwin.planning.beat_sheet.types import ArcBeatSheetData, BandSpan, BeatPhase
+    from forwin.world_view import builder as view_builder
+    from forwin.world_view.types import ChapterWorldView
+
+    calls = []
+
+    def build(session, *, project_id, chapter_plan, budget_chars, runtime=None):
+        calls.append((project_id, chapter_plan.chapter_number, budget_chars, runtime))
+        return ChapterWorldView(pov_ref="char-1", pov_name="陆沉")
+
+    monkeypatch.setattr(view_builder, "build_chapter_world_view", build)
+    engine = get_engine(postgres_test_url("context-world-view-provider"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    try:
+        with Session.begin() as session:
+            ProjectPolicyStore(session).initialize(
+                Project(id="project-1", title="测试书", premise="p", genre="玄幻", setting_summary="s"),
+                RuntimePolicy.for_profile("pulp"),
+            )
+            session.add(ArcPlanVersion(id="arc-1", project_id="project-1", arc_number=1, chapter_start=1,
+                                       chapter_end=8, arc_synopsis="s", status="active"))
+            session.flush()
+            ArcBeatSheetRepository(session).create("project-1", "arc-1", ArcBeatSheetData(
+                protagonist_ref="char-1",
+                phases=[BeatPhase(name="open", chapter_range=(1, 1), purpose="开局"),
+                        BeatPhase(name="rise", chapter_range=(2, 5), purpose="陆沉逼近旧王遗迹")],
+                band_breakdown=[BandSpan(band_index=0, chapter_start=1, chapter_end=8)],
+            ), source="fallback", reason="test")
+            context = assemble_context(_FakeRepo(session), "project-1", _plan(hook="门后传来钟声"))
+    finally:
+        engine.dispose()
+
+    # One build per assembly, on the BookState provider's runtime, within the pulp budget.
+    assert [(project, chapter, budget) for project, chapter, budget, _ in calls] == [("project-1", 2, 4000)]
+    assert isinstance(calls[0][3], BookStateRuntime)
+    assert context.world_view == ChapterWorldView(pov_ref="char-1", pov_name="陆沉")
+    assert context.chapter_plan_hook == "门后传来钟声"
+    assert context.arc_phase_purpose == "陆沉逼近旧王遗迹"
 
 
 def test_context_gates_are_explicit_runner_not_provider_side_effects() -> None:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Collection
+
 from pydantic import BaseModel, Field, field_validator
 
+from forwin.book_state.extraction.chapter_delta_schema import NEW_REF_PREFIX
 from forwin.protocol.experience import RewardTag
 
 
@@ -49,10 +52,19 @@ class ScenePlan(BaseModel):
         return _normalize_reward_tag(value)
 
 
+def is_scene_location_ref(value: str, location_ids: Collection[str]) -> bool:
+    """A location id from the world view's location table, or ``new:<name>`` for a place it lacks."""
+    text = value.strip()
+    if text.startswith(NEW_REF_PREFIX):
+        return bool(text.removeprefix(NEW_REF_PREFIX).strip())
+    return text in location_ids
+
+
 class SceneOutput(BaseModel):
     scene_no: int
     scene_objective: str
     scene_time_point: str = ""
+    # What the writer declared: a view location id or new:<name>; any other text is kept as written.
     scene_location_id: str = ""
     involved_entities: list[str] = Field(default_factory=list)
     text: str

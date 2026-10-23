@@ -46,6 +46,16 @@ class AllowedReveal(_ViewModel):
     # The actor observer's name; empty for the reader.
     observer_name: str = ""
     target_state: str
+    # The fact's subjects as a forbidden-topic phrase, without its proposition; empty when none is nameable.
+    topic: str = ""
+
+
+class ViewEntity(_ViewModel):
+    """An entity the POV knows of, by name only."""
+
+    ref: str
+    name: str
+    aliases: list[str] = Field(default_factory=list)
 
 
 class ViewHint(_ViewModel):
@@ -79,6 +89,8 @@ class ChapterWorldView(_ViewModel):
     pov_ref: str = ""
     pov_name: str = ""
     onstage: list[OnstageEntity] = Field(default_factory=list)
+    # Other entities the POV knows of: names the writer may use besides the onstage ones.
+    known_entities: list[ViewEntity] = Field(default_factory=list)
     pov_knowledge: list[KnownFact] = Field(default_factory=list)
     # "<fact_ref>: <proposition>" of recorded reader knowledge about onstage refs and chapter locations.
     reader_known: list[str] = Field(default_factory=list)
@@ -95,6 +107,6 @@ class ChapterWorldView(_ViewModel):
 
 
 __all__ = [
-    "AllowedReveal", "ChapterWorldView", "ForbiddenTopic", "KnownFact", "OnstageEntity", "ViewClock", "ViewHint",
-    "ViewLocation",
+    "AllowedReveal", "ChapterWorldView", "ForbiddenTopic", "KnownFact", "OnstageEntity", "ViewClock", "ViewEntity",
+    "ViewHint", "ViewLocation",
 ]

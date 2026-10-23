@@ -17,7 +17,7 @@ from forwin.planning.future_plan_audit import FuturePlanAuditor
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import BandDelightSchedule, BandObligationContract
 from forwin.writer.prompt_core import _canon_quality_context_section, build_single_chapter_draft_prompt
-from forwin.writer.prompt_core.sections import _story_basics_section
+from forwin.writer.prompt_core.sections import _chapter_plan_section, _story_basics_section
 from forwin.writer.prompt_core.constraints import _open_signal_constraint_sections
 
 
@@ -192,6 +192,22 @@ def test_story_basics_section_has_no_example_roles_or_countdowns() -> None:
     assert "系统巡检员" not in section
     assert "剩余4小时" not in section
     assert "剩余7天" not in section
+
+
+def test_chapter_plan_section_lists_hook_and_beat_sheet_phase_purpose() -> None:
+    fields = {
+        "project_id": "p1", "project_title": "书", "premise": "前提", "genre": "悬疑", "setting_summary": "设定",
+        "chapter_number": 3, "chapter_plan_title": "第三章", "chapter_plan_one_line": "推进",
+        "chapter_goals": ["目标一"],
+    }
+    bare = _chapter_plan_section(ChapterContextPack(**fields), "本章计划")
+    section = _chapter_plan_section(
+        ChapterContextPack(**fields, chapter_plan_hook="门外的脚步停了", arc_phase_purpose="逼主角离开安全区"),
+        "本章计划",
+    )
+
+    assert section == bare + "\n本章钩子：门外的脚步停了\n当前阶段目的：逼主角离开安全区"
+    assert bare.endswith("本章目标：\n  · 目标一")
 
 
 def test_writer_prompt_includes_future_plan_audit_summary() -> None:

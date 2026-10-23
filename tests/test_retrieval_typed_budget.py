@@ -84,7 +84,7 @@ def _pack_with_memories(memories: list[SimpleNamespace]) -> ChapterContextPack:
 
 
 def test_trim_pack_prunes_low_priority_memories_before_obligations() -> None:
-    broker = RetrievalBroker(context_budget_chars=2850)
+    broker = RetrievalBroker(context_budget_chars=2920)
     pack = _pack_with_memories(
         [
             _typed_memory("recent " + "x" * 260, "recent"),
@@ -99,7 +99,7 @@ def test_trim_pack_prunes_low_priority_memories_before_obligations() -> None:
 
 
 def test_finalize_context_summary_reports_memory_pruning() -> None:
-    broker = RetrievalBroker(context_budget_chars=2850)
+    broker = RetrievalBroker(context_budget_chars=2920)
     base_pack = _pack_with_memories(
         [
             _typed_memory("recent " + "x" * 260, "recent"),

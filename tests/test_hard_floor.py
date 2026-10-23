@@ -60,7 +60,6 @@ def _context(**updates) -> ChapterContextPack:
         "chapter_plan_title": "第一章",
         "chapter_plan_one_line": "角色A开始调查。",
         "chapter_goals": ["找到线索"],
-        "must_not_reveal": [],
     }
     payload.update(updates)
     return ChapterContextPack(**payload)
@@ -125,18 +124,21 @@ def test_unsupported_symbol_run_still_fails_as_garbage() -> None:
     assert "no_garbage" in result.fail_reasons
 
 
-def test_must_not_reveal_and_missing_event_fail() -> None:
-    body = "角色A终于发现父亲被围的真相，众人沉默片刻后继续行动。"
+def test_missing_event_fails_and_reveals_are_left_to_the_review_gate() -> None:
+    body = "角色A终于发现旧案的真相，众人沉默片刻后继续行动。"
     result = run_hard_floor(
         writer_output=_writer(body, chapter_delta=chapter_delta(body)),
-        context_pack=_context(must_not_reveal=["父亲被围"]),
+        context_pack=_context(must_not_reveal=["旧案的真相"]),
         repo=None,
         project_id="project-1",
         chapter_number=1,
         policy=_policy(),
     )
 
-    assert {"must_not_reveal", "at_least_one_event"}.issubset(result.fail_reasons)
+    # The reveal check lives in the world review gate; the floor no longer scans for secrets.
+    assert result.fail_reasons == ["at_least_one_event"]
+    assert "must_not_reveal" not in result.checks
+    assert "must_not_reveal_hits" not in result.metadata
 
 
 def test_clean_chapter_passes() -> None:

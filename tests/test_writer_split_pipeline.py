@@ -549,6 +549,66 @@ class SplitWriterPipelineTests(unittest.TestCase):
             output.scene_outputs[0].continuation.next_scene_bridge, "追查广播室"
         )
 
+    def test_scene_locations_are_checked_against_the_view_and_collected_as_hints(self) -> None:
+        from forwin.world_view.types import ChapterWorldView, ViewLocation
+
+        scene_plan = (
+            '{"scene_no":%d,"objective":"推进","must_progress_points":["推进"],"location_hint":"站台",'
+            '"involved_entities":["林夜"],"micro_hook":"异响","target_chars":400,"reward_beat_tag":"mystery"}'
+        )
+        locations = ["loc-platform", "new:旧广播室", "旧站台", "loc-platform"]
+
+        def scene(location: str) -> str:
+            return (
+                "<<FORWIN_BODY>>\n" + "林夜沿着旧站台继续追查广播里的陌生报站声。" * 10
+                + "\n<<FORWIN_SUMMARY>>\n林夜继续追查。\n<<FORWIN_LOCATION>>\n" + location
+            )
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self.responses = [
+                    '{"scenes":[' + ",".join(scene_plan % (index + 1) for index in range(4)) + "]}",
+                    *[scene(location) for location in locations],
+                    "<<FORWIN_TITLE>>\n旧站\n<<FORWIN_BODY>>\n" + "林夜在旧站台确认广播异常。" * 30
+                    + "\n<<FORWIN_SUMMARY>>\n林夜确认广播异常。",
+                ]
+
+            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+                return self.responses.pop(0)
+
+        context = ChapterContextPack(
+            project_id="p1", project_title="测试书", premise="前提", genre="悬疑", setting_summary="旧城站台",
+            chapter_number=4, chapter_plan_title="第四章", chapter_plan_one_line="主角进入旧站",
+            chapter_goals=["进入旧站"],
+            world_view=ChapterWorldView(
+                pov_ref="hero", pov_location=ViewLocation(id="loc-platform", name="站台", minutes_from_pov=0),
+            ),
+        )
+        writer = ChapterWriter(FakeClient(), writer_mode="scene", min_chapter_chars=300, max_scene_count=4)
+
+        with self.assertLogs("forwin.writer.chapter_writer", level="WARNING") as logs:
+            output = writer.write_chapter(context)
+
+        self.assertEqual(output.generation_meta["mode"], "scene")
+        # A location outside the view's table is kept as written, with a writer warning.
+        self.assertEqual([item.scene_location_id for item in output.scene_outputs], locations)
+        self.assertEqual(output.scene_location_hints, ["loc-platform", "new:旧广播室", "旧站台"])
+        self.assertEqual(
+            output.generation_meta["writer_warnings"],
+            [{"code": "scene_location_not_in_view", "scene_no": 3, "value": "旧站台"}],
+        )
+        self.assertTrue(any("旧站台" in line for line in logs.output))
+
+    def test_scene_location_refs_accept_view_ids_and_named_new_places(self) -> None:
+        from forwin.protocol.scene import is_scene_location_ref
+
+        ids = {"loc-a"}
+        self.assertTrue(is_scene_location_ref("loc-a", ids))
+        self.assertTrue(is_scene_location_ref(" new:旧广播室 ", ids))
+        self.assertFalse(is_scene_location_ref("new:  ", ids))
+        self.assertFalse(is_scene_location_ref("loc-b", ids))
+        self.assertFalse(is_scene_location_ref("", ids))
+
 
 if __name__ == "__main__":
     unittest.main()

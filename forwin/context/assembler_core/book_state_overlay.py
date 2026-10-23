@@ -13,26 +13,37 @@ _MAP_CONTEXT_REVIEW_GRAPH_NODE_LIMIT = 256
 _MAP_CONTEXT_REVIEW_GRAPH_EDGE_LIMIT = 512
 
 
-def _book_state_context_overlay(
-    repo_session,
-    project_id: str,
-    chapter_number: int,
-) -> dict:
+def _load_book_state_context_runtime(repo_session, project_id: str, chapter_number: int):
+    """BookState as it stands before the chapter; None without a session or when it fails to load."""
     from forwin.book_state import BookStateProjection, BookStateRepository
 
     if repo_session is None:
-        return {}
+        return None
     try:
         repository = BookStateRepository(repo_session)
         latest_chapter = repository.latest_available_chapter(project_id)
         as_of_chapter = max(0, min(int(latest_chapter or 0), int(chapter_number or 0) - 1))
-        runtime = BookStateProjection(repo_session).load_runtime_as_of(
+        return BookStateProjection(repo_session).load_runtime_as_of(
             project_id,
             as_of_chapter=as_of_chapter,
         )
     except Exception:
         logger.warning("Failed to load BookState context overlay.", exc_info=True)
+        return None
+
+
+def _book_state_context_overlay(
+    repo_session,
+    project_id: str,
+    chapter_number: int,
+    *,
+    runtime=None,
+) -> dict:
+    if runtime is None:
+        runtime = _load_book_state_context_runtime(repo_session, project_id, chapter_number)
+    if runtime is None:
         return {}
+    as_of_chapter = runtime.as_of_chapter
 
     map_nodes_by_id = runtime.map.nodes_by_id
     node_id_by_name = {node.name: node.id for node in map_nodes_by_id.values() if node.name}
@@ -199,6 +210,7 @@ def _merge_book_state_map_overlay(map_context: dict, overlay: dict) -> dict:
 
 __all__ = [
     '_book_state_context_overlay',
+    '_load_book_state_context_runtime',
     '_resolve_book_state_location_id',
     '_book_state_neighbors',
     '_merge_book_state_map_overlay',

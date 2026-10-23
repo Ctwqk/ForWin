@@ -82,11 +82,6 @@ def run_hard_floor(
         if not checks["at_least_one_event"]:
             fail_reasons.append("at_least_one_event")
 
-    hidden_hits = _must_not_reveal_hits(body, context_pack.must_not_reveal)
-    checks["must_not_reveal"] = not hidden_hits
-    if hidden_hits:
-        fail_reasons.append("must_not_reveal")
-
     checks["ending_hook"] = _has_ending_hook(body)
     if not checks["ending_hook"]:
         warning_reasons.append("ending_hook")
@@ -120,7 +115,6 @@ def run_hard_floor(
             "body_char_count": body_char_count,
             "writer_char_count": writer_char_count,
             "min_chapter_chars": min_chapter_chars,
-            "must_not_reveal_hits": hidden_hits,
             "pulp_beat_track": pulp_beat_track or "none",
             "planned_reward_tags": list(planned_reward_tags),
             "pulp_beat": pulp_beats.model_dump(mode="json"),
@@ -145,10 +139,6 @@ def _replace_masked_identifier(match: re.Match[str]) -> str:
 
 def _artifact_scan_text(body: str) -> str:
     return body.lower().replace("：", ":")
-
-
-def _must_not_reveal_hits(body: str, items: list[str]) -> list[str]:
-    return [item for item in items if item and item in body]
 
 
 def _has_ending_hook(body: str) -> bool:

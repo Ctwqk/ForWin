@@ -31,6 +31,7 @@ from forwin.book_state.schema import ACTOR_NODE_TYPES
 from forwin.book_state.story_clock import StoryCalendar, format_story_time
 from forwin.map.visibility import is_writer_visible_map_edge
 from forwin.models.project import ChapterPlan
+from forwin.planning.fact_text import states_proposition
 from forwin.protocol.book_state import FactNode, ObserverType, WorldEdge, WorldNode
 from forwin.world_engine.travel import estimate_travel
 from forwin.writer.prompt_core.world_view import forbidden_topic_text, render_world_view
@@ -215,15 +216,18 @@ def _allowed_reveals(
 def _hints(
     facts_by_id: Mapping[str, FactNode], directives: list[Mapping[str, Any]], chapter_number: int,
 ) -> list[ViewHint]:
-    """Hint texts only; a hint that states its fact's proposition is dropped."""
+    """Hint texts only; a hint that states its fact's proposition is dropped.
+
+    The comparison is the planner's (``planning.fact_text``). A hint stating another fact's secret is the
+    feasibility audit's to stop (``writer_text_states_secret``) before the plan is saved or written.
+    """
     hints: list[ViewHint] = []
     for item in directives:
         text = str(item.get("hint_text") or "")
         if not text.strip():
             continue
         fact = _fact_of(facts_by_id, item.get("fact_ref"))
-        truth = " ".join(fact.proposition.split()) if fact is not None else ""
-        if truth and truth in " ".join(text.split()):
+        if fact is not None and states_proposition(text, fact.proposition):
             logger.warning("Chapter %s hint directive %r states its fact's proposition", chapter_number, item.get("id"))
             continue
         hints.append(ViewHint(directive_id=str(item.get("id") or ""), hint_text=text))

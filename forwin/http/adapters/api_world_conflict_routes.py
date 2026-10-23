@@ -76,7 +76,7 @@ def build_handlers(
             except (ValidationError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             try:
-                ConflictResolutionService(
+                result = ConflictResolutionService(
                     session, admission=CanonAdmissionService(), policy=policy,
                     plan_amender=get_plan_amender() if decision.option == "amend_plan" else None,
                 ).resolve(project_id=project_id, conflict_id=conflict_id, decision=decision)
@@ -89,7 +89,11 @@ def build_handlers(
             except (ValueError, ConflictOptionUnavailable) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             session.commit()
-            return _conflict_info(row)
+            # A world-tick amend_plan whose replan failed still resolved: the warnings say what is left undone.
+            return _conflict_info(row).model_copy(update={
+                "warnings": [dict(warning) for warning in result.warnings],
+                "followup_conflict_id": result.followup_conflict_id,
+            })
 
     return {
         "list_project_world_conflicts": list_project_world_conflicts,

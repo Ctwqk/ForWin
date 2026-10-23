@@ -300,7 +300,9 @@ def test_reveal_directive_gives_truth_for_that_fact_only(source, caplog):
         assert carried == (permitted | held | reader_known) & secrets
     # A hint that states its fact's truth is dropped.
     leaky = {"id": "d-leak", "fact_ref": "fact:hinted", "hint_text": "so\n hinted-truth  indeed"}
-    view = _build(source, plan=_plan(hint_directives_json=json.dumps([*HINTS, leaky])))
+    # The planner's one normalizer: a space inserted inside the proposition does not hide it either.
+    spaced = {"id": "d-spaced", "fact_ref": "fact:hinted", "hint_text": "so hin ted-truth"}
+    view = _build(source, plan=_plan(hint_directives_json=json.dumps([*HINTS, leaky, spaced])))
     assert [hint.directive_id for hint in view.hints] == ["d-hint"]
     assert all("hinted-truth" not in text for text in _texts(view))
     # The directive is what permits it: without one the fact is a topic.

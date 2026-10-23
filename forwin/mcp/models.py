@@ -432,6 +432,9 @@ class WorldConflictView(BaseModel):
     actor_ref: str = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # Set on a resolve result only: what the standing resolution left undone, and the plan conflict to amend.
+    warnings: list[dict[str, str]] = Field(default_factory=list)
+    followup_conflict_id: str = ""
 
 
 class WorldConflictListView(BaseModel):

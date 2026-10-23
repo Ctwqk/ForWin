@@ -27,6 +27,10 @@ class WorldConflictInfo(BaseModel):
     actor_ref: str = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # Set on a resolve response only: what the standing resolution left undone, {code, message}, and the plan
+    # conflict to amend through when a world-tick amend_plan could not plan the chapters again.
+    warnings: list[dict[str, str]] = Field(default_factory=list)
+    followup_conflict_id: str = ""
 
 
 class WorldConflictResolveRequest(BaseModel):

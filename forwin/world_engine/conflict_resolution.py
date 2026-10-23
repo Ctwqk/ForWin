@@ -10,6 +10,7 @@ What the plan and the obligation ledger tell the writer comes only from the chan
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
@@ -54,10 +55,14 @@ if TYPE_CHECKING:
     from forwin.planning.amend import PlanAmender
 
 
+logger = logging.getLogger(__name__)
+
 # An accepted world change owes the plot a response within this many chapters of the latest one.
 OBLIGATION_DEADLINE_CHAPTERS = 6
 WORLD_CHANGE_OBLIGATION_TYPE = "world_change_response"
 PLOT_RESPONSE_PATCH_TYPE = "world_conflict_response"
+# The result warning of a world-tick amend_plan whose replan failed once the resolution committed.
+REPLAN_FAILED = "replan_failed"
 # A veto stops an open intent; one the story already settled keeps its status.
 _SETTLED_INTENT_STATUSES = frozenset({"resolved", "disrupted", "vetoed"})
 _EVENT_ACTOR_TYPES = {"human": "manual_ui", "codex": "worker", "auto": "system"}
@@ -82,6 +87,8 @@ class ConflictResolutionResult:
     # What an amend_plan's amender wrote: the band plan it planned and the beat sheet version it revised.
     band_plan_id: str = ""
     beat_sheet_id: str = ""
+    # The plan_feasibility conflict a human amends through when a world-tick amendment's replan failed.
+    followup_conflict_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -438,7 +445,8 @@ class ConflictResolutionService:
 
     ``plan_amender`` carries out amend_plan's planning. Without it amend_plan on a plan conflict is unavailable
     and a world-tick amend_plan only commits its change. With it an amend_plan resolution commits the session
-    itself before the amender's model calls, so pass a session outside a ``Session.begin()`` block.
+    itself before the amender's model calls, so pass a plain session: an amend_plan inside a
+    ``Session.begin()`` / ``sessionmaker.begin()`` or ``begin_nested()`` block is refused before any work.
     """
 
     def __init__(
@@ -464,9 +472,15 @@ class ConflictResolutionService:
         open and the session usable; any other CanonWriteFailure propagates after the same rollback.
 
         A plan conflict never takes that path: its only option, amend_plan, plans again (_resolve_plan_conflict).
-        A world-tick amend_plan hands the plan to the amender once its change is committed.
+        A world-tick amend_plan hands the plan to the amender once its change is committed; a replan that fails
+        then leaves the resolution standing, with a ``replan_failed`` warning and a follow-up plan conflict.
         """
         session = self.session
+        if decision.option == "amend_plan" and self.plan_amender is not None and _in_transaction_block(session):
+            raise RuntimeError(
+                "amend_plan with a plan amender commits between its model calls: resolve it with a plain session, "
+                "outside a transaction block"
+            )
         repo = WorldConflictRepository(session)
         found = repo.get(project_id, conflict_id)
         if found is None:
@@ -535,8 +549,35 @@ class ConflictResolutionService:
         # Commit the resolution first: neither its conflict row lock nor its project row lock may last
         # through the amender's model calls.
         session.commit()
-        amended = self.plan_amender.amend(session, conflict=row, decision=decision, policy=self.policy)
-        return replace(result, band_plan_id=amended.band_plan_id or "", beat_sheet_id=amended.beat_sheet_id or "")
+        return self._amend_after_world_change(row, decision, result)
+
+    def _amend_after_world_change(
+        self, row: WorldPlanConflictRow, decision: ConflictDecision, result: ConflictResolutionResult,
+    ) -> ConflictResolutionResult:
+        """Plan again the chapters a committed world-tick amend_plan changed. Nothing here fails the request: the
+        resolution stands. A failed or raising replan is recorded by the amender, in a new transaction, with a
+        follow-up plan conflict, and reported as a ``replan_failed`` warning."""
+        session = self.session
+        try:
+            amended = self.plan_amender.amend(session, conflict=row, decision=decision, policy=self.policy)
+        except Exception as exc:  # noqa: BLE001 - the resolution has committed; a failed replan may not hide it
+            session.rollback()
+            logger.warning("World conflict %s: the replan after amend_plan raised", row.id, exc_info=True)
+            issues = (self.plan_amender.error_issue(exc),)
+        else:
+            if not amended.failed:
+                return replace(result, band_plan_id=amended.band_plan_id or "",
+                               beat_sheet_id=amended.beat_sheet_id or "")
+            issues = amended.issues
+        failure = self.plan_amender.record_world_amendment_failure(
+            session, conflict=row, issues=issues, policy=self.policy,
+        )
+        details = "; ".join(f"{issue.code}: {issue.message}" for issue in issues)
+        warning = {"code": REPLAN_FAILED, "message": (
+            f"the resolution stands, but its chapters could not be planned again ({details}); amend the plan "
+            f"through conflict {failure.followup_conflict_id}"
+        )}
+        return replace(result, warnings=(*result.warnings, warning), followup_conflict_id=failure.followup_conflict_id)
 
     def _resolve_plan_conflict(
         self, row: WorldPlanConflictRow, decision: ConflictDecision,
@@ -649,6 +690,12 @@ class ConflictResolutionService:
         return outcome.graph_delta_ids, warnings
 
 
+def _in_transaction_block(session: Session) -> bool:
+    """Whether the session runs inside a ``begin()`` context or a SAVEPOINT, where a commit is refused."""
+    # SQLAlchemy keeps the begin() context it is in on the session; it has no public accessor for it.
+    return session.in_nested_transaction() or getattr(session, "_trans_context_manager", None) is not None
+
+
 def _resolution_context(session: Session, project_id: str, *, chapter_number: int, fallback_now: int) -> TickContext:
     """The latest canon chapter's window: a resolution lands at the chapter's end, and a change held in the
     chapter's tick keeps the times that tick gave it."""
@@ -670,6 +717,7 @@ def _resolution_context(session: Session, project_id: str, *, chapter_number: in
 __all__ = [
     "OBLIGATION_DEADLINE_CHAPTERS",
     "PLOT_RESPONSE_PATCH_TYPE",
+    "REPLAN_FAILED",
     "WORLD_CHANGE_OBLIGATION_TYPE",
     "ConflictOptionUnavailable",
     "ConflictResolutionResult",

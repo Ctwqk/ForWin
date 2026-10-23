@@ -27,15 +27,16 @@ from forwin.book_state.reveal_schedule import earliest_reveal_chapters
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
 from forwin.book_state.story_clock import StoryCalendar, StoryClockError
 from forwin.models.planning_v6 import BandPlanRow
-from forwin.models.project import ChapterPlan
+from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.planning.band_planner.types import BandPlanOutcome, ChapterPlanDraft, PlanIssue
 from forwin.planning.band_planner.validation import expected_span_minutes
+from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
 from forwin.planning.beat_sheet.types import READER_OBSERVER, ArcBeatSheetData, BandSpan
 from forwin.planning.fact_text import stated_facts
 from forwin.runtime.policy import RuntimePolicy
 from forwin.world_engine.conflict_repository import WorldConflictRepository
-from forwin.world_engine.conflict_routing import available_options, route_conflict
+from forwin.world_engine.conflict_routing import PLAN_CONFLICT_SOURCES, available_options, route_conflict
 from forwin.world_engine.conflict_types import ConflictDraft
 from forwin.world_engine.constraints import active_protections, narrative_boundary_violations
 from forwin.world_engine.travel import estimate_travel
@@ -152,7 +153,7 @@ class FeasibilityAuditor:
         kept = _kept_chapters(session, project_id, low=min(low, band[0]), high=max(high, band[1]),
                               audited={chapter.number for chapter in chapters})
         walk = _ChapterWalk(runtime=runtime, lexicon=lexicon, schedule=earliest_reveal_chapters(session, project_id),
-                            tolerance=policy.review.travel_tolerance)
+                            tolerance=policy.review.travel_tolerance, reader_known=reader_known_facts(runtime))
         issues = [issue for chapter in chapters for issue in walk.issues(chapter)]
         if beat_sheet is not None:
             issues.extend(_milestone_issues(beat_sheet, chapters, kept))
@@ -172,6 +173,8 @@ class _ChapterWalk:
     # fact node id -> earliest reader reveal chapter
     schedule: Mapping[str, int]
     tolerance: float
+    # fact node ids the reader's recorded cognition at the latest canon knows or believes
+    reader_known: frozenset[str] = frozenset()
     positions: dict[str, str] = field(default_factory=dict)
     released: set[str] = field(default_factory=set)
 
@@ -289,7 +292,7 @@ class _ChapterWalk:
         """The writer texts stating each fact the chapter may not reveal, by fact ref (Ruling P4a-R21).
 
         A secret or hidden fact, or one a protection keeps from the reader, stays unrevealable unless the
-        chapter reveals it to the reader or its earliest reveal chapter has come.
+        reader already knows it, the chapter reveals it to the reader, or its earliest reveal chapter has come.
         """
         protected = {
             _fact_ref(str(node.payload.get("fact_ref") or "")).removeprefix(FACT_REF_PREFIX)
@@ -302,7 +305,7 @@ class _ChapterWalk:
             f"{FACT_REF_PREFIX}{fact.id}": fact.proposition
             for fact in self.runtime.world.facts_by_id.values()
             if (fact.sensitivity_level in HIDDEN_SENSITIVITY or fact.id in protected) and fact.id not in revealed
-            and self.schedule.get(fact.id, math.inf) > chapter.number
+            and fact.id not in self.reader_known and self.schedule.get(fact.id, math.inf) > chapter.number
         }
         fields: dict[str, list[str]] = {}
         for name, text in chapter.writer_texts:
@@ -487,12 +490,19 @@ def open_plan_feasibility_conflict(
     """A plan_feasibility conflict over the band, offered and routed as conflict routing says: human, amend_plan.
 
     Its first error by chapter gives ``violated`` and the chapter it blocks from; it lists every issue, warnings
-    included, since the amender reads them.
+    included, since the amender reads them. An open plan conflict over the band that already blocks from that
+    chapter or earlier is returned instead. The project row lock (FOR NO KEY UPDATE, taken before the check as the
+    band planner takes it) keeps two writers from both opening one; the caller commits soon after.
     """
     errors = _errors(issues)
     if not errors:
         raise ValueError("a plan_feasibility conflict needs at least one error")
     first = errors[0]
+    blocks_from = first.chapter_number if first.chapter_number is not None else band.chapter_start
+    session.execute(select(Project.id).where(Project.id == project_id).with_for_update(key_share=True))
+    existing = _open_plan_conflict(session, project_id, band, blocks_from_chapter=blocks_from)
+    if existing is not None:
+        return existing
     as_of = BookStateRepository(session).latest_canon_chapter(project_id) or 0
     draft = ConflictDraft(
         project_id=project_id, source=PLAN_FEASIBILITY_SOURCE, detected_after_chapter=as_of,
@@ -504,11 +514,44 @@ def open_plan_feasibility_conflict(
             "kind": "plan_issues", "band": [band.chapter_start, band.chapter_end], "band_plan_id": band_plan_id,
             "issues": [issue.model_dump(mode="json") for issue in issues],
         },
-        blocks_from_chapter=first.chapter_number if first.chapter_number is not None else band.chapter_start,
+        blocks_from_chapter=blocks_from,
     )
     return WorldConflictRepository(session).create(
         draft, required_decider=route_conflict(draft, policy=policy), options=available_options(draft),
     )
+
+
+def band_for_chapter(session: Session, project_id: str, chapter_number: int) -> tuple[BandSpan, str | None]:
+    """The active beat-sheet band holding the chapter and its active band plan's id, if it has one.
+
+    Without a sheet band the chapter stands alone, as a one-chapter band.
+    """
+    repo = ArcBeatSheetRepository(session)
+    for row in repo.active_for_project(project_id):
+        arc = session.get(ArcPlanVersion, row.arc_plan_id)
+        if arc is None or not arc.chapter_start <= chapter_number <= arc.chapter_end:
+            continue
+        band = next((item for item in repo.load(row).band_breakdown
+                     if item.chapter_start <= chapter_number <= item.chapter_end), None)
+        if band is None:
+            break
+        band_plan_id = session.scalar(
+            select(BandPlanRow.id)
+            .where(BandPlanRow.project_id == project_id, BandPlanRow.arc_plan_id == arc.id,
+                   BandPlanRow.band_index == band.band_index, BandPlanRow.chapter_start == band.chapter_start,
+                   BandPlanRow.chapter_end == band.chapter_end, BandPlanRow.status == "active")
+            .order_by(BandPlanRow.version.desc()).limit(1)
+        )
+        return band, band_plan_id
+    return BandSpan(band_index=0, chapter_start=chapter_number, chapter_end=chapter_number), None
+
+
+def reader_known_facts(runtime: BookStateRuntime) -> frozenset[str]:
+    """The fact node ids the reader's recorded cognition knows or believes; an unrecorded public fact is not
+    known by default."""
+    reader = runtime.cognition_by_observer.get((READER_OBSERVER, READER_OBSERVER))
+    states = reader.knowledge_by_ref if reader is not None else {}
+    return frozenset(ref.removeprefix(FACT_REF_PREFIX) for ref, state in states.items() if state in _KNOWN_STATES)
 
 
 def violated_by(issues: Sequence[PlanIssue]) -> str:
@@ -521,6 +564,21 @@ def _errors(issues: Iterable[PlanIssue]) -> list[PlanIssue]:
     """The errors in chapter order; an error without a chapter goes last."""
     return sorted((issue for issue in issues if issue.severity == "error"),
                   key=lambda issue: (issue.chapter_number is None, issue.chapter_number or 0))
+
+
+def _open_plan_conflict(
+    session: Session, project_id: str, band: BandSpan, *, blocks_from_chapter: int,
+) -> WorldPlanConflictRow | None:
+    """An open plan conflict over the band that blocks from ``blocks_from_chapter`` or earlier."""
+    return session.scalar(
+        select(WorldPlanConflictRow)
+        .where(WorldPlanConflictRow.project_id == project_id, WorldPlanConflictRow.status == "open",
+               WorldPlanConflictRow.source.in_(sorted(PLAN_CONFLICT_SOURCES)),
+               WorldPlanConflictRow.blocks_from_chapter.between(band.chapter_start, blocks_from_chapter))
+        .order_by(WorldPlanConflictRow.blocks_from_chapter, WorldPlanConflictRow.created_at,
+                  WorldPlanConflictRow.id)
+        .limit(1)
+    )
 
 
 def _feedback(issue: PlanIssue) -> str:
@@ -595,7 +653,9 @@ __all__ = [
     "FeasibilityAuditor",
     "InfeasibleBandResponse",
     "PlanIssue",
+    "band_for_chapter",
     "open_plan_feasibility_conflict",
+    "reader_known_facts",
     "respond_to_infeasible_band",
     "violated_by",
 ]

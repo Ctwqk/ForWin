@@ -37,7 +37,15 @@ from forwin.models.draft import (
 )
 from forwin.planning.future_plan_audit import FuturePlanAuditor
 from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
-from forwin.planning.feasibility import FeasibilityAuditor
+from forwin.planning.feasibility import (
+    FeasibilityAuditor,
+    PlanIssue,
+    band_for_chapter,
+    open_plan_feasibility_conflict,
+)
+from forwin.planning.beat_sheet.types import READER_OBSERVER
+from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.repository import BookStateRepository
 from forwin.models.project import Project
 from sqlalchemy.orm import Session
 from forwin.state.updater import StateUpdater
@@ -50,6 +58,10 @@ from forwin.review.decision.audit import (
 )
 from forwin.review.decision.types import Decision, DecisionInput
 from forwin.state.repo import StateRepository
+
+
+# The POV's node type, and so the observer type of its cognition overlay.
+_POV_OBSERVER_TYPE = "character"
 
 
 def _future_plan_gate_outcome(
@@ -303,25 +315,80 @@ class AuditControlStage:
     ) -> None:
         """The feasibility audit of the chapter about to be written, against the latest canon.
 
-        Its issues on this chapter are recorded with the future plan audit's gate; an error blocks the
-        chapter on the same path as a blocking future plan audit, a warning only informs.
+        Its issues on this chapter are recorded with the future plan audit's gate. A warning only informs.
+        An error blocks the chapter on the same path as a blocking future plan audit, after a plan_feasibility
+        conflict for a human to amend_plan has been opened, or an open one reused, together with the audit's
+        event in a session of its own: the chapter loop's rollback keeps both, and run control pauses on the
+        conflict. That session takes the project row lock, so the chapter's session must hold none here.
         """
         chapter_number = int(chapter_plan.chapter_number or 0)
+        project_id = chapter_plan.project_id
+        policy = self._project_policy(session, project)
         sheets = ArcBeatSheetRepository(session)
         sheet = sheets.active_for_arc(chapter_plan.arc_plan_id)
+        latest = BookStateRepository(session).latest_canon_chapter(project_id) or 0
+        # The travel check reads only the POV's route knowledge, the secret check only the reader's.
+        runtime = BookStateProjection(session).load_runtime_as_of(
+            project_id,
+            as_of_chapter=latest,
+            observer_keys=[
+                (READER_OBSERVER, READER_OBSERVER),
+                *([(_POV_OBSERVER_TYPE, chapter_plan.pov_ref)] if chapter_plan.pov_ref else []),
+            ],
+        )
         issues = [
             issue
             for issue in FeasibilityAuditor().audit_plans(
                 session,
-                project_id=chapter_plan.project_id,
+                project_id=project_id,
                 plans=[chapter_plan],
                 beat_sheet=sheets.load(sheet) if sheet is not None else None,
-                policy=self._project_policy(session, project),
+                policy=policy,
+                runtime=runtime,
             )
             if issue.chapter_number == chapter_number
         ]
         if not issues:
             return
+        errors = [issue for issue in issues if issue.severity == "error"]
+        if not errors:
+            self._record_feasibility_event(
+                updater=updater, chapter_plan=chapter_plan, issues=issues, conflict_id=""
+            )
+            return
+        with self._SessionFactory() as own:
+            band, band_plan_id = band_for_chapter(own, project_id, chapter_number)
+            conflict = open_plan_feasibility_conflict(
+                own,
+                project_id=project_id,
+                band=band,
+                issues=issues,
+                policy=policy,
+                band_plan_id=band_plan_id,
+            )
+            self._record_feasibility_event(
+                updater=StateUpdater(own),
+                chapter_plan=chapter_plan,
+                issues=issues,
+                conflict_id=conflict.id,
+            )
+            own.commit()
+        raise RuntimeError(
+            "future_plan_audit_blocked:"
+            + ";".join(
+                ["feasibility", *(f"{issue.code}={issue.ref}" for issue in errors)]
+            )
+        )
+
+    def _record_feasibility_event(
+        self,
+        *,
+        updater: StateUpdater,
+        chapter_plan: ChapterPlan,
+        issues: list[PlanIssue],
+        conflict_id: str,
+    ) -> None:
+        chapter_number = int(chapter_plan.chapter_number or 0)
         errors = [issue for issue in issues if issue.severity == "error"]
         self._record_decision_event(
             updater=updater,
@@ -340,6 +407,7 @@ class AuditControlStage:
                 {
                     "audit": "feasibility",
                     "issues": [issue.model_dump(mode="json") for issue in issues],
+                    "conflict_id": conflict_id,
                 },
                 GateOutcome(
                     gate_id="future_plan_audit",
@@ -357,13 +425,6 @@ class AuditControlStage:
                 ),
             ),
         )
-        if errors:
-            raise RuntimeError(
-                "future_plan_audit_blocked:"
-                + ";".join(
-                    ["feasibility", *(f"{issue.code}={issue.ref}" for issue in errors)]
-                )
-            )
 
     def _audit_future_plans_after_acceptance(
         self,

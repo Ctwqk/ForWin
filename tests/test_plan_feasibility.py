@@ -117,12 +117,14 @@ def _audit(Session, world: _World, arc_id: str, plans) -> list[PlanIssue]:
         )
 
 
-def _compile(Session, world: _World, *, node_patches=(), narrative_patches=(), key: str = "setup") -> None:
+def _compile(Session, world: _World, *, node_patches=(), narrative_patches=(), cognition_patches=(),
+             key: str = "setup") -> None:
     with Session.begin() as session:
         result = BookStateCompiler(session).compile(ApprovedGraphDeltaSet(
             project_id=world.project_id, chapter_number=0, graph_deltas=[GraphDelta(
                 id=f"{key}-{world.project_id}", project_id=world.project_id, chapter_number=0,
                 node_patches=list(node_patches), narrative_patches=list(narrative_patches),
+                cognition_patches=list(cognition_patches),
             )],
         ))
         assert result.committed, result.blocked_reasons
@@ -465,30 +467,6 @@ def test_conflict_violation_follows_the_first_error(code: str, violated: str) ->
 # The pre-write check.
 
 
-class _Stage:
-    """The pre-write audit's pipeline surroundings: a clean future plan audit and a recorded event list."""
-
-    def __init__(self) -> None:
-        from forwin.generation.pipeline_core.audit_control import AuditControlStage
-
-        self.policy = POLICY
-        self.llm_client = None
-        self.events: list[dict[str, Any]] = []
-        self.stage = type("Harness", (AuditControlStage,), {
-            "_record_decision_event": lambda _self, **payload: self.events.append(payload)
-            or SimpleNamespace(id=f"event-{len(self.events)}"),
-        })()
-        self.stage.policy = POLICY
-        self.stage.llm_client = None
-        self.stage.retrieval_broker = None
-
-    def audit(self, session, project_id: str, plan: ChapterPlan):
-        return self.stage._audit_current_plan_before_write(
-            session=session, repo=None, updater=None, project_id=project_id, chapter_plan=plan,
-            context="context", trigger_stage="pre_write",
-        )
-
-
 @pytest.fixture
 def clean_future_audit(monkeypatch):
     from forwin.generation.pipeline_core import audit_control
@@ -506,6 +484,47 @@ def clean_future_audit(monkeypatch):
     monkeypatch.setattr(audit_control, "FuturePlanAuditor", CleanAuditor)
 
 
+def _stage(Session):
+    """The pre-write audit's pipeline surroundings, with the real event recorder and session factory."""
+    from forwin.generation.pipeline_core.audit_control import AuditControlStage
+
+    stage = AuditControlStage()
+    stage.policy = POLICY
+    stage.llm_client = None
+    stage.retrieval_broker = None
+    stage._SessionFactory = Session
+    stage._audit_task_id = ""
+    stage._audit_root_event_id = ""
+    return stage
+
+
+def _prewrite(Session, world: _World, plan_id: str):
+    """Run the pre-write audit as the chapter loop does: an error rolls the chapter's session back."""
+    with Session() as session:
+        try:
+            result = _stage(Session)._audit_current_plan_before_write(
+                session=session, repo=None, updater=StateUpdater(session), project_id=world.project_id,
+                chapter_plan=session.get(ChapterPlan, plan_id), context="context", trigger_stage="pre_write",
+            )
+        except RuntimeError as exc:
+            session.rollback()
+            return exc
+        session.commit()
+        return result
+
+
+def _feasibility_events(Session, world: _World) -> list[dict[str, Any]]:
+    from forwin.audit.events import DecisionEventType
+    from forwin.models.audit import DecisionEvent
+
+    with Session() as session:
+        rows = session.scalars(select(DecisionEvent).where(
+            DecisionEvent.project_id == world.project_id,
+            DecisionEvent.event_type == DecisionEventType.FUTURE_PLAN_AUDIT_RUN,
+        ).order_by(DecisionEvent.created_at, DecisionEvent.id))
+        return [payload for row in rows if (payload := json.loads(row.payload_json)).get("audit") == "feasibility"]
+
+
 def _persisted_plan(Session, world: _World, arc_id: str, number: int, **fields: str) -> str:
     with Session.begin() as session:
         plan = StateUpdater(session).create_chapter_plan(world.project_id, arc_id, number, "title", "one", ["goal"])
@@ -520,44 +539,135 @@ def _persisted_plan(Session, world: _World, arc_id: str, number: int, **fields: 
 
 
 def test_prewrite_feasibility_error_blocks_chapter(Session, clean_future_audit) -> None:
+    from forwin.world_engine.conflict_repository import WorldConflictRepository
+
     world, arc_id = _book(Session)
     _dead_rival(Session, world)
     plan_id = _persisted_plan(Session, world, arc_id, 1, onstage_refs_json=json.dumps([world.hero, world.rival]))
-    stage = _Stage()
 
+    raised = _prewrite(Session, world, plan_id)
+
+    assert isinstance(raised, RuntimeError)
+    assert str(raised).startswith("future_plan_audit_blocked:feasibility")
+    assert f"onstage_unavailable={world.rival}" in str(raised)
+    # What survives the chapter loop's rollback: a plan conflict run control pauses on, and the audit event.
     with Session() as session:
-        with pytest.raises(RuntimeError) as raised:
-            stage.audit(session, world.project_id, session.get(ChapterPlan, plan_id))
-    assert str(raised.value).startswith("future_plan_audit_blocked:feasibility")
-    assert f"onstage_unavailable={world.rival}" in str(raised.value)
-    feasibility = [event for event in stage.events if event["payload"].get("audit") == "feasibility"]
-    assert [[issue["code"] for issue in event["payload"]["issues"]] for event in feasibility] == [
-        ["onstage_unavailable"],
-    ]
+        conflict = WorldConflictRepository(session).open_blocking(world.project_id, next_chapter=1)
+        assert (conflict.source, conflict.required_decider, conflict.blocks_from_chapter) == (
+            "plan_feasibility", "human", 1,
+        )
+        assert json.loads(conflict.options_json) == ["amend_plan"]
+        proposed = json.loads(conflict.proposed_change_json)
+        assert (proposed["band"], proposed["band_plan_id"]) == ([1, 4], None)
+        assert [(issue["code"], issue["ref"]) for issue in proposed["issues"]] == [("onstage_unavailable", world.rival)]
+        assert "is dead" in proposed["issues"][0]["message"]
+        conflict_id = conflict.id
+    (event,) = _feasibility_events(Session, world)
+    assert [issue["code"] for issue in event["issues"]] == ["onstage_unavailable"]
+    assert "is dead" in event["issues"][0]["message"] and event["conflict_id"] == conflict_id
+
+    # Blocking the chapter again reuses the open conflict.
+    assert isinstance(_prewrite(Session, world, plan_id), RuntimeError)
+    with Session() as session:
+        assert [row.id for row in WorldConflictRepository(session).list(world.project_id, status="open")] == [
+            conflict_id,
+        ]
 
 
 def test_prewrite_feasibility_warning_is_only_recorded(Session, clean_future_audit) -> None:
+    from forwin.world_engine.conflict_repository import WorldConflictRepository
+
     world, arc_id = _book(Session)
     _public_clock(Session, world)
     plan_id = _persisted_plan(Session, world, arc_id, 1)
-    stage = _Stage()
 
+    assert _prewrite(Session, world, plan_id) == "context"
+    (event,) = _feasibility_events(Session, world)
+    assert [(issue["code"], issue["severity"]) for issue in event["issues"]] == [("clock_unanswered", "warning")]
+    assert event["gate_outcome"]["decision"] == "warn"
     with Session() as session:
-        assert stage.audit(session, world.project_id, session.get(ChapterPlan, plan_id)) == "context"
-    (event,) = [event for event in stage.events if event["payload"].get("audit") == "feasibility"]
-    assert [(issue["code"], issue["severity"]) for issue in event["payload"]["issues"]] == [
-        ("clock_unanswered", "warning"),
-    ]
-    assert event["chapter_number"] == 1
+        assert WorldConflictRepository(session).list(world.project_id) == []
 
     # A clean chapter records nothing.
     clean_id = _persisted_plan(Session, world, arc_id, 2, world_bindings_json=json.dumps([
         {"kind": "clock", "ref": _clock_id(world), "how": ""},
     ]))
-    stage = _Stage()
-    with Session() as session:
-        assert stage.audit(session, world.project_id, session.get(ChapterPlan, clean_id)) == "context"
-    assert [event for event in stage.events if event["payload"].get("audit") == "feasibility"] == []
+    assert _prewrite(Session, world, clean_id) == "context"
+    assert len(_feasibility_events(Session, world)) == 1
+
+
+# Fix round 1: conflict dedup, reader-known facts, milestones beyond the plans.
+
+
+def test_plan_feasibility_conflicts_are_not_stacked(Session) -> None:
+    from forwin.planning.beat_sheet.types import BandSpan
+    from forwin.planning.feasibility import open_plan_feasibility_conflict
+    from forwin.world_engine.conflict_repository import WorldConflictRepository
+    from forwin.world_engine.conflict_types import ConflictDraft
+
+    world, _arc_id = _book(Session)
+
+    def opened(band: BandSpan, chapter: int) -> str:
+        with Session.begin() as session:
+            return open_plan_feasibility_conflict(
+                session, project_id=world.project_id, band=band, policy=POLICY,
+                issues=[PlanIssue(code="onstage_unavailable", severity="error", chapter_number=chapter, ref="x",
+                                  message="m")],
+            ).id
+
+    first_band = BandSpan(band_index=0, chapter_start=1, chapter_end=4)
+    first = opened(first_band, 2)
+    # An open conflict that already blocks the band from chapter 2 blocks chapter 3 too.
+    assert opened(first_band, 3) == first
+    # One blocking only from chapter 2 cannot block chapter 1.
+    assert opened(first_band, 1) != first
+    # The band planner's conflict over a band is a plan conflict too.
+    with Session.begin() as session:
+        planning = WorldConflictRepository(session).create(ConflictDraft(
+            project_id=world.project_id, source="band_planning", detected_after_chapter=0, story_time=0,
+            involved_refs=[], violated="feasibility", impact_level="major", summary="s",
+            proposed_change={"kind": "plan_issues", "band": [5, 8], "issues": []}, blocks_from_chapter=5,
+        ), required_decider="human", options=("amend_plan",)).id
+    assert opened(BandSpan(band_index=1, chapter_start=5, chapter_end=8), 6) == planning
+
+
+def test_a_secret_the_reader_already_knows_may_be_stated(Session) -> None:
+    from forwin.book_state.projection import BookStateProjection
+    from forwin.planning.beat_sheet.service import beat_sheet_issues
+    from forwin.protocol.book_state import CognitionPatch
+
+    world, arc_id = _book(Session)
+    stated = _draft(world, 1, goals=[f"learn {SECRET}"])
+    assert [issue.code for issue in _audit(Session, world, arc_id, [stated])] == ["writer_text_states_secret"]
+    sheet = ArcBeatSheetData.model_validate({
+        "protagonist_ref": world.hero,
+        "phases": [{"name": "phase-a", "chapter_range": [1, 12], "purpose": f"tell {SECRET}"}],
+        "band_breakdown": [{"band_index": 0, "chapter_start": 1, "chapter_end": 12}],
+    })
+
+    def sheet_issues() -> list[str]:
+        with Session() as session:
+            runtime = BookStateProjection(session).load_runtime_as_of(world.project_id, as_of_chapter=0)
+        return [issue for issue in beat_sheet_issues(sheet, chapter_start=1, chapter_end=12, runtime=runtime,
+                                                     actor_ids={world.hero, world.rival})
+                if "states the proposition" in issue]
+
+    assert len(sheet_issues()) == 1
+    # The reader's recorded knowledge makes the secret revealed, with or without a schedule.
+    _compile(Session, world, cognition_patches=[CognitionPatch(
+        observer_type="reader", observer_id="reader", op="merge", field_path="knowledge_by_ref",
+        new_value={world.fact("fact-1"): "knows"}, evidence_refs=["knowledge:told:-:-"],
+    )])
+
+    assert _audit(Session, world, arc_id, [stated]) == []
+    assert sheet_issues() == []
+
+
+def test_hard_milestone_due_after_the_last_planned_chapter_raises_nothing(Session) -> None:
+    world, arc_id = _book(Session)
+
+    # milestone-1 is due by chapter 4; chapters 1 and 2 are all that is planned.
+    assert _audit(Session, world, arc_id, [_draft(world, 1), _draft(world, 2)]) == []
 
 
 # Ruling P4a-R21: one normalizer drops all whitespace.
@@ -589,7 +699,8 @@ def test_container_builds_the_plan_amender(monkeypatch, llm_available: bool) -> 
 
     client = SimpleNamespace(chat=lambda messages, **kwargs: "")
     monkeypatch.setattr(RuntimeContainer, "_build_core_services",
-                        lambda self: SimpleNamespace(infrastructure="infrastructure", policy=POLICY))
+                        lambda self: SimpleNamespace(infrastructure="infrastructure", policy=POLICY,
+                                                     artifact_store=None))
     monkeypatch.setattr(RuntimeContainer, "_build_generation_services", lambda self: SimpleNamespace(llm_client=client))
     monkeypatch.setattr(module, "_llm_available", lambda infrastructure, policy: llm_available)
 

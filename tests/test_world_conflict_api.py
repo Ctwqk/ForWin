@@ -255,12 +255,20 @@ def test_resolve_route_hands_the_plan_amender_only_to_amend_plan(monkeypatch, op
     monkeypatch.setattr(routes, "require_project", lambda *_: SimpleNamespace(id="p1"))
     monkeypatch.setattr(routes, "ProjectPolicyStore", lambda _: MagicMock())
     monkeypatch.setattr(routes, "WorldConflictRepository", lambda _: MagicMock())
-    monkeypatch.setattr(routes, "_conflict_info", lambda row: {})
+    from forwin.api_schema.world_conflicts import WorldConflictInfo
+    from forwin.world_engine.conflict_resolution import ConflictResolutionResult
+
+    monkeypatch.setattr(routes, "_conflict_info", lambda row: WorldConflictInfo(
+        id="c1", project_id="p1", source="world_tick", detected_after_chapter=3, story_time=0, violated="impact_review",
+        impact_level="major", required_decider="human", blocks_from_chapter=4, status="resolved", summary="s",
+    ))
     constructed: list[dict] = []
 
     def service(*args, **kwargs):
         constructed.append(kwargs)
-        return MagicMock()
+        resolved = MagicMock()
+        resolved.resolve.return_value = ConflictResolutionResult(graph_delta_ids=(), obligation_id="", plan_patch_id="")
+        return resolved
 
     monkeypatch.setattr(routes, "ConflictResolutionService", service)
     amender, builds = object(), []
@@ -268,7 +276,7 @@ def test_resolve_route_hands_the_plan_amender_only_to_amend_plan(monkeypatch, op
                                      get_plan_amender=lambda: builds.append(1) or amender)
     app = FastAPI()
     app.add_api_route("/resolve/{project_id}/{conflict_id}", handlers["resolve_project_world_conflict"],
-                      methods=["POST"], response_model=None)
+                      methods=["POST"])
     with TestClient(app) as client:
         response = client.post("/resolve/p1/c1", json={"option": option, "rationale": "r", "reason": "why"})
 
@@ -306,3 +314,42 @@ def test_response_without_next_plan_is_pending_not_escalated_over_http(conflict_
                 NarrativeObligationRow.project_id == book.project_id,
             )).all()
             assert obligation.status == "proposed"
+
+
+def test_resolve_route_reports_a_failed_amendment_beside_the_standing_resolution(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from fastapi import FastAPI
+
+    from forwin.api_schema.world_conflicts import WorldConflictInfo
+    from forwin.http.adapters import api_world_conflict_routes as routes
+    from forwin.world_engine.conflict_resolution import ConflictResolutionResult
+
+    session = MagicMock()
+    session.__enter__.return_value = session
+    monkeypatch.setattr(routes, "require_project", lambda *_: SimpleNamespace(id="p1"))
+    monkeypatch.setattr(routes, "ProjectPolicyStore", lambda _: MagicMock())
+    monkeypatch.setattr(routes, "WorldConflictRepository", lambda _: MagicMock())
+    monkeypatch.setattr(routes, "_conflict_info", lambda row: WorldConflictInfo(
+        id="c1", project_id="p1", source="world_tick", detected_after_chapter=3, story_time=0, violated="impact_review",
+        impact_level="major", required_decider="human", blocks_from_chapter=4, status="resolved", summary="s",
+    ))
+    warning = {"code": "replan_failed", "message": "the resolution stands, but its chapters could not be planned"}
+    service = MagicMock()
+    service.resolve.return_value = ConflictResolutionResult(
+        graph_delta_ids=("delta-1",), obligation_id="", plan_patch_id="", warnings=(warning,),
+        followup_conflict_id="c2",
+    )
+    monkeypatch.setattr(routes, "ConflictResolutionService", lambda *args, **kwargs: service)
+    handlers = routes.build_handlers(get_session=lambda: session, get_plan_amender=lambda: object())
+    app = FastAPI()
+    app.add_api_route("/resolve/{project_id}/{conflict_id}", handlers["resolve_project_world_conflict"],
+                      methods=["POST"])
+    with TestClient(app) as client:
+        response = client.post("/resolve/p1/c1", json={"option": "amend_plan", "rationale": "r", "reason": "why"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["status"], body["warnings"], body["followup_conflict_id"]) == ("resolved", [warning], "c2")
+    session.commit.assert_called_once()

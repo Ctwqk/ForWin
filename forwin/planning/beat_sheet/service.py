@@ -414,7 +414,12 @@ def _writer_text_issues(
     data: ArcBeatSheetData, runtime: BookStateRuntime, reveal_chapters: Mapping[str, int],
 ) -> list[str]:
     """Phase purposes and milestone descriptions reach the writer verbatim (Ruling P4a-R21): neither may state a
-    secret or hidden fact, or one the sheet keeps from the reader, before the reader may learn it."""
+    secret or hidden fact, or one the sheet keeps from the reader, before the reader may learn it. A fact the
+    reader's recorded cognition already knows may be stated."""
+    # Imported here: the feasibility audit imports the band planner's modules, which import this package.
+    from forwin.planning.feasibility import reader_known_facts
+
+    known = reader_known_facts(runtime)
     reveal = dict(reveal_chapters)
     own: dict[str, int] = {}
     for target in data.reveal_targets:
@@ -426,7 +431,7 @@ def _writer_text_issues(
     protected = {spec.fact_ref.removeprefix(FACT_REF_PREFIX) for spec in data.protections
                  if spec.kind == "must_not_know" and spec.observer_ref == READER_OBSERVER}
     concealed = {f"{FACT_REF_PREFIX}{fact.id}": fact.proposition for fact in runtime.world.facts_by_id.values()
-                 if fact.sensitivity_level in HIDDEN_SENSITIVITY or fact.id in protected}
+                 if (fact.sensitivity_level in HIDDEN_SENSITIVITY or fact.id in protected) and fact.id not in known}
     texts = [(f"phases[{index}].purpose", phase.purpose, phase.chapter_range[0])
              for index, phase in enumerate(data.phases)]
     texts.extend((f"milestones[{index}].description", milestone.description, milestone.target_range[0])

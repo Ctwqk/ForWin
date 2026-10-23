@@ -39,6 +39,7 @@ class DecisionEventType:
     WORLD_CONFLICT_DETECTED = "world_conflict_detected"
     WORLD_CONFLICT_ESCALATED = "world_conflict_escalated"
     WORLD_CONFLICT_RESOLVED = "world_conflict_resolved"
+    WORLD_CONFLICT_AMEND_FAILED = "world_conflict_amend_failed"
     PROMPT_TRACE_RECORDED = "prompt_trace_recorded"
 
     RUNTIME_POLICY_UPDATED = "runtime_policy_updated"
@@ -200,6 +201,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.WORLD_CONFLICT_DETECTED,
     DecisionEventType.WORLD_CONFLICT_ESCALATED,
     DecisionEventType.WORLD_CONFLICT_RESOLVED,
+    DecisionEventType.WORLD_CONFLICT_AMEND_FAILED,
     DecisionEventType.PROMPT_TRACE_RECORDED,
     DecisionEventType.RUNTIME_POLICY_UPDATED,
     DecisionEventType.MANUAL_CHECKPOINT_CREATED,

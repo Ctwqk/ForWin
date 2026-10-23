@@ -7,9 +7,10 @@ Create Date: 2026-10-22 00:00:00.000000
 Adds versioned arc beat sheets and band plans, and chapter planning fields.
 New NOT NULL chapter columns carry server defaults for existing rows.
 The maintenance step rename and deletion are irreversible; downgrade only
-reverts the schema. Stored runtime policies are unchanged in this data step.
+reverts the schema; removed policy keys and maintenance history are not restored.
 """
 
+import json
 from typing import Sequence, Union
 
 from alembic import op
@@ -89,9 +90,45 @@ def upgrade() -> None:
     op.execute("UPDATE post_canon_maintenance_runs SET step_name = 'plan' WHERE step_name = 'planning'")
     op.execute("DELETE FROM post_canon_maintenance_runs WHERE step_name = 'arc'")
 
+    op.drop_table("world_simulation_turns")
+    _drop_simulation_from_policies()
+
+
+def _drop_simulation_from_policies() -> None:
+    bind = op.get_bind()
+    rows = bind.execute(sa.text("SELECT id, runtime_policy_json FROM projects")).all()
+    for project_id, raw_policy in rows:
+        try:
+            policy = json.loads(raw_policy or "")
+        except ValueError:
+            continue
+        planning = policy.get("planning") if isinstance(policy, dict) else None
+        if not isinstance(planning, dict) or "use_llm_simulation" not in planning:
+            continue
+        del planning["use_llm_simulation"]
+        bind.execute(
+            sa.text("UPDATE projects SET runtime_policy_json = :policy WHERE id = :id"),
+            {"policy": json.dumps(policy, ensure_ascii=False, separators=(",", ":")), "id": project_id},
+        )
+
 
 def downgrade() -> None:
     """Revert schema; the maintenance step data rewrite is not reversed."""
+    op.create_table(
+        "world_simulation_turns",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("chapter_number", sa.Integer(), nullable=False),
+        sa.Column("pressure_level", sa.String(), nullable=False),
+        sa.Column("pressure_summary", sa.Text(), nullable=False),
+        sa.Column("notable_shifts_json", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
     op.drop_index("uq_chapter_plans_project_chapter", table_name="chapter_plans")
     op.create_index("ix_chapter_plans_project_chapter", "chapter_plans", ["project_id", "chapter_number"], unique=False)
     op.drop_column("chapter_plans", "hook")

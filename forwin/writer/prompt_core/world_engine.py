@@ -118,7 +118,7 @@ _COLOCATED_TYPES = frozenset({*ACTOR_NODE_TYPES, "item", "resource", "site_state
 _RECORD_TYPES = frozenset({"event", "intent"})
 # The intents still to happen; the compact index lists these, not settled ones.
 _PENDING_INTENT_STATUSES = frozenset({"planned", "due", "held"})
-_EVENT_FACT_TYPE = "event"
+EVENT_FACT_TYPE = "event"
 
 
 def _without_empty(value: Any) -> Any:
@@ -226,9 +226,9 @@ def build_adjudication_messages(
         fact_payloads[ref] = {"ref": f"{FACT_REF_PREFIX}{ref}", **facts[ref].model_dump(mode="json", exclude_defaults=True)}
         pending.update(_fact_references(fact_payloads[ref]) - fact_payloads.keys())
     # Every scoped standing fact, and only the newest scoped event facts: the book's events keep growing.
-    events = sorted((ref for ref in fact_payloads if facts[ref].fact_type == _EVENT_FACT_TYPE),
+    events = sorted((ref for ref in fact_payloads if facts[ref].fact_type == EVENT_FACT_TYPE),
                     key=lambda ref: (-facts[ref].created_at_chapter, ref))
-    shown = {ref for ref in fact_payloads if facts[ref].fact_type != _EVENT_FACT_TYPE}
+    shown = {ref for ref in fact_payloads if facts[ref].fact_type != EVENT_FACT_TYPE}
     shown.update(events[:MAX_ADJUDICATION_EVENT_FACTS])
     payload["facts"] = [fact_payloads[ref] for ref in sorted(shown)]
     # Objective truth is sufficient for adjudication; no cognition overlay is serialized.

@@ -90,7 +90,7 @@ immutable CandidateDraftRecord
 
 `forwin.canon.CanonAdmissionService` 是唯一把 candidate 转为 accepted/canon 状态的入口；generation pipeline 与人工接受都提交持久化的 `CanonCommitPlan`。旧 `commit()`、`BookStateDirectCommitService`、`BookStateCanonPort`、`_commit_book_state_canon`、`_apply_world_v4_gate` 和恒成功的 `_compile_world_model_after_acceptance` 已删除。运行期世界编辑 proposal 也只能经 `CanonAdmissionService.commit_world_edit` 写 BookState。
 
-post-Canon maintenance 按 world → planning → arc → feedback 顺序运行；world 先跑 `WorldTickService.run`，再跑旧 `WorldSimulator`；四步之后完成 order controls。第2章起，Canon 提交强制要求前章四步与 controls 成功且没有未解除的 future/checkpoint/manual 阻断；它不同于可重建的知识投影。trace以冻结payload同事务进入既有outbox，异步上传失败不回滚已成功业务；补传不重跑模型，内容SHA区分不同trace对象。
+post-Canon maintenance 按 world → planning → arc → feedback 顺序运行；world 只运行 `WorldTickService.run`，feedback 在聚合前分析新读者评论；四步之后完成 order controls。第2章起，Canon 提交强制要求前章四步与 controls 成功且没有未解除的 future/checkpoint/manual 阻断；它不同于可重建的知识投影。trace以冻结payload同事务进入既有outbox，异步上传失败不回滚已成功业务；补传不重跑模型，内容SHA区分不同trace对象。
 
 旧 `world_model_v4` / world-v4 compatibility projection 与 `StateUpdater.apply_*` 写入已删除。当前统一 chapter delta 经 `ChapterDeltaTranslator` 与 BookState review/compile 落盘；后续只保留 Knowledge Projection refresh 等当前检索投影。
 

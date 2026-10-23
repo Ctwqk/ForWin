@@ -137,7 +137,7 @@ FinalResidualPolicy 只判资格，不提交 Canon。fail/error 或不可接纳 
 
 ## 8. Canon 后的维护、投影和恢复
 
-post-Canon maintenance 按 world → planning → arc → feedback 顺序执行。world 先跑世界 tick，再跑旧 `WorldSimulator` 的世界压力更新；后续规划、下一章 Arc resolution 和反馈读取推进后的世界。这些结果被下一章的 planning/personality/context 消费。四步全部成功后，还需完成 order controls，包括 obligation 验证、future-plan audit、generation-audit report 和 band checkpoint。第2章及以后提交 Canon 都强制检查前章这一屏障；未解除的 future-contract、checkpoint 或人工阻断会使提交等待恢复。pulp 的 continue 只放过 checkpoint warn，fail 仍阻断。
+post-Canon maintenance 按 world → planning → arc → feedback 顺序执行。world 只运行世界 tick，feedback 在聚合前分析新读者评论；后续规划、下一章 Arc resolution 和反馈读取推进后的世界。这些结果被下一章的 planning/personality/context 消费。四步全部成功后，还需完成 order controls，包括 obligation 验证、future-plan audit、generation-audit report 和 band checkpoint。第2章及以后提交 Canon 都强制检查前章这一屏障；未解除的 future-contract、checkpoint 或人工阻断会使提交等待恢复。pulp 的 continue 只放过 checkpoint warn，fail 仍阻断。
 
 四步维护及order_controls的trace已与对象存储上传分开：业务结果、成功状态和冻结脱敏trace的OutboxEvent同事务提交，上传在事务后由现有worker处理。存储失败重试上传，不重跑已成功的维护模型。对象key含内容SHA，旧trace延迟补传不会覆盖后来重跑order_controls的trace；上传状态归outbox，维护结果保留引用。原始payload保留在outbox中，尚未增加自动清理策略。
 
@@ -212,7 +212,7 @@ S4-S8 的读者留存、多样性、认知/张力及完整体验度量仍是未�
 
 ### P3 世界推进与冲突闭环
 
-`POST_CANON_STEP_NAMES = ("world", "planning", "arc", "feedback")`；world 先 tick 再旧 `WorldSimulator`。`WorldTickService.run` 的结果以 `tick_id`、`graph_delta_ids`、`conflict_ids`、`dropped_candidate_ids`、`postponed_candidate_ids`、`warnings`、`skipped_reason` 写入 step `result_json`，并附 `pressure_level`。
+`POST_CANON_STEP_NAMES = ("world", "planning", "arc", "feedback")`；world 只运行 tick。`WorldTickService.run` 的结果以 `tick_id`、`graph_delta_ids`、`conflict_ids`、`dropped_candidate_ids`、`postponed_candidate_ids`、`warnings`、`skipped_reason` 写入 step `result_json`，与 tick 的 `step_result()` 完全一致。
 
 1. 用 `tick-<commit id>`、本章 `story_time_start..story_time_end` 整数分钟窗口与确定性 seed 建上下文。world disabled、非最新章、同 tick 已提交或该章已有 tick 都跳过；最新章重写也不重复推进世界。`target_total_chapters > 0` 且本章达到或超过目标时，以 `skipped_reason="book_complete"` 跳过。
 2. 从本章 intent interactions、clock 到期、due intents、onstage bookkeeping 与 actor turns 收集候选。`WorldAdjudicator` 每 tick 先尝试一批最多 20 个 due offstage intents；超 prompt guard 后逐 intent 调用，单个仍超限则 DROPPED `prompt_too_large`，后续 due intent 补位；超 cap 未询问者以 `adjudication:<intent>` 进入 `postponed_candidate_ids`。`ActorTurnRunner` 按 actor 视图行动。已 due 的 onstage intent 若未出现在本章 interactions，顺延至当前时间并增加 slip_count，超过 `world.max_onstage_slips` 产生 `onstage_slip` 冲突；这是 P3 临时规则，由 P4 band 规划器替换。

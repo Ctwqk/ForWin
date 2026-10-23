@@ -258,7 +258,6 @@ def test_load_eval_cases_builds_prompts_from_fixture_text() -> None:
         "arc_plan",
         "review_json",
         "comment_analysis",
-        "world_pressure",
     ]
     assert [case.case_id for case in smoke] == ["writer_preview", "scene_breakdown"]
     preview = medium[0]

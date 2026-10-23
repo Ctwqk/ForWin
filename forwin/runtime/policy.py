@@ -9,6 +9,8 @@ GateDelegate = Literal["human", "spark"]
 WorldConflictDelegate = Literal["codex", "human"]
 BandCheckpointAction = Literal["continue", "pause_on_warn", "pause_always"]
 
+_PLANNING_PROFILE_KNOBS = ("band_size", "max_replans_per_band", "digest_budget_chars")
+
 
 class FrozenPolicyModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -67,7 +69,6 @@ class ReviewPolicy(FrozenPolicyModel):
 class PlanningPolicy(FrozenPolicyModel):
     future_constraints: bool
     plan_health: bool
-    use_llm_simulation: bool
     context_recency_window: int = Field(ge=0, le=1000)
     band_size: int = Field(default=6, ge=4, le=12)
     max_replans_per_band: int = Field(default=2, ge=0, le=5)
@@ -79,7 +80,6 @@ class PlanningPolicy(FrozenPolicyModel):
             return cls(
                 future_constraints=False,
                 plan_health=False,
-                use_llm_simulation=False,
                 context_recency_window=50,
                 band_size=8,
                 max_replans_per_band=1,
@@ -88,7 +88,6 @@ class PlanningPolicy(FrozenPolicyModel):
         return cls(
             future_constraints=True,
             plan_health=True,
-            use_llm_simulation=True,
             context_recency_window=0,
         )
 
@@ -148,7 +147,7 @@ class RuntimePolicy(FrozenPolicyModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _load_world_defaults(cls, data: object) -> object:
+    def _load_profile_defaults(cls, data: object) -> object:
         if not isinstance(data, dict):
             return data
         profile = data.get("quality_profile", "standard")
@@ -160,10 +159,11 @@ class RuntimePolicy(FrozenPolicyModel):
             loaded["planning"] = {
                 **{
                     field: getattr(defaults, field)
-                    for field in ("band_size", "max_replans_per_band", "digest_budget_chars")
+                    for field in _PLANNING_PROFILE_KNOBS
                 },
                 **data["planning"],
             }
+            loaded["planning"].pop("use_llm_simulation", None)
         writer = data.get("writer", {})
         if isinstance(writer, dict):
             loaded["writer"] = {

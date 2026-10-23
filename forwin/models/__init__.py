@@ -34,7 +34,6 @@ from .phase import (
     ProjectStageAnalysis,
     ProvisionalPromotionRecord,
 )
-from .phase4 import WorldSimulationTurn
 from .progression import ProjectProgressionRule
 from .publisher import (
     CommentSignalCandidate,
@@ -134,7 +133,6 @@ __all__ = [
     "BandExperiencePlan",
     "ChapterRewriteAttempt",
     "ProvisionalPromotionRecord",
-    "WorldSimulationTurn",
     # draft
     "ChapterDraft",
     "ChapterReview",

@@ -506,15 +506,6 @@ class LLMReliabilityRunner:
             max_chars=1200,
             review_interval_chapters=0,
         )
-        policy = RuntimePolicy.model_validate(
-            {
-                **policy.model_dump(mode="python"),
-                "planning": {
-                    **policy.planning.model_dump(mode="python"),
-                    "use_llm_simulation": False,
-                },
-            }
-        )
         container = RuntimeContainer.from_config(
             infrastructure,
             policy=policy,

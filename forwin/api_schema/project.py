@@ -115,8 +115,6 @@ class ProjectSummary(ProjectArcSnapshotFields):
     last_replan_strategy: str = ""
     last_replan_reason: str = ""
     current_time_label: str = ""
-    world_pressure_level: str = ""
-    world_pressure_summary: str = ""
     generation_control: GenerationControlInfo = Field(
         default_factory=GenerationControlInfo
     )
@@ -199,8 +197,6 @@ class ProjectDetail(ProjectArcSnapshotFields):
     pacing_summary: str = ""
     current_time_label: str = ""
     recent_replans: list[dict[str, object]] = []
-    world_pressure_level: str = ""
-    world_pressure_summary: str = ""
     generation_control: GenerationControlInfo = Field(
         default_factory=GenerationControlInfo
     )

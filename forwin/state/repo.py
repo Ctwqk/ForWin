@@ -35,7 +35,6 @@ from forwin.models import (
     SignalWindowAggregate,
     SubWorld,
     SubWorldRosterItem,
-    WorldSimulationTurn,
 )
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.protocol import (
@@ -47,7 +46,6 @@ from forwin.protocol import (
     ReaderFeedbackView,
     SignalSummaryView,
     SubWorldSummary,
-    WorldPressureView,
 )
 
 logger = logging.getLogger(__name__)
@@ -615,35 +613,6 @@ class StateRepository:
             ProjectPolicyStore(self.session)
             .load(project)
             .policy.planning.future_constraints
-        )
-
-    def get_latest_world_pressure(
-        self,
-        project_id: str,
-        before_chapter: int,
-    ) -> Optional[WorldPressureView]:
-        row = self.session.execute(
-            select(WorldSimulationTurn)
-            .where(
-                WorldSimulationTurn.project_id == project_id,
-                WorldSimulationTurn.chapter_number < before_chapter,
-            )
-            .order_by(
-                WorldSimulationTurn.chapter_number.desc(),
-                WorldSimulationTurn.created_at.desc(),
-            )
-            .limit(1)
-        ).scalar_one_or_none()
-        if row is None:
-            return None
-        try:
-            shifts = json.loads(row.notable_shifts_json or "[]") or []
-        except (json.JSONDecodeError, TypeError):
-            shifts = []
-        return WorldPressureView(
-            pressure_level=row.pressure_level,
-            pressure_summary=row.pressure_summary,
-            notable_shifts=[str(item) for item in shifts],
         )
 
     def get_recent_reader_feedback(

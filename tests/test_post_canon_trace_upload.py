@@ -26,7 +26,7 @@ class UnavailableStore(LocalObjectStore):
         return super().write_text(relative_path, content, content_type=content_type)
 
 
-@pytest.mark.parametrize("phase", ["world", "order_controls"])
+@pytest.mark.parametrize("phase", ["world", "feedback", "order_controls"])
 def test_storage_outage_preserves_business_and_replays_only_frozen_trace(
     tmp_path, phase
 ):
@@ -46,14 +46,14 @@ def test_storage_outage_preserves_business_and_replays_only_frozen_trace(
             [
                 {
                     "attempt_no": 1,
-                    "stage_key": "world_pressure",
+                    "stage_key": "comment_analysis",
                     "api_key": "must-not-persist",
                 }
             ]
         )
         return {"business": "done"}
 
-    if phase == "world":
+    if phase in {"world", "feedback"}:
         service._step_runners[phase] = business
     service.run(canon_commit_id="canon-1", worker_id="business-worker")
     service.run_order_controls(
@@ -64,6 +64,14 @@ def test_storage_outage_preserves_business_and_replays_only_frozen_trace(
         assert session.get(Project, "project-1").setting_summary == "business committed"
         rows = list(session.scalars(select(PostCanonMaintenanceRun)))
         assert all(row.status == "succeeded" and row.attempts == 1 for row in rows)
+        if phase == "world":
+            world_run = next(row for row in rows if row.step_name == "world")
+            assert json.loads(world_run.result_json) == {"business": "done"}
+        if phase == "feedback":
+            from forwin.models import PromptTrace
+            trace = session.scalars(select(PromptTrace)).one()
+            assert trace.stage_key == "comment_analysis"
+            assert trace.trace_scope == "audience"
         event = session.scalars(select(OutboxEvent)).one()
         assert event.status == "pending"
         payload = json.loads(event.payload_json)

@@ -81,9 +81,6 @@ class _FakeRepo:
     def get_current_timeline(self, project_id: str):
         return None
 
-    def get_latest_world_pressure(self, project_id: str, before_chapter: int):
-        return None
-
     def get_active_arc_envelope(self, project_id: str):
         return None
 

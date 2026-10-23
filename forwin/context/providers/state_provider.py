@@ -54,9 +54,6 @@ class StateContextProvider:
                     project_id,
                     as_of_chapter=as_of_chapter,
                 ),
-                "world_pressure": repo.get_latest_world_pressure(
-                    project_id, before_chapter=chapter_plan.chapter_number
-                ),
                 "active_subworlds": repo.get_active_subworld_summary(
                     project_id, chapter_plan.chapter_number
                 ),

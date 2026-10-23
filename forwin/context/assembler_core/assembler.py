@@ -115,7 +115,6 @@ class ChapterContextAssembler:
             canon_name_anchors=data.get("canon_name_anchors", []),
             active_threads=data.get("threads", []),
             timeline=data.get("timeline"),
-            world_pressure=data.get("world_pressure"),
             reader_feedback=data.get("reader_feedback"),
             current_arc_envelope=data.get("current_arc_envelope"),
             audience_hints=data.get("audience_hints"),

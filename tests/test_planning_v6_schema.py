@@ -208,3 +208,45 @@ def test_models_create_all_on_sqlite() -> None:
                     session.flush()
     finally:
         engine.dispose()
+
+
+def test_0006_strips_removed_planning_key_preserving_other_policy_data(monkeypatch) -> None:
+    import importlib
+    import json
+    migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
+    engine = sa.create_engine("sqlite:///:memory:")
+    policies = {
+        "legacy": json.dumps({"planning": {"use_llm_simulation": True, "context_recency_window": 73}, "custom": [1]}),
+        "current": '{"planning":{"band_size":8}}',
+        "malformed": "not-json",
+        "empty": "",
+        "nonobject": "[]",
+        "planning_nonobject": '{"planning":null}',
+    }
+    try:
+        with engine.begin() as connection:
+            connection.execute(sa.text("CREATE TABLE projects (id TEXT PRIMARY KEY, runtime_policy_json TEXT)"))
+            for key, value in policies.items():
+                connection.execute(sa.text("INSERT INTO projects VALUES (:id, :policy)"), {"id": key, "policy": value})
+            monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
+            migration._drop_simulation_from_policies()
+            actual = dict(connection.execute(sa.text("SELECT id, runtime_policy_json FROM projects")).all())
+            assert json.loads(actual.pop("legacy")) == {"planning": {"context_recency_window": 73}, "custom": [1]}
+            assert actual == {k: v for k, v in policies.items() if k != "legacy"}
+            first = connection.execute(sa.text("SELECT id, runtime_policy_json FROM projects ORDER BY id")).all()
+            migration._drop_simulation_from_policies()
+            assert connection.execute(sa.text("SELECT id, runtime_policy_json FROM projects ORDER BY id")).all() == first
+    finally:
+        engine.dispose()
+
+
+def test_0006_removes_simulation_table_and_downgrade_restores_empty_schema(legacy_database) -> None:
+    config, engine = legacy_database
+    table_name = "world_simulation_turns"
+    original = [(c["name"], str(c["type"]), c["nullable"]) for c in sa.inspect(engine).get_columns(table_name)]
+    command.upgrade(config, "0006_planning_v6")
+    assert table_name not in sa.inspect(engine).get_table_names()
+    command.downgrade(config, "0005_world_plan_conflicts")
+    assert [(c["name"], str(c["type"]), c["nullable"]) for c in sa.inspect(engine).get_columns(table_name)] == original
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(f"SELECT count(*) FROM {table_name}")).scalar_one() == 0

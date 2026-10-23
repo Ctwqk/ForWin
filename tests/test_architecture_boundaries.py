@@ -1197,3 +1197,15 @@ def test_application_read_models_have_one_current_owner() -> None:
         if removed_import in path.read_text(encoding="utf-8"):
             offenders.append(path.relative_to(ROOT).as_posix())
     assert offenders == []
+
+
+def test_removed_simulation_package_cannot_be_imported() -> None:
+    assert not (ROOT / "forwin/simulation").exists()
+    for path in (ROOT / "forwin").rglob("*.py"):
+        if "migrations" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            imports = ([node.module or ""] if isinstance(node, ast.ImportFrom)
+                       else [alias.name for alias in node.names] if isinstance(node, ast.Import) else [])
+            assert not any(name == "forwin.simulation" or name.startswith("forwin.simulation.") for name in imports), path

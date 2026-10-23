@@ -39,7 +39,7 @@ from forwin.retrieval import RetrievalBroker
 from forwin.review.draft_service import DraftReviewService
 from forwin.review.repair import RepairExecution, RepairService, RepairVerifier
 from forwin.runtime.policy import RuntimePolicy
-from forwin.simulation.world import WorldSimulator
+from forwin.audience.comment_analysis import CommentAnalyzer
 from forwin.skills import SkillPromptLayerBuilder, SkillRouter
 from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
@@ -80,7 +80,7 @@ class ChapterPipeline(
         stage_analyzer: StageAnalyzer,
         pacing_strategist: PacingStrategist,
         replan_governor: ReplanGovernor,
-        world_simulator: WorldSimulator,
+        comment_analyzer: CommentAnalyzer,
         arc_envelope_manager: ArcEnvelopeManager,
         draft_review: DraftReviewService,
         repair: RepairService,
@@ -124,7 +124,7 @@ class ChapterPipeline(
         self.stage_analyzer = stage_analyzer
         self.pacing_strategist = pacing_strategist
         self.replan_governor = replan_governor
-        self.world_simulator = world_simulator
+        self.comment_analyzer = comment_analyzer
         self.arc_envelope_manager = arc_envelope_manager
         self.draft_review = draft_review
         self.repair = repair
@@ -140,7 +140,7 @@ class ChapterPipeline(
                 pacing_strategist=self.pacing_strategist,
                 replan_governor=self.replan_governor,
                 arc_envelope_manager=self.arc_envelope_manager,
-                world_simulator=self.world_simulator,
+                comment_analyzer=self.comment_analyzer,
                 artifact_store=self.artifact_store,
                 llm_client=self.llm_client,
             )

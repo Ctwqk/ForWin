@@ -91,7 +91,6 @@ def test_stored_policy_without_new_sections_loads(profile, expected) -> None:
     stored.pop("writer", None)
     for field in ("band_size", "max_replans_per_band", "digest_budget_chars"):
         stored["planning"].pop(field, None)
-    stored["planning"]["use_llm_simulation"] = True
     stored["planning"]["context_recency_window"] = 73
     original = json.dumps(stored)
 
@@ -103,7 +102,6 @@ def test_stored_policy_without_new_sections_loads(profile, expected) -> None:
         policy.planning.digest_budget_chars,
         policy.writer.world_view_budget_chars,
     ) == expected
-    assert policy.planning.use_llm_simulation is True
     assert policy.planning.context_recency_window == 73
     assert json.dumps(stored) == original
     assert RuntimePolicy.model_validate_json(policy.model_dump_json()) == policy
@@ -275,7 +273,6 @@ def test_pulp_policy_is_deliberately_small_but_keeps_hard_floor() -> None:
     assert policy.review.repair_scopes == ()
     assert policy.review.effective_rewrite_limit(has_blocking_issue=False) == 0
     assert policy.review.effective_rewrite_limit(has_blocking_issue=True) == 1
-    assert policy.planning.use_llm_simulation is False
     assert policy.canon.hard_floor is True
 
 
@@ -306,3 +303,47 @@ def test_stored_map_movement_signal_loads_as_world_consistency() -> None:
     assert not policy.review.allows_signal("map_movement")
     both = {**stored["review"], "signals": ["map_movement", "lint", "world_consistency"]}
     assert ReviewPolicy.model_validate(both).signals == ("world_consistency", "lint")
+
+
+def test_stored_policy_with_removed_keys_loads() -> None:
+    stored = RuntimePolicy.for_profile("pulp").model_dump(mode="json")
+    stored["planning"]["use_llm_simulation"] = True
+    original = json.dumps(stored)
+    policy = RuntimePolicy.model_validate_json(original)
+    assert "use_llm_simulation" not in policy.planning.model_dump()
+    assert policy.planning.context_recency_window == 50
+    assert json.dumps(stored) == original
+
+
+@pytest.mark.parametrize("profile", ["standard", "pulp"])
+def test_with_user_settings_resets_planning_writer_knobs_on_profile_switch(profile) -> None:
+    stored = RuntimePolicy.for_profile(profile).model_dump(mode="json")
+    stored["planning"].update(band_size=11, max_replans_per_band=4, digest_budget_chars=12345)
+    stored["writer"]["world_view_budget_chars"] = 12345
+    policy = RuntimePolicy.model_validate(stored)
+    target = "pulp" if profile == "standard" else "standard"
+    updated = policy.with_user_settings(quality_profile=target)
+    defaults = RuntimePolicy.for_profile(target)
+    assert updated.planning == defaults.planning
+    assert updated.writer == defaults.writer
+
+
+@pytest.mark.parametrize("profile", ["standard", "pulp"])
+def test_with_user_settings_keeps_custom_planning_writer_knobs_on_same_profile(profile) -> None:
+    stored = RuntimePolicy.for_profile(profile).model_dump(mode="json")
+    stored["planning"].update(band_size=11, max_replans_per_band=4, digest_budget_chars=12345)
+    stored["writer"]["world_view_budget_chars"] = 12345
+    policy = RuntimePolicy.model_validate(stored)
+    updated = policy.with_user_settings(quality_profile=profile, review_interval_chapters=7)
+    assert updated.planning == policy.planning
+    assert updated.writer == policy.writer
+    assert updated.pause.review_interval_chapters == 7
+
+
+def test_unknown_writer_key_is_rejected() -> None:
+    stored = RuntimePolicy.for_profile("standard").model_dump(mode="json")
+    stored["writer"]["unknown"] = True
+    with pytest.raises(ValidationError) as exc:
+        RuntimePolicy.model_validate(stored)
+    assert exc.value.errors()[0]["loc"] == ("writer", "unknown")
+    assert exc.value.errors()[0]["type"] == "extra_forbidden"

@@ -68,12 +68,6 @@ class MemorySnippet(BaseModel):
     score: float = 0.0
 
 
-class WorldPressureView(BaseModel):
-    pressure_level: str
-    pressure_summary: str
-    notable_shifts: list[str] = Field(default_factory=list)
-
-
 class ArcEnvelopeView(BaseModel):
     source_policy_tier: str = ""
     base_target_size: int = 0
@@ -203,7 +197,6 @@ class ChapterContextPack(BaseModel):
     active_threads: list[PlotThreadSnapshot] = Field(default_factory=list)
     timeline: TimelineSnapshot | None = None
     retrieved_memories: list[MemorySnippet] = Field(default_factory=list)
-    world_pressure: WorldPressureView | None = None
     reader_feedback: ReaderFeedbackView | None = None
     current_arc_envelope: ArcEnvelopeView | None = None
     audience_hints: AudienceHintView | None = None
@@ -330,7 +323,6 @@ class ReviewContextPack(BaseModel):
     active_rules: list[EntitySnapshot] = Field(default_factory=list)
     active_threads: list[PlotThreadSnapshot] = Field(default_factory=list)
     timeline: TimelineSnapshot | None = None
-    world_pressure: WorldPressureView | None = None
     reader_feedback: ReaderFeedbackView | None = None
     audience_hints: AudienceHintView | None = None
     reader_promise: ReaderPromise | None = None

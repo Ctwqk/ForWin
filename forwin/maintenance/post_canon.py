@@ -34,7 +34,7 @@ from forwin.observability.llm_trace import build_llm_decision_event_payloads, pr
 from forwin.observability.payloads import safe_error_summary
 from forwin.planning.stage_analysis import save_stage_analysis
 from forwin.runtime.policy_store import ProjectPolicyStore
-from forwin.simulation.world import save_world_turn
+from forwin.audience.comment_analysis import build_reader_feedback_snapshot
 from forwin.state.updater import StateUpdater
 
 if TYPE_CHECKING:
@@ -149,7 +149,7 @@ class PostCanonMaintenanceService:
         pacing_strategist: Any,
         replan_governor: Any,
         arc_envelope_manager: Any,
-        world_simulator: Any,
+        comment_analyzer: Any,
         artifact_store: Any,
         llm_client: Any,
         world_tick: WorldTickService | None = None,
@@ -162,7 +162,7 @@ class PostCanonMaintenanceService:
         self.pacing_strategist = pacing_strategist
         self.replan_governor = replan_governor
         self.arc_envelope_manager = arc_envelope_manager
-        self.world_simulator = world_simulator
+        self.comment_analyzer = comment_analyzer
         self.artifact_store = artifact_store
         self.llm_client = llm_client
         # Built from llm_client on the first world step when not given.
@@ -672,7 +672,7 @@ class PostCanonMaintenanceService:
                     step_name=claim.step_name,
                     attempts=attempts,
                 )
-                if trace:
+                if trace and claim.step_name != "world":
                     result["trace"] = trace
                 self._complete_claim_in_session(session, claim, result)
         except Exception as exc:
@@ -942,27 +942,12 @@ class PostCanonMaintenanceService:
         project = session.get(Project, commit.project_id)
         if project is None:
             raise ValueError(f"Project not found: {commit.project_id}")
-        # The world tick runs first; the world simulator still reports the pressure level.
         tick = self._world_tick_service().run(
             session,
             commit,
             policy=ProjectPolicyStore(session).load(project).policy,
         )
-        turn = self.world_simulator.simulate(
-            session=session,
-            project_id=commit.project_id,
-            chapter_number=commit.chapter_number,
-        )
-        save_world_turn(
-            session=session,
-            project_id=commit.project_id,
-            chapter_number=commit.chapter_number,
-            turn=turn,
-        )
-        return {
-            **tick.step_result(),
-            "pressure_level": turn.pressure_level,
-        }
+        return tick.step_result()
 
     def _world_tick_service(self) -> WorldTickService:
         if self.world_tick is None:
@@ -980,6 +965,18 @@ class PostCanonMaintenanceService:
         session: Session,
         commit: CanonCommitRecord,
     ) -> Mapping[str, Any]:
+        project = session.get(Project, commit.project_id)
+        if project is None:
+            raise ValueError(f"Project not found: {commit.project_id}")
+        build_reader_feedback_snapshot(
+            session,
+            project.title,
+            project_id=commit.project_id,
+            chapter_number=commit.chapter_number,
+            limit=8,
+            analyze_missing=True,
+            analyzer=self.comment_analyzer,
+        )
         result = run_feedback_aggregation_pass(
             session,
             commit.project_id,
@@ -1013,6 +1010,22 @@ class PostCanonMaintenanceService:
     ) -> dict[str, Any]:
         if not attempts:
             return {}
+        comment_attempts = [item for item in attempts if item.get("stage_key") == "comment_analysis"]
+        if comment_attempts:
+            save_world_prompt_trace(
+                session,
+                {
+                    "trace_scope": "audience",
+                    "stage_key": "comment_analysis",
+                    "template_id": "audience:comment_analysis",
+                    "template_version": "v1",
+                    "input_snapshot": {
+                        "project_id": commit.project_id,
+                        "chapter_number": commit.chapter_number,
+                    },
+                    "attempts": comment_attempts,
+                },
+            )
         return enqueue_trace_upload(
             session,
             trace={

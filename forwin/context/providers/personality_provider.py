@@ -16,20 +16,6 @@ class PersonalityContextProvider:
         library = draft.data.setdefault("personality_library", CharacterPersonalityLibrary())
         allowed_entities = draft.data.get("allowed_entities", [])
         try:
-            pressure_triggers = []
-            world_pressure = draft.data.get("world_pressure")
-            if world_pressure is not None:
-                pressure_triggers.extend(
-                    [
-                        str(world_pressure.pressure_level or "").strip(),
-                        str(world_pressure.pressure_summary or "").strip(),
-                    ]
-                )
-                pressure_triggers.extend(
-                    str(item).strip()
-                    for item in world_pressure.notable_shifts
-                    if str(item).strip()
-                )
             active_personality_contexts = [
                 item.model_dump(mode="json")
                 for item in build_active_personality_contexts(
@@ -41,7 +27,6 @@ class PersonalityContextProvider:
                     ],
                     library=library,
                     scene_flags=["chapter_generation"],
-                    pressure_triggers=pressure_triggers,
                 )
             ]
         except Exception:

@@ -30,7 +30,6 @@ DEFAULT_STAGES = (
     "scene_generation",
     "scene_stitch",
     "subworld_delta",
-    "world_pressure",
     "chapter_delta_extraction",
 )
 

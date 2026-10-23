@@ -155,7 +155,6 @@ def test_post_canon_phase3_has_one_durable_owner() -> None:
     assert "commit.idempotency_key" in service
     assert "self.post_canon_maintenance.run_for_chapter(" in stage
     assert "self.stage_analyzer.analyze(" not in stage
-    assert "self.world_simulator.simulate(" not in stage
     assert "build_post_canon_outbox_handlers" in handlers
     assert "post_canon_service_provider" in handlers
 

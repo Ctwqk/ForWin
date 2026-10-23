@@ -78,7 +78,7 @@ If the MCP server is missing or unhealthy, stop and fix the operator environment
 
 ### World Conflict Decisions And Resume
 
-Post-Canon maintenance runs `("world", "planning", "arc", "feedback")`. The world step runs a tick before the legacy `WorldSimulator`; its result records tick/delta/conflict/drop/postponement ids, warnings and skip reason. A tick uses the accepted chapter's story-time window, checks candidates, applies budgets, holds review-worthy changes, propagates news once and submits through `CanonAdmissionService.commit_world_tick`. Disabled, non-latest and already-ticked chapters skip; when `target_total_chapters > 0` and the chapter is at or past it, the skip reason is `book_complete`. Due intents beyond the adjudication cap that were not asked about appear as `adjudication:<intent>` in `postponed_candidate_ids`. LLM outages skip affected nodes.
+Post-Canon maintenance runs `("world", "planning", "arc", "feedback")`. The world step runs only a tick; its result records tick/delta/conflict/drop/postponement ids, warnings and skip reason. A tick uses the accepted chapter's story-time window, checks candidates, applies budgets, holds review-worthy changes, propagates news once and submits through `CanonAdmissionService.commit_world_tick`. Disabled, non-latest and already-ticked chapters skip; when `target_total_chapters > 0` and the chapter is at or past it, the skip reason is `book_complete`. Due intents beyond the adjudication cap that were not asked about appear as `adjudication:<intent>` in `postponed_candidate_ids`. LLM outages skip affected nodes.
 
 Historical rewrite replays world_engine deltas (ticks and direct conflict resolutions) with CAS; failed deltas create human `replay_cas` conflicts. Their carried resolutions are superseded, while the original conflicts stay `resolved`; open obligations become terminal `cancelled` with `metadata.cancel_reason` and no longer count in open lists, budgets or gates. Associated plan patches are reverted only on `planned`/`failed` plans and recorded as `plan_patch_revert`; accepted and other plan statuses stay unchanged. A goal or marker another still-active resolution patch contributes to the same plan is retained. Revert cannot recover old items displaced by the five-item caps. Inspect the replay_cas `proposed_change` keys `superseded_conflict_ids`, `cancelled_obligation_ids` and `reverted_plan_patch_ids`; those keys are always present, and the summary gives the three counts when any resolution was superseded.
 
@@ -147,3 +147,5 @@ Run the focused operator and Codex integration tests from the repository virtual
   tests/test_codex_operator_ready.py \
   -q
 ```
+
+Reader-comment analysis runs before post-Canon feedback aggregation. `FORWIN_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS` retains its existing name and defaults to 20 seconds; a failed or timed-out optional model call falls back to comment-language cues.

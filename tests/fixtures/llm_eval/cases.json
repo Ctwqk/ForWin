@@ -134,29 +134,6 @@
       "suites": [
         "medium"
       ]
-    },
-    {
-      "case_id": "world_pressure",
-      "stage_key": "world_pressure",
-      "task_family": "phase4",
-      "expected_output_kind": "json",
-      "schema_name": "world_pressure",
-      "messages": [
-        {
-          "role": "system",
-          "content": "你是网文世界模拟器，只输出 JSON，不要解释。"
-        },
-        {
-          "role": "user",
-          "content": "请评估当前世界压力，只输出 {\"pressure_level\":\"low|medium|high\",\"pressure_summary\":\"...\",\"notable_shifts\":[]}。背景：潮雾增强，商会开始封锁码头。"
-        }
-      ],
-      "response_format": {
-        "type": "json_object"
-      },
-      "suites": [
-        "medium"
-      ]
     }
   ]
 }

@@ -217,7 +217,6 @@ def build_project_detail(
         session, [project_id], limit=50
     ).get(project_id, [])
     latest_stage = runtime_maps["latest_stage_map"].get(project_id)
-    latest_world = runtime_maps["latest_world_map"].get(project_id)
     latest_arc_envelope = runtime_maps["latest_arc_envelope_map"].get(project_id)
     latest_arc_analysis = runtime_maps["latest_arc_analysis_map"].get(project_id)
     latest_arc_structure = runtime_maps["latest_arc_structure_map"].get(project_id)
@@ -301,8 +300,6 @@ def build_project_detail(
         pacing_verdict=latest_stage.pacing_verdict if latest_stage else "",
         pacing_summary=latest_stage.pacing_summary if latest_stage else "",
         current_time_label=latest_stage.timeline_label if latest_stage else "",
-        world_pressure_level=latest_world.pressure_level if latest_world else "",
-        world_pressure_summary=latest_world.pressure_summary if latest_world else "",
         **project_arc_snapshot_payload(
             latest_arc_envelope,
             latest_arc_analysis,

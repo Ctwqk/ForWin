@@ -407,8 +407,6 @@ class LLMWebNovelReviewer:
             )
         if context.timeline is not None:
             add_evidence("world:timeline", "world", context.timeline.model_dump_json())
-        if context.world_pressure is not None:
-            add_evidence("world:pressure", "world", context.world_pressure.model_dump_json())
         if getattr(context, "world_context", None) is not None:
             world_context = context.world_context
             if world_context.snapshot_id:
@@ -544,9 +542,6 @@ class LLMWebNovelReviewer:
             },
             "world": {
                 "timeline": context.timeline.model_dump(mode="json") if context.timeline is not None else {},
-                "world_pressure": (
-                    context.world_pressure.model_dump(mode="json") if context.world_pressure is not None else {}
-                ),
                 "active_rules": [item.model_dump(mode="json") for item in context.active_rules[:5]],
                 "canon_invariants": list(context.canon_invariants),
                 "world_context": context.world_context.model_dump(mode="json"),

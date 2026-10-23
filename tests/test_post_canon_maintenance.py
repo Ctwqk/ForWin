@@ -130,7 +130,7 @@ def _durable_service():
         pacing_strategist=object(),
         replan_governor=object(),
         arc_envelope_manager=object(),
-        world_simulator=object(),
+        comment_analyzer=object(),
         artifact_store=object(),
         llm_client=SimpleNamespace(drain_llm_attempt_events=lambda: []),
     )
@@ -291,7 +291,7 @@ def test_trace_enqueue_failure_rolls_back_step_and_marks_run_retryable() -> None
         pacing_strategist=object(),
         replan_governor=object(),
         arc_envelope_manager=object(),
-        world_simulator=object(),
+        comment_analyzer=object(),
         artifact_store=object(),
         llm_client=SimpleNamespace(drain_llm_attempt_events=lambda: []),
     )
@@ -368,7 +368,7 @@ def test_stale_completion_cannot_enqueue_trace() -> None:
         pacing_strategist=object(),
         replan_governor=object(),
         arc_envelope_manager=object(),
-        world_simulator=object(),
+        comment_analyzer=object(),
         artifact_store=object(),
         llm_client=SimpleNamespace(
             drain_llm_attempt_events=lambda: next(drains),
@@ -623,7 +623,7 @@ def test_blocked_order_controls_are_re_evaluated_until_clear() -> None:
         pacing_strategist=object(),
         replan_governor=object(),
         arc_envelope_manager=object(),
-        world_simulator=object(),
+        comment_analyzer=object(),
         artifact_store=object(),
         llm_client=llm_client,
     )

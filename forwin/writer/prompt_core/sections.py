@@ -494,17 +494,6 @@ def _arc_envelope_section(context: ChapterContextPack, *, compact: bool = False)
     )
 
 
-def _world_pressure_section(context: ChapterContextPack) -> str | None:
-    pressure = getattr(context, "world_pressure", None)
-    if not pressure:
-        return None
-    return (
-        "【世界压力】\n"
-        f"  · 等级：{pressure.pressure_level}\n"
-        f"  · 概览：{pressure.pressure_summary}"
-    )
-
-
 def _world_model_section(context: ChapterContextPack) -> str | None:
     world_context = getattr(context, "world_context", None)
     if not world_context or not world_context.snapshot_id:
@@ -592,7 +581,6 @@ __all__ = [
     '_active_threads_section',
     '_canon_name_anchor_section',
     '_arc_envelope_section',
-    '_world_pressure_section',
     '_world_model_section',
     '_audience_hints_section',
     '_retrieved_memories_section',

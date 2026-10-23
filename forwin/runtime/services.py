@@ -48,7 +48,7 @@ class GenerationRuntimeServices:
     stage_analyzer: Any
     pacing_strategist: Any
     replan_governor: Any
-    world_simulator: Any
+    comment_analyzer: Any
     arc_envelope_manager: Any
     draft_review: DraftReviewService
     writer: Any

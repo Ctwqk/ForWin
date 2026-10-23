@@ -31,7 +31,6 @@ from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.planning.goals import load_goals_json
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta, NarrativePatch, NodePatch, WorldNode
 from forwin.runtime.policy import RuntimePolicy
-from forwin.simulation.world import WorldTurnDraft
 from forwin.state.updater import StateUpdater
 from forwin.world_engine.actor_turns import ActorTurnRunner
 from forwin.world_engine.adjudicator import AdjudicationCall, WorldAdjudicator
@@ -640,10 +639,6 @@ def test_world_step_runs_before_planning_and_records_tick_result() -> None:
         calls.append("tick")
         return tick_run(session, commit, policy=policy)
 
-    def simulate(**_kwargs: Any) -> WorldTurnDraft:
-        calls.append("simulator")
-        return WorldTurnDraft(pressure_level="low", pressure_summary="", notable_shifts=[])
-
     tick_service.run = tick  # type: ignore[method-assign]
     service = PostCanonMaintenanceService(
         session_factory=Session,
@@ -651,7 +646,7 @@ def test_world_step_runs_before_planning_and_records_tick_result() -> None:
         pacing_strategist=object(),
         replan_governor=object(),
         arc_envelope_manager=object(),
-        world_simulator=SimpleNamespace(simulate=simulate),
+        comment_analyzer=object(),
         artifact_store=object(),
         llm_client=llm,
         world_tick=tick_service,
@@ -669,8 +664,8 @@ def test_world_step_runs_before_planning_and_records_tick_result() -> None:
     service.run(canon_commit_id=commit_id, worker_id="worker-1")
 
     assert POST_CANON_STEP_NAMES == ("world", "planning", "arc", "feedback")
-    # Inside the world step the tick runs first, then the world simulator.
-    assert calls == ["world", "tick", "simulator", "planning", "arc", "feedback"]
+    # The world step completes its tick before downstream maintenance.
+    assert calls == ["world", "tick", "planning", "arc", "feedback"]
     with Session() as session:
         run = session.scalars(select(PostCanonMaintenanceRun).where(
             PostCanonMaintenanceRun.canon_commit_id == commit_id, PostCanonMaintenanceRun.step_name == "world",
@@ -685,7 +680,6 @@ def test_world_step_runs_before_planning_and_records_tick_result() -> None:
         "postponed_candidate_ids": [],
         "warnings": [],
         "skipped_reason": "",
-        "pressure_level": "low",
     }
     engine.dispose()
 
@@ -1395,7 +1389,7 @@ def test_a_maintenance_service_built_without_the_container_keeps_the_tick_off_th
     llm = _WorldLLM()
     service = PostCanonMaintenanceService(
         session_factory=object(), stage_analyzer=object(), pacing_strategist=object(), replan_governor=object(),
-        arc_envelope_manager=object(), world_simulator=object(), artifact_store=object(), llm_client=llm,
+        arc_envelope_manager=object(), comment_analyzer=object(), artifact_store=object(), llm_client=llm,
     )
 
     assert service._world_tick_service().llm_client is None
@@ -1651,3 +1645,15 @@ def test_actor_views_read_only_the_turned_actors_recent_vetoes(monkeypatch) -> N
     )
     assert len(hero_view["vetoes"]) == MAX_RECENT_VETOES
     engine.dispose()
+
+
+def test_world_step_result_is_tick_result_only() -> None:
+    from unittest.mock import Mock, patch
+    service = object.__new__(PostCanonMaintenanceService)
+    result = WorldTickResult(tick_id="tick-only", graph_delta_ids=[], conflict_ids=[], dropped_candidate_ids=[], postponed_candidate_ids=[], skipped_reason="world_disabled")
+    service.world_tick = SimpleNamespace(run=lambda *args, **kwargs: result)
+    commit = SimpleNamespace(project_id="p", chapter_number=1)
+    session = Mock()
+    with patch("forwin.maintenance.post_canon.ProjectPolicyStore") as store:
+        store.return_value.load.return_value.policy = _policy()
+        assert service._run_world_step(session, commit) == result.step_result()

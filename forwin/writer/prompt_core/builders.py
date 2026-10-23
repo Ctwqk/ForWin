@@ -30,7 +30,6 @@ from .sections import (
     _timeline_section,
     _world_model_section,
     _world_intent_section,
-    _world_pressure_section,
 )
 
 
@@ -110,7 +109,6 @@ def _scene_prompt_sections(
         _experience_overlay_section(context),
         _world_intent_section(context),
         _arc_envelope_section(context, compact=envelope_compact),
-        _world_pressure_section(context),
         _world_model_section(context),
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=memory_limit, excerpt_chars=80),
@@ -152,7 +150,6 @@ def build_single_chapter_draft_prompt(
         _experience_overlay_section(context),
         _world_intent_section(context),
         _arc_envelope_section(context, compact=False),
-        _world_pressure_section(context),
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=3, excerpt_chars=80),
         _timeline_section(context),
@@ -212,7 +209,6 @@ def build_preview_chapter_prompt(
         _experience_overlay_section(context),
         _world_intent_section(context),
         _arc_envelope_section(context, compact=True),
-        _world_pressure_section(context),
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=2, excerpt_chars=60),
         _timeline_section(context),
@@ -314,7 +310,7 @@ def build_scene_generation_prompt(
     )
     user_content = (
         f"{scene_sections}\n\n"
-        "请显式参考当前世界压力和读者信号提示来组织这个 scene。\n\n"
+        "请显式参考读者信号提示来组织这个 scene。\n\n"
         "输出要求：\n"
         "1. 只写当前这个 scene，不要偷跑到下一 scene。\n"
         "2. 不要输出 JSON，不要解释。\n"

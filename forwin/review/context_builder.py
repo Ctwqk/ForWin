@@ -106,7 +106,6 @@ def build_review_context_pack(
         active_rules=active_rules,
         active_threads=active_threads,
         timeline=context.timeline,
-        world_pressure=context.world_pressure,
         reader_feedback=reader_feedback,
         audience_hints=context.audience_hints,
         reader_promise=context.reader_promise,

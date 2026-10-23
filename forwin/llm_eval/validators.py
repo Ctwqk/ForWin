@@ -13,7 +13,6 @@ REQUIRED_JSON_KEYS: dict[str, list[str]] = {
     "scene_breakdown": ["scenes"],
     "review_json": ["verdict", "issues"],
     "comment_analysis": ["signals"],
-    "world_pressure": ["pressure_level", "pressure_summary"],
 }
 
 REQUIRED_TAGS: dict[str, list[str]] = {

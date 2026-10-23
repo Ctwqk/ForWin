@@ -27,7 +27,7 @@ from forwin.audience.feedback import (
 from forwin.arc_sizing import policy_for_total_chapters
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.planning.stage_analysis import PacingStrategist
-from forwin.simulation.world import CommentAnalyzer
+from forwin.audience.comment_analysis import CommentAnalyzer
 from forwin.publishers.manager import PublisherManager
 from forwin.state.repo import StateRepository
 from tests.postgres import postgres_test_url
@@ -120,6 +120,31 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.session.add(row)
         self.session.flush()
         return row
+
+    def test_feedback_step_analyzes_new_comments_before_aggregation(self) -> None:
+        from types import SimpleNamespace
+        from forwin.maintenance.post_canon import PostCanonMaintenanceService
+
+        project = self._create_project()
+        comment = self._add_comment(
+            project_id=project.id, work_name=project.title, body="剧情有逻辑矛盾",
+            remote_comment_id="new-feedback", author_id="reader-1", author_name="reader",
+        )
+        service = object.__new__(PostCanonMaintenanceService)
+        service.comment_analyzer = CommentAnalyzer(llm_client=None)
+        commit = SimpleNamespace(project_id=project.id, chapter_number=1)
+        result = service._run_feedback_step(self.session, commit)
+        candidates = self.session.scalars(select(CommentSignalCandidate).where(
+            CommentSignalCandidate.source_comment_id == comment.id,
+        )).all()
+        self.assertTrue(candidates)
+        self.assertTrue(all(row.chapter_number == 1 for row in candidates))
+        self.assertGreater(result["aggregate_count"], 0)
+        ids = [row.id for row in candidates]
+        service._run_feedback_step(self.session, commit)
+        self.assertEqual(self.session.scalars(select(CommentSignalCandidate.id).where(
+            CommentSignalCandidate.source_comment_id == comment.id,
+        )).all(), ids)
 
     def _add_signal(
         self,
@@ -1351,3 +1376,35 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_feedback_comment_attempts_save_prompt_trace_and_events() -> None:
+    from types import SimpleNamespace
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from forwin.maintenance.post_canon import PostCanonMaintenanceService
+    from forwin.models import Base, DecisionEvent, OutboxEvent, PromptTrace
+
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            session.add(Project(id="project-trace", title="title", premise="premise", genre="genre"))
+            session.flush()
+            service = object.__new__(PostCanonMaintenanceService)
+            result = service._enqueue_step_trace(
+                session=session,
+                commit=SimpleNamespace(id="canon-trace", project_id="project-trace", chapter_number=1),
+                step_name="feedback",
+                attempts=[{"stage_key": "comment_analysis", "attempt_no": 1, "http_status": 200, "output_chars": 20}],
+            )
+            trace = session.scalars(select(PromptTrace)).one()
+            assert trace.stage_key == "comment_analysis"
+            assert trace.trace_scope == "audience"
+            events = session.scalars(select(DecisionEvent)).all()
+            assert events
+            assert all(event.related_object_id == trace.id for event in events)
+            outbox = session.scalars(select(OutboxEvent)).one()
+            assert outbox.event_id == result["event_id"]
+    finally:
+        engine.dispose()

@@ -908,12 +908,11 @@ justification = "网文爽点标记"
 max_literals = 50
 
 [[entry]]
-path = "forwin/simulation/world.py"
+path = "forwin/audience/comment_analysis.py"
 symbol = "_KEYWORD_RULES"
 checks = ["cjk_collection"]
-category = "pending_removal"
-remove_in = "P4"
-justification = "WorldSimulator 读者评论关键词；P4 删除 WorldSimulator"
+category = "language_lexicon"
+justification = "reader comment language cues, not story content"
 max_literals = 42
 
 [[entry]]

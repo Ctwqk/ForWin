@@ -33,7 +33,7 @@ from forwin.runtime.services import (
     PublisherRuntimeServices,
     SkillRuntimeBundle,
 )
-from forwin.simulation.world import WorldSimulator
+from forwin.audience.comment_analysis import CommentAnalyzer
 from forwin.skills import build_skill_runtime_components
 from forwin.storage import ArtifactStore
 from forwin.subworld_manager import SubWorldManager
@@ -200,7 +200,7 @@ class RuntimeContainer:
                 stage_analyzer=generation.stage_analyzer,
                 pacing_strategist=generation.pacing_strategist,
                 replan_governor=generation.replan_governor,
-                world_simulator=generation.world_simulator,
+                comment_analyzer=generation.comment_analyzer,
                 arc_envelope_manager=generation.arc_envelope_manager,
                 draft_review=generation.draft_review,
                 repair=generation.repair,
@@ -364,15 +364,7 @@ class RuntimeContainer:
                 subworld_manager=subworld_manager,
             )
             llm_available = bool(model_profile.api_key) or infrastructure.codex_enabled
-            phase4_llm = (
-                llm_client
-                if policy.planning.use_llm_simulation and llm_available
-                else None
-            )
-            world_simulator = WorldSimulator(
-                llm_client=phase4_llm,
-                active_thread_limit=infrastructure.phase_active_thread_limit,
-            )
+            comment_analyzer = CommentAnalyzer(llm_client=llm_client if llm_available else None)
             planning_service = PlanningService.build_default(
                 director=arc_director,
                 subworld_manager=subworld_manager,
@@ -411,7 +403,7 @@ class RuntimeContainer:
                 stage_analyzer=stage_analyzer,
                 pacing_strategist=pacing_strategist,
                 replan_governor=replan_governor,
-                world_simulator=world_simulator,
+                comment_analyzer=comment_analyzer,
                 arc_envelope_manager=arc_envelope_manager,
                 draft_review=draft_review,
                 writer=writer,
@@ -503,7 +495,7 @@ class RuntimeContainer:
                 pacing_strategist=generation.pacing_strategist,
                 replan_governor=generation.replan_governor,
                 arc_envelope_manager=generation.arc_envelope_manager,
-                world_simulator=generation.world_simulator,
+                comment_analyzer=generation.comment_analyzer,
                 artifact_store=core.artifact_store,
                 llm_client=generation.llm_client,
                 world_tick=build_world_tick_service(
@@ -570,14 +562,7 @@ class RuntimeContainer:
                 subworld_manager=subworld_manager,
             )
             llm_available = _llm_available(infrastructure, policy)
-            world_simulator = WorldSimulator(
-                llm_client=(
-                    llm_client
-                    if policy.planning.use_llm_simulation and llm_available
-                    else None
-                ),
-                active_thread_limit=infrastructure.phase_active_thread_limit,
-            )
+            comment_analyzer = CommentAnalyzer(llm_client=llm_client if llm_available else None)
             planning_service = PlanningService.build_default(
                 director=arc_director,
                 subworld_manager=subworld_manager,
@@ -594,7 +579,7 @@ class RuntimeContainer:
                 pacing_strategist=pacing_strategist,
                 replan_governor=replan_governor,
                 arc_envelope_manager=arc_envelope_manager,
-                world_simulator=world_simulator,
+                comment_analyzer=comment_analyzer,
                 artifact_store=core.artifact_store,
                 llm_client=llm_client,
                 world_tick=build_world_tick_service(

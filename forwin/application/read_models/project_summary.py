@@ -139,7 +139,6 @@ def build_project_summaries(
     for project in projects:
         latest_stage = runtime_maps["latest_stage_map"].get(project.id)
         last_replan = runtime_maps["last_replan_map"].get(project.id)
-        latest_world = runtime_maps["latest_world_map"].get(project.id)
         latest_arc_envelope = runtime_maps["latest_arc_envelope_map"].get(project.id)
         latest_arc_analysis = runtime_maps["latest_arc_analysis_map"].get(project.id)
         latest_arc_structure = runtime_maps["latest_arc_structure_map"].get(project.id)
@@ -208,12 +207,6 @@ def build_project_summaries(
                 last_replan_strategy=last_replan.strategy if last_replan else "",
                 last_replan_reason=last_replan.reason if last_replan else "",
                 current_time_label=latest_stage.timeline_label if latest_stage else "",
-                world_pressure_level=latest_world.pressure_level
-                if latest_world
-                else "",
-                world_pressure_summary=latest_world.pressure_summary
-                if latest_world
-                else "",
                 generation_control=generation_control,
                 chapters=chapters_by_project.get(project.id, [])[
                     -_PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT:

@@ -22,7 +22,6 @@ from forwin.state.query_helpers import (
     load_latest_arc_envelope_analysis_by_project,
     load_latest_replan_event_by_project,
     load_latest_stage_analysis_by_project,
-    load_latest_world_turn_by_project,
 )
 from .common import (
     _latest_rows_by_project,
@@ -309,7 +308,6 @@ def load_project_runtime_maps(
 ) -> dict[str, dict[str, Any]]:
     latest_stage_map = load_latest_stage_analysis_by_project(session, project_ids)
     last_replan_map = load_latest_replan_event_by_project(session, project_ids)
-    latest_world_map = load_latest_world_turn_by_project(session, project_ids)
     latest_arc_envelope_map = load_latest_active_arc_envelope_by_project(
         session, project_ids
     )
@@ -328,7 +326,6 @@ def load_project_runtime_maps(
     return {
         "latest_stage_map": latest_stage_map,
         "last_replan_map": last_replan_map,
-        "latest_world_map": latest_world_map,
         "latest_arc_envelope_map": latest_arc_envelope_map,
         "latest_arc_analysis_map": latest_arc_analysis_map,
         "latest_arc_structure_map": latest_arc_structure_map,

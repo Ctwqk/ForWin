@@ -13,7 +13,6 @@ from .context import (
     PlotThreadSnapshot,
     SignalSummaryView,
     TimelineSnapshot,
-    WorldPressureView,
     ChapterContextPack,
 )
 from .experience import (
@@ -67,7 +66,6 @@ __all__ = [
     "RelationSnapshot",
     "PlotThreadSnapshot",
     "TimelineSnapshot",
-    "WorldPressureView",
     "ChapterContextPack",
     "ReaderPromise",
     "MacroPayoff",

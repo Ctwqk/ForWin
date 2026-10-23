@@ -14,7 +14,6 @@ from forwin.models.phase import (
     ProjectReplanEvent,
     ProjectStageAnalysis,
 )
-from forwin.models.phase4 import WorldSimulationTurn
 from forwin.models.project import ArcPlanVersion
 
 
@@ -173,23 +172,6 @@ def load_latest_stage_analysis_by_project(
             ProjectStageAnalysis.chapter_number.desc(),
             ProjectStageAnalysis.created_at.desc(),
             ProjectStageAnalysis.id.desc(),
-        ),
-    )
-
-
-def load_latest_world_turn_by_project(
-    session: Session,
-    project_ids: Iterable[str],
-) -> dict[str, WorldSimulationTurn]:
-    return _load_latest_partitioned_rows(
-        session,
-        WorldSimulationTurn,
-        WorldSimulationTurn.project_id,
-        project_ids,
-        order_by=(
-            WorldSimulationTurn.chapter_number.desc(),
-            WorldSimulationTurn.created_at.desc(),
-            WorldSimulationTurn.id.desc(),
         ),
     )
 

@@ -20,7 +20,7 @@ def earliest_reveal_chapters(session: Session, project_id: str) -> dict[str, int
     # The seed committer imports the review gate, which reads this schedule.
     from forwin.genesis.handoff.world_seed_committer import seed_ref_id
 
-    pack = _active_pack(session, project_id)
+    pack = active_genesis_pack(session, project_id)
     seed = _mapping(pack.get("world_seed"))
     blueprint = _mapping(pack.get("book_arc_blueprint"))
     arc_starts: dict[int, int] = {}
@@ -51,7 +51,8 @@ def earliest_reveal_chapters(session: Session, project_id: str) -> dict[str, int
     return schedule
 
 
-def _active_pack(session: Session, project_id: str) -> dict[str, Any]:
+def active_genesis_pack(session: Session, project_id: str) -> dict[str, Any]:
+    """The project's active Genesis pack; empty when it has none or its JSON is not an object."""
     project = session.get(Project, project_id)
     revision_id = str(getattr(project, "active_genesis_revision_id", "") or "").strip()
     revision = session.get(BookGenesisRevision, revision_id) if revision_id else None
@@ -80,4 +81,4 @@ def _integer(value: Any) -> int | None:
     return value if type(value) is int else None
 
 
-__all__ = ["earliest_reveal_chapters"]
+__all__ = ["active_genesis_pack", "earliest_reveal_chapters"]

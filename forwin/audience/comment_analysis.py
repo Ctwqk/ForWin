@@ -16,12 +16,9 @@ from forwin.audience.feedback import (
 )
 from forwin.models import (
     CommentSignalCandidate,
-    Project,
     PublisherRawComment,
-    WorldSimulationTurn,
     new_id,
 )
-from forwin.book_state.thread_sampling import SampledThread, sample_active_threads
 from forwin.utils import parse_llm_json
 from forwin.llm.compat import call_chat_compat
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
@@ -89,13 +86,6 @@ class SignalDraft:
     severity: int
     confidence: float
     evidence_span: str
-
-
-@dataclass(slots=True)
-class WorldTurnDraft:
-    pressure_level: str
-    pressure_summary: str
-    notable_shifts: list[str]
 
 
 def _signal_key(signal_type: str, target_type: str, target_name: str) -> str:
@@ -215,7 +205,7 @@ def _load_highlight_comments(
 
 
 class CommentAnalyzer:
-    """Extracts structured comment signals in Phase 4."""
+    """Extracts structured reader comment signals for feedback aggregation."""
 
     def __init__(self, *, llm_client=None) -> None:
         self.llm_client = llm_client
@@ -511,6 +501,7 @@ def build_reader_feedback_snapshot(
     limit: int = 6,
     llm_client=None,
     analyze_missing: bool = False,
+    analyzer: CommentAnalyzer | None = None,
     allowed_chapter_titles: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     empty_snapshot = {
@@ -580,7 +571,7 @@ def build_reader_feedback_snapshot(
         return empty_snapshot
 
     if analyze_missing and project_id:
-        analyzer = CommentAnalyzer(llm_client=llm_client)
+        analyzer = analyzer or CommentAnalyzer(llm_client=llm_client)
         analyzer.analyze_and_store(
             session=session,
             project_id=project_id,
@@ -645,243 +636,3 @@ def build_reader_feedback_snapshot(
         "signals": aggregated_signals,
     }
 
-
-class WorldSimulator:
-    def __init__(self, *, llm_client=None, active_thread_limit: int = 20) -> None:
-        self.llm_client = llm_client
-        self.active_thread_limit = max(1, int(active_thread_limit))
-
-    def simulate(
-        self,
-        *,
-        session: Session,
-        project_id: str,
-        chapter_number: int,
-    ) -> WorldTurnDraft:
-        project = session.get(Project, project_id)
-        sampled = sample_active_threads(
-            session=session,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            limit=self.active_thread_limit,
-            stale_window=2,
-            recent_window=2,
-        )
-        active_threads = sampled.threads
-        latest_beats = sampled.latest_beats
-        stale_threads: list[str] = []
-        for thread in active_threads:
-            last_beat = latest_beats.get(thread.id)
-            reference_chapter = (
-                last_beat.chapter_number
-                if last_beat is not None
-                else thread.opened_at_chapter
-            )
-            if chapter_number - reference_chapter >= 2:
-                stale_threads.append(thread.name)
-        feedback = _load_reader_feedback(
-            session,
-            project.title if project else "",
-            project_id=project_id,
-            chapter_number=chapter_number,
-            limit=8,
-            llm_client=self.llm_client,
-        )
-
-        llm_turn = self._simulate_with_llm(
-            chapter_number=chapter_number,
-            active_threads=active_threads,
-            stale_threads=stale_threads,
-            feedback_summary=str(feedback.get("summary") or ""),
-        )
-        if llm_turn is not None:
-            return llm_turn
-
-        dominant_sentiment = str(feedback.get("dominant_sentiment") or "neutral")
-        pressure_level = "steady"
-        shifts: list[str] = []
-        if stale_threads:
-            pressure_level = "rising" if len(stale_threads) == 1 else "critical"
-            shifts.append(f"悬置线程：{'、'.join(stale_threads)}")
-        if dominant_sentiment.startswith("risk:"):
-            pressure_level = "critical"
-            shifts.append("读者指出当前情节存在明显风险点")
-        elif dominant_sentiment.startswith("pacing:"):
-            if pressure_level == "steady":
-                pressure_level = "rising"
-            shifts.append("读者对当前节奏存在持续担忧")
-        elif dominant_sentiment.startswith("confusion:"):
-            if pressure_level == "steady":
-                pressure_level = "rising"
-            shifts.append("读者困惑点正在放大世界压迫感")
-        elif dominant_sentiment.startswith("character_heat:"):
-            if pressure_level == "steady":
-                pressure_level = "rising"
-            shifts.append("读者热度正在推高后续兑现压力")
-        elif dominant_sentiment.startswith("relationship_interest:"):
-            if pressure_level == "steady":
-                pressure_level = "rising"
-            shifts.append("读者对关系线的持续关注正在推高互动兑现压力")
-        elif dominant_sentiment.startswith("prediction:"):
-            if pressure_level == "steady":
-                pressure_level = "rising"
-            shifts.append("读者猜测正在放大谜面兑现与 managed ambiguity 的压力")
-        elif dominant_sentiment == "negative":
-            pressure_level = "critical" if stale_threads else "rising"
-            shifts.append("读者对最近推进节奏表达了明显担忧")
-        elif dominant_sentiment == "curious":
-            if pressure_level == "steady":
-                pressure_level = "rising"
-            shifts.append("读者对悬念的追问正在放大世界压迫感")
-        elif dominant_sentiment == "positive":
-            shifts.append("读者期待正在推高后续兑现压力")
-        if not shifts:
-            shifts.append("主要矛盾仍处于可控推进状态")
-
-        pressure_summary = (
-            f"第{chapter_number}章后，世界压力为 {pressure_level}。"
-            f"重点变化：{'；'.join(shifts)}。"
-        )
-        return WorldTurnDraft(
-            pressure_level=pressure_level,
-            pressure_summary=pressure_summary,
-            notable_shifts=shifts,
-        )
-
-    def _simulate_with_llm(
-        self,
-        *,
-        chapter_number: int,
-        active_threads: list[SampledThread],
-        stale_threads: list[str],
-        feedback_summary: str,
-    ) -> WorldTurnDraft | None:
-        if self.llm_client is None:
-            return None
-        prompt = [
-            {
-                "role": "system",
-                "content": "你是网文世界模拟器，只输出 JSON，不要解释。",
-            },
-            {
-                "role": "user",
-                "content": (
-                    "请判断当前章节之后的世界压力，并输出下一章前的重要连锁反应。\n"
-                    f"当前章节：第 {chapter_number} 章\n"
-                    f"活跃线程数：{len(active_threads)}\n"
-                    f"悬置线程：{json.dumps(stale_threads, ensure_ascii=False)}\n\n"
-                    f"读者反馈摘要：{feedback_summary}\n\n"
-                    '返回格式：{"pressure_level":"steady|rising|critical","pressure_summary":"一句中文总结","notable_shifts":["变化1","变化2"]}'
-                ),
-            },
-        ]
-        try:
-            raw = call_chat_compat(
-                self.llm_client,
-                prompt,
-                temperature=0.35,
-                max_tokens=700,
-                response_format={"type": "json_object"},
-                task_family="phase4",
-                stage_key="world_pressure",
-                output_schema={"type": "object"},
-                timeout_seconds=_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS,
-                retry_on_timeout=False,
-            )
-        except TypeError as exc:
-            if "response_format" not in str(exc):
-                logger.warning("Phase4 world LLM call failed.", exc_info=True)
-                return None
-            try:
-                raw = call_chat_compat(
-                    self.llm_client,
-                    prompt,
-                    temperature=0.35,
-                    max_tokens=700,
-                    task_family="phase4",
-                    stage_key="world_pressure",
-                    timeout_seconds=_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS,
-                    retry_on_timeout=False,
-                )
-            except Exception:
-                logger.warning("Phase4 world LLM fallback call failed.", exc_info=True)
-                return None
-        except Exception:
-            logger.warning("Phase4 world LLM call failed.", exc_info=True)
-            return None
-        try:
-            payload = parse_llm_json(raw, error_prefix="World simulator parser")
-        except Exception as exc:  # noqa: BLE001
-            mark_latest_attempt_parse_failure(
-                self.llm_client,
-                parser_name="World simulator parser",
-                stage_key="world_pressure",
-                schema_name="world_pressure",
-                raw_output=raw,
-                error=exc,
-            )
-            logger.warning("Phase4 world parse failed.", exc_info=True)
-            return None
-        level = str(payload.get("pressure_level") or "steady").strip().lower()
-        if level not in {"steady", "rising", "critical"}:
-            level = "steady"
-        notable = [
-            str(item).strip()
-            for item in (payload.get("notable_shifts") or [])
-            if str(item).strip()
-        ]
-        return WorldTurnDraft(
-            pressure_level=level,
-            pressure_summary=str(payload.get("pressure_summary") or "").strip()
-            or f"第{chapter_number}章后，世界压力为 {level}。",
-            notable_shifts=notable or ["世界仍在对主角行动做出反应"],
-        )
-
-
-def _load_reader_feedback(
-    session: Session,
-    project_title: str,
-    *,
-    project_id: str = "",
-    chapter_number: int = 0,
-    limit: int = 6,
-    llm_client=None,
-) -> dict[str, object]:
-    snapshot = build_reader_feedback_snapshot(
-        session,
-        project_title,
-        project_id=project_id,
-        chapter_number=chapter_number,
-        limit=limit,
-        llm_client=llm_client,
-        analyze_missing=True,
-    )
-    return {
-        "dominant_sentiment": snapshot["dominant_sentiment"],
-        "summary": snapshot["feedback_summary"],
-        "highlights": [
-            str(comment.body_text or "")[:120]
-            for comment in snapshot["recent_comments"]
-        ],
-        "signals": snapshot["signals"],
-    }
-
-
-def save_world_turn(
-    *,
-    session: Session,
-    project_id: str,
-    chapter_number: int,
-    turn: WorldTurnDraft,
-) -> None:
-    session.add(
-        WorldSimulationTurn(
-            id=new_id(),
-            project_id=project_id,
-            chapter_number=chapter_number,
-            pressure_level=turn.pressure_level,
-            pressure_summary=turn.pressure_summary,
-            notable_shifts_json=json.dumps(turn.notable_shifts, ensure_ascii=False),
-        )
-    )
-    session.flush()

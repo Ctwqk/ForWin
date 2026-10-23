@@ -32,7 +32,10 @@ NARRATIVE_EDGE_TYPES: set[str] = {
     "contradicts_plan",
 }
 
-# A review_constraint's payload.until_chapter while its protection is open; a missing one means the same.
+PLAN_CONSTRAINT_SOURCE_TYPE = "plan_constraint"
+PROTECTION_STATUS_PATH = "payload.status"
+RELEASED_PROTECTION_STATUS = "released"
+# A missing expiry, like zero, leaves a protection open unless its payload status is released.
 OPEN_PROTECTION_UNTIL = 0
 PROTECTION_UNTIL_PATH = "payload.until_chapter"
 

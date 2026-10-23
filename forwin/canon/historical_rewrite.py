@@ -48,6 +48,7 @@ from forwin.world_engine.conflict_events import (
 from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.world_engine.superseded_resolutions import supersede_resolutions
 from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE
+from forwin.book_state.narrative import PLAN_CONSTRAINT_SOURCE_TYPE
 
 from .plan import CanonCommitPlan
 
@@ -100,9 +101,10 @@ def _patch_ref(patch: object) -> str:
 
 
 def _created_refs(delta: GraphDelta) -> list[str]:
-    """The nodes, edges and facts a delta creates."""
+    """The world and narrative nodes, edges and facts a delta creates."""
     return [
         *(patch.node_id for patch in delta.node_patches if str(patch.op) == "create"),
+        *(patch.target_ref for patch in delta.narrative_patches if str(patch.op) == "create"),
         *(patch.edge_id for patch in delta.edge_patches if str(patch.op) == "create"),
         *(
             f"{FACT_REF_PREFIX}{patch.fact_id}"
@@ -236,13 +238,15 @@ class HistoricalCanonRewriteRepository:
         retained_ids = [
             delta_id for delta_id in chapter_ids if delta_id not in owned_ids
         ]
-        # A retained delta is an accepted world edit or a world tick's delta.
+        # Retain accepted world edits, listed world ticks, and canon plan constraints.
         tick_ids = {
             delta_id
             for delta_id, source_type in chapter_rows
             if delta_id not in owned_ids and source_type == WORLD_ENGINE_SOURCE_TYPE
         }
-        edit_ids = set(retained_ids) - tick_ids
+        constraint_ids = {delta_id for delta_id, source_type in chapter_rows
+                          if delta_id not in owned_ids and source_type == PLAN_CONSTRAINT_SOURCE_TYPE}
+        edit_ids = set(retained_ids) - tick_ids - constraint_ids
         if edit_ids:
             world_edit_ids = set(
                 self.session.scalars(
@@ -637,7 +641,7 @@ class HistoricalCanonReplacement:
         replayed = []
         for delta in deltas:
             dependency = self._dropped_tick_dependency(delta)
-            if delta.source_type == WORLD_ENGINE_SOURCE_TYPE:
+            if delta.source_type in {WORLD_ENGINE_SOURCE_TYPE, PLAN_CONSTRAINT_SOURCE_TYPE}:
                 mismatches = compiler.cas_mismatches(runtime, delta)
                 if mismatches or dependency is not None:
                     self._drop_world_tick_delta(delta, mismatches, dependency)
@@ -691,7 +695,7 @@ class HistoricalCanonReplacement:
             graph_delta_id=delta.id,
             reason=(
                 f"Rewriting chapter {self.plan.chapter_number} dropped "
-                f"world_engine delta {delta.id}."
+                f"{delta.source_type} delta {delta.id}."
             ),
         )
         reasons = [label for label, _, _ in mismatches]

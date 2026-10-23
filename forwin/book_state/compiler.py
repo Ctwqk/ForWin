@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from forwin.book_state.cognition import CognitionView
-from forwin.book_state.narrative import OPEN_PROTECTION_UNTIL, PROTECTION_UNTIL_PATH
+from forwin.book_state.narrative import OPEN_PROTECTION_UNTIL, PROTECTION_STATUS_PATH, PROTECTION_UNTIL_PATH
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository, _as_jsonable, _world_edge_as_of
 from forwin.book_state.runtime import INACTIVE_SPANS_KEY, BookStateRuntime
@@ -20,6 +20,7 @@ from forwin.protocol.book_state import (
     GraphDeltaType,
     MapPatch,
     NodePatch,
+    NarrativePatch,
     WorldEdge,
     WorldNode,
 )
@@ -220,8 +221,13 @@ class BookStateCompiler:
         return [
             (label, patch, current)
             for label, patch, current in self._iter_patch_current_values(runtime, delta)
-            if getattr(patch, "old_value", None) is not None
-            and not _json_equal(patch.old_value, current)
+            if (getattr(patch, "old_value", None) is not None
+                # An absent protection status is active, and its explicit None must still participate in CAS.
+                or (isinstance(patch, NarrativePatch) and str(patch.op) != "create"
+                    and patch.field_path == PROTECTION_STATUS_PATH))
+            and (not _json_equal(patch.old_value, current)
+                 or (isinstance(patch, NarrativePatch) and patch.field_path == PROTECTION_STATUS_PATH
+                     and _split_target_ref(patch.target_ref)[1] not in runtime.narrative.nodes_by_id))
         ]
 
     def _iter_patch_current_values(

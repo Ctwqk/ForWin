@@ -6,33 +6,30 @@ import json
 import logging
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.models.genesis import BookGenesisRevision
-from forwin.models.project import Project
+from forwin.models.project import ArcPlanVersion, Project
+from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
 
 
 logger = logging.getLogger(__name__)
 
 
 def earliest_reveal_chapters(session: Session, project_id: str) -> dict[str, int]:
-    """Fact node id -> ``chapter_start`` of the arc its world_seed reveal candidate names."""
+    """Fact node id -> reader target start, otherwise the candidate's live arc start."""
     # The seed committer imports the review gate, which reads this schedule.
     from forwin.genesis.handoff.world_seed_committer import seed_ref_id
 
     pack = active_genesis_pack(session, project_id)
     seed = _mapping(pack.get("world_seed"))
-    blueprint = _mapping(pack.get("book_arc_blueprint"))
-    arc_starts: dict[int, int] = {}
-    for arc in _mappings(blueprint.get("arcs")):
-        number, start = _integer(arc.get("arc_number")), _integer(arc.get("chapter_start"))
-        if number is None or start is None:
-            logger.warning(
-                "project %s: book_arc_blueprint arc has a non-integer arc_number or chapter_start: %r",
-                project_id, {key: arc.get(key) for key in ("arc_number", "chapter_start")},
-            )
-            continue
-        arc_starts[number] = start
+    arc_starts = {
+        arc.arc_number: arc.chapter_start for arc in session.scalars(select(ArcPlanVersion).where(
+            ArcPlanVersion.project_id == project_id, ArcPlanVersion.status != "superseded",
+        ).order_by(ArcPlanVersion.version))
+        if type(arc.arc_number) is int and type(arc.chapter_start) is int
+    }
     schedule: dict[str, int] = {}
     for candidate in _mappings(seed.get("reveal_candidates")):
         fact_id = str(candidate.get("fact_id") or "").strip()
@@ -48,6 +45,14 @@ def earliest_reveal_chapters(session: Session, project_id: str) -> dict[str, int
             continue
         node_id = seed_ref_id(project_id, "fact", fact_id)
         schedule[node_id] = min(schedule.get(node_id, start), start)
+    reader_targets: dict[str, int] = {}
+    repo = ArcBeatSheetRepository(session)
+    for row in repo.active_for_project(project_id):
+        for target in repo.load(row).reveal_targets:
+            if target.observer == "reader":
+                ref, start = target.fact_ref.removeprefix("fact:"), target.range[0]
+                reader_targets[ref] = min(reader_targets.get(ref, start), start)
+    schedule.update(reader_targets)
     return schedule
 
 

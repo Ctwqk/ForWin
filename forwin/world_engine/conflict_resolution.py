@@ -201,7 +201,7 @@ def _broken_protections(held: TickCandidate, runtime: BookStateRuntime) -> list[
 def _release_candidate(
     conflict: WorldPlanConflictRow, held: TickCandidate, runtime: BookStateRuntime,
 ) -> TickCandidate | None:
-    """Every protection the held change breaks in the next chapter ends with the latest one."""
+    """Release every protection the held change breaks in the next chapter, including at chapter zero."""
     broken = _broken_protections(held, runtime)
     if not broken:
         return None

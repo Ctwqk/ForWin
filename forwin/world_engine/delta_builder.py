@@ -20,7 +20,7 @@ from forwin.book_state.extraction.translator import (
     _stable_id,
 )
 from forwin.book_state.knowledge import FACT_REF_PREFIX, KnowledgeEvent, knowledge_event_to_patch
-from forwin.book_state.narrative import OPEN_PROTECTION_UNTIL, PROTECTION_UNTIL_PATH
+from forwin.book_state.narrative import PROTECTION_STATUS_PATH, RELEASED_PROTECTION_STATUS
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
@@ -402,22 +402,18 @@ class _TickBuilder:
     # protections
 
     def _release_protection(self, ref: str, until_chapter: int) -> None:
-        """End a review_constraint's protection at ``until_chapter``.
-
-        A missing until_chapter was open, which until_chapter 0 also means; the patch records it as 0, so
-        every release carries an old_value that a rewind restores and a replay's CAS compares.
-        """
+        """Release a protection, including at chapter zero; retain the P3 candidate wire format."""
         node = self.runtime.narrative.nodes_by_id.get(ref.strip())
         if node is None or node.node_type != "review_constraint":
             self._unresolved(f"protection {ref.strip()!r} is not a review_constraint node")
             return
-        old_value = node.payload.get("until_chapter")
+        old_value = node.payload.get("status")
         self.narrative_patches.append(NarrativePatch(
             target_ref=f"{_PROTECTION_REF_PREFIX}{node.id}",
             op="set",
-            field_path=PROTECTION_UNTIL_PATH,
-            old_value=OPEN_PROTECTION_UNTIL if old_value is None else old_value,
-            new_value=until_chapter,
+            field_path=PROTECTION_STATUS_PATH,
+            old_value=old_value,
+            new_value=RELEASED_PROTECTION_STATUS,
             reason=self.reason,
             evidence_refs=[self._evidence_ref()],
         ))

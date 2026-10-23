@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -12,6 +13,10 @@ from sqlalchemy.orm import sessionmaker
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.compiler import BookStateCompiler
 from forwin.book_state.repository import BookStateRepository
+from forwin.book_state.narrative import PLAN_CONSTRAINT_SOURCE_TYPE, PROTECTION_STATUS_PATH, RELEASED_PROTECTION_STATUS
+from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.reviewer import BookStateReviewGate
+from forwin.planning.beat_sheet.types import ProtectionSpec
 from forwin.candidate_drafts import (
     CandidateDraftRepository,
     candidate_body_hash,
@@ -19,7 +24,7 @@ from forwin.candidate_drafts import (
     candidate_writer_output_admission_fingerprint,
 )
 from forwin.models.base import new_id
-from forwin.models.book_state import GraphDeltaRow
+from forwin.models.book_state import GraphDeltaRow, WorldSnapshotRow
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.audit import DecisionEvent
@@ -29,7 +34,7 @@ from forwin.models.project import ChapterPlan, Project
 from forwin.maintenance.state import post_canon_barrier_ready
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.outbox.store import enqueue_outbox_event
-from forwin.protocol.book_state import ApprovedGraphDeltaSet, BookStateCompileResult
+from forwin.protocol.book_state import ApprovedGraphDeltaSet, BookStateCompileResult, GraphDelta, NarrativePatch
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE
 
@@ -52,6 +57,12 @@ class CanonStaleVersion(RuntimeError):
 
 class CanonWriteFailure(RuntimeError):
     """An authoritative Canon write could not be completed."""
+
+
+@dataclass(frozen=True)
+class CanonPlanConstraintOutcome:
+    graph_delta_ids: tuple[str, ...]
+    idempotent: bool
 
 
 class CanonAdmissionService:
@@ -593,6 +604,66 @@ class CanonAdmissionService:
         session.flush()
         return compile_result
 
+    def commit_plan_constraints(
+        self, *, session: Session, project_id: str, beat_sheet_id: str,
+        creates: list[ProtectionSpec], releases: list[str],
+    ) -> CanonPlanConstraintOutcome:
+        """Commit a sheet's protections after the latest canon delta; the caller owns the transaction."""
+        project = session.scalar(select(Project).where(Project.id == project_id).with_for_update(key_share=True))
+        if project is None:
+            raise CanonStaleVersion("project no longer exists")
+        rows = session.execute(select(GraphDeltaRow.id, GraphDeltaRow.metadata_json).where(
+            GraphDeltaRow.project_id == project_id, GraphDeltaRow.source_type == PLAN_CONSTRAINT_SOURCE_TYPE,
+        ).order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)).all()
+        existing = tuple(ref for ref, metadata in rows if _json_object(metadata).get("beat_sheet_id") == beat_sheet_id)
+        if existing:
+            return CanonPlanConstraintOutcome(existing, True)
+        chapter = BookStateRepository(session).latest_canon_chapter(project_id) or 0
+        runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=chapter)
+        patches = []
+        for ref in dict.fromkeys(releases):
+            node = runtime.narrative.nodes_by_id.get(ref)
+            if node is None or node.node_type != "review_constraint":
+                raise CanonWriteFailure(f"protection {ref!r} is not a review_constraint node")
+            patches.append(NarrativePatch(target_ref=f"review_constraint:{ref}", op="set",
+                field_path=PROTECTION_STATUS_PATH, old_value=node.payload.get("status"),
+                new_value=RELEASED_PROTECTION_STATUS))
+        for spec in creates:
+            ref = new_id()
+            payload = {"ref": spec.ref, "kind": spec.kind, "until_chapter": spec.until_chapter, "source": "beat_sheet"}
+            if spec.kind == "must_not_know":
+                payload.update(observer_ref=spec.observer_ref, fact_ref=spec.fact_ref)
+            if spec.kind == "must_hold_state":
+                payload.update(field=spec.field, value=spec.value)
+            patches.append(NarrativePatch(target_ref=f"review_constraint:{ref}", op="create", new_value={
+                "id": ref, "project_id": project_id, "node_type": "review_constraint", "payload": payload,
+                "metadata": {"beat_sheet_id": beat_sheet_id},
+            }))
+        delta = GraphDelta(id=new_id(), project_id=project_id, chapter_number=chapter,
+            source_type=PLAN_CONSTRAINT_SOURCE_TYPE, source_id=beat_sheet_id, narrative_patches=patches,
+            metadata={"beat_sheet_id": beat_sheet_id})
+        changes = ApprovedGraphDeltaSet(project_id=project_id, chapter_number=chapter,
+                                       graph_deltas=[delta], approved_by=[PLAN_CONSTRAINT_SOURCE_TYPE])
+        verdict = BookStateReviewGate(session).review(changes, base_chapter=chapter)
+        if not verdict.accepted:
+            raise CanonWriteFailure("; ".join(issue.message for issue in verdict.issues))
+        result = BookStateCompiler(session).compile(changes, compiler_run_id=f"canon-plan-constraints-{beat_sheet_id}",
+                                                     base_chapter=chapter)
+        if not result.committed:
+            raise CanonWriteFailure("; ".join(result.blocked_reasons))
+        # PostgreSQL now() is transaction-stable. Preserve order after the seed and after any
+        # earlier sheet in this transaction, both in the ledger and the narrative snapshot.
+        last_delta_time = session.scalar(select(func.max(GraphDeltaRow.created_at)).where(
+            GraphDeltaRow.project_id == project_id, GraphDeltaRow.chapter_number == chapter,
+        ))
+        session.get(GraphDeltaRow, delta.id).created_at = last_delta_time + timedelta(microseconds=1)
+        last_snapshot_time = session.scalar(select(func.max(WorldSnapshotRow.built_at)).where(
+            WorldSnapshotRow.project_id == project_id, WorldSnapshotRow.as_of_chapter == chapter,
+        ))
+        session.get(WorldSnapshotRow, result.world_snapshot_id).built_at = last_snapshot_time + timedelta(microseconds=1)
+        session.flush()
+        return CanonPlanConstraintOutcome(tuple(result.graph_delta_ids), False)
+
     def commit_world_tick(
         self,
         *,
@@ -786,6 +857,7 @@ def _outcome_from_record(
 
 __all__ = [
     "CanonAdmissionService",
+    "CanonPlanConstraintOutcome",
     "CanonStaleVersion",
     "CanonWriteFailure",
     "GENESIS_SEED_SOURCE_TYPE",

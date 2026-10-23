@@ -597,14 +597,14 @@ def test_amend_plan_releases_protections_and_requires_human(monkeypatch) -> None
     delta_id = _delta_id(book, conflict_id)
     assert result == ConflictResolutionResult(graph_delta_ids=(delta_id,), obligation_id="", plan_patch_id="")
     [delta] = _resolution_deltas(Session, book, conflict_id)
-    # The release rides in the same delta as the change, with the protection's old until_chapter.
+    # The release rides in the same delta as the change, with the protection's old payload status.
     assert [(patch.target_ref, str(patch.op), patch.field_path, patch.old_value, patch.new_value)
             for patch in delta.narrative_patches] == [
-        ("review_constraint:protect-rival", "set", "payload.until_chapter", 0, 1),
+        ("review_constraint:protect-rival", "set", "payload.status", None, "released"),
     ]
     runtime = _runtime(Session, book)
     assert runtime.world.get_state(rival)["alive_status"] == "dead"
-    assert runtime.narrative.nodes_by_id["protect-rival"].payload["until_chapter"] == 1
+    assert runtime.narrative.nodes_by_id["protect-rival"].payload["status"] == "released"
     assert runtime.narrative.nodes_by_id["protect-hero"].payload["until_chapter"] == 0
     assert check_narrative_boundaries(runtime, held, next_chapter=2) == []
     assert _row(Session, book, conflict_id) == ("resolved", [delta_id], "amend_plan")
@@ -849,7 +849,7 @@ def test_veto_with_an_unknown_actor_only_stops_the_intent(monkeypatch) -> None:
     engine.dispose()
 
 
-def test_builder_releases_only_review_constraints_and_records_an_absent_until_chapter_as_open(monkeypatch) -> None:
+def test_builder_releases_only_review_constraints_and_records_an_absent_status(monkeypatch) -> None:
     engine, Session = _session_factory()
     book = _book(Session, monkeypatch, protections=lambda world: [
         ("protect-open", {"ref": world.rival, "kind": "must_be_alive", "source": "test"}),
@@ -868,7 +868,7 @@ def test_builder_releases_only_review_constraints_and_records_an_absent_until_ch
     built = _built(Session, context, [release("protect-open")], tick_id="tick-release")
     assert [(patch.target_ref, patch.field_path, patch.old_value, patch.new_value)
             for patch in built.narrative_patches] == [
-        ("review_constraint:protect-open", "payload.until_chapter", 0, 1),
+        ("review_constraint:protect-open", "payload.status", None, "released"),
     ]
     engine.dispose()
 
@@ -891,13 +891,15 @@ def test_releasing_an_open_protection_rewinds_to_open(monkeypatch) -> None:
         violated="protection", impact="major", actor_ref=book.world.hero,
     )
 
-    # The release records the open protection as until_chapter 0, and canon admission's CAS accepts that.
+    # The release records the absent status as None, and canon admission's CAS accepts that.
     _resolve(Session, book, conflict_id, "amend_plan")
 
     [delta] = _resolution_deltas(Session, book, conflict_id)
     [release] = delta.narrative_patches
-    assert (release.field_path, release.old_value, release.new_value) == ("payload.until_chapter", 0, 1)
-    assert _runtime(Session, book).narrative.nodes_by_id["protect-open"].payload["until_chapter"] == 1
+    assert (release.field_path, release.old_value, release.new_value) == ("payload.status", None, "released")
+    released = _runtime(Session, book)
+    assert released.narrative.nodes_by_id["protect-open"].payload["status"] == "released"
+    assert check_narrative_boundaries(released, held, next_chapter=2) == []
 
     # Rewind chapter 1 without the release, as a rewrite that drops its delta does.
     with Session.begin() as session:
@@ -905,6 +907,7 @@ def test_releasing_an_open_protection_rewinds_to_open(monkeypatch) -> None:
         repository.invalidate_project_range(book.project_id, from_chapter=1, through_chapter=1)
         repository.retire_chapter_deltas(book.project_id, 1, delta_ids=[delta.id])
     rewound = _runtime(Session, book)
+    assert "status" not in rewound.narrative.nodes_by_id["protect-open"].payload
     assert "until_chapter" not in rewound.narrative.nodes_by_id["protect-open"].payload
     assert [v.constraint_node_id for v in check_narrative_boundaries(rewound, held, next_chapter=2)] == [
         "protect-open",
@@ -914,10 +917,10 @@ def test_releasing_an_open_protection_rewinds_to_open(monkeypatch) -> None:
         assert BookStateCompiler(session).cas_mismatches(rewound, delta) == []
         closed = rewound.narrative.nodes_by_id["protect-open"]
         rewound.narrative.nodes_by_id["protect-open"] = closed.model_copy(
-            update={"payload": {**closed.payload, "until_chapter": 5}},
+            update={"payload": {**closed.payload, "status": "released"}},
         )
         assert [label for label, _patch, _current in BookStateCompiler(session).cas_mismatches(rewound, delta)] == [
-            "narrative:review_constraint:protect-open:payload.until_chapter",
+            "narrative:review_constraint:protect-open:payload.status",
         ]
     engine.dispose()
 

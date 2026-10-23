@@ -563,3 +563,71 @@ def test_split_arc_into_bands_always_passes_band_validation() -> None:
                 bands = split_arc_into_bands(start, start + length - 1, band_size)
                 assert [band.band_index for band in bands] == list(range(len(bands)))
                 assert band_breakdown_issues(bands, start, start + length - 1) == [], (length, band_size)
+
+
+def test_fallback_protagonist_skips_inactive_seeded_character():
+    from forwin.genesis.handoff.world_seed_committer import seed_ref_id
+    from forwin.planning.beat_sheet.fallback import fallback_protagonist_ref
+
+    refs = [seed_ref_id("p", "character", ref) for ref in ("first", "second")]
+    runtime = BookStateRuntime(project_id="p", as_of_chapter=1, world=ObjectiveWorldGraph(nodes=[
+        WorldNode(id=refs[0], project_id="p", node_type="character", is_active=False, metadata=_SEEDED),
+        WorldNode(id=refs[1], project_id="p", node_type="character", metadata=_SEEDED),
+    ]), map_graph=MapGraph())
+    pack = {"world": {"story_engine": {"core_cast": [{"id": "first"}, {"id": "second"}]}}}
+    assert fallback_protagonist_ref("p", pack, runtime) == refs[1]
+
+
+def test_provider_failure_after_chapter_one_uses_next_active_seeded_character(Session):
+    world, arc_id = _book(Session)
+    with Session.begin() as session:
+        revision = session.scalars(select(BookGenesisRevision).where(BookGenesisRevision.project_id == world.project_id)).one()
+        pack = json.loads(revision.pack_json)
+        pack["world"]["story_engine"]["core_cast"].append({"id": "opp-1"})
+        revision.pack_json = json.dumps(pack)
+        result = BookStateCompiler(session).compile(ApprovedGraphDeltaSet(
+            project_id=world.project_id, chapter_number=1, graph_deltas=[GraphDelta(
+                id=f"deactivate-{world.project_id}", project_id=world.project_id, chapter_number=1,
+                node_patches=[NodePatch(node_id=world.hero, node_type="character", op="deactivate",
+                                        field_path="is_active", old_value=True)],
+            )],
+        ))
+        assert result.committed, result.blocked_reasons
+    client = StubLLM(RuntimeError("unavailable"), RuntimeError("unavailable"))
+    row_id = _ensure(Session, _service(client), world, arc_id)
+    with Session() as session:
+        row = session.get(ArcBeatSheetRow, row_id)
+        assert (row.source, row.protagonist_ref) == ("fallback", world.rival)
+        assert len(_traces(session, world.project_id)) == 1
+    assert len(client.calls) == 2
+
+
+@pytest.mark.parametrize("revise", [False, True])
+def test_generation_rereads_active_sheet_after_llm_and_saves_losing_trace(Session, monkeypatch, revise):
+    from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+    from forwin.planning.beat_sheet.types import ArcBeatSheetData
+
+    world, arc_id = _book(Session)
+    service = _service(StubLLM(_sheet(world), _sheet(world)))
+    if revise:
+        _ensure(Session, service, world, arc_id)
+    real_call = service._call
+    with Session.begin() as session:
+        winner = []
+
+        def racing_call(*args, **kwargs):
+            result = real_call(*args, **kwargs)
+            # A competing writer wins while this call generates; the post-call read must see it.
+            winner.append(ArcBeatSheetRepository(session).create(
+                world.project_id, arc_id, ArcBeatSheetData.model_validate(_sheet(world)), source="llm", reason="winner",
+            ))
+            return result
+
+        monkeypatch.setattr(service, "_call", racing_call)
+        args = dict(project_id=world.project_id, arc_plan=session.get(ArcPlanVersion, arc_id), policy=POLICY)
+        row = (service.revise(session, **args, reason="revision", conflict_summary="change") if revise
+               else service.ensure_for_arc(session, **args))
+        assert row.id == winner[0].id
+        rows = list(session.scalars(select(ArcBeatSheetRow).where(ArcBeatSheetRow.project_id == world.project_id)))
+        assert len(rows) == (2 if revise else 1)
+        assert len(_traces(session, world.project_id)) == (2 if revise else 1)

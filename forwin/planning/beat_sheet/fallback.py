@@ -66,7 +66,7 @@ def fallback_protagonist_ref(project_id: str, pack: Mapping[str, Any], runtime: 
     for item in core_cast:
         ref = str(item.get("id") or "").strip() if isinstance(item, Mapping) else ""
         node = runtime.world.get_node(seed_ref_id(project_id, "character", ref)) if ref else None
-        if node is not None and str(node.node_type) == "character":
+        if node is not None and node.is_active and str(node.node_type) == "character":
             return node.id
     raise ValueError(f"project {project_id} has no seeded core_cast character to stand as protagonist")
 

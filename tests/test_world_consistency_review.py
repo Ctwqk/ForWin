@@ -311,7 +311,7 @@ def test_refs_before_trailing_punctuation_get_their_names() -> None:
 
 # Gate errors the writer cannot fix by rewriting prose keep the generic fix; the reader check
 # applies only to world tick deltas, which never reach the writer.
-_DEFAULT_FIX_GATE_CODES = {"delta_not_allowed_for_canon", "world_engine_reader_knowledge"}
+_DEFAULT_FIX_GATE_CODES = {"delta_not_allowed_for_canon", "world_engine_reader_knowledge", "invalid_protection"}
 
 
 def _gate_error_codes() -> set[str]:

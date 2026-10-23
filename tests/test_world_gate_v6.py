@@ -19,6 +19,7 @@ from forwin.canon import preparation
 from forwin.genesis.handoff.world_seed_committer import WorldSeedCommitter, seed_ref_id
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision
+from forwin.models.project import ArcPlanVersion
 from forwin.naming.types import EntityAdmissionPlan
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta, MapEdge, MapNode, NodePatch
 from forwin.protocol.review import ReviewVerdict
@@ -165,6 +166,7 @@ def _seed_world(
         session.add(revision)
         session.flush()
         project.active_genesis_revision_id = revision.id
+        session.add_all([ArcPlanVersion(project_id=project.id, arc_synopsis="arc", **arc) for arc in TWO_ARCS])
         world = _World(project.id)
         repo = BookStateRepository(session)
         for number in range(1, 6):
@@ -813,3 +815,42 @@ def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.Mo
         ("delta-3", {"translation_warnings": []}),
     ]
     assert calls == [{"approved_by": ["chapter_extraction"], "base_chapter": 2, "travel_tolerance": 0.35}]
+
+
+@pytest.mark.parametrize("payload", [
+    {"ref": "a", "until_chapter": 1},
+    {"ref": "a", "kind": "must_not_know", "until_chapter": 1},
+    {"ref": "a", "kind": "must_hold_state", "until_chapter": 1},
+    {"ref": "a", "kind": "must_exist"},
+    {"ref": "a", "kind": "invalid", "until_chapter": 1},
+    {"ref": "a", "kind": "must_exist", "until_chapter": True},
+    {"ref": "a", "kind": "must_exist", "until_chapter": -1},
+])
+def test_gate_rejects_malformed_protection(monkeypatch, payload):
+    from forwin.protocol.book_state import NarrativePatch
+    from tests.test_world_constraints import _runtime
+
+    gate = BookStateReviewGate(None)
+    monkeypatch.setattr(gate.projection, "load_runtime_as_of", lambda *args, **kwargs: _runtime())
+    delta = GraphDelta(id="plan", project_id="p", source_type="plan_constraint", narrative_patches=[
+        NarrativePatch(target_ref="review_constraint:new", op="create", new_value={
+            "id": "new", "project_id": "p", "node_type": "review_constraint", "payload": payload,
+        }),
+    ])
+    verdict = gate.review(ApprovedGraphDeltaSet(project_id="p", chapter_number=0, graph_deltas=[delta]), base_chapter=0)
+    assert not verdict.accepted
+    assert ("error", "invalid_protection") in _codes(verdict)
+
+
+def test_gate_rejects_non_narrative_plan_constraint(monkeypatch):
+    from tests.test_world_constraints import _runtime
+
+    gate = BookStateReviewGate(None)
+    monkeypatch.setattr(gate.projection, "load_runtime_as_of", lambda *args, **kwargs: _runtime())
+    delta = GraphDelta(id="plan", project_id="p", source_type="plan_constraint", node_patches=[
+        NodePatch(node_id="a", node_type="character", op="set", field_path="state.alive_status",
+                  old_value="alive", new_value="dead"),
+    ])
+    verdict = gate.review(ApprovedGraphDeltaSet(project_id="p", chapter_number=0, graph_deltas=[delta]), base_chapter=0)
+    assert not verdict.accepted
+    assert ("error", "invalid_protection") in _codes(verdict)

@@ -213,6 +213,7 @@ def _book(
     Session,
     *,
     list_chapter_two_tick: bool = True,
+    with_plan_constraint: bool = False,
     chapter_three: tuple[NodePatch | EdgePatch, ...] = (),
     tick_three: tuple[NodePatch, ...] = (),
     tick_two_resolutions: tuple[ConflictOption, ...] = (),
@@ -244,6 +245,13 @@ def _book(
         _create(project_id, GATE, description="gate description", phase="closed"),
         _create(project_id, CAMP, mood="calm"),
     )])}
+    if with_plan_constraint:
+        from forwin.planning.beat_sheet.types import ProtectionSpec
+        with Session.begin() as session:
+            CanonAdmissionService().commit_plan_constraints(
+                session=session, project_id=project_id, beat_sheet_id="sheet-ch1",
+                creates=[ProtectionSpec(ref=GATE, kind="must_exist", until_chapter=5)], releases=[],
+            )
     _complete_post_canon(Session, project_id, 1, commits[1], world_delta_ids=())
     commits[2] = _accept(Session, project_id, 2, version=1, deltas=[
         _chapter_delta(project_id, 2, "delta-ch2-original", _create(project_id, "event-original")),
@@ -849,3 +857,48 @@ def test_a_shared_response_goal_stays_while_another_resolution_holds_it(
         # The obligation's own goal, contract entry and anchor go; nothing else holds them.
         assert _obligation(book, obligation_id)[0] == "cancelled"
         assert (experience["obligations_to_resolve"], experience["rule_anchors"]) == ([], [])
+
+
+def test_historical_rewrite_replays_plan_constraint_delta(Session):
+    from forwin.planning.beat_sheet.types import ProtectionSpec
+
+    book = _book(Session)
+    with Session.begin() as session:
+        created = CanonAdmissionService().commit_plan_constraints(
+            session=session, project_id=book.project_id, beat_sheet_id="sheet-before-rewrite",
+            creates=[ProtectionSpec(ref=GATE, kind="must_exist", until_chapter=5)], releases=[],
+        )
+        runtime = BookStateProjection(session).load_runtime_as_of(book.project_id, as_of_chapter=3)
+        protection = next(n for n in runtime.narrative.nodes_by_id.values()
+                          if n.metadata.get("beat_sheet_id") == "sheet-before-rewrite")
+        released = CanonAdmissionService().commit_plan_constraints(
+            session=session, project_id=book.project_id, beat_sheet_id="sheet-revised",
+            creates=[], releases=[protection.id],
+        )
+    outcome = _quiet_rewrite(book, 2)
+    assert outcome.blocked is False, outcome.failure_reason
+    assert set(created.graph_delta_ids + released.graph_delta_ids) <= _delta_ids(book)
+    replayed = _runtime(book, 3).narrative.nodes_by_id[protection.id]
+    assert replayed.payload["status"] == "released"
+    assert replayed.payload["until_chapter"] == 5
+
+
+def test_historical_rewrite_checks_plan_constraint_release_cas(Session):
+    from forwin.protocol.book_state import NarrativePatch
+
+    book = _book(Session, with_plan_constraint=True)
+    protection = next(n for n in _runtime(book, 3).narrative.nodes_by_id.values()
+                      if n.metadata.get("beat_sheet_id") == "sheet-ch1")
+    with Session.begin() as session:
+        released = CanonAdmissionService().commit_plan_constraints(
+            session=session, project_id=book.project_id, beat_sheet_id="release-ch3",
+            creates=[], releases=[protection.id],
+        )
+    delta = _chapter_delta(book.project_id, 2, "rewrite-protection")
+    delta.narrative_patches.append(NarrativePatch(target_ref=f"review_constraint:{protection.id}", op="set",
+                                                 field_path="payload.status", old_value=None, new_value="active"))
+    outcome = _rewrite_chapter_two(book, version=2, delta=delta)
+    assert outcome.blocked is False, outcome.failure_reason
+    assert not set(released.graph_delta_ids) & _delta_ids(book)
+    assert _runtime(book, 3).narrative.nodes_by_id[protection.id].payload["status"] == "active"
+    assert _replay_conflict(book).violated == "replay_cas"

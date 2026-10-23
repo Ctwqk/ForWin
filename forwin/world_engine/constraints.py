@@ -356,6 +356,8 @@ def check_narrative_boundaries(
         if node.node_type != "review_constraint" or getattr(node, "status", "active") != "active":
             continue
         payload = node.payload
+        if payload.get("status") == "released":
+            continue
         until = payload.get("until_chapter", 0)
         until = until if type(until) is int else 0
         if until != 0 and until < next_chapter:

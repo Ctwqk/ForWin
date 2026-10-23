@@ -14,6 +14,7 @@ from forwin.book_state.cognition import CognitionView
 from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.map_graph import MapGraph
+from forwin.book_state.narrative import PLAN_CONSTRAINT_SOURCE_TYPE
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
@@ -33,7 +34,7 @@ CHAPTER_EXTRACTION_SOURCE_TYPE = "chapter_extraction"
 # here because importing the world engine types at module level cycles back into this module.
 WORLD_ENGINE_SOURCE_TYPE = "world_engine"
 # Deltas carrying the v6 movement, item transfer and knowledge metadata.
-_V6_SOURCE_TYPES = frozenset({CHAPTER_EXTRACTION_SOURCE_TYPE, WORLD_ENGINE_SOURCE_TYPE})
+_V6_SOURCE_TYPES = frozenset({CHAPTER_EXTRACTION_SOURCE_TYPE, WORLD_ENGINE_SOURCE_TYPE, PLAN_CONSTRAINT_SOURCE_TYPE})
 DEFAULT_TRAVEL_TOLERANCE = 0.2
 _AWARE_STATES = frozenset({"knows", "believes"})
 _MINUTE_EPSILON = 1e-6
@@ -84,7 +85,9 @@ class BookStateReviewGate:
             issues.extend(_immutable_rule_definition_issues(runtime, delta))
             if delta.source_type == WORLD_ENGINE_SOURCE_TYPE:
                 issues.extend(_reader_knowledge_issues(delta))
-            if delta.source_type in _V6_SOURCE_TYPES:
+            if delta.source_type == PLAN_CONSTRAINT_SOURCE_TYPE:
+                issues.extend(_plan_constraint_issues(runtime, delta))
+            elif delta.source_type in _V6_SOURCE_TYPES:
                 issues.extend(
                     _ChapterExtractionChecks(
                         self.session, runtime, delta, travel_tolerance=travel_tolerance
@@ -101,6 +104,47 @@ class BookStateReviewGate:
             issues=issues,
             approved_changes=changes if accepted else None,
         )
+
+
+def _plan_constraint_issues(runtime: BookStateRuntime, delta: GraphDelta) -> list[BookStateReviewIssue]:
+    """Plan constraints only change narrative protections; validate each resulting payload."""
+    from forwin.planning.beat_sheet.types import PROTECTION_KINDS
+
+    issues = []
+
+    def invalid(ref: str, message: str) -> None:
+        issues.append(BookStateReviewIssue(severity="error", code="invalid_protection", target_ref=ref,
+                                          message=message))
+
+    if any((delta.node_patches, delta.edge_patches, delta.fact_patches, delta.map_patches, delta.cognition_patches)):
+        invalid(delta.id, "plan_constraint deltas may only contain narrative patches")
+    nodes = {ref: node.model_dump(mode="json") for ref, node in runtime.narrative.nodes_by_id.items()}
+    for patch in delta.narrative_patches:
+        ref = patch.target_ref.split(":", 1)[-1]
+        if str(patch.op) == "create":
+            node = deepcopy(patch.new_value) if isinstance(patch.new_value, dict) else {}
+        else:
+            node = deepcopy(nodes.get(ref, {}))
+            if not patch.field_path or "old_value" not in patch.model_fields_set:
+                invalid(patch.target_ref, "protection changes require field_path and old_value")
+            if str(patch.op) not in {"set", "replace", "merge", "remove", "append"}:
+                invalid(patch.target_ref, "unsupported protection operation")
+            apply_path_patch(node, patch.field_path, patch.new_value, op=str(patch.op))
+        payload = node.get("payload")
+        if node.get("node_type") != "review_constraint" or not isinstance(payload, dict):
+            invalid(patch.target_ref, "plan constraints must target review_constraint nodes")
+            continue
+        kind, until = payload.get("kind"), payload.get("until_chapter")
+        required = [payload.get("ref")]
+        if kind == "must_not_know":
+            required.extend((payload.get("observer_ref"), payload.get("fact_ref")))
+        elif kind == "must_hold_state":
+            required.append(payload.get("field"))
+        if (kind not in PROTECTION_KINDS or type(until) is not int or until < 0
+                or any(not isinstance(value, str) or not value.strip() for value in required)):
+            invalid(patch.target_ref, "invalid protection kind, expiry or required fields")
+        nodes[ref] = node
+    return issues
 
 
 def _schema_issues(delta: GraphDelta) -> list[BookStateReviewIssue]:

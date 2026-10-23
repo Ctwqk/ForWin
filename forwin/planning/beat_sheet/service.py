@@ -7,6 +7,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.knowledge import FACT_REF_PREFIX, KNOWLEDGE_STATES
@@ -16,11 +17,11 @@ from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.reveal_schedule import active_genesis_pack
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.book_state.schema import ACTOR_NODE_TYPES, WORLD_NODE_FIELDS
-from forwin.canon.admission import GENESIS_SEED_SOURCE_TYPE
+from forwin.canon.admission import GENESIS_SEED_SOURCE_TYPE, CanonAdmissionService
 from forwin.genesis.arc_activation_review import build_arc_activation_review_pack
 from forwin.genesis.handoff.world_seed_committer import seed_ref_id
 from forwin.models.planning_v6 import ArcBeatSheetRow
-from forwin.models.project import ArcPlanVersion
+from forwin.models.project import ArcPlanVersion, Project
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.observability.llm_trace import (
     RAW_REQUEST_KEY, RAW_RESPONSE_KEY, mark_latest_attempt_parse_failure, mark_latest_attempt_workflow,
@@ -61,6 +62,9 @@ _ALLOWED = {
 class ArcBeatSheetService:
     """Writes beat sheet versions in the caller's session; the caller commits.
 
+    Callers must not hold the project row lock across the LLM call. This service locks and re-reads
+    the active sheet after generation, before writing the sheet and its canon constraints.
+
     ``llm_client`` is None when no model is configured: every generation then writes the fallback.
     ``save_trace`` saves the call's PromptTrace and its LLM DecisionEvents in that session and returns the
     trace id; every generation saves one, a fallback included.
@@ -100,11 +104,13 @@ class ArcBeatSheetService:
         return self._generate(
             session, project_id=project_id, arc_plan=arc_plan, policy=policy, reason=reason,
             current=repo.load(current) if current is not None else None,
+            expected_sheet_id=current.id if current is not None else None,
             revision={"reason": reason, "conflict_summary": conflict_summary},
         )
 
     def _generate(
         self, session: Session, *, project_id: str, arc_plan: ArcPlanVersion, policy: RuntimePolicy, reason: str,
+        expected_sheet_id: str | None = None,
         current: ArcBeatSheetData | None = None, revision: Mapping[str, str] | None = None,
     ) -> ArcBeatSheetRow:
         start, end = arc_bounds(arc_plan)
@@ -157,7 +163,23 @@ class ArcBeatSheetService:
             data, source = build_fallback_beat_sheet(
                 arc_plan, protagonist_ref=fallback_protagonist, band_size=policy.planning.band_size,
             ), "fallback"
-        row = ArcBeatSheetRepository(session).create(project_id, arc_plan.id, data, source=source, reason=reason)
+        session.execute(select(Project).where(Project.id == project_id).with_for_update(key_share=True)).scalar_one()
+        repo = ArcBeatSheetRepository(session)
+        active = repo.active_for_arc(arc_plan.id)
+        if active is not None and active.id != expected_sheet_id:
+            self.save_trace(session, self._prompt_trace(
+                call, project_id=project_id, as_of=as_of, arc_plan=arc_plan, reason=reason, source=source, row=active,
+            ))
+            return active
+        latest = BookStateRepository(session).latest_canon_chapter(project_id) or 0
+        locked_runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=latest)
+        releases = [node.id for node in locked_runtime.narrative.nodes_by_id.values()
+                    if active is not None and node.node_type == "review_constraint"
+                    and node.metadata.get("beat_sheet_id") == active.id]
+        row = repo.create(project_id, arc_plan.id, data, source=source, reason=reason)
+        CanonAdmissionService().commit_plan_constraints(
+            session=session, project_id=project_id, beat_sheet_id=row.id, creates=data.protections, releases=releases,
+        )
         self.save_trace(session, self._prompt_trace(
             call, project_id=project_id, as_of=as_of, arc_plan=arc_plan, reason=reason, source=source, row=row,
         ))
@@ -386,6 +408,21 @@ def beat_sheet_issues(
     return issues
 
 
+def milestone_refs_for_chapter(session: Session, project_id: str, chapter_number: int) -> frozenset[str]:
+    """Future hard milestones across active sheets, plus the current arc's exit-state refs."""
+    refs: set[str] = set()
+    repo = ArcBeatSheetRepository(session)
+    for row in repo.active_for_project(project_id):
+        data = repo.load(row)
+        for milestone in data.milestones:
+            if milestone.hard and milestone.target_range[1] >= chapter_number:
+                refs.update(milestone.required_refs)
+        arc = session.get(ArcPlanVersion, row.arc_plan_id)
+        if arc is not None and arc.chapter_start <= chapter_number <= arc.chapter_end:
+            refs.update(item.ref for item in data.exit_state)
+    return frozenset(refs)
+
+
 def band_breakdown_issues(bands: Sequence[BandSpan], chapter_start: int, chapter_end: int) -> list[str]:
     """Bands cover the arc in order; each spans MIN-MAX chapters, or one band covers an arc shorter than MIN."""
     issues = _coverage_issues(
@@ -488,4 +525,4 @@ def _reveal_candidates(project_id: str, pack: Mapping[str, Any], runtime: BookSt
     return result
 
 
-__all__ = ["STAGE_KEY", "ArcBeatSheetService", "band_breakdown_issues", "beat_sheet_issues"]
+__all__ = ["STAGE_KEY", "ArcBeatSheetService", "band_breakdown_issues", "beat_sheet_issues", "milestone_refs_for_chapter"]

@@ -313,7 +313,7 @@ def test_response_without_next_plan_is_pending_not_escalated_over_http(conflict_
             [obligation] = session.scalars(select(NarrativeObligationRow).where(
                 NarrativeObligationRow.project_id == book.project_id,
             )).all()
-            assert obligation.status == "proposed"
+            assert obligation.status == "active"
 
 
 def test_resolve_route_reports_a_failed_amendment_beside_the_standing_resolution(monkeypatch):
@@ -353,3 +353,32 @@ def test_resolve_route_reports_a_failed_amendment_beside_the_standing_resolution
     body = response.json()
     assert (body["status"], body["warnings"], body["followup_conflict_id"]) == ("resolved", [warning], "c2")
     session.commit.assert_called_once()
+
+
+def test_planless_obligation_budget_rejection_over_http_rolls_back(conflict_api):
+    from forwin.models import ChapterPlan, NarrativeObligationRow
+    from tests.test_world_conflict_resolution import _held
+
+    client, Session, book, _ = conflict_api
+    with Session.begin() as session:
+        for number in (2, 3):
+            session.get(ChapterPlan, book.plans[number]).status = "accepted"
+        for index in range(3):
+            session.add(NarrativeObligationRow(
+                id=f"existing-{book.project_id}-{index}", project_id=book.project_id, origin_chapter_number=1,
+                obligation_type="motivation_gap", priority="P1", status="active", summary="existing",
+                hardness="design_debt", deadline_chapter=5, payoff_test="payoff",
+            ))
+    conflict_id = _conflict(Session, book, proposed_change=_held(book).model_dump(mode="json"))
+    response = client.post(f"/api/projects/{book.project_id}/world-conflicts/{conflict_id}/resolve", json={
+        "option": "accept_with_obligation", "rationale": "future response", "reason": "reviewed",
+    })
+    assert response.status_code == 400, response.text
+    assert "obligation_budget_exceeded" in response.text
+    with Session() as session:
+        assert WorldConflictRepository(session).get(book.project_id, conflict_id).status == "open"
+        assert len(session.scalars(select(NarrativeObligationRow).where(
+            NarrativeObligationRow.project_id == book.project_id,
+        )).all()) == 3
+        runtime = BookStateProjection(session).load_runtime_as_of(book.project_id, as_of_chapter=1)
+        assert runtime.world.get_state(book.later)["status"] == "planned"

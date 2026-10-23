@@ -57,7 +57,7 @@ _PENDING_INTENT_STATUSES = frozenset({"planned", "due", "held"})
 # News of an event reaches an actor only through propagation's recorded knowledge.
 _EVENT_FACT_TYPE = "event"
 _VETO_OPTION = "veto_world"
-# How ConflictDecision.model_dump_json writes a veto in decision_json, for matching it in SQL.
+# conflict_repository.serialize_conflict_decision must preserve this compact SQL LIKE prefilter.
 _VETO_DECISION_PATTERN = f'%"option":"{_VETO_OPTION}"%'
 # The priority an agenda without one ranks at, as the tick's budget reads it.
 _DEFAULT_AGENDA_PRIORITY = 3

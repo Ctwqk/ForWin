@@ -1364,10 +1364,14 @@ def test_accept_with_obligation_without_next_plan_records_obligation_only(pendin
     effects = record_option_side_effects(session, row, _decision("accept_with_obligation"), latest_chapter=1)
     assert effects.plan_patch_id == ""
     obligation = session.get(NarrativeObligationRow, effects.obligation_id)
-    assert obligation.status == "proposed"
+    assert obligation.status == "active"
     assert obligation.deadline_chapter == 7
     assert json.loads(obligation.linked_plan_patch_ids_json) == []
     assert session.scalars(select(NarrativePlanPatchRow)).all() == []
+
+    from forwin.narrative_obligations.repository import NarrativeObligationRepository
+    active = NarrativeObligationRepository(session).list_active_for_context(row.project_id, chapter_number=2)
+    assert [item.id for item in active] == [effects.obligation_id]
 
 
 @pytest.mark.parametrize("option", ["plot_responds", "accept_with_obligation"])
@@ -1395,7 +1399,7 @@ def test_plan_boundary_defence_rejects_stale_offered_options(pending_side_effect
 
 def test_onstage_plan_bindings_read_active_band_and_accepted_history(pending_side_effect_session):
     from forwin.models.planning_v6 import ArcBeatSheetRow, BandPlanRow
-    from forwin.world_engine.tick import _onstage_plan_bindings
+    from forwin.world_engine.plan_bindings import onstage_plan_bindings
 
     session, conflict = pending_side_effect_session
     project_id = conflict.project_id
@@ -1417,16 +1421,16 @@ def test_onstage_plan_bindings_read_active_band_and_accepted_history(pending_sid
                        band_index=0, chapter_start=1, chapter_end=4, status="active")
     session.add(band)
     session.flush()
-    assert _onstage_plan_bindings(session, project_id, 4) == (
+    assert onstage_plan_bindings(session, project_id, 4) == (
         frozenset({"current"}), True, frozenset({"earlier", "current"}),
     )
     band.status = "superseded"
-    assert _onstage_plan_bindings(session, project_id, 4)[1] is False
-    assert _onstage_plan_bindings(session, project_id, 8) == (
+    assert onstage_plan_bindings(session, project_id, 4)[1] is False
+    assert onstage_plan_bindings(session, project_id, 8) == (
         frozenset(), True, frozenset({"earlier", "current"}),
     )
     sheet.status = "superseded"
-    assert _onstage_plan_bindings(session, project_id, 8) == (frozenset(), False, frozenset())
+    assert onstage_plan_bindings(session, project_id, 8) == (frozenset(), False, frozenset())
 
 
 # Fix round 1: failed world-tick amendments, transaction blocks, re-splits, partial failures, refs, retries.
@@ -1711,4 +1715,158 @@ def test_amend_plan_on_a_band_planning_conflict_plans_the_band() -> None:
         planned = session.get(BandPlanRow, result.band_plan_id)
         assert (planned.version, planned.chapter_start, planned.chapter_end) == (1, 1, 4)
     assert _conflict_row(Session, world.project_id, conflict_id) == ("resolved", [f"band_plan:{result.band_plan_id}"])
+    engine.dispose()
+
+
+# Task 8 fix round 1: planless side effects and rollback contracts.
+
+@pytest.mark.parametrize("option", ["plot_responds", "accept_with_obligation"])
+def test_supersede_planless_resolution_retires_its_side_effect(pending_side_effect_session, option):
+    from forwin.world_engine.conflict_resolution import record_option_side_effects
+    from forwin.world_engine.superseded_resolutions import supersede_resolutions
+
+    session, row = pending_side_effect_session
+    decision = _decision(option)
+    effects = record_option_side_effects(session, row, decision, latest_chapter=1)
+    repo = WorldConflictRepository(session)
+    refs = ["rolled-back-delta"] + ([effects.obligation_id] if effects.obligation_id else [])
+    repo.mark_resolved(row, decision=decision, result_refs=refs,
+                       pending_plan_response=effects.pending_plan_response)
+    result = supersede_resolutions(session, project_id=row.project_id, graph_delta_id="rolled-back-delta",
+                                  reason="historical rewrite")
+    assert result.conflict_ids == (row.id,)
+    assert row.status == "resolved"
+    assert repo.pending_plot_responses(row.project_id) == []
+    if effects.obligation_id:
+        obligation = session.get(NarrativeObligationRow, effects.obligation_id)
+        assert obligation.status == "cancelled"
+        assert json.loads(obligation.metadata_json)["cancel_reason"] == "historical rewrite"
+        assert result.cancelled_obligation_ids == (effects.obligation_id,)
+    else:
+        assert json.loads(row.decision_json)["pending_plan_response"] is False
+        assert result.cancelled_obligation_ids == ()
+
+
+def test_supersede_planner_bound_response_reverts_prefixed_patch(pending_side_effect_session):
+    from forwin.world_engine.conflict_resolution import record_option_side_effects, record_plot_response_patch
+    from forwin.world_engine.superseded_resolutions import supersede_resolutions
+
+    session, row = pending_side_effect_session
+    repo = WorldConflictRepository(session)
+    decision = _decision("plot_responds")
+    effects = record_option_side_effects(session, row, decision, latest_chapter=1)
+    repo.mark_resolved(row, decision=decision, result_refs=["delta"],
+                       pending_plan_response=effects.pending_plan_response)
+    arc = ArcPlanVersion(project_id=row.project_id, arc_synopsis="arc", chapter_start=1, chapter_end=8)
+    session.add(arc)
+    session.flush()
+    plan = ChapterPlan(project_id=row.project_id, arc_plan_id=arc.id, chapter_number=2, title="plan",
+                       goals_json='["original"]', status="planned")
+    session.add(plan)
+    session.flush()
+    patch_id = record_plot_response_patch(session, row, plan)
+    repo.attach_result_refs(row, [f"plan_patch:{patch_id}"])
+    assert len(load_goals_json(plan.goals_json)) == 2
+    result = supersede_resolutions(session, project_id=row.project_id, graph_delta_id="delta", reason="rewrite")
+    assert result.reverted_plan_patch_ids == (patch_id,)
+    assert load_goals_json(plan.goals_json) == ["original"]
+    assert row.status == "resolved"
+    assert repo.pending_plot_responses(row.project_id) == []
+
+
+@pytest.mark.parametrize("has_plan", [False, True], ids=["planless", "with-plan"])
+def test_obligation_refuses_full_ledger_without_creating_row(pending_side_effect_session, has_plan):
+    from forwin.world_engine.conflict_resolution import record_option_side_effects
+
+    session, row = pending_side_effect_session
+    if has_plan:
+        arc = ArcPlanVersion(project_id=row.project_id, arc_synopsis="arc", chapter_start=1, chapter_end=8)
+        session.add(arc)
+        session.flush()
+        session.add(ChapterPlan(project_id=row.project_id, arc_plan_id=arc.id, chapter_number=2,
+                                title="next", status="planned"))
+    for index in range(3):
+        session.add(NarrativeObligationRow(
+            id=f"existing-{index}", project_id=row.project_id, origin_chapter_number=1,
+            obligation_type="motivation_gap", priority="P1", status="active", summary="existing",
+            hardness="design_debt", deadline_chapter=5, payoff_test="payoff",
+        ))
+    session.flush()
+    with pytest.raises(ConflictOptionUnavailable, match="obligation_budget_exceeded"):
+        record_option_side_effects(session, row, _decision("accept_with_obligation"), latest_chapter=1)
+    assert row.status == "open"
+    assert len(session.scalars(select(NarrativeObligationRow)).all()) == 3
+
+
+@pytest.mark.parametrize("rationale", ["plain", 'quote \" slash \\ newline\n tab\t', "理由/<>"])
+def test_repository_veto_serializer_matches_recent_vetoes_sql_like(pending_side_effect_session, rationale):
+    from forwin.world_engine.actor_turns import recent_vetoes
+
+    session, row = pending_side_effect_session
+    row.actor_ref = "actor"
+    repo = WorldConflictRepository(session)
+    repo.mark_resolved(row, decision=_decision("veto_world").model_copy(update={"rationale": rationale}),
+                       result_refs=[], pending_plan_response=True)
+    assert recent_vetoes(session, row.project_id, actor_ids=["actor"])["actor"] == [row]
+    repo.clear_pending_plan_response(row)
+    assert recent_vetoes(session, row.project_id, actor_ids=["actor"])["actor"] == [row]
+    assert json.loads(row.decision_json)["rationale"] == rationale
+
+
+def test_planless_obligation_is_in_band_planner_inputs(pending_side_effect_session):
+    from forwin.world_engine.conflict_resolution import record_option_side_effects
+    from forwin.planning.band_planner.inputs import build_band_inputs
+    from forwin.planning.beat_sheet.types import ArcBeatSheetData, BandSpan
+    from tests.test_world_tick_steps import _actor, _runtime as memory_runtime
+
+    session, row = pending_side_effect_session
+    effects = record_option_side_effects(session, row, _decision("accept_with_obligation"), latest_chapter=1)
+    arc = ArcPlanVersion(project_id=row.project_id, arc_synopsis="arc", chapter_start=1, chapter_end=8)
+    session.add(arc)
+    session.flush()
+    band = BandSpan(band_index=0, chapter_start=2, chapter_end=4)
+    inputs = build_band_inputs(
+        session, project_id=row.project_id, arc_plan=arc,
+        beat_sheet=ArcBeatSheetData(protagonist_ref="actor", phases=[], band_breakdown=[band]),
+        band=band, chapter_numbers=[2, 3, 4], rows={}, as_of=1, runtime=memory_runtime(_actor("actor")),
+        policy=POLICY, notes=[], trope_cost_ceiling=10,
+    )
+    assert [item["id"] for item in inputs.payload["open_obligations"]] == [effects.obligation_id]
+
+
+@pytest.mark.parametrize("option", ["plot_responds", "accept_with_obligation"])
+def test_resolution_without_plan_reaches_later_band_planner(option):
+    from tests.test_band_planner import _book as planner_book, _band, _planner, _plan_band, StubLLM
+
+    engine, Session = _session_factory()
+    world, arc_id, sheet_id = planner_book(Session)
+    held = TickCandidate(candidate_id="held", origin="adjudication", actor_id=world.hero, summary="held",
+                         effects=WorldEffects(entity_changes=[
+                             EffectEntityChange(ref=world.rival, field="mood", new_value="wary"),
+                         ]))
+    with Session.begin() as session:
+        session.get(Project, world.project_id).target_total_chapters = 20
+        row = WorldConflictRepository(session).create(ConflictDraft(
+            project_id=world.project_id, source="world_tick", detected_after_chapter=0, story_time=1000,
+            involved_refs=[world.rival], violated="impact_review", impact_level="moderate", summary="held",
+            proposed_change=held.model_dump(mode="json"), actor_ref=world.hero, blocks_from_chapter=1,
+        ), required_decider="human", options=ALL_OPTIONS)
+        conflict_id = row.id
+    with Session.begin() as session:
+        result = _service(session).resolve(project_id=world.project_id, conflict_id=conflict_id,
+                                           decision=_decision(option))
+    client = StubLLM(_band(world, range(1, 5), {1: {"goals": [PLOT_RESPONSE_GENERIC_GOAL, "goal-1"]}}))
+    outcome = _plan_band(Session, _planner(client), world, arc_id, sheet_id)
+    assert outcome.band_plan_id is not None
+    with Session() as session:
+        repo = WorldConflictRepository(session)
+        row = repo.get(world.project_id, conflict_id)
+        if option == "plot_responds":
+            assert client.payload(0)["pending_responses"][0]["id"] == conflict_id
+            patch_refs = [ref for ref in json.loads(row.result_refs_json) if ref.startswith("plan_patch:")]
+            assert len(patch_refs) == 1
+            assert session.get(NarrativePlanPatchRow, patch_refs[0].removeprefix("plan_patch:")) is not None
+            assert repo.pending_plot_responses(world.project_id) == []
+        else:
+            assert [item["id"] for item in client.payload(0)["open_obligations"]] == [result.obligation_id]
     engine.dispose()

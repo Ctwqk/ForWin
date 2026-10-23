@@ -333,7 +333,7 @@ def test_onstage_intent_slips_until_conflict() -> None:
             max_slips=2,
             chapter_number=7,
             bound_intent_refs=frozenset({"intent-1", "intent-touched"}) if now > NOW else frozenset(),
-            band_ended=False,
+            band_ended=False, band_bound_intent_refs=frozenset(),
         )
         _commit_bookkeeping(runtime, result.candidates, now)
         return result
@@ -586,7 +586,7 @@ def test_queued_news_is_delivered_by_a_later_tick(monkeypatch: pytest.MonkeyPatc
     onstage = onstage_bookkeeping(
         runtime, onstage_due=due.onstage, already_due=due_onstage_intents(runtime),
         interactions=interactions, now=now, max_slips=2, chapter_number=1,
-        bound_intent_refs=frozenset(), band_ended=False,
+        bound_intent_refs=frozenset(), band_ended=False, band_bound_intent_refs=frozenset(),
     )
     sources = [*chapter_events(chapter_one), *tick_events(world.project_id, "tick-1", clocks)]
     news = propagate_news(
@@ -635,7 +635,7 @@ def test_queued_news_is_delivered_by_a_later_tick(monkeypatch: pytest.MonkeyPatc
         runtime, onstage_due=select_due_intents(runtime, now=later).onstage,
         already_due=due_onstage_intents(runtime), interactions=chapter_two.metadata["intent_interactions"],
         now=later, max_slips=2, chapter_number=2,
-        bound_intent_refs=frozenset({onstage_id}), band_ended=False,
+        bound_intent_refs=frozenset({onstage_id}), band_ended=False, band_bound_intent_refs=frozenset(),
     )
     news = propagate_news(runtime, lexicon, events=[], in_transit=queue, now=later, fact_ref_for_event={})
 
@@ -664,14 +664,14 @@ def test_bound_but_undelivered_onstage_intent_slips(status):
     result = onstage_bookkeeping(
         runtime, onstage_due=select_due_intents(runtime, now=NOW).onstage,
         already_due=due_onstage_intents(runtime), interactions=[], now=NOW,
-        max_slips=2, chapter_number=3, bound_intent_refs=frozenset({"intent-1"}), band_ended=False,
+        max_slips=2, chapter_number=3, bound_intent_refs=frozenset({"intent-1"}), band_ended=False, band_bound_intent_refs=frozenset(),
     )
     assert len(result.candidates) == 1
     assert result.candidates[0].slip_updates == {"intent-1": 1}
     delivered = onstage_bookkeeping(
         runtime, onstage_due=select_due_intents(runtime, now=NOW).onstage,
         already_due=due_onstage_intents(runtime), interactions=[_interaction("intent-1", "advanced")], now=NOW,
-        max_slips=2, chapter_number=3, bound_intent_refs=frozenset({"intent-1"}), band_ended=False,
+        max_slips=2, chapter_number=3, bound_intent_refs=frozenset({"intent-1"}), band_ended=False, band_bound_intent_refs=frozenset(),
     )
     assert not any(candidate.slip_updates for candidate in delivered.candidates)
 
@@ -684,9 +684,10 @@ def test_unbound_due_onstage_intent_slips_only_at_band_end(status, band_ended):
         runtime, onstage_due=select_due_intents(runtime, now=NOW).onstage,
         already_due=due_onstage_intents(runtime), interactions=[], now=NOW,
         max_slips=2, chapter_number=3, bound_intent_refs=frozenset(), band_ended=band_ended,
+        band_bound_intent_refs=frozenset(),
     )
     assert [candidate.slip_updates for candidate in result.candidates if candidate.slip_updates] == (
-        [{"intent-1": 1}] if band_ended else []
+        [{"intent-1": 1}] if band_ended and status == "due" else []
     )
 
 
@@ -704,8 +705,23 @@ def test_bound_onstage_intent_slips_even_when_scheduled_later():
     runtime = _runtime(_actor("actor-1"), _intent("intent-1", "actor-1", at=NOW + 60, onstage=True))
     result = onstage_bookkeeping(
         runtime, onstage_due=[], already_due=[], interactions=[], now=NOW, max_slips=2, chapter_number=3,
-        bound_intent_refs=frozenset({"intent-1"}), band_ended=False,
+        bound_intent_refs=frozenset({"intent-1"}), band_ended=False, band_bound_intent_refs=frozenset(),
     )
     [candidate] = result.candidates
     assert candidate.intent_status_changes == {"intent-1": "due"}
     assert candidate.slip_updates == {"intent-1": 1}
+
+
+def test_first_due_at_band_end_waits_for_next_planner():
+    runtime = _runtime(_actor("actor-1"), _intent("intent-1", "actor-1", at=NOW, onstage=True))
+    result = onstage_bookkeeping(
+        runtime, onstage_due=select_due_intents(runtime, now=NOW).onstage,
+        already_due=[], interactions=[], now=NOW, max_slips=0, chapter_number=3,
+        bound_intent_refs=frozenset(), band_ended=True, band_bound_intent_refs=frozenset(),
+    )
+    assert result.conflicts == []
+    [candidate] = result.candidates
+    assert candidate.intent_status_changes == {"intent-1": "due"}
+    assert candidate.slip_updates == {}
+    _commit_bookkeeping(runtime, result.candidates, NOW)
+    assert [node.id for node in due_onstage_intents(runtime)] == ["intent-1"]

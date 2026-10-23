@@ -14,7 +14,7 @@ from forwin.planning.band_plan_patcher import BandPlanPatcher
 from forwin.planning.future_plan_audit import FuturePlanAuditor
 from forwin.planning.plan_patch_validator import PlanPatchValidator
 
-from .budget import evaluate_obligation_budget
+from .budget import ObligationBudgetResult, evaluate_obligation_budget
 from .repository import NarrativeObligationRepository
 from .types import NarrativeObligation, NarrativePlanPatch
 
@@ -117,9 +117,8 @@ class DeferAcceptanceTransaction:
                 )
 
         repo = NarrativeObligationRepository(self.session)
-        budget_result = _evaluate_transaction_budget(
+        budget_result = check_obligation_budget(
             session=self.session,
-            repo=repo,
             obligation=prepared_obligation,
             plan_patch=prepared_patch,
             current_chapter=current_chapter,
@@ -177,17 +176,19 @@ class DeferAcceptanceTransaction:
         )
 
 
-def _evaluate_transaction_budget(
+def check_obligation_budget(
     *,
     session: Session,
-    repo: NarrativeObligationRepository,
     obligation: NarrativeObligation,
-    plan_patch: NarrativePlanPatch,
+    plan_patch: NarrativePlanPatch | None = None,
     current_chapter: int,
     target_total_chapters: int,
-    target_plan: ChapterPlan | None,
-    target_band: BandExperiencePlan | None,
-):
+    target_plan: ChapterPlan | None = None,
+    target_band: BandExperiencePlan | None = None,
+) -> ObligationBudgetResult:
+    """Check the shared ledger budget, using the current chapter as an unbound obligation's band."""
+    repo = NarrativeObligationRepository(session)
+    plan_patch = plan_patch or NarrativePlanPatch(project_id=obligation.project_id)
     open_obligations = _open_obligations_for_project(
         session=session,
         repo=repo,

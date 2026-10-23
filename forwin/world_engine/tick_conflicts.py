@@ -35,7 +35,7 @@ from .conflict_resolution import (
 )
 from .conflict_routing import AUTO_OPTION, available_options, route_conflict
 from .conflict_types import ConflictDecision, ConflictDraft
-from .constraints import candidate_references, check_narrative_boundaries
+from .constraints import check_narrative_boundaries, milestone_change_references
 from .types import TickCandidate, TickContext
 
 
@@ -84,7 +84,7 @@ def review_draft(
     violations = check_narrative_boundaries(runtime, candidate, next_chapter=next_chapter)
     if not violations and IMPACT_LEVELS.index(candidate.impact_level) < _REVIEWED_IMPACT:
         return None
-    milestone = candidate.impact_level == "critical" and bool(milestone_refs & candidate_references(candidate))
+    milestone = candidate.impact_level == "critical" and bool(milestone_refs & milestone_change_references(candidate))
     effects = candidate.effects
     refs = [
         candidate.intent_id, candidate.actor_id, *(violation.ref for violation in violations),

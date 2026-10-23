@@ -88,10 +88,11 @@ def onstage_bookkeeping(
     chapter_number: int,
     bound_intent_refs: frozenset[str],
     band_ended: bool,
-    band_bound_intent_refs: frozenset[str] = frozenset(),
+    band_bound_intent_refs: frozenset[str],
 ) -> OnstageResult:
     """Slip missed plan bindings, or due intents never bound in the band when the band ends.
 
+    Newly due, unbound intents pass to the next band without a same-tick slip (R29).
     A slip counts one more ``slip_count`` and puts ``scheduled_at`` off to now (the tick
     builder writes both). A slip past ``max_slips`` is held in an ``onstage_slip`` conflict
     that blocks the next chapter.
@@ -113,7 +114,7 @@ def onstage_bookkeeping(
         statuses = {intent.id: "due"} if intent.id in newly_due else {}
         should_slip = intent.id not in touched and (
             intent.id in bound_intent_refs
-            or (band_ended and intent.id not in band_bound_intent_refs)
+            or (band_ended and intent.id not in newly_due and intent.id not in band_bound_intent_refs)
         )
         if not should_slip:
             if statuses:

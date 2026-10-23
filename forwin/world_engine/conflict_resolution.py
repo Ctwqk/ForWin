@@ -33,7 +33,7 @@ from forwin.models.base import new_id
 from forwin.models.project import ChapterPlan, Project
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
-from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
+from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction, check_obligation_budget
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.planning.future_plan_audit.patches import FuturePlanPatchMixin
 from forwin.planning.query import PlanningQuery
@@ -42,7 +42,7 @@ from forwin.runtime.policy import RuntimePolicy
 from forwin.writer.prompt_core.world_engine import world_change_response
 
 from .conflict_repository import ConflictNotOpen, WorldConflictRepository, conflict_result_refs
-from .conflict_routing import PLAN_CONFLICT_SOURCES
+from .conflict_routing import PLAN_BOUNDARY_VIOLATIONS, PLAN_CONFLICT_SOURCES
 from .conflict_types import ConflictDecision
 from .constraints import check_narrative_boundaries
 from .delta_builder import WorldTickDeltaBuilder
@@ -132,9 +132,10 @@ def option_candidates(
     options commit the held change; amend_plan also ends the protections it breaks with that chapter,
     and the other two refuse a change that still breaks one (ConflictOptionUnavailable). A held
     change that sets the status of an intent canon has since settled is stale (ConflictStale).
+    Milestone and reveal-schedule conflicts accept only veto_world or amend_plan.
     """
     _check_decision(conflict, decision)
-    if conflict.violated in {"milestone", "reveal_schedule"} and decision.option not in {"veto_world", "amend_plan"}:
+    if conflict.violated in PLAN_BOUNDARY_VIOLATIONS and decision.option not in {"veto_world", "amend_plan"}:
         raise ConflictOptionUnavailable(
             f"Conflict {conflict.id}: the held change breaks {conflict.violated}; veto it or amend the plan"
         )
@@ -316,8 +317,6 @@ def _record_obligation(
 ) -> OptionSideEffects:
     project = session.get(Project, conflict.project_id)
     total = int(project.target_total_chapters or 0) if project is not None else 0
-    if total <= latest_chapter:
-        raise ConflictOptionUnavailable(f"No chapter follows chapter {latest_chapter} within the book's {total}")
     plan = _next_unaccepted_plan(session, conflict.project_id, latest_chapter=latest_chapter)
     obligation_id = new_id()
     summary = writer_response_text(conflict)
@@ -336,7 +335,15 @@ def _record_obligation(
         metadata={"conflict_id": conflict.id},
     )
     if plan is None:
-        stored = NarrativeObligationRepository(session).create_obligation(obligation)
+        budget = check_obligation_budget(
+            session=session, obligation=obligation, current_chapter=latest_chapter, target_total_chapters=total,
+        )
+        if budget.over_budget:
+            reasons = ", ".join(["obligation_budget_exceeded", *budget.reasons])
+            raise ConflictOptionUnavailable(f"The obligation ledger refused the obligation: {reasons}")
+        stored = NarrativeObligationRepository(session).create_obligation(
+            obligation.model_copy(update={"status": "active"}),
+        )
         return OptionSideEffects(obligation_id=stored.id, plan_patch_id="")
     plan_patch = NarrativePlanPatch(
         id=new_id(),

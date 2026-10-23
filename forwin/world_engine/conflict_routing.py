@@ -15,7 +15,8 @@ _PLAN_CONFLICT_OPTIONS: tuple[ConflictOption, ...] = ("amend_plan",)
 # P3 has no chapter-extraction source, so rewrite_chapter is never offered.
 _PLAN_OPTIONS: tuple[ConflictOption, ...] = ("veto_world", "plot_responds", "amend_plan")
 # A change that breaks a narrative boundary lands only once the user amends the plan around it.
-_BOUNDARY_VIOLATIONS = frozenset({"protection", "milestone", "reveal_schedule"})
+PLAN_BOUNDARY_VIOLATIONS = frozenset({"milestone", "reveal_schedule"})
+_BOUNDARY_VIOLATIONS = PLAN_BOUNDARY_VIOLATIONS | {"protection"}
 _BOUNDARY_OPTIONS: tuple[ConflictOption, ...] = ("veto_world", "amend_plan")
 _OBLIGATION_IMPACTS = frozenset({"minor", "moderate"})
 _CODEX_IMPACTS = frozenset({"moderate", "major"})
@@ -48,4 +49,4 @@ def route_conflict(draft: ConflictDraft, *, policy: RuntimePolicy) -> ConflictDe
     return "human"
 
 
-__all__ = ["AUTO_OPTION", "PLAN_CONFLICT_SOURCES", "available_options", "route_conflict"]
+__all__ = ["PLAN_BOUNDARY_VIOLATIONS", "AUTO_OPTION", "PLAN_CONFLICT_SOURCES", "available_options", "route_conflict"]

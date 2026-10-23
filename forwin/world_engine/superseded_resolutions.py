@@ -16,7 +16,7 @@ from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativePlanPatch
 from forwin.planning.future_plan_audit.patches import FuturePlanPatchMixin
-from forwin.world_engine.conflict_repository import PLAN_PATCH_REF_PREFIX, conflict_result_refs
+from forwin.world_engine.conflict_repository import PLAN_PATCH_REF_PREFIX, WorldConflictRepository, conflict_result_refs
 
 
 PLAN_PATCH_REVERT_TYPE = "plan_patch_revert"
@@ -38,7 +38,8 @@ def supersede_resolutions(
     """Undo the side effects of the conflicts whose resolution committed through ``graph_delta_id``.
 
     Those are the resolved conflicts whose result_refs list the delta; they stay resolved. The open
-    obligations their plan patches bind are cancelled with ``reason``. A patch on a plan still to
+    obligations referenced by the resolution or its patches are cancelled with ``reason``; pending
+    responses are retired. A patch on a plan still to
     write is reverted and the revert recorded as a ``plan_patch_revert`` patch; a patch on a plan
     already accepted stays. A goal or marker another still-active resolution also put into the plan
     stays with it (Ruling P34).
@@ -62,6 +63,11 @@ def supersede_resolutions(
     reverted: list[str] = []
     for row in rows:
         refs = _result_refs(row)
+        if not any(ref.startswith(PLAN_PATCH_REF_PREFIX) for ref in conflict_result_refs(row)):
+            WorldConflictRepository(session).clear_pending_plan_response(row)
+        for ref in refs:
+            if ledger.cancel_obligation(ref, reason=reason) is not None:
+                cancelled.append(ref)
         for patch in sorted(ledger.list_patches_by_ids(refs), key=lambda item: refs.index(item.id)):
             for obligation_id in patch.source_obligation_ids:
                 if obligation_id in refs and ledger.cancel_obligation(obligation_id, reason=reason) is not None:
@@ -94,7 +100,7 @@ def supersede_resolutions(
     session.flush()
     return SupersededResolutions(
         conflict_ids=tuple(row.id for row in rows),
-        cancelled_obligation_ids=tuple(cancelled),
+        cancelled_obligation_ids=tuple(dict.fromkeys(cancelled)),
         reverted_plan_patch_ids=tuple(reverted),
     )
 

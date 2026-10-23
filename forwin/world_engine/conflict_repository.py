@@ -15,6 +15,11 @@ from .conflict_types import ConflictDecider, ConflictDecision, ConflictDraft, Co
 PLAN_PATCH_REF_PREFIX = "plan_patch:"
 
 
+def serialize_conflict_decision(payload: dict) -> str:
+    """Compact JSON required by actor_turns' veto SQL LIKE prefilter."""
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 class ConflictNotOpen(RuntimeError):
     pass
 
@@ -94,11 +99,18 @@ class WorldConflictRepository:
         payload = decision.model_dump(mode="json")
         if pending_plan_response:
             payload["pending_plan_response"] = True
-        # Compact like model_dump_json: actor_turns.recent_vetoes matches the stored text with LIKE.
-        row.decision_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        row.decision_json = serialize_conflict_decision(payload)
         row.result_refs_json = json.dumps(list(result_refs), ensure_ascii=False)
         row.status = "resolved"
         self.session.flush()
+
+    def clear_pending_plan_response(self, row: WorldPlanConflictRow) -> None:
+        """Retire a response whose world change left canon, retaining the resolution record."""
+        payload = json.loads(row.decision_json or "{}")
+        if payload.get("pending_plan_response") is True:
+            payload["pending_plan_response"] = False
+            row.decision_json = serialize_conflict_decision(payload)
+            self.session.flush()
 
     def pending_plot_responses(self, project_id: str) -> list[WorldPlanConflictRow]:
         """Resolved plot_responds conflicts still waiting for a plan to answer them, oldest first.

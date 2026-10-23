@@ -145,11 +145,31 @@ def test_impact_rows(checks, effects, expected):
 @pytest.mark.parametrize("candidate", [
     _candidate(_change("a", "location_id", "l2")),
     _candidate({"knowledge": [_knowledge(fact_ref="fact:secret")]}),
-    _candidate(next_turn_at={"a": 1100}),
-    _candidate(new_intents=[_intent(target_refs=["a"])]),
+    _candidate({"movements": [_movement(entity_ref="a")]}),
+    _candidate({"item_transfers": [{"item_ref": "item", "from_ref": "b", "to_ref": "a"}]}),
+    *[_candidate({"relation_changes": [{"source_ref": "b", "target_ref": "a", "edge_type": "ally_of",
+                                         "change": change}]}) for change in ("create", "set", "end")],
 ])
 def test_milestone_references_are_critical(checks, candidate):
     assert checks.classify_impact(_runtime(), candidate, milestone_refs=frozenset({"a", "secret"})) == "critical"
+
+
+@pytest.mark.parametrize("candidate", [
+    _candidate(actor_id="a", intent_id="a", next_turn_at={"a": 1100}),
+    _candidate(actor_id="a", slip_updates={"intent": 1}, intent_status_changes={"intent": "due"}),
+    _candidate(new_intents=[_intent(target_refs=["a"])]),
+    _candidate({"events": [_event(participant_refs=["a"])]}),
+])
+def test_milestone_authorship_and_bookkeeping_do_not_raise_impact(checks, candidate):
+    assert checks.classify_impact(_runtime(), candidate, milestone_refs=frozenset({"a"})) == "minor"
+
+
+@pytest.mark.parametrize("effects", [
+    {"movements": [_movement(entity_ref="item")]},
+    {"item_transfers": [{"item_ref": "item", "from_ref": "a", "to_ref": "b"}]},
+])
+def test_milestone_item_state_changes_are_critical(checks, effects):
+    assert checks.classify_impact(_runtime(), _candidate(effects), milestone_refs=frozenset({"item"})) == "critical"
 
 
 def test_declared_impact_cannot_lower_computed_level(checks):
@@ -469,7 +489,7 @@ def test_dead_owner_onstage_slip_is_not_action(checks):
     runtime = _runtime(_node("a", alive_status="dead"))
     result = onstage_bookkeeping(runtime, onstage_due=[], already_due=[runtime.world.get_node("intent")],
         interactions=[], now=NOW, max_slips=2, chapter_number=3,
-        bound_intent_refs=frozenset({"intent"}), band_ended=False)
+        bound_intent_refs=frozenset({"intent"}), band_ended=False, band_bound_intent_refs=frozenset())
     assert len(result.candidates) == 1
     assert result.candidates[0].slip_updates == {"intent": 1}
     assert checks.check_hard_rules(runtime, LEXICON, result.candidates[0],

@@ -128,10 +128,16 @@ def _refs(value: Any, *, references: bool = False) -> Iterator[str]:
             yield from _refs(item, references=references)
 
 
-def candidate_references(candidate: TickCandidate) -> frozenset[str]:
-    """The refs touched by effects and bookkeeping changes, using the classifier's ref semantics."""
-    return frozenset(set(_refs(candidate.model_dump(mode="python"))) | candidate.intent_status_changes.keys()
-                     | candidate.slip_updates.keys() | candidate.next_turn_at.keys())
+def milestone_change_references(candidate: TickCandidate) -> frozenset[str]:
+    """Refs whose world state changes, excluding authorship, proposals and bookkeeping (R28)."""
+    effects = candidate.effects
+    refs = {change.ref for change in effects.entity_changes}
+    refs.update(move.entity_ref for move in effects.movements)
+    refs.update(ref for transfer in effects.item_transfers for ref in (transfer.item_ref, transfer.to_ref))
+    refs.update(ref for change in effects.relation_changes for ref in (change.source_ref, change.target_ref))
+    for knowledge in effects.knowledge:
+        refs.update((knowledge.fact_ref, knowledge.fact_ref.removeprefix(FACT_REF_PREFIX)))
+    return frozenset(refs)
 
 
 def classify_impact(
@@ -141,7 +147,7 @@ def classify_impact(
     milestone_refs: frozenset[str] = frozenset(),
 ) -> str:
     level = IMPACT_LEVELS.index(candidate.impact_level)
-    references = candidate_references(candidate)
+    references = milestone_change_references(candidate)
     if milestone_refs.intersection(references):
         return "critical"
     if candidate.effects.relation_changes:

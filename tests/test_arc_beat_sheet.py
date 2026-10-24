@@ -549,6 +549,53 @@ def test_reveal_chapters_schedule_facts_the_sheet_does_not_target() -> None:
     assert _issues(**_READER_PROTECTED, **purpose, reveal_chapters={"secret": 1}) != []
 
 
+@pytest.mark.parametrize("field", [
+    "genre_promise", "pleasure_promise", "core_pleasures", "acceptable_drag_level",
+    "acceptable_exposition_density", "cliffhanger_aggressiveness", "world_legibility_target",
+    "ambiguity_constraints",
+])
+@pytest.mark.parametrize("text", ["the secret-value", "the secret- \nvalue"])
+def test_experience_text_rejects_secret_propositions_before_the_arc_start(field, text):
+    payload = {field: [text] if field in {"core_pleasures", "ambiguity_constraints"} else text}
+    changes = {"arc_payoff_map" if field == "ambiguity_constraints" else "reader_promise": payload}
+    issues = _issues(**_READER_PROTECTED, **changes)
+    path = f"arc_payoff_map.{field}[0]" if field == "ambiguity_constraints" else f"reader_promise.{field}"
+    if field == "core_pleasures":
+        path += "[0]"
+    assert any(issue.startswith(f"{path} states the proposition of fact:secret") for issue in issues)
+    assert _issues(**_READER_PROTECTED, **changes, reveal_targets=[], reveal_chapters={"secret": 1}) == []
+    assert _issues(**_READER_PROTECTED, **changes, reveal_targets=[]) != []
+    # The sheet's own future reveal replaces an earlier external schedule.
+    assert _issues(**_READER_PROTECTED, **changes, reveal_chapters={"secret": 1}) != []
+
+
+@pytest.mark.parametrize("reader_knows", [False, True])
+def test_experience_validation_checks_hidden_facts_and_recorded_reader_knowledge(reader_knows):
+    from forwin.book_state.cognition import CognitionView
+    from forwin.planning.beat_sheet.service import beat_sheet_issues
+    from forwin.planning.beat_sheet.types import ArcBeatSheetData
+    from forwin.protocol.book_state import CognitionOverlay
+
+    runtime = BookStateRuntime(
+        project_id="p", as_of_chapter=0, map_graph=MapGraph(),
+        world=ObjectiveWorldGraph(nodes=list(_RUNTIME.world.nodes_by_id.values()), facts=[FactNode(
+            id="secret", project_id="p", proposition="HiddenKeeper concealed the charter", sensitivity_level="secret",
+        )]),
+        cognition_by_observer={
+            ("reader", "reader"): CognitionView(CognitionOverlay(
+                id="reader", project_id="p", observer_type="reader", observer_id="reader",
+                knowledge_by_ref={"fact:secret": "knows" if reader_knows else "suspects"},
+            )),
+        },
+    )
+    data = ArcBeatSheetData.model_validate({
+        **_VALID, "reader_promise": {"pleasure_promise": "HiddenKeeper concealed the charter"},
+        "arc_payoff_map": {"ambiguity_constraints": ["HiddenKeeper concealed the charter"]},
+    })
+    issues = beat_sheet_issues(data, chapter_start=1, chapter_end=6, runtime=runtime, actor_ids=_OFFERED)
+    assert len(issues) == (0 if reader_knows else 2)
+
+
 def test_generation_checks_writer_text_against_the_reveal_schedule(Session, monkeypatch) -> None:
     from forwin.planning.beat_sheet import service as module
 

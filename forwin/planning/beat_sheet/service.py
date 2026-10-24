@@ -406,16 +406,19 @@ def beat_sheet_issues(
             issues.append(f"{path}.field is required")
         else:
             state_field(node, item.field, f"{path}.field")
-    issues.extend(_writer_text_issues(data, runtime, reveal_chapters or {}))
+    issues.extend(_writer_text_issues(data, runtime, reveal_chapters or {}, chapter_start=chapter_start))
     return issues
 
 
 def _writer_text_issues(
     data: ArcBeatSheetData, runtime: BookStateRuntime, reveal_chapters: Mapping[str, int],
+    *, chapter_start: int,
 ) -> list[str]:
-    """Phase purposes and milestone descriptions reach the writer verbatim (Ruling P4a-R21): neither may state a
-    secret or hidden fact, or one the sheet keeps from the reader, before the reader may learn it. A fact the
-    reader's recorded cognition already knows may be stated."""
+    """Writer-facing text cannot state concealed facts before their reader reveal (P4a-R21/R36).
+
+    Promises and ambiguity constraints reach the writer from the arc's start; revelation layers are projected
+    separately by chapter. A fact the reader's recorded cognition already knows may be stated.
+    """
     # Imported here: the feasibility audit imports the band planner's modules, which import this package.
     from forwin.planning.feasibility import reader_known_facts
 
@@ -436,6 +439,16 @@ def _writer_text_issues(
              for index, phase in enumerate(data.phases)]
     texts.extend((f"milestones[{index}].description", milestone.description, milestone.target_range[0])
                  for index, milestone in enumerate(data.milestones))
+    for field, value in data.reader_promise.model_dump().items():
+        if field == "ambiguity_mode":
+            continue  # An enum, not author free text.
+        if isinstance(value, list):
+            texts.extend((f"reader_promise.{field}[{index}]", text, chapter_start)
+                         for index, text in enumerate(value))
+        else:
+            texts.append((f"reader_promise.{field}", value, chapter_start))
+    texts.extend((f"arc_payoff_map.ambiguity_constraints[{index}]", text, chapter_start)
+                 for index, text in enumerate(data.arc_payoff_map.ambiguity_constraints))
     issues = []
     for path, text, start in texts:
         for ref in stated_facts([text], concealed):

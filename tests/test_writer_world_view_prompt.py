@@ -280,7 +280,9 @@ def test_planner_prompts_mark_the_fields_that_reach_the_writer():
 
     arguments = {"payload": {}, "digest_text": "digest", "output_schema": {}, "allowed": {}}
     # Milestone descriptions become the experience plan's curiosity-beat questions.
-    arc = writer_facing(ARC_BEATS_INSTRUCTIONS, "purpose", "milestones 的 description")
+    arc = writer_facing(ARC_BEATS_INSTRUCTIONS, "purpose", "milestones 的 description", "reader_promise",
+                        "arc_payoff_map", "revelation_layers", "summary", "ambiguity_constraints")
+    assert "chapter_window" in arc
     band = writer_facing(BAND_PLAN_INSTRUCTIONS, "title", "one_line", "goals", "hook")
     binding_instruction = next(item for item in BAND_PLAN_INSTRUCTIONS if "world_bindings 写" in item)
     assert "每项世界绑定必须由本章面向写作者的某条 goals 承接" in binding_instruction

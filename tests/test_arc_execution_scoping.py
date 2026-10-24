@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.project import Project
 from forwin.generation.pipeline_core.result import RunResult
 from forwin.generation.pipeline_core.structural_patches import (
     evaluate_structural_patch_completion_debt,
@@ -67,6 +68,8 @@ class ArcExecutionScopingTests(unittest.TestCase):
             project_id = seeded_book(
                 session_factory, chapters=4, arc_ranges=[(1, 2), (3, 4)],
             )
+            with session_factory.begin() as session:
+                session.get(Project, project_id).target_total_chapters = 20
 
             captured: dict[str, object] = {}
             progress_events: list[tuple[str, dict[str, object]]] = []

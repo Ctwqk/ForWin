@@ -4,6 +4,7 @@ import json
 import logging
 
 from forwin.context.request import ContextDraft, ContextRequest
+from forwin.experience.projection import writer_payoff_map
 from forwin.knowledge_system.context import KnowledgeContextQuery
 from forwin.protocol.world_model import WorldContextPack
 
@@ -76,7 +77,9 @@ class ExperienceContextProvider:
                 "reader_promise": reader_promise_getter(project_id)
                 if callable(reader_promise_getter)
                 else None,
-                "arc_payoff_map": arc_payoff_map_getter(project_id)
+                "arc_payoff_map": writer_payoff_map(
+                    arc_payoff_map_getter(project_id), chapter_plan.chapter_number,
+                )
                 if callable(arc_payoff_map_getter)
                 else None,
                 "band_schedule": (

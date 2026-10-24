@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.experience.projection import writer_payoff_map
 from forwin.experience.service import AudienceCalibrationProfile
 from forwin.experience.types import BeatSheetExperienceInput
 from forwin.models.project import ChapterPlan
@@ -71,7 +72,7 @@ class ChapterExperiencePlanner:
                 else "至少兑现一个可验证的局面变化"
             )
         )
-        payoff_map = experience.arc_payoff_map
+        payoff_map = writer_payoff_map(experience.arc_payoff_map, chapter_number)
         reader_promise = experience.reader_promise
         rule_anchors = [
             item.summary

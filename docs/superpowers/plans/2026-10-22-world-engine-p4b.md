@@ -641,14 +641,9 @@
 - 每章报告：各角色 LLM 调用次数与 token、世界冲突数与人工冲突数（P5 验收的度量，对应设计“验证”第 5 条与审计的自治风险）。
 - 世界简报改为逐行降级裁剪（避免整段裁掉只剩主角）；`exit_state` 的值与 BookState 比较（不再只看是否被触及）。
 
-### Task 20: 写作者可见的设定简介（P4a follow-up 最终审查 I3）
+### Task 20:（已移出）写作者可见的设定简介
 
-**Files:** `forwin/planning/beat_sheet/{types,service}.py`、`forwin/writer/prompt_core/{planning,sections}.py`、`forwin/context/providers/*`；Test: `tests/test_arc_beat_sheet.py`、`tests/test_writer_secret_sources.py`、`tests/test_writer_world_view_prompt.py`
-
-- 背景：FU-R45 去掉了 writer prompt 中的原始 premise、setting 与 Genesis 总览；第 1 章可能没有任何设定文字（reader_promise 默认为空）。
-- 节拍表增加 `setting_brief`（一到三句世界与基调说明），由 `plan.arc_beats` 生成，作为写作者可见字段：与 phase purpose 相同的校验（`writer_text_states_secret`、隐藏实体名字检查，以卷起点为准），prompt 指令说明它原样交给写作者。
-- writer 的故事基本信息段渲染当前卷的 `setting_brief`；为空时不渲染。fallback 节拍表从 genre 与 Genesis 的公开字段生成一个不含秘密的简介，或留空。
-- 测试：含秘密命题或隐藏实体名的 `setting_brief` 被拒绝；合法简介出现在五个 builder 中。
+已在 P4a follow-up 中实现（`docs/superpowers/plans/2026-10-24-world-engine-p4a-followup.md` Task F6，裁定 FU-R51），P4b 不再执行。
 
 ---
 
@@ -657,7 +652,7 @@
 - 按用户要求（2026-10-24）：Codex 覆盖约三分之一的子任务。
   - Codex `gpt-6-astra`：Task 0、2、7、11、16、18
   - Codex `gpt-6.1-sol`：Task 13
-  - Claude opus：Task 1、3、4、5、6、8、9、10、12、15、17、19、20
+  - Claude opus：Task 1、3、4、5、6、8、9、10、12、15、17、19
   - 任务审查与最终整支审查用 Claude；Codex 实现的任务由控制者运行 PostgreSQL 测试与全量测试。
 - Task 14：仅控制者执行
 - 依赖顺序：
@@ -665,5 +660,4 @@
   - 8 → 9 → 10 依次进行，因为它们共用世界引擎文件。
   - 7、11 从 3 开始可以并行。
   - 15 在 1 之后；16 与 2 共用 W16，放在 2 之后；17 放在 3、10 之后（分层改动面大，避免与功能任务冲突）；18 在 17 之后；19 在 15、17 之后。
-  - 20 在 3 之后（与节拍表校验共用代码）。
-  - 12 → 13 → 14，13 的文档覆盖 15–20。
+  - 12 → 13 → 14，13 的文档覆盖 15–19。

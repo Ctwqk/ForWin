@@ -63,8 +63,6 @@ def _story_basics_section(context: ChapterContextPack) -> str:
     lines = [
         "【故事基本信息】",
         f"类型：{context.genre}",
-        f"前提：{context.premise}",
-        f"世界背景：{context.setting_summary}",
     ]
     protagonist_name = _extract_protagonist_name(context)
     if protagonist_name:
@@ -77,13 +75,13 @@ def _story_basics_section(context: ChapterContextPack) -> str:
                     "无名追踪者、守卫或操作员也要写成具体职能称谓或阵营代号，"
                     "不要把“工作人员”单独作为角色标签或揭示。"
                 ),
-                (
-                    "人物身份连续性约束：不得突然改变已登场命名人物的性别、代词、亲属关系或辈分；"
-                    "不要把前文女性角色改写成叔叔、父亲、祖父、男人，也不要把既有男性角色改写成母亲、姐姐或女人。"
-                    "亲属/性别反转只有在前文已有明确伏笔且本章完整解释时才允许。"
-                ),
             ]
         )
+    lines.append(
+        "人物身份连续性约束：不得突然改变已登场命名人物的性别、代词、亲属关系或辈分；"
+        "不要把前文女性角色改写成叔叔、父亲、祖父、男人，也不要把既有男性角色改写成母亲、姐姐或女人。"
+        "亲属/性别反转只有在前文已有明确伏笔且本章完整解释时才允许。"
+    )
     if getattr(context, "genesis_context_refs", None):
         revision_id = str(context.genesis_context_refs.get("genesis_revision_id", "") or "")
         if revision_id:
@@ -92,17 +90,14 @@ def _story_basics_section(context: ChapterContextPack) -> str:
 
 
 def _extract_protagonist_name(context: ChapterContextPack) -> str:
-    candidates = [
-        str(getattr(context, "premise", "") or ""),
-        str(getattr(context, "genesis_story_engine_summary", "") or ""),
-    ]
-    for text in candidates:
-        match = re.search(r"(?:主角|主人公|主视角)\s*(?:[：:是为]\s*|\s+)([\u4e00-\u9fff]{2,4})", text)
-        if match:
-            name = match.group(1).strip()
-            if name and name not in {"工作人员", "相关人员", "主人公", "主角"}:
-                return name
-    return ""
+    # Author synopses are not chapter-permitted identity sources.
+    view = getattr(context, "world_view", None)
+    if view is None:
+        return ""
+    if view.pov_name.strip():
+        return view.pov_name.strip()
+    return next((entity.name.strip() for entity in view.known_entities
+                 if entity.ref == view.pov_ref and entity.name.strip()), "")
 
 
 def _chapter_plan_section(context: ChapterContextPack, title: str) -> str:

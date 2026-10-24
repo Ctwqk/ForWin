@@ -19,18 +19,20 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PATH = ROOT / "tests" / "fixtures" / "prompt_regression" / "cases.json"
 SNAPSHOT_DIR = ROOT / "tests" / "fixtures" / "prompt_regression" / "snapshots"
 
+# FU-R45: every case omits raw premise/setting. The ten cases without a world view also
+# omit the premise-derived name/instruction; single_world_view retains its permitted POV name.
 EXPECTED_PROMPT_REVISIONS = {
-    "single_minimal_opening": "1fb80985ce40d886",
-    "single_countdown_generic_profile": "e680e806e6962f36",
-    "single_closed_countdown": "f837ab3593ef6ef1",
-    "single_character_state": "f6d1c32f0e41202b",
-    "single_pre_audit_suppression": "a9a994621c21025e",
-    "single_future_plan_audit": "345375148db9f19c",
-    "preview_arc_rehearsal": "4a69e6d52e31b297",
-    "scene_breakdown_basic": "f850d8f67a2ab110",
-    "single_final_chapter": "99ba13c66fc3b92d",
-    "single_obligation_visible": "e2d92a093b20360c",
-    "single_world_view": "c2b1aeb4f6ab3556",
+    "single_minimal_opening": "20945044dfd2ba13",
+    "single_countdown_generic_profile": "04098e33416b1c84",
+    "single_closed_countdown": "d2110e5c7933395f",
+    "single_character_state": "e700ddc0ea273280",
+    "single_pre_audit_suppression": "03857b89fe16cfa4",
+    "single_future_plan_audit": "29e1c73a618c1c54",
+    "preview_arc_rehearsal": "6d11dd03fe9d3cc2",
+    "scene_breakdown_basic": "59bcbf8b6770a3b1",
+    "single_final_chapter": "c91f80892f3c273c",
+    "single_obligation_visible": "aaf7cb474097cd4f",
+    "single_world_view": "09b34f397ecf8089",
 }
 
 

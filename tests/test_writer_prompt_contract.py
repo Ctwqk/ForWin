@@ -16,6 +16,7 @@ from forwin.models.project import ChapterPlan
 from forwin.planning.future_plan_audit import FuturePlanAuditor
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import BandDelightSchedule, BandObligationContract
+from forwin.world_view.types import ChapterWorldView
 from forwin.writer.prompt_core import _canon_quality_context_section, build_single_chapter_draft_prompt
 from forwin.writer.prompt_core.sections import _chapter_plan_section, _story_basics_section
 from forwin.writer.prompt_core.constraints import _open_signal_constraint_sections
@@ -84,19 +85,21 @@ def test_writer_prompt_includes_protagonist_naming_contract() -> None:
     context = ChapterContextPack(
         project_id="p1",
         project_title="灰城遗档",
-        premise="主角：陆明，旧城档案修复师。",
+        premise="主角：陈星，旧城档案修复师。",
         genre="悬疑科幻",
         setting_summary="核心系统记忆系统维持公共档案秩序。",
         chapter_number=1,
         chapter_plan_title="档案室的裂缝",
         chapter_plan_one_line="陆明发现家族档案被抹除。",
         chapter_goals=["陆明发现倒计时"],
+        world_view=ChapterWorldView(pov_ref="hero", pov_name="陆明"),
     )
 
     prompt = build_single_chapter_draft_prompt(context)
     content = "\n".join(message["content"] for message in prompt)
 
     assert "主角姓名：陆明" in content
+    assert "主角姓名：陈星" not in content
     assert "不要用“工作人员”" in content
     assert "第 1 章正文前 300 字内必须出现主角姓名" in content
     assert "只保留一条线性时间线" in content
@@ -187,7 +190,7 @@ def test_story_basics_section_has_no_example_roles_or_countdowns() -> None:
 
     section = _story_basics_section(context)
 
-    assert "主角姓名：陆明" in section
+    assert "主角姓名：" not in section
     assert "倒计时约束" not in section
     assert "系统巡检员" not in section
     assert "剩余4小时" not in section

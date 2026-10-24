@@ -263,7 +263,8 @@ def test_load_eval_cases_builds_prompts_from_fixture_text() -> None:
     preview = medium[0]
     assert preview.input_snapshot == {"chapter_number": contexts[0].chapter_number}
     assert preview.messages
-    assert contexts[0].premise in json.dumps(preview.messages, ensure_ascii=False)
+    # Ruling FU-R45: the writer never sees the raw author premise.
+    assert contexts[0].premise not in json.dumps(preview.messages, ensure_ascii=False)
     genesis = next(case for case in medium if case.case_id == "genesis_brief")
     assert genesis.response_format == {"type": "json_object"}
     assert genesis.messages[0]["role"] == "system"

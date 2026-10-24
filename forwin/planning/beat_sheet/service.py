@@ -64,8 +64,10 @@ _ALLOWED = {
 class ArcBeatSheetService:
     """Writes beat sheet versions in the caller's session; the caller commits.
 
-    Callers must not hold the project row lock across the LLM call. This service locks and re-reads
-    the active sheet after generation, before writing the sheet and its canon constraints.
+    Callers must not hold the project row lock across the LLM call, with one exception: the
+    start-writing handoff holds it to keep arc/map/seed materialization and the first beat sheet's
+    canon constraints atomic. Other callers acquire the publication lock after generation; this
+    service then re-reads the active sheet before writing it and its canon constraints.
 
     ``llm_client`` is None when no model is configured: every generation then writes the fallback.
     ``save_trace`` saves the call's PromptTrace and its LLM DecisionEvents in that session and returns the

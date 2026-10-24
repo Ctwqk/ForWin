@@ -89,7 +89,7 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
     world = fixture["pack"]["world"]
     summaries = [arc["summary"] for arc in world["story_engine"]["long_arcs"]]
     markers = {source: f"AUTHOR_ONLY_{genre}_{source}_7f3c91" for source in (
-        "long_arc", "world", "map", "fact", "beat_sheet", "band_plan", "premise", "setting",
+        "long_arc", "world", "map", "fact", "beat_sheet", "beat_sheet_open", "band_plan", "premise", "setting",
         "phase", "milestone", "ambiguity", "title", "one_line", "goals", "hook", "hint_text",
         *(f"promise_{field}" for field in PROMISE_FIELDS),
     )}
@@ -113,6 +113,8 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
     fixture["beat_sheet"]["arc_payoff_map"]["ambiguity_constraints"] = ["PERMITTED_AMBIGUITY"]
     fixture["beat_sheet"]["arc_payoff_map"]["revelation_layers"] = [{
         "layer_id": "future-canary", "summary": markers["beat_sheet"], "chapter_window": "3",
+    }, {
+        "layer_id": "open-canary", "summary": markers["beat_sheet_open"], "chapter_window": "1",
     }]
     fixture["band_plan"]["chapters"][0]["world_bindings"][0]["how"] = markers["band_plan"]
     project_id = f"writer-sources-{genre}"
@@ -155,6 +157,10 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
     assert len(client.messages) == 2 and call.data is not None and call.issues == []
     sheet = call.data
     assert all(path in str(client.messages[1]) for path in paths.values())
+    # Both windows survive real beat-sheet validation; neither grants writer permission.
+    assert [(layer.summary, layer.chapter_window) for layer in sheet.arc_payoff_map.revelation_layers] == [
+        (markers["beat_sheet"], "3"), (markers["beat_sheet_open"], "1"),
+    ]
     monkeypatch.setattr(feasibility, "_kept_chapters", lambda *a, **k: [])
     monkeypatch.setattr(feasibility, "earliest_reveal_chapters", lambda *a: {})
     monkeypatch.setattr(feasibility.StoryCalendarRepository, "get", lambda *_: calendar)
@@ -206,6 +212,7 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
     chapter_experience = ChapterExperiencePlanner().derive_chapter_experience_plan(
         chapter_number=1, experience=experience, schedule=schedule, chapter_plan=plan,
     )
+    assert markers["beat_sheet_open"] in experience.arc_payoff_map.model_dump_json()
     revision = SimpleNamespace(id="genesis-source-regression", revision=1, pack_json=json.dumps(fixture["pack"]))
     project = Project(id=project_id, setting_summary="", creation_status="genesis_ready", **fixture["project"])
     # Keep the real premise, including interstellar's early revelation; it has no name-pattern trigger.
@@ -250,9 +257,15 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
     assert markers["fact"] in {fact.proposition for fact in runtime.world.facts_by_id.values()}
     hidden = next(fact for fact in runtime.world.facts_by_id.values() if fact.proposition == markers["fact"])
     assert f"fact:{hidden.id}" in {topic.fact_ref for topic in view.forbidden_topics}
-    assert markers["beat_sheet"] in sheet.arc_payoff_map.model_dump_json()
+    for source in ("beat_sheet", "beat_sheet_open"):
+        assert markers[source] in sheet.arc_payoff_map.model_dump_json()
+        fact = next(fact for fact in runtime.world.facts_by_id.values() if fact.proposition == markers[source])
+        fact_ref = f"fact:{fact.id}"
+        assert fact_ref in {topic.fact_ref for topic in view.forbidden_topics}
+        assert fact_ref not in {target.fact_ref for target in sheet.reveal_targets}
+        assert fact_ref not in {directive["fact_ref"] for directive in chapter["reveal_directives"]}
+        assert markers[source] not in view.model_dump_json()
     assert markers["band_plan"] in plan.world_bindings_json
-    assert context.arc_payoff_map.revelation_layers == []
     return context, markers, summaries
 
 
@@ -275,10 +288,12 @@ def test_no_author_side_text_reaches_any_writer_builder(monkeypatch, genre, buil
     assert markers["gate"] in issue.original_result["message"]
     assert instruction.must_fix and overlay.rule_anchors
 
-    for candidate in (context, repaired):
-        text = _prompt(builder, candidate)
-        leaked = [source for source, marker in markers.items() if marker in text]
-        assert leaked == [], (genre, builder, leaked)
+    prompts = {"normal": _prompt(builder, context), "repair": _prompt(builder, repaired)}
+    leaked = {path: [source for source, marker in markers.items() if marker in text]
+              for path, text in prompts.items()}
+    assert not any(leaked.values()), (genre, builder, leaked)
+    assert context.arc_payoff_map.revelation_layers == []
+    for path, text in prompts.items():
         assert "Genesis 根层版本：genesis-source-regression" in text
         assert context.world_view.pov_name in text
         assert context.chapter_plan_title in text
@@ -293,7 +308,7 @@ def test_no_author_side_text_reaches_any_writer_builder(monkeypatch, genre, buil
             assert f"PERMITTED_{field}" in text
         assert "PERMITTED_AMBIGUITY" in text
         assert not any(heading in text for heading in ("Genesis 世界总览", "Genesis 地图总览", "Genesis 长线引擎"))
-        if candidate is repaired:
+        if path == "repair":
             assert "repair must fix:" in text
         if genre == "interstellar":
             assert "父亲还活在沉船墓场" in context.premise

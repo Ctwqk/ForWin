@@ -21,7 +21,7 @@ from forwin.protocol.experience import ArcPayoffMap, RevelationLayer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.repo import StateRepository
-from forwin.world_view.types import ChapterWorldView
+from forwin.world_view.types import AllowedReveal, ChapterWorldView
 from tests.test_writer_world_view_prompt import BUILDERS, _context, _prompt
 
 
@@ -69,7 +69,10 @@ def experience_book():
 @pytest.mark.parametrize("builder", BUILDERS)
 @pytest.mark.parametrize("path", ["normal", "repair", "override"])
 @pytest.mark.parametrize("chapter", [1, 8])
-def test_experience_revelations_reach_all_builders_only_at_their_window(experience_book, builder, path, chapter):
+@pytest.mark.parametrize("reveal_permitted", [False, True])
+def test_experience_revelations_reach_all_builders_only_via_world_view(
+    experience_book, builder, path, chapter, reveal_permitted,
+):
     Session, schedule = experience_book
     if path == "override":
         override_band_experience("p", schedule.band_id, BandExperienceOverrideRequest(),
@@ -95,35 +98,43 @@ def test_experience_revelations_reach_all_builders_only_at_their_window(experien
         ExperienceContextProvider().contribute(
             ContextRequest(project_id="p", chapter_plan=repo.get_chapter_plan("p", chapter), repo=repo), draft,
         )
+        view = ChapterWorldView(allowed_reveals=[AllowedReveal(
+            directive_id="reveal-charter", fact_ref="fact:charter", proposition=SECRET,
+            observer="reader", target_state="knows",
+        )] if reveal_permitted else [])
         context = _context(
-            ChapterWorldView(), chapter_number=chapter, reader_promise=draft.data["reader_promise"],
+            view, chapter_number=chapter, reader_promise=draft.data["reader_promise"],
             arc_payoff_map=draft.data["arc_payoff_map"], band_delight_schedule=draft.data["band_schedule"],
             chapter_experience_plan=draft.data["chapter_experience_plan"],
         )
         text = _prompt(builder, context)
-        assert (SECRET in text) == (chapter >= 8)
-        assert ("HiddenKeeper" in text) == (chapter >= 8)
+        assert (SECRET in text) is reveal_permitted
+        assert ("HiddenKeeper" in text) is reveal_permitted
         assert SAFE_PROMISE in text
         assert "Every inference needs evidence" in text
-        assert len(context.arc_payoff_map.revelation_layers) == (1 if chapter >= 8 else 0)
-        # Author readers retain the complete future layer after every writer projection.
+        assert context.arc_payoff_map.revelation_layers == []
+        assert SECRET not in context.chapter_experience_plan.model_dump_json()
+        # Author readers retain the complete layer after every writer projection.
         assert repo.get_arc_payoff_map("p").revelation_layers[0].summary == SECRET
         assert repo.get_beat_sheet_experience("p").arc_payoff_map.revelation_layers[0].summary == SECRET
 
 
-@pytest.mark.parametrize(("window", "chapter", "visible"), [
-    ("8", 7, False), ("8", 8, True), ("8-10", 7, False), ("8-10", 8, True),
-    ([8, 10], 11, True), (" 8 – 10 ", 8, True), ("", 8, False), ("later", 8, False),
-    ("10-8", 10, False), ("0", 1, False), ("-1", 1, False),
+@pytest.mark.parametrize(("window", "chapter"), [
+    ("1", 1), ("8", 7), ("8", 8), ("8-10", 7), ("8-10", 8),
+    ([8, 10], 11), (" 8 – 10 ", 8), ("", 8), ("later", 8),
+    ("10-8", 10), ("0", 1), ("-1", 1),
 ])
-def test_writer_revelation_windows_require_an_unambiguous_start(window, chapter, visible):
-    original = ArcPayoffMap(revelation_layers=[RevelationLayer(summary=SECRET, chapter_window=window)])
+def test_writer_projection_drops_revelation_layers_for_every_window(window, chapter):
+    original = ArcPayoffMap(
+        revelation_layers=[RevelationLayer(summary=SECRET, chapter_window=window)],
+        ambiguity_constraints=["Every inference needs evidence"],
+    )
     projected = writer_payoff_map(original, chapter)
-    assert bool(projected.revelation_layers) is visible
+    assert projected.revelation_layers == []
+    assert projected.ambiguity_constraints == original.ambiguity_constraints
     assert original.revelation_layers[0].summary == SECRET
-    if visible:
-        projected.revelation_layers[0].summary = "changed"
-        assert original.revelation_layers[0].summary == SECRET
+    projected.ambiguity_constraints.append("changed")
+    assert original.ambiguity_constraints == ["Every inference needs evidence"]
 
 
 @pytest.mark.parametrize("chapter", [1, 8])
@@ -151,6 +162,6 @@ def test_rewrite_in_completed_arc_reads_its_own_promise(experience_book, chapter
         assert draft.data["reader_promise"].pleasure_promise == SAFE_PROMISE
         payoff = draft.data["arc_payoff_map"]
         assert payoff.ambiguity_constraints == ["Every inference needs evidence"]
-        assert [layer.summary for layer in payoff.revelation_layers] == ([SECRET] if chapter == 8 else [])
+        assert payoff.revelation_layers == []
         assert repo.get_reader_promise("p").pleasure_promise == "Next arc promise"
         assert repo.get_arc_payoff_map("p").ambiguity_constraints == ["Next arc constraint"]

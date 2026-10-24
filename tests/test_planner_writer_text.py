@@ -171,7 +171,7 @@ def test_every_revelation_layer_summary_rejects_an_unrevealed_concealed_name():
 @pytest.mark.parametrize(("window", "start", "reveal_start"), [
     ("1", 1, 1), ("4-6", 4, 3), ([4, 6], 4, 4), (" 4 – 6 ", 4, 4), ("4—6", 4, 4),
 ])
-def test_revelation_summary_with_on_time_related_reveal_validates_and_reaches_writer(window, start, reveal_start):
+def test_revelation_summary_with_on_time_related_reveal_validates_but_never_reaches_writer(window, start, reveal_start):
     payload, _ = _named_sheet("revelation_summary")
     payload["arc_payoff_map"]["revelation_layers"][0]["chapter_window"] = window
     payload["reveal_targets"][0]["range"] = [reveal_start, 6]
@@ -190,7 +190,8 @@ def test_revelation_summary_with_on_time_related_reveal_validates_and_reaches_wr
         rendered = _experience_overlay_section(SimpleNamespace(
             chapter_number=chapter, band_delight_schedule=schedule, chapter_experience_plan=plan,
         ))
-        assert ("HiddenSociety" in rendered) is (chapter >= start)
+        # Ruling FU-R48: revelation summaries are author-only; reveals reach the writer via directives.
+        assert "HiddenSociety" not in rendered
 
 
 @pytest.mark.parametrize("field", ["title", "one_line", "goals", "hook", "hint_text"])

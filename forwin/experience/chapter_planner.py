@@ -75,13 +75,8 @@ class ChapterExperiencePlanner:
         payoff_map = writer_payoff_map(experience.arc_payoff_map, chapter_number)
         reader_promise = experience.reader_promise
         rule_anchors = [
-            item.summary
-            for item in payoff_map.revelation_layers[:2]
-            if str(item.summary).strip()
-        ]
-        rule_anchors.extend(
             item for item in payoff_map.ambiguity_constraints[:2] if str(item).strip()
-        )
+        ]
         if reader_promise.world_legibility_target:
             rule_anchors.append(reader_promise.world_legibility_target)
         if calibration.clarify_rule_legibility:

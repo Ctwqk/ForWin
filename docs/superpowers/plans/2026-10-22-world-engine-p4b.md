@@ -573,6 +573,8 @@
 
 ---
 
+- （P4a 审计 B14）`Design-docs/CURRENT_DESIGN.md`、`CURRENT_ARCHITECTURE.md`、`DESIGN_STATUS.md` 中重复的“世界审查”段只保留一处，其余改为链接，并同步 `tests/test_design_status_docs.py` 的标记。
+
 ### Task 14: 生产部署 runbook（P0–P4 合并；仅控制者执行，每一步经用户确认）
 
 1. 确认线上没有活跃的生成任务：`task_active_generation_check`。暂停全部任务，优先 `task_pause`。关闭自动调度。暂停 post-Canon worker。
@@ -639,15 +641,25 @@
 - 每章报告：各角色 LLM 调用次数与 token、世界冲突数与人工冲突数（P5 验收的度量，对应设计“验证”第 5 条与审计的自治风险）。
 - 世界简报改为逐行降级裁剪（避免整段裁掉只剩主角）；`exit_state` 的值与 BookState 比较（不再只看是否被触及）。
 
+### Task 20: 写作者可见的设定简介（P4a follow-up 最终审查 I3）
+
+**Files:** `forwin/planning/beat_sheet/{types,service}.py`、`forwin/writer/prompt_core/{planning,sections}.py`、`forwin/context/providers/*`；Test: `tests/test_arc_beat_sheet.py`、`tests/test_writer_secret_sources.py`、`tests/test_writer_world_view_prompt.py`
+
+- 背景：FU-R45 去掉了 writer prompt 中的原始 premise、setting 与 Genesis 总览；第 1 章可能没有任何设定文字（reader_promise 默认为空）。
+- 节拍表增加 `setting_brief`（一到三句世界与基调说明），由 `plan.arc_beats` 生成，作为写作者可见字段：与 phase purpose 相同的校验（`writer_text_states_secret`、隐藏实体名字检查，以卷起点为准），prompt 指令说明它原样交给写作者。
+- writer 的故事基本信息段渲染当前卷的 `setting_brief`；为空时不渲染。fallback 节拍表从 genre 与 Genesis 的公开字段生成一个不含秘密的简介，或留空。
+- 测试：含秘密命题或隐藏实体名的 `setting_brief` 被拒绝；合法简介出现在五个 builder 中。
+
 ---
 
 ## 执行分工（沿用 P3 / P4a 模式）
 
-- 按用户偏好（P4a R32），实现、修复与任务审查都交给 Codex：`gpt-6-astra` 负责 Task 0–12、15–19，`gpt-6.1-sol` 负责 Task 13 与简单的修复；控制者运行全部 PostgreSQL 测试与全量测试；最终的整支审查用 Claude。
+- 按用户偏好（P4a R32），实现、修复与任务审查都交给 Codex：`gpt-6-astra` 负责 Task 0–12、15–20，`gpt-6.1-sol` 负责 Task 13 与简单的修复；控制者运行全部 PostgreSQL 测试与全量测试；最终的整支审查用 Claude。
 - Task 14：仅控制者执行
 - 依赖顺序：
   - 0 → 1、2 并行 → 3 → 4、5 并行 → 6。
   - 8 → 9 → 10 依次进行，因为它们共用世界引擎文件。
   - 7、11 从 3 开始可以并行。
   - 15 在 1 之后；16 与 2 共用 W16，放在 2 之后；17 放在 3、10 之后（分层改动面大，避免与功能任务冲突）；18 在 17 之后；19 在 15、17 之后。
-  - 12 → 13 → 14，13 的文档覆盖 15–19。
+  - 20 在 3 之后（与节拍表校验共用代码）。
+  - 12 → 13 → 14，13 的文档覆盖 15–20。

@@ -230,8 +230,8 @@ def test_unreachable_movement_names_mover_and_destination() -> None:
     engine.dispose()
 
 
-def test_hidden_fact_contradiction_shows_the_propositions() -> None:
-    # R40: the writer must see which secret it contradicted, as with must_not_reveal.
+def test_hidden_fact_contradiction_names_only_the_topic() -> None:
+    # R44: repair identifies the topic without teaching the writer the hidden truth.
     engine, Session = _session_factory()
     world = _seed_world(Session)
 
@@ -241,10 +241,13 @@ def test_hidden_fact_contradiction_shows_the_propositions() -> None:
 
     assert _codes(verdict) == [("contradicts_hidden_fact", "error")]
     issue = verdict.issues[0]
-    assert "「proposition-public」" in issue.description
-    assert "「proposition-secret」" in issue.description
+    assert "涉及甲的未揭示真相" in issue.description
+    assert "proposition-public" not in issue.description
+    assert "proposition-secret" not in issue.description
     assert "fact:" not in issue.description
-    assert any("「proposition-secret」" in item for item in verdict.repair_instruction.must_fix)
+    assert any("涉及甲的未揭示真相" in item for item in verdict.repair_instruction.must_fix)
+    assert all("proposition-secret" not in item for item in verdict.repair_instruction.must_fix)
+    assert issue.original_result["fact_propositions"][world.fact("fact-secret")] == "proposition-secret"
     assert issue.entity_names == []
     assert issue.suggested_fix == WORLD_REPAIR_FIXES["contradicts_hidden_fact"]
     engine.dispose()
@@ -256,7 +259,11 @@ def test_refs_before_trailing_punctuation_get_their_names() -> None:
     assert _named("node-1 reaches site-1: blocked. Then site-1.", names) == (
         "Ann reaches Harbor: blocked. Then Harbor.", ["Ann", "Harbor"],
     )
-    assert _named("fact:fact-1: known", names) == ("「the vault is empty」: known", [])
+    assert _named("fact:fact-1: known", names) == ("「未揭示真相」: known", [])
+    assert _named("fact:fact-1: known", names, {"fact:fact-1": ["Ann"]}) == (
+        "「涉及Ann的未揭示真相」: known", [],
+    )
+    assert _named("fact:unknown: kept", names) == ("「未揭示真相」: kept", [])
     assert _named("unknown-1: kept", names) == ("unknown-1: kept", [])
 
 

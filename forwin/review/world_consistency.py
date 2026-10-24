@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, NamedTuple
 
 from pydantic import ValidationError
@@ -19,6 +19,7 @@ from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.writer.prompt_core.world_repair import world_repair_fix
+from forwin.writer.prompt_core.world_view import forbidden_topic_text
 
 ISSUE_TYPE = "world_consistency"
 # Gate and translator messages separate refs with spaces, commas, semicolons, parens and quotes.
@@ -71,6 +72,7 @@ class WorldConsistencyReviewer:
             for item in extraction_issues
         ]
         names: Mapping[str, str] = {}
+        fact_topics: Mapping[str, Sequence[str]] = {}
         extraction = writer_output.chapter_delta
         if extraction is None:
             findings.append(_Finding(
@@ -100,6 +102,7 @@ class WorldConsistencyReviewer:
                 travel_tolerance=travel_tolerance,
             )
             names = world.names
+            fact_topics = world.translation.fact_topics
             findings.extend(
                 _Finding(issue.severity, issue.code, issue.message, _path_ref(issue.path), "ChapterDeltaTranslator")
                 for issue in world.translation.issues
@@ -109,11 +112,19 @@ class WorldConsistencyReviewer:
                     _Finding(issue.severity, issue.code, issue.message, issue.target_ref, "BookStateReviewGate")
                     for issue in world.gate.issues
                 )
-        return _verdict([self._issue(finding, names) for finding in findings])
+        return _verdict([self._issue(finding, names, fact_topics) for finding in findings])
 
-    def _issue(self, finding: _Finding, names: Mapping[str, str]) -> ContinuityIssue:
+    def _issue(
+        self, finding: _Finding, names: Mapping[str, str], fact_topics: Mapping[str, Sequence[str]],
+    ) -> ContinuityIssue:
         error = finding.severity == "error"
-        description, entity_names = _named(finding.message or finding.code, names)
+        description, entity_names = _named(finding.message or finding.code, names, fact_topics)
+        fix = world_repair_fix(finding.code) if error else ""
+        suggested_fix, _ = _named(fix, names, fact_topics)
+        audit_refs = {
+            token if token in names else token.rstrip(_TRAILING_PUNCTUATION)
+            for token in _REF_TOKEN.findall(f"{finding.message} {finding.evidence_ref} {fix}")
+        }
         return ContinuityIssue(
             rule_name=finding.code,
             severity="error" if error else "warning",
@@ -124,28 +135,35 @@ class WorldConsistencyReviewer:
             target_scope="draft",
             issue_group=issue_group_for_issue(issue_type=ISSUE_TYPE),
             evidence_refs=[finding.evidence_ref] if finding.evidence_ref else [],
-            suggested_fix=world_repair_fix(finding.code) if error else "",
+            suggested_fix=suggested_fix,
             source_layer="book_state",
             source_analyzer=finding.source_analyzer,
             blocking=error,
-            # The raw message keeps the ids for audit.
-            original_result={"code": finding.code, "message": finding.message, "ref": finding.evidence_ref},
+            # Only audit data retains the raw message and referenced propositions.
+            original_result={
+                "code": finding.code, "message": finding.message, "ref": finding.evidence_ref,
+                "fact_propositions": {
+                    ref: names[ref] for ref in sorted(audit_refs) if ref.startswith(FACT_REF_PREFIX) and ref in names
+                },
+            },
         )
 
 
-def _named(text: str, names: Mapping[str, str]) -> tuple[str, list[str]]:
-    """``text`` with every known ref replaced by its display name, and the entity names it used."""
+def _named(
+    text: str, names: Mapping[str, str], fact_topics: Mapping[str, Sequence[str]] | None = None,
+) -> tuple[str, list[str]]:
+    """Render fact refs by topic and other known refs by name; never fall back to a proposition."""
     entity_names: list[str] = []
 
     def name_of(match: re.Match[str]) -> str:
         token = match.group(0)
         ref = token if token in names else token.rstrip(_TRAILING_PUNCTUATION)
+        suffix = token[len(ref):]
+        if ref.startswith(FACT_REF_PREFIX):
+            return f"「{forbidden_topic_text((fact_topics or {}).get(ref, ()))}」{suffix}"
         name = names.get(ref)
         if not name:
             return token
-        suffix = token[len(ref):]
-        if ref.startswith(FACT_REF_PREFIX):
-            return f"「{name}」{suffix}"
         entity_names.append(name)
         return f"{name}{suffix}"
 

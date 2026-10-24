@@ -10,13 +10,13 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
-from forwin.book_state.knowledge import FACT_REF_PREFIX, KnowledgeEvent, knowledge_event_to_patch
+from forwin.book_state.knowledge import FACT_REF_PREFIX, KnowledgeEvent, is_concealed, knowledge_event_to_patch
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
-from forwin.book_state.runtime import BookStateRuntime
-from forwin.book_state.schema import WORLD_NODE_FIELDS
+from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+from forwin.book_state.schema import ACTOR_NODE_TYPES, WORLD_NODE_FIELDS
 from forwin.book_state.story_clock import (
     StoryCalendar, StoryClockError, duration_to_minutes, format_story_time,
 )
@@ -76,6 +76,7 @@ _SYMMETRIC_EDGE_TYPES = frozenset(
 _EDGE_SET_FIELDS = frozenset({"weight", "confidence", "status", "visibility", "truth_relation", "visibility_default"})
 _EDGE_SET_PREFIXES = ("state.", "metadata.")
 _INTENT_STATUS_BY_EFFECT = {"disrupted": "disrupted", "fulfilled": "resolved"}
+_TOPIC_SUBJECT_TYPES = frozenset({*ACTOR_NODE_TYPES, "family", "institution", "item", "location", "region"})
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,8 @@ class TranslationResult:
     issues: tuple[ExtractionIssue, ...]
     # Display name of every node, site and fact ref the delta and its review can name.
     names: Mapping[str, str] = field(default_factory=dict)
+    # Writer-safe subject names, separate from the propositions retained for audit.
+    fact_topics: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 class ChapterDeltaTranslator:
@@ -199,7 +202,7 @@ class _DeltaBuilder:
             self._intent_interaction(interaction, f"intent_interactions[{index}]")
         issues = tuple(self.issues)
         if any(issue.severity == "error" for issue in issues):
-            return TranslationResult(None, issues, self._display_names())
+            return TranslationResult(None, issues, self._display_names(), self._fact_topics())
         delta = GraphDelta(
             id=f"chapter-delta:{self.project_id}:{self.chapter}:{extraction.body_sha256[:16]}",
             project_id=self.project_id,
@@ -234,7 +237,7 @@ class _DeltaBuilder:
                 "time_elapsed_minutes": elapsed,
             },
         )
-        return TranslationResult(delta, issues, self._display_names())
+        return TranslationResult(delta, issues, self._display_names(), self._fact_topics())
 
     def _display_names(self) -> dict[str, str]:
         """Names of the world nodes, map nodes and facts before the chapter plus the ones it creates."""
@@ -255,6 +258,35 @@ class _DeltaBuilder:
             if str(patch.op) == "create"
         )
         return {ref: text for ref, name in names.items() if (text := str(name or "").strip())}
+
+    def _fact_topics(self) -> dict[str, tuple[str, ...]]:
+        """Name visible subjects only, including nodes and facts created by this chapter."""
+        world = ObjectiveWorldGraph(
+            nodes=list(self.world.nodes_by_id.values()), states_by_node_id=self.world.states_by_node_id,
+        )
+        for patch in self.created_nodes.values():
+            world.apply_node_patch(patch)
+        places = {**self.map.nodes_by_id, **{node.id: node for node in self.new_sites.values()}}
+        subjects_by_fact = {
+            f"{FACT_REF_PREFIX}{fact.id}": fact.related_node_refs for fact in self.world.facts_by_id.values()
+        }
+        subjects_by_fact.update(
+            (f"{FACT_REF_PREFIX}{patch.fact_id}", patch.related_refs)
+            for patch in self.fact_patches if str(patch.op) == "create"
+        )
+        topics: dict[str, tuple[str, ...]] = {}
+        for fact_ref, refs in subjects_by_fact.items():
+            names: list[str] = []
+            for ref in refs:
+                node = world.get_node(ref)
+                place = places.get(ref)
+                if node is not None:
+                    if str(node.node_type) in _TOPIC_SUBJECT_TYPES and not is_concealed(world, node):
+                        names.append(node.name.strip())
+                elif place is not None:
+                    names.append(place.name.strip())
+            topics[fact_ref] = tuple(dict.fromkeys(name for name in names if name))
+        return topics
 
     # issues and time
 

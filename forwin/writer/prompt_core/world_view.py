@@ -18,6 +18,7 @@ from forwin.world_view.types import (
 # A forbidden topic names an unrevealed secret's subjects, never its proposition.
 FORBIDDEN_TOPIC_TEMPLATE = "涉及{subjects}的未揭示真相"
 FORBIDDEN_TOPIC_SUBJECT_SEPARATOR = "、"
+UNNAMED_FACT_TOPIC = "未揭示真相"
 # The <<FORWIN_LOCATION>> instruction of the scene prompt; the location table lists the ids it accepts.
 SCENE_LOCATION_INSTRUCTION = "填地点表中的 id，新地点写 new:<名称>"
 LOCATION_TABLE_HEADING = "地点表（id：名称）"
@@ -40,6 +41,8 @@ _NOT_FOR_READER = "POV 知道；本章不得向读者明示"
 
 def forbidden_topic_text(subjects: Sequence[str]) -> str:
     """The topic of a secret the writer must not settle, built from its subjects' names."""
+    if not subjects:
+        return UNNAMED_FACT_TOPIC
     return FORBIDDEN_TOPIC_TEMPLATE.format(subjects=FORBIDDEN_TOPIC_SUBJECT_SEPARATOR.join(subjects))
 
 

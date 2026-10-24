@@ -654,7 +654,11 @@
 
 ## 执行分工（沿用 P3 / P4a 模式）
 
-- 按用户偏好（P4a R32），实现、修复与任务审查都交给 Codex：`gpt-6-astra` 负责 Task 0–12、15–20，`gpt-6.1-sol` 负责 Task 13 与简单的修复；控制者运行全部 PostgreSQL 测试与全量测试；最终的整支审查用 Claude。
+- 按用户要求（2026-10-24）：Codex 覆盖约三分之一的子任务。
+  - Codex `gpt-6-astra`：Task 0、2、7、11、16、18
+  - Codex `gpt-6.1-sol`：Task 13
+  - Claude opus：Task 1、3、4、5、6、8、9、10、12、15、17、19、20
+  - 任务审查与最终整支审查用 Claude；Codex 实现的任务由控制者运行 PostgreSQL 测试与全量测试。
 - Task 14：仅控制者执行
 - 依赖顺序：
   - 0 → 1、2 并行 → 3 → 4、5 并行 → 6。

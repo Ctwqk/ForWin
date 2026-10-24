@@ -924,15 +924,6 @@ justification = "技能提示层发给 LLM 的前缀"
 max_literals = 3
 
 [[entry]]
-path = "forwin/subworld_manager.py"
-symbol = "SubWorldManager._window_overlaps"
-checks = ["chapter_number_literal", "cjk_inline_iteration"]
-category = "pending_removal"
-remove_in = "P4"
-justification = "前期/中段/后期 窗口词与写死的章节号；P4 删除 subworld 角色路径"
-max_literals = 10
-
-[[entry]]
 path = "forwin/world_templates.py"
 symbol = "<file>"
 checks = ["fixture_term"]

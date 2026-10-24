@@ -44,7 +44,6 @@ from forwin.models.audit import DecisionEvent
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.outbox import OutboxEvent
 from forwin.models.project import ChapterPlan, Project
-from forwin.models.subworld import SubWorldRosterItem
 from forwin.models.maintenance import PostCanonMaintenanceRun
 from forwin.maintenance.events import ORDER_CONTROLS_KEY, POST_CANON_STEP_NAMES
 from forwin.naming import (
@@ -77,7 +76,6 @@ class PreparedCanon:
     chapter_plan_id: str
     candidate_id: str
     obligation_id: str
-    roster_item_id: str
 
 
 @dataclass(frozen=True)
@@ -117,28 +115,6 @@ def prepared_canon() -> PreparedCanon:
             ),
         )
         arc = updater.create_arc_plan(project.id, "Arc one")
-        subworld = updater.create_subworld(
-            project_id=project.id,
-            origin_arc_id=arc.id,
-            parent_subworld_id=None,
-            name="Archive district",
-            purpose="Introduce the archivist",
-            scope="arc_local",
-        )
-        roster_item = updater.create_roster_item(
-            project_id=project.id,
-            subworld_id=subworld.id,
-            entity_id=None,
-            display_name="Shen Linchuan",
-            role_hint="Archivist",
-            is_core=True,
-            status="activated_named",
-            activation_chapter=1,
-            metadata={
-                "pending_entity_admission": True,
-                "entry_target_chapter": 1,
-            },
-        )
         chapter = updater.create_chapter_plan(
             project_id=project.id,
             arc_plan_id=arc.id,
@@ -252,7 +228,6 @@ def prepared_canon() -> PreparedCanon:
             chapter_plan_id=chapter.id,
             candidate_id=candidate.id,
             obligation_id=obligation.id,
-            roster_item_id=roster_item.id,
         )
 
     yield prepared
@@ -2226,14 +2201,9 @@ def test_canon_failure_rolls_back_every_authoritative_write(
     assert _authoritative_snapshot(prepared_canon) == before
     with prepared_canon.Session() as session:
         candidate = session.get(CandidateDraftRecord, prepared_canon.candidate_id)
-        roster_item = session.get(SubWorldRosterItem, prepared_canon.roster_item_id)
         assert candidate is not None
-        assert roster_item is not None
         assert candidate.status == "failed"
         assert failure_stage in candidate.failure_reason
-        roster_metadata = json.loads(roster_item.metadata_json)
-        assert roster_metadata["pending_entity_admission"] is True
-        assert "character_id" not in roster_metadata
 
 
 def test_atomic_commit_writes_all_authoritative_state_once(
@@ -2262,9 +2232,7 @@ def test_atomic_commit_writes_all_authoritative_state_once(
     assert snapshot["obligation_status"] == "active"
     with prepared_canon.Session() as session:
         candidate = session.get(CandidateDraftRecord, prepared_canon.candidate_id)
-        roster_item = session.get(SubWorldRosterItem, prepared_canon.roster_item_id)
         assert candidate is not None
-        assert roster_item is not None
         assert candidate.status == "accepted"
         assert candidate.canon_commit_id == outcome.commit_id
         assert outcome.commit_id == prepared_canon.plan.canon_commit_id
@@ -2317,11 +2285,6 @@ def test_atomic_commit_writes_all_authoritative_state_once(
                 "upload_url": "https://write.example/prepared",
             }
         ]
-        roster_metadata = json.loads(roster_item.metadata_json)
-        assert roster_metadata["character_id"] == f"character-{candidate.id}"
-        assert roster_metadata["book_state_node_id"] == f"character-{candidate.id}"
-        assert roster_metadata["canon_source"] == "book_state"
-        assert "pending_entity_admission" not in roster_metadata
 
 
 def test_publisher_event_uses_prepared_snapshot_after_settings_change(

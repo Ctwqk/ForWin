@@ -7,6 +7,8 @@ Create Date: 2026-10-22 00:00:00.000000
 Adds versioned arc beat sheets and band plans, and chapter planning fields.
 Drops arc_world_contracts, band_world_contracts, and chapter_world_delta_intents;
 downgrade recreates these tables empty without restoring their rows.
+The subworld character table and identity links are also dropped; downgrade
+restores their schema, with empty identity links, but cannot recover deleted data.
 New NOT NULL chapter columns carry server defaults for existing rows.
 The maintenance step rename and deletion are irreversible; downgrade only
 reverts the schema; removed policy keys and maintenance history are not restored.
@@ -29,6 +31,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
+    _drop_subworld_character_paths()
     _drop_retired_arc_planner_tables()
     op.create_table(
         "arc_beat_sheets",
@@ -132,6 +135,7 @@ def _drop_simulation_from_policies() -> None:
 
 def downgrade() -> None:
     """Revert schema; the maintenance step data rewrite is not reversed."""
+    _restore_subworld_character_paths()
     _restore_retired_arc_planner_tables()
     op.create_table(
         "project_replan_events",
@@ -409,5 +413,79 @@ def _restore_retired_arc_planner_tables() -> None:
         "ix_provisional_promotions_project_arc_band",
         "provisional_promotion_records",
         ["project_id", "arc_id", "band_id"],
+        unique=False,
+    )
+
+
+def _drop_subworld_character_paths() -> None:
+    op.drop_table("sub_world_roster_items")
+    op.drop_column("character_identity_map", "roster_item_ids_json")
+
+
+def _restore_subworld_character_paths() -> None:
+    # Populate existing identities before restoring the baseline's no-default column.
+    op.add_column(
+        "character_identity_map",
+        sa.Column("roster_item_ids_json", sa.Text(), server_default="[]", nullable=False),
+    )
+    op.alter_column("character_identity_map", "roster_item_ids_json", server_default=None)
+    op.create_table(
+        "sub_world_roster_items",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("subworld_id", sa.String(), nullable=False),
+        sa.Column("entity_id", sa.String(), nullable=True),
+        sa.Column("entity_kind", sa.String(), nullable=False),
+        sa.Column("display_name", sa.String(), nullable=False),
+        sa.Column("slot_key", sa.String(), nullable=False),
+        sa.Column("role_hint", sa.Text(), nullable=False),
+        sa.Column("description", sa.Text(), nullable=False),
+        sa.Column("is_core", sa.Boolean(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("activation_chapter", sa.Integer(), nullable=False),
+        sa.Column("metadata_json", sa.Text(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(), server_default=sa.text("now()"), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(), server_default=sa.text("now()"), nullable=False
+        ),
+        sa.ForeignKeyConstraint(
+            ["entity_id"],
+            ["entities.id"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id", "subworld_id"],
+            ["sub_worlds.project_id", "sub_worlds.id"],
+            name="fk_sub_world_roster_project_subworld",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_sub_world_roster_project_display",
+        "sub_world_roster_items",
+        ["project_id", "display_name"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_sub_world_roster_project_slot",
+        "sub_world_roster_items",
+        ["project_id", "slot_key"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_sub_world_roster_project_status",
+        "sub_world_roster_items",
+        ["project_id", "status"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_sub_world_roster_project_subworld",
+        "sub_world_roster_items",
+        ["project_id", "subworld_id"],
         unique=False,
     )

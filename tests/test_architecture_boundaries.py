@@ -1383,3 +1383,21 @@ def test_literal_llm_stages_have_registered_prompt_trace_owners() -> None:
     assert stages == LLM_STAGE_TRACE_OWNERS.keys()
     for path, persistence_call in LLM_STAGE_TRACE_OWNERS.values():
         assert persistence_call in _read(path)
+
+
+def test_subworld_role_paths_are_gone() -> None:
+    assert not (ROOT / "forwin" / ("subworld_" + "manager.py")).exists()
+    forbidden = (
+        "SubWorld" + "Manager", "SubWorld" + "RosterItem", "sub_world_" + "roster",
+        "roster_" + "item", "plan_band_" + "activation", "ensure_initial_" + "registry",
+        "plan_subworld_" + "delta", "apply_arc_" + "delta",
+        "SubWorld" + "SlotPlan", "SubWorld" + "CharacterSeed",
+    )
+    offenders = [
+        (str(path.relative_to(ROOT)), token)
+        for source_root in (ROOT / "forwin", ROOT / "tests")
+        for path in source_root.rglob("*")
+        if path.suffix in {".py", ".md", ".toml"} and "migrations" not in path.parts
+        for token in forbidden if token in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []

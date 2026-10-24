@@ -32,8 +32,9 @@ from forwin.models import (
     ReaderScaleSnapshot,
     SignalWindowAggregate,
     SubWorld,
-    SubWorldRosterItem,
 )
+from forwin.book_state import BookStateQuery
+from forwin.map.subworlds import location_subworld_ids
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.protocol import (
     ArcPayoffMap,
@@ -397,52 +398,18 @@ class StateRepository:
             .all()
         )
 
-    def list_roster_items(
-        self,
-        project_id: str,
-        subworld_ids: list[str] | None = None,
-    ) -> list[SubWorldRosterItem]:
-        stmt = select(SubWorldRosterItem).where(
-            SubWorldRosterItem.project_id == project_id
-        )
-        normalized_ids = [
-            str(item or "").strip()
-            for item in (subworld_ids or [])
-            if str(item or "").strip()
-        ]
-        if normalized_ids:
-            stmt = stmt.where(SubWorldRosterItem.subworld_id.in_(normalized_ids))
-        return list(
-            self.session.execute(
-                stmt.order_by(
-                    SubWorldRosterItem.subworld_id.asc(),
-                    SubWorldRosterItem.is_core.desc(),
-                    SubWorldRosterItem.created_at.asc(),
-                    SubWorldRosterItem.id.asc(),
-                )
-            )
-            .scalars()
-            .all()
-        )
-
     def get_active_subworld_summary(
         self,
         project_id: str,
         chapter_number: int,
     ) -> list[SubWorldSummary]:
         active_ids = self._active_subworld_ids_for_chapter(project_id, chapter_number)
-        if not active_ids:
-            active_ids = self._fallback_global_core_ids(project_id)
         active_set = set(active_ids)
         rows = self.list_subworlds(project_id)
-        roster_by_subworld: dict[str, list[SubWorldRosterItem]] = {}
-        for item in self.list_roster_items(project_id, [row.id for row in rows]):
-            roster_by_subworld.setdefault(item.subworld_id, []).append(item)
         summaries: list[SubWorldSummary] = []
         for row in rows:
             if row.id not in active_set:
                 continue
-            roster = roster_by_subworld.get(row.id, [])
             summaries.append(
                 SubWorldSummary(
                     id=row.id,
@@ -451,14 +418,6 @@ class StateRepository:
                     scope=row.scope,
                     status=row.status,
                     active_in_current_band=True,
-                    core_cast=[
-                        item.display_name
-                        for item in roster
-                        if item.is_core and str(item.display_name or "").strip()
-                    ],
-                    planned_slot_count=sum(
-                        1 for item in roster if item.status == "planned_slot"
-                    ),
                 )
             )
         return summaries
@@ -469,8 +428,6 @@ class StateRepository:
         chapter_number: int,
     ) -> list[dict]:
         active_ids = self._active_subworld_ids_for_chapter(project_id, chapter_number)
-        if not active_ids:
-            active_ids = self._fallback_global_core_ids(project_id)
         active_set = set(active_ids)
         drafts: list[dict] = []
         map_region_rows = (
@@ -847,42 +804,15 @@ class StateRepository:
         )
 
     def _active_subworld_ids_for_chapter(
-        self,
-        project_id: str,
-        chapter_number: int,
+        self, project_id: str, chapter_number: int,
     ) -> list[str]:
-        chapter_experience = self.get_chapter_experience_plan(
-            project_id, chapter_number
+        plan = self.get_chapter_plan(project_id, chapter_number)
+        if plan is None:
+            return []
+        query = BookStateQuery(self.session)
+        latest = query.repository.latest_canon_chapter(project_id)
+        runtime = query.runtime(project_id, as_of_chapter=latest if latest is not None else 0)
+        location_refs = _load_json_object(plan.location_refs_json or "[]", [])
+        return location_subworld_ids(
+            runtime, location_refs if isinstance(location_refs, list) else [], pov_ref=plan.pov_ref or "",
         )
-        if chapter_experience is not None and chapter_experience.active_subworld_ids:
-            return [
-                str(item).strip()
-                for item in chapter_experience.active_subworld_ids
-                if str(item).strip()
-            ]
-        band_schedule = self.get_band_experience_plan_for_chapter(
-            project_id, chapter_number
-        )
-        if band_schedule is not None and band_schedule.active_subworld_ids:
-            return [
-                str(item).strip()
-                for item in band_schedule.active_subworld_ids
-                if str(item).strip()
-            ]
-        return []
-
-    def _fallback_global_core_ids(self, project_id: str) -> list[str]:
-        rows = self.session.execute(
-            select(SubWorld.id)
-            .where(
-                SubWorld.project_id == project_id,
-                SubWorld.scope == "global_core",
-                SubWorld.status == "active",
-            )
-            .order_by(SubWorld.created_at.asc(), SubWorld.id.asc())
-        ).all()
-        return [
-            str(subworld_id)
-            for (subworld_id,) in rows
-            if str(subworld_id or "").strip()
-        ]

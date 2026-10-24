@@ -38,7 +38,6 @@ from forwin.audience.comment_analysis import CommentAnalyzer
 from forwin.skills import SkillPromptLayerBuilder, SkillRouter
 from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
-from forwin.subworld_manager import SubWorldManager
 from forwin.writer.chapter_writer import ChapterWriter
 
 
@@ -66,7 +65,6 @@ class ChapterPipeline(
         skill_router: SkillRouter,
         skill_prompt_layer_builder: SkillPromptLayerBuilder,
         book_genesis: BookGenesisService,
-        subworld_manager: SubWorldManager,
         retrieval_broker: RetrievalBroker,
         artifact_store: ArtifactStore,
         observability: ObservabilityService,
@@ -107,7 +105,6 @@ class ChapterPipeline(
         self.skill_router = skill_router
         self.skill_prompt_layer_builder = skill_prompt_layer_builder
         self.book_genesis = book_genesis
-        self.subworld_manager = subworld_manager
         self.retrieval_broker = retrieval_broker
         self.artifact_store = artifact_store
         self.observability = observability

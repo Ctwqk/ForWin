@@ -30,7 +30,6 @@ from forwin.models import (
     Project,
     PromptTrace,
     SubWorld,
-    SubWorldRosterItem,
     new_id,
 )
 from forwin.protocol import (
@@ -340,41 +339,6 @@ class StateUpdater:
             status=status,
             introduced_at_chapter=int(introduced_at_chapter or 0),
             retired_at_chapter=retired_at_chapter,
-            metadata_json=json.dumps(metadata or {}, ensure_ascii=False),
-        )
-        self.session.add(row)
-        self.session.flush()
-        return row
-
-    def create_roster_item(
-        self,
-        *,
-        project_id: str,
-        subworld_id: str,
-        entity_id: str | None,
-        entity_kind: str = "character",
-        display_name: str = "",
-        slot_key: str = "",
-        role_hint: str = "",
-        description: str = "",
-        is_core: bool = False,
-        status: str = "planned_slot",
-        activation_chapter: int = 0,
-        metadata: dict | None = None,
-    ) -> SubWorldRosterItem:
-        row = SubWorldRosterItem(
-            id=new_id(),
-            project_id=project_id,
-            subworld_id=subworld_id,
-            entity_id=entity_id,
-            entity_kind=entity_kind,
-            display_name=display_name,
-            slot_key=slot_key,
-            role_hint=role_hint,
-            description=description,
-            is_core=is_core,
-            status=status,
-            activation_chapter=int(activation_chapter or 0),
             metadata_json=json.dumps(metadata or {}, ensure_ascii=False),
         )
         self.session.add(row)

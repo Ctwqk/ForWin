@@ -67,6 +67,8 @@ def _seed_legacy_chapter(session: Session) -> None:
 def _assert_planning_schema(engine: sa.Engine) -> None:
     inspector = sa.inspect(engine)
     assert {"arc_beat_sheets", "band_plans"} <= set(inspector.get_table_names())
+    assert "sub_world_" + "roster_" + "items" not in inspector.get_table_names()
+    assert "roster_" + "item_ids_json" not in {c["name"] for c in inspector.get_columns("character_identity_map")}
     assert {"project_stage_analyses", "project_replan_events"}.isdisjoint(inspector.get_table_names())
     assert "macro_" + "progression_json" not in {c["name"] for c in inspector.get_columns("arc_plan_versions")}
     assert {c["name"] for c in inspector.get_columns("arc_beat_sheets")} == BEAT_SHEET_COLUMNS
@@ -397,3 +399,69 @@ def test_0006_replanner_downgrade_definitions_match_baseline() -> None:
     expected = definitions(baseline.upgrade)
     assert len(expected) == 3
     assert definitions(migration.downgrade) == expected
+
+
+def test_0006_drops_subworld_character_paths_and_restores_baseline(legacy_database) -> None:
+    config, engine = legacy_database
+    table_name = "sub_world_" + "roster_" + "items"
+    column = "roster_" + "item_ids_json"
+
+    def schema():
+        inspector = sa.inspect(engine)
+        return {
+            table: {
+                "columns": sorted((c["name"], str(c["type"]), c["nullable"], c["default"])
+                                  for c in inspector.get_columns(table)),
+                "pk": inspector.get_pk_constraint(table),
+                "fk": inspector.get_foreign_keys(table),
+                "indexes": inspector.get_indexes(table),
+                "unique": inspector.get_unique_constraints(table),
+            }
+            for table in (table_name, "character_identity_map")
+        }
+
+    original = schema()
+    with Session(engine) as session, session.begin():
+        _seed_legacy_chapter(session)
+        identities = sa.Table("character_identity_map", sa.MetaData(), autoload_with=session.connection())
+        session.execute(identities.insert().values(**{
+            "id": "identity-1", "project_id": "project-1", "canonical_character_id": "character-1",
+            "book_state_node_id": "character-1", "genesis_ref_id": "seed:character-1",
+            column: '["old-link"]', "aliases_json": "[]", "display_name": "Character",
+            "status": "active", "metadata_json": "{}",
+            "created_at": datetime(2026, 10, 22), "updated_at": datetime(2026, 10, 22),
+        }))
+    command.upgrade(config, "0006_planning_v6")
+    _assert_planning_schema(engine)
+    command.downgrade(config, "0005_world_plan_conflicts")
+    assert schema() == original
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(f"SELECT count(*) FROM {table_name}")).scalar_one() == 0
+        assert connection.execute(sa.text(f"SELECT {column} FROM character_identity_map")).scalar_one() == "[]"
+    command.upgrade(config, "0006_planning_v6")
+    _assert_planning_schema(engine)
+
+
+def test_0006_subworld_character_downgrade_definitions_match_baseline() -> None:
+    import ast
+    import inspect
+
+    baseline = importlib.import_module("forwin.migrations.versions.0001_v5_baseline")
+    migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
+    table_name = "sub_world_" + "roster_" + "items"
+
+    def definitions(function):
+        result = {}
+        for node in ast.walk(ast.parse(inspect.getsource(function))):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in {"create_table", "create_index"}:
+                continue
+            table_arg = node.args[0 if node.func.attr == "create_table" else 1]
+            if isinstance(table_arg, ast.Constant) and table_arg.value == table_name:
+                result[node.args[0].value] = ast.dump(node, include_attributes=False)
+        return result
+
+    expected = definitions(baseline.upgrade)
+    assert len(expected) == 5
+    assert definitions(migration._restore_subworld_character_paths) == expected

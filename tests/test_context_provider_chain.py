@@ -391,3 +391,57 @@ def test_canon_quality_context_does_not_infer_ordinary_last_arc_chapter_as_final
     )
 
     assert context["is_final_chapter"] is False
+
+
+def test_active_subworlds_follow_plan_locations(monkeypatch) -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from forwin.book_state import BookStateQuery
+    from forwin.models import Base, SubWorld, MapRegionRow
+    from forwin.models.project import ArcPlanVersion, ChapterPlan
+    from forwin.state.repo import StateRepository
+
+    runtime = SimpleNamespace(
+        map=SimpleNamespace(nodes_by_id={
+            "loc-a": SimpleNamespace(subworld_id="sw-a"),
+            "loc-b": SimpleNamespace(subworld_id="sw-b"),
+            "loc-c": SimpleNamespace(subworld_id="sw-a"),
+        }),
+        world=SimpleNamespace(get_state=lambda ref: {"location_id": "loc-b"} if ref == "pov" else {},
+                              get_node=lambda ref: None),
+    )
+    reads = []
+    monkeypatch.setattr(BookStateRepository, "latest_canon_chapter", lambda self, project_id: 7)
+    def load_runtime(self, project_id, *, as_of_chapter):
+        reads.append((project_id, as_of_chapter))
+        return runtime
+    monkeypatch.setattr(BookStateQuery, "runtime", load_runtime)
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(Project(id="p", title="title", premise="p", genre="g"))
+        session.add(ArcPlanVersion(id="arc", project_id="p", arc_synopsis="arc"))
+        for key in ("a", "b", "unused"):
+            session.add(SubWorld(id=f"sw-{key}", project_id="p", name=key, scope="global_core"))
+            session.add(MapRegionRow(id=f"region-{key}", project_id="p", subworld_id=f"sw-{key}", name=key, region_type="local_region"))
+        plan = ChapterPlan(project_id="p", arc_plan_id="arc", chapter_number=8, title="title", pov_ref="pov",
+                           location_refs_json='["loc-a", "missing", "loc-c"]',
+                           experience_plan_json='{"active_subworld_ids": ["sw-unused"]}')
+        session.add(plan)
+        session.flush()
+        repo = StateRepository(session)
+        assert [s.id for s in repo.get_active_subworld_summary("p", 8)] == ["sw-a"]
+        assert [r["subworld_id"] for r in repo.get_active_subworld_region_drafts("p", 8)] == ["sw-a"]
+        plan.location_refs_json = '["loc-b", "loc-a", "loc-c"]'
+        assert {s.id for s in repo.get_active_subworld_summary("p", 8)} == {"sw-a", "sw-b"}
+        plan.location_refs_json = "[]"
+        assert [s.id for s in repo.get_active_subworld_summary("p", 8)] == ["sw-b"]
+        assert [r["subworld_id"] for r in repo.get_active_subworld_region_drafts("p", 8)] == ["sw-b"]
+        plan.location_refs_json = '["missing"]'
+        assert [s.id for s in repo.get_active_subworld_summary("p", 8)] == ["sw-b"]
+        plan.pov_ref = ""
+        assert repo.get_active_subworld_summary("p", 8) == []
+        assert repo.get_active_subworld_region_drafts("p", 8) == []
+        assert repo.get_active_subworld_summary("p", 9) == []
+        assert reads and all(item == ("p", 7) for item in reads)
+    engine.dispose()

@@ -81,7 +81,7 @@ def test_create_character_writes_book_state_loadout_metadata_without_legacy_brid
     assert {event.event_type for event in events} >= {"character_created", "personality_loadout_auto_assigned"}
 
 
-def test_create_character_persists_identity_map_for_book_state_legacy_and_roster(tmp_path: Path) -> None:
+def test_create_character_persists_identity_map_for_book_state_and_genesis(tmp_path: Path) -> None:
     engine = get_engine(postgres_test_url("character-identity-map"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -98,8 +98,7 @@ def test_create_character_persists_identity_map_for_book_state_legacy_and_roster
             CharacterCreationRequest(
                 project_id=project.id,
                 source="api_manual",
-                source_ref="roster_a",
-                roster_item_id="roster_a",
+                source_ref="manual-character",
                 name="周怀瑾",
                 aliases=["周执事"],
                 description="负责联络内城。",
@@ -116,7 +115,6 @@ def test_create_character_persists_identity_map_for_book_state_legacy_and_roster
     assert identity.canonical_character_id == result.character_id
     assert identity.display_name == "周怀瑾"
     assert identity.genesis_ref_id == "genesis:core_cast:zhou"
-    assert identity.roster_item_ids_json == '["roster_a"]'
     assert identity.aliases_json == '["周执事", "周怀瑾"]'
     assert identity.status == "active"
 
@@ -210,16 +208,6 @@ def test_registry_resolves_identity_before_name_or_alias(tmp_path: Path) -> None
         )
         repo.create_world_node(
             WorldNode(
-                id="char_roster",
-                project_id=project.id,
-                node_type="character",
-                name="同名角色",
-                metadata={"roster_item_ids": ["roster_b"]},
-            ),
-            version_chapter=0,
-        )
-        repo.create_world_node(
-            WorldNode(
                 id="char_alias",
                 project_id=project.id,
                 node_type="character",
@@ -231,15 +219,11 @@ def test_registry_resolves_identity_before_name_or_alias(tmp_path: Path) -> None
         registry = CharacterRegistry(session)
 
         by_character_id = registry.resolve(project_id=project.id, character_id="char_canonical", name="别名")
-        by_roster = registry.resolve(project_id=project.id, roster_item_id="roster_b", name="别名")
         by_alias = registry.resolve(project_id=project.id, name="别名")
 
     assert by_character_id.node is not None
     assert by_character_id.node.id == "char_canonical"
     assert by_character_id.resolution == "explicit_character_id"
-    assert by_roster.node is not None
-    assert by_roster.node.id == "char_roster"
-    assert by_roster.resolution == "explicit_roster_item_id"
     assert by_alias.node is not None
     assert by_alias.node.id == "char_alias"
     assert by_alias.resolution == "canonical_alias"

@@ -91,7 +91,6 @@ class CharacterIdentityMapRow(Base):
     canonical_character_id: Mapped[str] = mapped_column(String, nullable=False, default="")
     book_state_node_id: Mapped[str] = mapped_column(String, nullable=False, default="")
     genesis_ref_id: Mapped[str] = mapped_column(String, nullable=False, default="")
-    roster_item_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     aliases_json: Mapped[str] = mapped_column(Text, default="[]")
     display_name: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String, default="active")

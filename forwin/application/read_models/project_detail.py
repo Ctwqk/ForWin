@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-from collections import defaultdict
 from datetime import datetime
 from typing import Callable
 
@@ -17,9 +15,10 @@ from forwin.api_schema import (
 )
 from forwin.models.draft import ChapterReview
 from forwin.models.project import ChapterPlan, Project
-from forwin.models.subworld import SubWorld, SubWorldRosterItem
+from forwin.models.subworld import SubWorld
 from forwin.protocol.review import normalize_repair_scope
 from forwin.runtime.policy_store import ProjectPolicyStore
+from forwin.state.repo import StateRepository
 from forwin.state.query_helpers import (
     load_latest_drafts_by_plan_id,
     load_latest_rewrite_attempts_by_chapter,
@@ -111,19 +110,6 @@ def build_project_detail(
         .scalars()
         .all()
     )
-    roster_rows = (
-        session.execute(
-            select(SubWorldRosterItem).where(
-                SubWorldRosterItem.project_id == project_id
-            )
-        )
-        .scalars()
-        .all()
-    )
-    roster_by_subworld: dict[str, list[SubWorldRosterItem]] = defaultdict(list)
-    for row in roster_rows:
-        roster_by_subworld[row.subworld_id].append(row)
-
     threads = book_state.active_threads(
         project_id,
         as_of_chapter=as_of_chapter,
@@ -218,17 +204,9 @@ def build_project_detail(
     ).get(project_id, [])
     latest_beat_sheet = runtime_maps["latest_beat_sheet_map"].get(project_id)
     latest_band_experience = runtime_maps["latest_band_experience_map"].get(project_id)
-    active_subworld_ids: set[str] = set()
-    if latest_band_experience is not None:
-        try:
-            payload = json.loads(latest_band_experience.schedule_json or "{}") or {}
-        except (json.JSONDecodeError, TypeError):
-            payload = {}
-        active_subworld_ids = {
-            str(item).strip()
-            for item in (payload.get("active_subworld_ids") or [])
-            if str(item).strip()
-        }
+    active_subworld_ids = {
+        item.id for item in StateRepository(session).get_active_subworld_summary(project_id, as_of_chapter + 1)
+    }
     subworlds = [
         {
             "id": row.id,
@@ -237,16 +215,6 @@ def build_project_detail(
             "scope": row.scope,
             "status": row.status,
             "active_in_current_band": row.id in active_subworld_ids,
-            "core_cast": [
-                item.display_name
-                for item in roster_by_subworld.get(row.id, [])
-                if item.is_core and str(item.display_name or "").strip()
-            ],
-            "planned_slot_count": sum(
-                1
-                for item in roster_by_subworld.get(row.id, [])
-                if item.status == "planned_slot"
-            ),
         }
         for row in subworld_rows
     ]

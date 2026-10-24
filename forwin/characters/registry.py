@@ -24,17 +24,14 @@ class CharacterRegistry:
         *,
         project_id: str,
         character_id: str = "",
-        roster_item_id: str = "",
         name: str = "",
     ) -> CharacterResolutionResult:
         repo = BookStateRepository(self.session)
         normalized_id = str(character_id or "").strip()
-        normalized_roster_id = str(roster_item_id or "").strip()
         normalized_name = _normalize_name(name)
         identity = CharacterIdentityMap(self.session).resolve(
             project_id=project_id,
             character_id=normalized_id,
-            roster_item_id=normalized_roster_id,
         )
         nodes = [node for node in repo.list_world_nodes(project_id) if str(node.node_type) == "character"]
         if identity is not None:
@@ -47,13 +44,6 @@ class CharacterRegistry:
             for node in nodes:
                 if node.id == normalized_id:
                     return CharacterResolutionResult(node=node, resolution="explicit_character_id")
-        if normalized_roster_id:
-            for node in nodes:
-                metadata = dict(node.metadata) if isinstance(node.metadata, dict) else {}
-                roster_ids = metadata.get("roster_item_ids") if isinstance(metadata.get("roster_item_ids"), list) else []
-                if normalized_roster_id in {str(item or "").strip() for item in roster_ids}:
-                    return CharacterResolutionResult(node=node, resolution="explicit_roster_item_id")
-
         for node in nodes:
             if normalized_name and normalized_name in {_normalize_name(alias) for alias in node.aliases}:
                 return CharacterResolutionResult(node=node, resolution="canonical_alias")

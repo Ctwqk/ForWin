@@ -12,7 +12,6 @@ class CharacterCreationRequest(BaseModel):
     source: str
     source_ref: str = ""
     character_id: str = ""
-    roster_item_id: str = ""
     name: str
     aliases: list[str] = Field(default_factory=list)
     description: str = ""
@@ -39,7 +38,6 @@ class CharacterCreationResult(BaseModel):
     created: bool = False
     merged_existing: bool = False
     world_node: dict[str, Any] = Field(default_factory=dict)
-    roster_item_id: str = ""
     personality_loadout: dict[str, Any] = Field(default_factory=dict)
     personality_assignment: PersonalityAssignmentReport | dict[str, Any] = Field(default_factory=dict)
     integrity_report: Any = None

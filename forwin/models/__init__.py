@@ -52,7 +52,7 @@ from .publisher import (
 )
 from .projection import ProjectionCheckpoint
 from .project import ArcPlanVersion, ChapterPlan, Project
-from .subworld import SubWorld, SubWorldRosterItem
+from .subworld import SubWorld
 from .task import GenerationTask
 from forwin.map.models import (
     MapEdgeRow,
@@ -101,7 +101,6 @@ __all__ = [
     "ProjectProgressionRule",
     "GenerationTask",
     "SubWorld",
-    "SubWorldRosterItem",
     # entity
     "Entity",
     "EntityAlias",

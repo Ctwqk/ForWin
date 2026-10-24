@@ -5,7 +5,6 @@ import unittest
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
-from sqlalchemy import select
 
 from forwin.application.read_models import build_project_detail
 from forwin.book_state import BookStateRepository
@@ -15,30 +14,20 @@ from forwin.context.assembler_core import assemble_context
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision
 from forwin.map.models import MapRegionRow
-from forwin.models.phase import BandExperiencePlan
-from forwin.models.project import ChapterPlan
-from forwin.models.subworld import (
-    SubWorld,
-    SubWorldRosterItem,
-    project_scoped_subworld_id,
-)
+from forwin.models.subworld import project_scoped_subworld_id
 from forwin.generation.pipeline import ChapterPipeline
 from forwin.protocol import (
-    ArcPayoffMap,
     ChapterEntryTarget,
     ChapterExperiencePlan,
-    ReaderPromise,
     ReviewVerdict,
-    SubWorldPlanDelta,
     SubWorldSummary,
     WriterOutput,
 )
-from forwin.protocol.book_state import WorldNode
+from forwin.protocol.book_state import MapNode, WorldNode
 from forwin.protocol.review import ContinuityIssue
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
-from forwin.subworld_manager import SubWorldManager
 from forwin.world_view.types import ChapterWorldView, OnstageEntity
 from tests.chapter_delta_helpers import chapter_delta
 from tests.postgres import postgres_test_url
@@ -94,160 +83,6 @@ class _AnchoredContinuityChecker(ContinuityChecker):
 
 class SubWorldControlTests(unittest.TestCase):
 
-    def test_same_logical_subworld_id_is_isolated_across_projects(self) -> None:
-        engine = get_engine(postgres_test_url("subworld-project-isolation"))
-        init_db(engine)
-        session = get_session_factory(engine)()
-        try:
-            updater = StateUpdater(session)
-            project_a = updater.create_project(
-                title="甲书",
-                premise="p",
-                genre="g",
-                runtime_policy=RuntimePolicy.for_profile("standard"),
-            )
-            project_b = updater.create_project(
-                title="乙书",
-                premise="p",
-                genre="g",
-                runtime_policy=RuntimePolicy.for_profile("standard"),
-            )
-            arc_a = updater.create_arc_plan(project_a.id, "甲弧线")
-            arc_b = updater.create_arc_plan(project_b.id, "乙弧线")
-            manager = SubWorldManager()
-
-            def delta(role_hint: str) -> SubWorldPlanDelta:
-                return SubWorldPlanDelta.model_validate(
-                    {
-                        "new_subworlds": [
-                            {
-                                "subworld_id": "arc_local_1",
-                                "name": "同名局部世界",
-                                "scope": "arc_local",
-                                "chapter_window_hint": "1-3",
-                                "planned_slots": [
-                                    {
-                                        "slot_key": "local-contact",
-                                        "role_hint": role_hint,
-                                        "description": f"{role_hint}的角色槽位",
-                                    }
-                                ],
-                            }
-                        ],
-                        "initial_active_subworld_ids": ["arc_local_1"],
-                    }
-                )
-
-            result_a = manager.apply_arc_delta(
-                session=session,
-                project_id=project_a.id,
-                arc_id=arc_a.id,
-                delta=delta("甲方联络员"),
-                chapter_number=0,
-            )
-            result_b = manager.apply_arc_delta(
-                session=session,
-                project_id=project_b.id,
-                arc_id=arc_b.id,
-                delta=delta("乙方联络员"),
-                chapter_number=0,
-            )
-            session.flush()
-
-            subworld_a = result_a.new_subworlds[0].subworld_id
-            subworld_b = result_b.new_subworlds[0].subworld_id
-            # Planned slots stay unnamed until the plan supplies a name; only
-            # named slots can be activated into entry targets.
-            for owner_id, slot_name in ((project_a.id, "甲联络员名"), (project_b.id, "乙联络员名")):
-                for slot in session.execute(
-                    select(SubWorldRosterItem).where(SubWorldRosterItem.project_id == owner_id)
-                ).scalars():
-                    slot.display_name = slot_name
-            session.flush()
-            activation_a = manager.plan_band_activation(
-                session=session,
-                project_id=project_a.id,
-                chapter_start=1,
-                chapter_end=3,
-                active_band=[],
-            )
-            activation_b = manager.plan_band_activation(
-                session=session,
-                project_id=project_b.id,
-                chapter_start=1,
-                chapter_end=3,
-                active_band=[],
-            )
-            rosters = session.execute(
-                select(SubWorldRosterItem).where(
-                    SubWorldRosterItem.project_id.in_([project_a.id, project_b.id])
-                )
-            ).scalars().all()
-        finally:
-            session.close()
-            engine.dispose()
-
-        self.assertNotEqual(subworld_a, subworld_b)
-        self.assertNotEqual(subworld_a, "arc_local_1")
-        self.assertNotEqual(subworld_b, "arc_local_1")
-        self.assertEqual(
-            {item.subworld_id for item in rosters if item.project_id == project_a.id},
-            {subworld_a},
-        )
-        self.assertEqual(
-            {item.subworld_id for item in rosters if item.project_id == project_b.id},
-            {subworld_b},
-        )
-        self.assertEqual(
-            [item.role_hint for item in activation_a.chapter_entry_targets],
-            ["甲方联络员"],
-        )
-        self.assertEqual(
-            [item.role_hint for item in activation_b.chapter_entry_targets],
-            ["乙方联络员"],
-        )
-
-    def test_ensure_registry_rosters_book_state_characters(self) -> None:
-        with TemporaryDirectory():
-            engine = get_engine(postgres_test_url("subworld-book-state"))
-            init_db(engine)
-            session = get_session_factory(engine)()
-            try:
-                updater = StateUpdater(session)
-                project = updater.create_project(
-                    title="书",
-                    premise="p",
-                    genre="g",
-                    runtime_policy=RuntimePolicy.for_profile("standard"),
-                )
-                BookStateRepository(session).create_world_node(
-                    WorldNode(
-                        id="char_book",
-                        project_id=project.id,
-                        node_type="character",
-                        name="陆沉",
-                        description="BookState canon 角色",
-                    ),
-                    version_chapter=0,
-                )
-                manager = SubWorldManager()
-
-                global_core_id = manager.ensure_registry(session, project.id)
-                roster = session.execute(
-                    select(SubWorldRosterItem)
-                    .where(SubWorldRosterItem.project_id == project.id)
-                ).scalar_one()
-                metadata = json.loads(roster.metadata_json)
-            finally:
-                session.close()
-                engine.dispose()
-
-        self.assertEqual(roster.subworld_id, global_core_id)
-        self.assertIsNone(roster.entity_id)
-        self.assertEqual(roster.display_name, "陆沉")
-        self.assertEqual(metadata["character_id"], "char_book")
-        self.assertEqual(metadata["canon_source"], "book_state")
-
     def test_project_detail_reads_book_state_characters(self) -> None:
         with TemporaryDirectory():
             engine = get_engine(postgres_test_url("project-detail-book-state-characters"))
@@ -283,7 +118,6 @@ class SubWorldControlTests(unittest.TestCase):
 
         self.assertEqual([item.id for item in detail.characters], ["char_book"])
         self.assertEqual(detail.characters[0].name, "陆沉")
-
 
     def test_assemble_context_uses_book_state_entities_and_active_subworlds(self) -> None:
         with TemporaryDirectory():
@@ -382,39 +216,17 @@ class SubWorldControlTests(unittest.TestCase):
                     scope="arc_local",
                     metadata={"chapter_window_hint": "1-3"},
                 )
-                updater.create_roster_item(
-                    project_id=project.id,
-                    subworld_id=global_core.id,
-                    entity_id=None,
-                    display_name="阿青",
-                    description="允许角色",
-                    is_core=True,
-                    status="seeded_named",
-                    metadata={
-                        "character_id": "char_allowed",
-                        "book_state_node_id": "char_allowed",
-                        "canon_source": "book_state",
-                    },
-                )
-                updater.create_roster_item(
-                    project_id=project.id,
-                    subworld_id=arc_local.id,
-                    entity_id=None,
-                    display_name="小明",
-                    description="其他子世界角色",
-                    is_core=True,
-                    status="seeded_named",
-                    metadata={
-                        "character_id": "char_other_subworld",
-                        "book_state_node_id": "char_other_subworld",
-                        "canon_source": "book_state",
-                    },
-                )
+                book_state.create_map_node(MapNode(
+                    id="map-old-house", project_id=project.id, subworld_id=global_core.id,
+                    node_type="site", name="旧宅",
+                ))
+                plan = StateRepository(session).get_chapter_plan(project.id, 1)
+                plan.location_refs_json = '["map-old-house"]'
                 updater.update_chapter_experience_plan(
                     project.id,
                     1,
                     ChapterExperiencePlan(
-                        active_subworld_ids=[global_core.id],
+                        active_subworld_ids=[arc_local.id],
                         entity_admission_rule="strict_named_character",
                     ),
                 )
@@ -468,6 +280,7 @@ class SubWorldControlTests(unittest.TestCase):
                 session.close()
                 engine.dispose()
 
+        self.assertEqual([item.id for item in context.active_subworlds], [global_core.id])
         active_names = [item.name for item in context.active_entities]
         self.assertIn("阿青", active_names)
         self.assertIn("小明", active_names)
@@ -515,6 +328,14 @@ class SubWorldControlTests(unittest.TestCase):
                 )
                 session.commit()
 
+                arc = updater.create_arc_plan(project.id, "arc")
+                plan = updater.create_chapter_plan(project.id, arc.id, 1, "title", "summary", [])
+                BookStateRepository(session).create_map_node(MapNode(
+                    id="map-region", project_id=project.id, subworld_id=global_core.id,
+                    node_type="site", name="site",
+                ))
+                plan.location_refs_json = '["map-region"]'
+                session.flush()
                 drafts = StateRepository(session).get_active_subworld_region_drafts(project.id, 1)
             finally:
                 session.close()
@@ -926,7 +747,6 @@ class SubWorldControlTests(unittest.TestCase):
 
         self.assertIsNone(fixed)
 
-
     def test_project_detail_exposes_subworld_summaries(self) -> None:
         with TemporaryDirectory():
             engine = get_engine(postgres_test_url("detail"))
@@ -949,15 +769,6 @@ class SubWorldControlTests(unittest.TestCase):
                     scope="global_core",
                     metadata={},
                 )
-                updater.create_roster_item(
-                    project_id=project.id,
-                    subworld_id=global_core.id,
-                    entity_id=None,
-                    display_name="阿青",
-                    description="核心角色",
-                    is_core=True,
-                    status="planned_slot",
-                )
                 detail = build_project_detail(
                     session=session,
                     project=project,
@@ -970,406 +781,11 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertTrue(detail.subworlds)
         self.assertEqual(detail.subworlds[0].name, "global_core")
 
-    def test_band_activation_reserves_entry_name_without_writing_book_state(self) -> None:
-        engine = get_engine(postgres_test_url("planned-slot-canon-boundary"))
-        init_db(engine)
-        session = get_session_factory(engine)()
-        try:
-            updater = StateUpdater(session)
-            project = updater.create_project(
-                title="书",
-                premise="p",
-                genre="g",
-                runtime_policy=RuntimePolicy.for_profile("standard"),
-            )
-            subworld = updater.create_subworld(
-                project_id=project.id,
-                origin_arc_id=None,
-                parent_subworld_id=None,
-                name="江城",
-                purpose="本地线",
-                scope="arc_local",
-                metadata={"chapter_window_hint": "3-5"},
-            )
-            roster = updater.create_roster_item(
-                project_id=project.id,
-                subworld_id=subworld.id,
-                entity_id=None,
-                display_name="阿青",
-                slot_key="guard",
-                role_hint="护卫",
-                description="冷静护卫，负责保护主角。",
-                status="planned_slot",
-            )
-
-            activation = SubWorldManager().plan_band_activation(
-                session=session,
-                project_id=project.id,
-                chapter_start=3,
-                chapter_end=5,
-                active_band=[
-                    SimpleNamespace(
-                        title="江城",
-                        one_line="护卫进入本地线",
-                        goals_json='["引入护卫"]',
-                    )
-                ],
-            )
-            session.flush()
-            session.refresh(roster)
-            metadata = json.loads(roster.metadata_json or "{}")
-            nodes = BookStateRepository(session).list_world_nodes(project.id)
-        finally:
-            session.close()
-            engine.dispose()
-
-        self.assertEqual(len(activation.chapter_entry_targets), 1)
-        self.assertEqual(activation.chapter_entry_targets[0].entity_name, "阿青")
-        self.assertEqual(roster.display_name, "阿青")
-        self.assertEqual(nodes, [])
-        self.assertEqual(roster.status, "activated_named")
-        self.assertEqual(metadata.get("entry_target_chapter"), 3)
-        self.assertTrue(metadata.get("pending_entity_admission"))
-        self.assertNotIn("character_id", metadata)
-        self.assertNotIn("book_state_node_id", metadata)
-
-    def test_band_activation_skips_unnamed_planned_slots(self) -> None:
-        engine = get_engine(postgres_test_url("planned-slot-unnamed-skip"))
-        init_db(engine)
-        session = get_session_factory(engine)()
-        try:
-            updater = StateUpdater(session)
-            project = updater.create_project(
-                title="书",
-                premise="p",
-                genre="g",
-                runtime_policy=RuntimePolicy.for_profile("standard"),
-            )
-            subworld = updater.create_subworld(
-                project_id=project.id,
-                origin_arc_id=None,
-                parent_subworld_id=None,
-                name="江城",
-                purpose="本地线",
-                scope="arc_local",
-                metadata={"chapter_window_hint": "3-5"},
-            )
-            named = updater.create_roster_item(
-                project_id=project.id,
-                subworld_id=subworld.id,
-                entity_id=None,
-                display_name="阿青",
-                slot_key="named-slot",
-                role_hint="护卫",
-                description="有名字的槽位。",
-                status="planned_slot",
-            )
-            unnamed = updater.create_roster_item(
-                project_id=project.id,
-                subworld_id=subworld.id,
-                entity_id=None,
-                slot_key="unnamed-slot",
-                role_hint="联络人",
-                description="没有名字的槽位。",
-                status="planned_slot",
-            )
-
-            activation = SubWorldManager().plan_band_activation(
-                session=session,
-                project_id=project.id,
-                chapter_start=3,
-                chapter_end=5,
-                active_band=[
-                    SimpleNamespace(
-                        title="江城",
-                        one_line="本地线展开",
-                        goals_json='["引入角色"]',
-                    )
-                ],
-            )
-            session.flush()
-            session.refresh(named)
-            session.refresh(unnamed)
-            unnamed_metadata = json.loads(unnamed.metadata_json or "{}")
-        finally:
-            session.close()
-            engine.dispose()
-
-        self.assertEqual(
-            [target.entity_name for target in activation.chapter_entry_targets],
-            ["阿青"],
-        )
-        self.assertEqual(named.status, "activated_named")
-        self.assertEqual(unnamed.status, "planned_slot")
-        self.assertEqual(unnamed.display_name, "")
-        self.assertFalse(unnamed.activation_chapter)
-        self.assertNotIn("pending_entity_admission", unnamed_metadata)
-        self.assertNotIn("entry_target_chapter", unnamed_metadata)
-
-    def test_band_activation_does_not_reintroduce_canon_bound_roster_item(self) -> None:
-        engine = get_engine(postgres_test_url("planned-slot-canonical-metadata"))
-        init_db(engine)
-        session = get_session_factory(engine)()
-        try:
-            updater = StateUpdater(session)
-            project = updater.create_project(
-                title="书",
-                premise="p",
-                genre="g",
-                runtime_policy=RuntimePolicy.for_profile("standard"),
-            )
-            subworld = updater.create_subworld(
-                project_id=project.id,
-                origin_arc_id=None,
-                parent_subworld_id=None,
-                name="江城",
-                purpose="本地线",
-                scope="arc_local",
-                metadata={"chapter_window_hint": "3-5"},
-            )
-            BookStateRepository(session).create_world_node(
-                WorldNode(
-                    id="char_canonical_zhou",
-                    project_id=project.id,
-                    node_type="character",
-                    name="周怀瑾",
-                    aliases=[],
-                    description="负责联络内城。",
-                    profile={
-                        "personality_loadout": {
-                            "dominant": {"skill": "trait-loyal-protector", "weight": 0.9},
-                            "secondary": [],
-                            "social_mask": [],
-                            "stress_modes": [],
-                            "relationship_patterns": [],
-                            "overrides": {},
-                        }
-                    },
-                    metadata={
-                        "character_identity": {
-                            "canonical_character_id": "char_canonical_zhou",
-                            "book_state_node_id": "char_canonical_zhou",
-                        }
-                    },
-                ),
-                version_chapter=0,
-            )
-            roster = updater.create_roster_item(
-                project_id=project.id,
-                subworld_id=subworld.id,
-                entity_id=None,
-                display_name="周执事",
-                role_hint="联络人",
-                description="负责联络内城。",
-                is_core=True,
-                status="planned_slot",
-                metadata={
-                    "character_id": "char_canonical_zhou",
-                    "book_state_node_id": "char_canonical_zhou",
-                    "canon_source": "book_state",
-                },
-            )
-
-            activation = SubWorldManager().plan_band_activation(
-                session=session,
-                project_id=project.id,
-                chapter_start=3,
-                chapter_end=5,
-                active_band=[
-                    SimpleNamespace(
-                        title="江城",
-                        one_line="联络人继续本地线",
-                        goals_json='["推进联络"]',
-                    )
-                ],
-            )
-            session.flush()
-            session.refresh(roster)
-            nodes = BookStateRepository(session).list_world_nodes(project.id)
-        finally:
-            session.close()
-            engine.dispose()
-
-        self.assertEqual(activation.chapter_entry_targets, [])
-        self.assertEqual([node.id for node in nodes if node.node_type == "character"], ["char_canonical_zhou"])
-        self.assertIsNone(roster.entity_id)
-        self.assertEqual(roster.display_name, "周执事")
-
-    def test_runtime_subworld_core_character_stays_planned_until_canon(self) -> None:
-        engine = get_engine(postgres_test_url("subworld-core-canon-boundary"))
-        init_db(engine)
-        session = get_session_factory(engine)()
-        try:
-            updater = StateUpdater(session)
-            project = updater.create_project(
-                title="书",
-                premise="p",
-                genre="g",
-                runtime_policy=RuntimePolicy.for_profile("standard"),
-            )
-            arc = updater.create_arc_plan(project.id, "弧线")
-            manager = SubWorldManager()
-            manager.apply_arc_delta(
-                session=session,
-                project_id=project.id,
-                arc_id=arc.id,
-                chapter_number=1,
-                delta=SubWorldPlanDelta.model_validate(
-                    {
-                        "new_subworlds": [
-                            {
-                                "name": "江城",
-                                "scope": "arc_local",
-                                "core_named_characters": [
-                                    {
-                                        "name": "沈临川",
-                                        "description": "冷静护卫，负责保护主角。",
-                                        "role_hint": "护卫",
-                                        "importance": 7,
-                                    }
-                                ],
-                            }
-                        ],
-                        "initial_active_subworld_ids": [],
-                    }
-                ),
-            )
-            session.flush()
-            nodes = BookStateRepository(session).list_world_nodes(project.id)
-            roster = session.execute(select(SubWorldRosterItem).where(SubWorldRosterItem.display_name == "沈临川")).scalar_one()
-            roster_metadata = json.loads(roster.metadata_json or "{}")
-        finally:
-            session.close()
-            engine.dispose()
-
-        self.assertEqual(nodes, [])
-        self.assertEqual(roster.display_name, "沈临川")
-        self.assertTrue(roster_metadata.get("pending_entity_admission"))
-        self.assertNotIn("character_id", roster_metadata)
-        self.assertNotIn("book_state_node_id", roster_metadata)
-
-    def test_chapter_zero_subworld_core_character_waits_for_entity_admission(self) -> None:
-        engine = get_engine(postgres_test_url("subworld-core-chapter-zero"))
-        init_db(engine)
-        session = get_session_factory(engine)()
-        try:
-            updater = StateUpdater(session)
-            project = updater.create_project(
-                title="书",
-                premise="p",
-                genre="g",
-                runtime_policy=RuntimePolicy.for_profile("standard"),
-            )
-            arc = updater.create_arc_plan(project.id, "弧线")
-            SubWorldManager().apply_arc_delta(
-                session=session,
-                project_id=project.id,
-                arc_id=arc.id,
-                chapter_number=0,
-                delta=SubWorldPlanDelta.model_validate(
-                    {
-                        "new_subworlds": [
-                            {
-                                "name": "江城",
-                                "scope": "arc_local",
-                                "core_named_characters": [
-                                    {
-                                        "name": "沈临川",
-                                        "description": "冷静护卫，负责保护主角。",
-                                        "role_hint": "护卫",
-                                        "importance": 7,
-                                    }
-                                ],
-                            }
-                        ]
-                    }
-                ),
-            )
-            nodes = BookStateRepository(session).list_world_nodes(project.id)
-            roster = session.execute(
-                select(SubWorldRosterItem).where(
-                    SubWorldRosterItem.display_name == "沈临川"
-                )
-            ).scalar_one()
-            roster_metadata = json.loads(roster.metadata_json or "{}")
-        finally:
-            session.close()
-            engine.dispose()
-
-        self.assertEqual(nodes, [])
-        self.assertEqual(
-            roster_metadata,
-            {"pending_entity_admission": True, "planned_at_chapter": 0},
-        )
-
-    def test_runtime_subworld_core_character_roster_dedupes_by_planned_name(self) -> None:
-        engine = get_engine(postgres_test_url("subworld-core-roster-planned-dedupe"))
-        init_db(engine)
-        session = get_session_factory(engine)()
-        try:
-            updater = StateUpdater(session)
-            project = updater.create_project(
-                title="书",
-                premise="p",
-                genre="g",
-                runtime_policy=RuntimePolicy.for_profile("standard"),
-            )
-            arc = updater.create_arc_plan(project.id, "弧线")
-            manager = SubWorldManager()
-            delta = SubWorldPlanDelta.model_validate(
-                {
-                    "new_subworlds": [
-                        {
-                            "subworld_id": "subworld_dedupe",
-                            "name": "江城",
-                            "scope": "arc_local",
-                            "core_named_characters": [
-                                {
-                                    "name": "沈临川",
-                                    "description": "冷静护卫，负责保护主角。",
-                                    "role_hint": "护卫",
-                                    "importance": 7,
-                                }
-                            ],
-                        }
-                    ],
-                    "initial_active_subworld_ids": [],
-                }
-            )
-            manager.apply_arc_delta(
-                session=session,
-                project_id=project.id,
-                arc_id=arc.id,
-                chapter_number=1,
-                delta=delta,
-            )
-            manager.apply_arc_delta(
-                session=session,
-                project_id=project.id,
-                arc_id=arc.id,
-                chapter_number=1,
-                delta=delta,
-            )
-            session.flush()
-            roster_rows = session.execute(
-                select(SubWorldRosterItem).where(
-                    SubWorldRosterItem.project_id == project.id,
-                    SubWorldRosterItem.subworld_id
-                    == project_scoped_subworld_id(project.id, "subworld_dedupe"),
-                    SubWorldRosterItem.display_name == "沈临川",
-                )
-            ).scalars().all()
-            nodes = BookStateRepository(session).list_world_nodes(project.id)
-            roster_metadata = [json.loads(row.metadata_json or "{}") for row in roster_rows]
-        finally:
-            session.close()
-            engine.dispose()
-
-        self.assertEqual(nodes, [])
-        self.assertEqual(len(roster_rows), 1)
-        self.assertTrue(roster_metadata[0].get("pending_entity_admission"))
-        self.assertNotIn("character_id", roster_metadata[0])
-
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_project_scoped_subworld_ids_are_stable_and_isolated() -> None:
+    assert project_scoped_subworld_id("project-a", "local") == project_scoped_subworld_id("project-a", "local")
+    assert project_scoped_subworld_id("project-a", "local") != project_scoped_subworld_id("project-b", "local")

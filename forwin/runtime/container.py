@@ -30,7 +30,6 @@ from forwin.runtime.services import (
 from forwin.audience.comment_analysis import CommentAnalyzer
 from forwin.skills import build_skill_runtime_components
 from forwin.storage import ArtifactStore
-from forwin.subworld_manager import SubWorldManager
 from forwin.writer.llm import LLMClient
 
 
@@ -185,7 +184,6 @@ class RuntimeContainer:
                     generation.skill_runtime.prompt_layer_builder
                 ),
                 book_genesis=generation.book_genesis,
-                subworld_manager=generation.subworld_manager,
                 retrieval_broker=generation.retrieval_broker,
                 artifact_store=core.artifact_store,
                 observability=core.observability,
@@ -367,7 +365,6 @@ class RuntimeContainer:
             )
             book_genesis.observability = core.observability
 
-            subworld_manager = SubWorldManager()
             retrieval_broker = RetrievalBroker(
                 context_budget_chars=infrastructure.context_budget_chars,
                 max_entities=infrastructure.retrieval_max_entities,
@@ -409,7 +406,6 @@ class RuntimeContainer:
                 llm_client=llm_client,
                 skill_runtime=skill_runtime,
                 book_genesis=book_genesis,
-                subworld_manager=subworld_manager,
                 retrieval_broker=retrieval_broker,
                 comment_analyzer=comment_analyzer,
                 draft_review=draft_review,

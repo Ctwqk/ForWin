@@ -81,7 +81,6 @@ class CharacterCreationHelper:
         resolution = self.registry.resolve(
             project_id=request.project_id,
             character_id=request.character_id,
-            roster_item_id=request.roster_item_id,
             name=request.name,
         )
         if (
@@ -109,16 +108,10 @@ class CharacterCreationHelper:
             profile["personality_tags"] = list(request.personality_tags)
         profile["personality_loadout"] = loadout_payload
         metadata = {
-            "roster_item_ids": [request.roster_item_id]
-            if request.roster_item_id
-            else [],
             "character_identity": {
                 "canonical_character_id": character_id,
                 "book_state_node_id": character_id,
                 "genesis_ref_id": genesis_ref_id,
-                "roster_item_ids": [request.roster_item_id]
-                if request.roster_item_id
-                else [],
             },
             "personality_assignment": assignment_payload,
             "character_creation": {
@@ -202,7 +195,6 @@ class CharacterCreationHelper:
             created=True,
             merged_existing=False,
             world_node=node.model_dump(mode="json"),
-            roster_item_id=request.roster_item_id,
             personality_loadout=loadout_payload,
             personality_assignment=assignment.report,
             integrity_report=CharacterIntegrityReport(ok=assignment.validation.ok),
@@ -244,7 +236,7 @@ class CharacterCreationHelper:
             value = str(context.get(key) or "").strip()
             if value:
                 return value
-        return str(request.source_ref or request.roster_item_id or "").strip()
+        return str(request.source_ref or "").strip()
 
     def get_or_create_character(
         self, request: CharacterCreationRequest
@@ -363,7 +355,6 @@ class CharacterCreationHelper:
             canonical_character_id=character_id,
             book_state_node_id=character_id,
             genesis_ref_id=genesis_ref_id,
-            roster_item_ids=[request.roster_item_id] if request.roster_item_id else [],
             aliases=list(aliases or request.aliases),
             display_name=display_name or request.name,
             metadata={

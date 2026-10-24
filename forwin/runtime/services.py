@@ -42,7 +42,6 @@ class GenerationRuntimeServices:
     llm_client: ModelAdapter
     skill_runtime: SkillRuntimeBundle
     book_genesis: Any
-    subworld_manager: Any
     retrieval_broker: Any
     comment_analyzer: Any
     draft_review: DraftReviewService

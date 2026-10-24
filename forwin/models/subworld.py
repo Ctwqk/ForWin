@@ -5,10 +5,8 @@ from hashlib import sha256
 from typing import Optional
 
 from sqlalchemy import (
-    Boolean,
     DateTime,
     ForeignKey,
-    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -62,50 +60,6 @@ class SubWorld(Base):
     danger_profile_json: Mapped[str] = mapped_column(Text, default="{}")
     generation_seed: Mapped[int] = mapped_column(Integer, default=0)
     map_status: Mapped[str] = mapped_column(String, default="")
-    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=func.now(),
-        server_default=func.now(),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=func.now(),
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-
-class SubWorldRosterItem(Base):
-    __tablename__ = "sub_world_roster_items"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["project_id", "subworld_id"],
-            ["sub_worlds.project_id", "sub_worlds.id"],
-            name="fk_sub_world_roster_project_subworld",
-        ),
-        Index("ix_sub_world_roster_project_subworld", "project_id", "subworld_id"),
-        Index("ix_sub_world_roster_project_status", "project_id", "status"),
-        Index("ix_sub_world_roster_project_display", "project_id", "display_name"),
-        Index("ix_sub_world_roster_project_slot", "project_id", "slot_key"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(
-        String, ForeignKey("projects.id"), nullable=False
-    )
-    subworld_id: Mapped[str] = mapped_column(String, nullable=False)
-    entity_id: Mapped[Optional[str]] = mapped_column(
-        String, ForeignKey("entities.id"), nullable=True
-    )
-    entity_kind: Mapped[str] = mapped_column(String, default="character")
-    display_name: Mapped[str] = mapped_column(String, default="")
-    slot_key: Mapped[str] = mapped_column(String, default="")
-    role_hint: Mapped[str] = mapped_column(Text, default="")
-    description: Mapped[str] = mapped_column(Text, default="")
-    is_core: Mapped[bool] = mapped_column(Boolean, default=False)
-    status: Mapped[str] = mapped_column(String, default="planned_slot")
-    activation_chapter: Mapped[int] = mapped_column(Integer, default=0)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
 from forwin.experience.chapter_planner import ChapterExperiencePlanner
 from forwin.experience.persistence import ExperiencePersistence
+from forwin.map.subworlds import location_subworld_ids
 from forwin.models.planning_v6 import BandPlanRow
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.models.world_conflict import WorldPlanConflictRow
@@ -89,7 +90,7 @@ def persist_band_plan(
             chapter_number=chapter.chapter_number, experience=inputs.experience, schedule=inputs.schedule,
             chapter_plan=plan, calibration=inputs.calibration,
         ).model_copy(update={
-            "active_subworld_ids": _location_subworlds(inputs.runtime, chapter.location_refs),
+            "active_subworld_ids": location_subworld_ids(inputs.runtime, chapter.location_refs),
             "chapter_entry_targets": _entry_targets(inputs.runtime, chapter),
             "entity_admission_rule": ENTITY_ADMISSION_RULE,
         })
@@ -188,9 +189,6 @@ def _row_entry(plan: ChapterPlan) -> dict:
     }
 
 
-def _location_subworlds(runtime: BookStateRuntime, location_refs: Sequence[str]) -> list[str]:
-    nodes = [runtime.map.nodes_by_id.get(ref) for ref in location_refs]
-    return list(dict.fromkeys(node.subworld_id for node in nodes if node is not None and node.subworld_id))
 
 
 def _entry_targets(runtime: BookStateRuntime, chapter: ChapterPlanDraft) -> list[ChapterEntryTarget]:

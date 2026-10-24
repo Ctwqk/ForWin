@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -417,7 +418,8 @@ def _writer_text_issues(
     """Writer-facing text cannot state concealed facts before their reader reveal (P4a-R21/R36).
 
     Purposes and milestones feed band-wide key beats, so all these texts are checked from the arc's start
-    (P4a-R38). Revelation layers are projected separately by chapter. Recorded reader knowledge is allowed.
+    (P4a-R38). Revelation-layer names use their window start (P4a-R39); their chapter projection is unchanged.
+    Recorded reader knowledge is allowed.
     """
     # Imported here: the feasibility audit imports the band planner's modules, which import this package.
     from forwin.planning.band_planner.inputs import _concealed_names
@@ -452,7 +454,7 @@ def _writer_text_issues(
                  for index, text in enumerate(data.arc_payoff_map.ambiguity_constraints))
     concealed_names = _concealed_names(runtime)
     issues = []
-    for path, text, start in texts:
+    for path, text, _ in texts:
         for ref in stated_facts([text], concealed):
             chapter = reveal.get(ref.removeprefix(FACT_REF_PREFIX))
             if chapter is not None and chapter <= chapter_start:
@@ -462,7 +464,13 @@ def _writer_text_issues(
             )
             issues.append(f"{path} states the proposition of {ref}, which {when}; it reaches the writer verbatim, "
                           f"so hint at it instead")
-        # R38 preserves naming once a related reader reveal starts, using the text's own range.
+    for index, layer in enumerate(data.arc_payoff_map.revelation_layers):
+        # Match writer_payoff_map's window semantics; only summary is rendered from a layer.
+        window = re.fullmatch(r"\s*([0-9]+)(?:\s*[-–—]\s*([0-9]+))?\s*", layer.chapter_window)
+        if window and 1 <= int(window[1]) and (window[2] is None or int(window[2]) >= int(window[1])):
+            texts.append((f"arc_payoff_map.revelation_layers[{index}].summary", layer.summary, int(window[1])))
+    for path, text, start in texts:
+        # R38/R39 preserve naming once a related reader reveal starts, using the text's own range.
         revealed_nodes = {
             ref for fact in runtime.world.facts_by_id.values()
             if fact.id in known or (fact.id in reveal and reveal[fact.id] <= start)

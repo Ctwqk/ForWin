@@ -11,6 +11,7 @@ from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
 from forwin.book_state.story_clock import CalendarUnit, StoryCalendar
 from forwin.experience.band_scheduler import BandExperienceScheduler
+from forwin.experience.chapter_planner import ChapterExperiencePlanner
 from forwin.experience.types import BeatSheetExperienceInput
 from forwin.planning.band_planner.inputs import OfferedRefs, _concealed_names
 from forwin.planning.band_planner.types import BandPlanOutput
@@ -90,6 +91,9 @@ def _named_sheet(field):
     elif field == "ambiguity_constraints":
         payload["arc_payoff_map"] = {field: [text]}
         path = "arc_payoff_map.ambiguity_constraints[0]"
+    elif field == "revelation_summary":
+        payload["arc_payoff_map"] = {"revelation_layers": [{"summary": text, "chapter_window": "1"}]}
+        path = "arc_payoff_map.revelation_layers[0].summary"
     else:
         payload["reader_promise"] = {field: [text] if field == "core_pleasures" else text}
         path = f"reader_promise.{field}" + ("[0]" if field == "core_pleasures" else "")
@@ -107,7 +111,7 @@ def _sheet_issues(payload, *, runtime=None, reveal_chapters=None):
 @pytest.mark.parametrize("field", [
     "purpose", "description", "genre_promise", "pleasure_promise", "core_pleasures",
     "acceptable_drag_level", "acceptable_exposition_density", "cliffhanger_aggressiveness",
-    "world_legibility_target", "ambiguity_constraints",
+    "world_legibility_target", "ambiguity_constraints", "revelation_summary",
 ])
 @pytest.mark.parametrize("visibility_source", ["state", "profile"])
 def test_every_beat_sheet_writer_text_rejects_concealed_names(field, visibility_source):
@@ -125,21 +129,24 @@ def test_every_beat_sheet_writer_text_rejects_concealed_names(field, visibility_
     assert _sheet_issues(payload, runtime=runtime, reveal_chapters={"secret": 1}) == []
 
 
-@pytest.mark.parametrize("field", ["purpose", "description"])
+@pytest.mark.parametrize("field", ["purpose", "description", "revelation_summary"])
 @pytest.mark.parametrize(("reveal_start", "allowed"), [(3, True), (4, True), (5, False)])
-def test_concealed_name_exception_uses_the_phase_or_milestone_start(field, reveal_start, allowed):
+def test_concealed_name_exception_uses_the_text_window_start(field, reveal_start, allowed):
     payload, _ = _named_sheet(field)
     if field == "purpose":
         payload["phases"][0]["chapter_range"] = [4, 6]
         payload["phases"].insert(0, {"name": "opening", "chapter_range": [1, 3], "purpose": "a clue"})
-    else:
+    elif field == "description":
         payload["milestones"][0]["target_range"] = [4, 6]
+    else:
+        payload["arc_payoff_map"]["revelation_layers"][0]["chapter_window"] = "4-6"
     payload["reveal_targets"][0]["range"] = [reveal_start, 6]
     assert bool(_sheet_issues(payload)) is not allowed
 
 
-def test_concealed_names_need_a_related_reader_reveal_or_recorded_knowledge():
-    payload, _ = _named_sheet("genre_promise")
+@pytest.mark.parametrize("field", ["genre_promise", "revelation_summary"])
+def test_concealed_names_need_a_related_reader_reveal_or_recorded_knowledge(field):
+    payload, _ = _named_sheet(field)
     payload["reveal_targets"][0].update(observer="hero", range=[1, 6])
     assert _sheet_issues(payload)
     assert _sheet_issues(payload, runtime=_concealed_runtime(reader_knows=True)) == []
@@ -149,6 +156,41 @@ def test_concealed_names_need_a_related_reader_reveal_or_recorded_knowledge():
     )
     payload["reveal_targets"][0]["observer"] = "reader"
     assert _sheet_issues(payload, runtime=runtime)
+
+
+def test_every_revelation_layer_summary_rejects_an_unrevealed_concealed_name():
+    payload, _ = _named_sheet("revelation_summary")
+    layers = payload["arc_payoff_map"]["revelation_layers"]
+    layers[:0] = [{"summary": "follow the clue", "chapter_window": "1"}] * 2
+    payload["reveal_targets"] = []
+    issues = _sheet_issues(payload)
+    assert len(issues) == 1
+    assert issues[0].startswith("arc_payoff_map.revelation_layers[2].summary names concealed entity society")
+
+
+@pytest.mark.parametrize(("window", "start", "reveal_start"), [
+    ("1", 1, 1), ("4-6", 4, 3), ([4, 6], 4, 4), (" 4 – 6 ", 4, 4), ("4—6", 4, 4),
+])
+def test_revelation_summary_with_on_time_related_reveal_validates_and_reaches_writer(window, start, reveal_start):
+    payload, _ = _named_sheet("revelation_summary")
+    payload["arc_payoff_map"]["revelation_layers"][0]["chapter_window"] = window
+    payload["reveal_targets"][0]["range"] = [reveal_start, 6]
+    assert _sheet_issues(payload) == []
+
+    data = ArcBeatSheetData.model_validate(payload)
+    experience = BeatSheetExperienceInput.from_beat_sheet(data, data.band_breakdown[0])
+    schedule = BandExperienceScheduler().derive_band_delight_schedule(
+        band_id="band:1:6", chapter_start=1, chapter_end=6, experience=experience, active_band=[],
+    )
+    for chapter in {1, start}:
+        plan = ChapterExperiencePlanner().derive_chapter_experience_plan(
+            chapter_number=chapter, experience=experience, schedule=schedule,
+            chapter_plan=SimpleNamespace(title="title", one_line="follow the clue", goals_json="[]"),
+        )
+        rendered = _experience_overlay_section(SimpleNamespace(
+            chapter_number=chapter, band_delight_schedule=schedule, chapter_experience_plan=plan,
+        ))
+        assert ("HiddenSociety" in rendered) is (chapter >= start)
 
 
 @pytest.mark.parametrize("field", ["title", "one_line", "goals", "hook", "hint_text"])

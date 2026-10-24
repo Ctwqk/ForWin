@@ -210,7 +210,7 @@ def _immutable_rule_definition_issues(
                 code="immutable_rule_definition_conflict",
                 target_ref=f"node:{node.id}:{field_path or 'definition'}",
                 message=(
-                    f"writer delta cannot rewrite canonical rule definition {node.name or node.id} "
+                    f"writer delta cannot rewrite canonical rule definition {node.id} "
                     f"at {field_path or 'definition'} without an explicit canon bridge"
                 ),
             )

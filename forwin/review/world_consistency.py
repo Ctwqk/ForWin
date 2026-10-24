@@ -124,6 +124,9 @@ class WorldConsistencyReviewer:
         description, entity_names = _named(finding.message or finding.code, names, fact_topics)
         fix = world_repair_fix(finding.code) if error else ""
         suggested_fix, _ = _named(fix, names, fact_topics)
+        for name in sorted({name for name in (concealed_names or {}).values() if name}, key=len, reverse=True):
+            description = description.replace(name, UNNAMED_ACTOR_LABEL)
+            suggested_fix = suggested_fix.replace(name, UNNAMED_ACTOR_LABEL)
         audit_refs = {
             token if token in names else token.rstrip(_TRAILING_PUNCTUATION)
             for token in _REF_TOKEN.findall(f"{finding.message} {finding.evidence_ref} {fix}")

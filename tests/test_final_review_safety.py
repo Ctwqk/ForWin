@@ -1,4 +1,4 @@
-"""FU-R49 regressions that need no PostgreSQL canon writes."""
+"""FU-R49/FU-R50 regressions that need no PostgreSQL canon writes."""
 
 import json
 from types import SimpleNamespace
@@ -6,16 +6,18 @@ from types import SimpleNamespace
 import pytest
 
 from forwin.book_state.extraction.translator import _DeltaBuilder
+from forwin.book_state.reviewer import _immutable_rule_definition_issues
 from forwin.generation.pipeline_core.repair_patches import _current_chapter_repair_experience_plan
-from forwin.protocol.book_state import FactNode, WorldNode
+from forwin.protocol.book_state import FactNode, GraphDelta, NodePatch, WorldNode
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.review.draft_service import DraftReviewService
 from forwin.review.world_consistency import WorldConsistencyReviewer, _Finding
 from forwin.world_engine.conflict_resolution import ConflictOptionUnavailable, record_option_side_effects
 from forwin.world_engine.conflict_routing import available_options
 from forwin.world_engine.tick import _Tick
+from forwin.writer.prompt_core.world_repair import WORLD_REPAIR_FIXES
 from forwin.writer.prompt_core.world_view import UNNAMED_ACTOR_LABEL, render_world_view
-from tests.test_chapter_world_view import source, _build
+from tests.test_chapter_world_view import source, _build, _plan
 from tests.test_world_conflict_resolution import pending_side_effect_session, _decision
 from tests.test_world_conflict_routing import _draft
 from tests.test_writer_world_view_prompt import BUILDERS, _context, _prompt
@@ -51,6 +53,76 @@ def test_concealed_review_names_stay_in_audit(source, message, code):
         assert secret_name not in text
     for builder in BUILDERS:
         assert secret_name not in _prompt(builder, context.model_copy(update={"chapter_experience_plan": overlay}))
+
+
+@pytest.mark.parametrize("visibility,name", [
+    ("hidden", "CONCEALED_RULE_NAME_FU_R50"),
+    ("open", "OPEN_RULE_NAME_FU_R50"),
+])
+def test_rule_definition_gate_respects_name_visibility_through_writer_repair(source, visibility, name):
+    rule = WorldNode(
+        id="rule-definition", project_id="p", node_type="rule", name=name,
+        profile={"statement": "old rule"}, state={"visibility_level": visibility},
+    )
+    source.runtime.world.add_node(rule)
+    delta = GraphDelta(
+        id="rule-change", project_id="p", chapter_number=6, source_type="chapter_extraction",
+        node_patches=[NodePatch(
+            node_id=rule.id, node_type="rule", op="set", field_path="profile.statement",
+            old_value="old rule", new_value="changed rule",
+        )],
+    )
+    gate_issue, = _immutable_rule_definition_issues(source.runtime, delta)
+    assert gate_issue.code == "immutable_rule_definition_conflict"
+    translator = object.__new__(_DeltaBuilder)
+    translator.world, translator.map = source.runtime.world, source.runtime.map
+    translator.new_sites, translator.created_nodes, translator.fact_patches = {}, {}, []
+    issue = WorldConsistencyReviewer()._issue(
+        _Finding(gate_issue.severity, gate_issue.code, gate_issue.message, gate_issue.target_ref, "BookStateReviewGate"),
+        translator._display_names(), translator._fact_topics(), translator._concealed_names(),
+    )
+    plan = _plan(onstage_refs_json='["hero", "ally"]', reveal_directives_json="[]")
+    context = _context(_build(source, plan=plan), chapter_experience_plan=ChapterExperiencePlan())
+    instruction = DraftReviewService._continuity_repair_instruction(continuity_issues=[issue], context=context)
+    overlay = _current_chapter_repair_experience_plan(context.chapter_experience_plan, instruction)
+    assert issue.suggested_fix and instruction.must_fix and overlay.rule_anchors
+    prompts = [
+        _prompt(builder, context.model_copy(update={"chapter_experience_plan": overlay}))
+        for builder in BUILDERS
+    ]
+    if visibility == "hidden":
+        for text in (issue.description, issue.suggested_fix, *issue.entity_names,
+                     *instruction.must_fix, *overlay.rule_anchors, *prompts):
+            assert name not in text
+        assert UNNAMED_ACTOR_LABEL in issue.description
+        assert issue.entity_names == []
+        assert issue.original_result["concealed_entity_names"] == {rule.id: name}
+        assert name in json.dumps(issue.original_result)
+    else:
+        assert name in issue.description
+        assert issue.entity_names == [name]
+        assert all(name in text for text in (*instruction.must_fix, *overlay.rule_anchors, *prompts))
+        assert issue.original_result["concealed_entity_names"] == {}
+    assert rule.id in gate_issue.message
+    assert name not in gate_issue.message
+
+
+def test_raw_concealed_names_are_redacted_from_review_description_and_fix(monkeypatch):
+    name = "CONCEALED_RULE_NAME_FU_R50"
+    longer_name = f"{name}_EXTENDED"
+    code = "immutable_rule_definition_conflict"
+    message = f"prefix{longer_name}suffix; {name}; {longer_name}"
+    monkeypatch.setitem(WORLD_REPAIR_FIXES, code, f"Keep {longer_name}; preserve {name}.")
+    issue = WorldConsistencyReviewer()._issue(
+        _Finding("error", code, message, "rule-hidden", "BookStateReviewGate"),
+        {"rule-hidden": UNNAMED_ACTOR_LABEL}, {},
+        {"rule-hidden": name, "rule-extended": longer_name, "rule-blank": ""},
+    )
+    assert issue.description == f"prefix{UNNAMED_ACTOR_LABEL}suffix; {UNNAMED_ACTOR_LABEL}; {UNNAMED_ACTOR_LABEL}"
+    assert issue.suggested_fix == f"Keep {UNNAMED_ACTOR_LABEL}; preserve {UNNAMED_ACTOR_LABEL}."
+    assert issue.entity_names == []
+    assert issue.original_result["message"] == message
+    assert issue.original_result["concealed_entity_names"] == {"rule-hidden": name}
 
 
 def test_forbidden_topic_lines_deduplicate_without_losing_fact_refs(source):

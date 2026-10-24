@@ -139,3 +139,34 @@
 
 - [ ] **Step 1:** Update docs and the docstring. Run `.venv/bin/python -m pytest -q tests/test_design_status_docs.py tests/test_no_story_content_in_runtime.py`.
 - [ ] **Step 2: Commit**: `docs: record the P4a audit rulings`.
+
+### Task F6: A validated writer-facing setting brief (FU-R51)
+
+Background: FU-R45 removed the raw premise, setting and Genesis overviews from the writer prompt, so the writer gets no book-level world or tone description. The beat sheet now carries a short brief that is validated like the other writer-facing planner text.
+
+**Files:**
+- Modify: `forwin/planning/beat_sheet/types.py` (`ArcBeatSheetData.setting_brief: str = ""`), `forwin/planning/beat_sheet/service.py` (validation, payload), `forwin/planning/beat_sheet/fallback.py`
+- Modify: `forwin/writer/prompt_core/planning.py` (the `ARC_BEATS_INSTRUCTIONS` field description and its writer-facing clause; keep `max_literals` exact), `forwin/writer/prompt_core/sections.py` (story-basics section)
+- Modify: the context plumbing that already carries the beat sheet's reader promise for the chapter's own arc (`forwin/state/repo.py`, `forwin/context/providers/experience_provider.py` or the story-basics provider, `forwin/protocol/context.py` field `arc_setting_brief`)
+- Test: `tests/test_arc_beat_sheet.py`, `tests/test_planner_writer_text.py`, `tests/test_writer_secret_sources.py`, `tests/test_writer_world_view_prompt.py`, one multi-genre fixture's `beat_sheet` stub plus an assertion in `tests/test_planning_multi_genre.py`; prompt snapshots/hashes only if they change
+
+**Interfaces:**
+- `ArcBeatSheetData.setting_brief: str` defaults to `""`, so stored sheets without it still load. Validation:
+  - at most 200 characters after strip; issue code `setting_brief_too_long`;
+  - `writer_text_states_secret` with the shared normalizer, against facts not revealed to the reader by the arc's `chapter_start`, the same rule as `reader_promise`;
+  - the concealed-name check with the same arc-start reveal exception as phase purposes.
+- The arc-beats prompt asks for one to three sentences on the world's look and texture and the story's tone, and states that it reaches the writer verbatim, with no secrets and no concealed names.
+- The fallback beat sheet leaves `setting_brief` empty: no unvalidated text.
+- The writer's story-basics section renders `设定简介：<brief>` from the chapter's own arc's active sheet, using the M5 read path, in all five builders. An empty brief renders nothing.
+- `revise` keeps or regenerates the brief like any other field.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `test_setting_brief_validates_like_other_writer_text` (secret proposition, concealed name, too long, allowed reveal exception)
+  - `test_setting_brief_reaches_every_writer_builder`
+  - `test_stored_sheet_without_setting_brief_loads`
+  - `test_fallback_sheet_has_no_setting_brief`
+  - the multi-genre fixture's brief appears in the chapter-1 prompt
+- [ ] **Step 2: Run them; confirm they fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** `.venv/bin/python -m pytest -q tests/test_arc_beat_sheet.py tests/test_planner_writer_text.py tests/test_writer_secret_sources.py tests/test_writer_world_view_prompt.py tests/test_planning_multi_genre.py tests/test_prompt_revision.py tests/test_no_story_content_in_runtime.py`. Expect PASS.
+- [ ] **Step 5: Commit**: `feat(planning): give the writer a validated setting brief from the beat sheet`.

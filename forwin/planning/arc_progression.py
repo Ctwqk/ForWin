@@ -25,8 +25,8 @@ class ArcProgressionService:
     ) -> ArcPlanVersion | None:
         """The arc that ``after_chapter + 1`` opens, active and with a beat sheet; None when no arc opens there.
 
-        When ``after_chapter`` ends the active arc, that arc becomes completed and the planned arc with the lowest
-        ``chapter_start`` becomes active. An arc a concurrent caller already activated is returned the same way,
+        When ``after_chapter`` reaches or passes the active arc's end, earlier active/planned arcs become completed
+        and the planned arc holding the next chapter becomes active. An arc already activated is returned the same way,
         its beat sheet ensured, so a second call changes nothing. The arc's first band is not planned here.
         """
         arc = self._activate(session, project_id=project_id, after_chapter=after_chapter)
@@ -75,13 +75,16 @@ class ArcProgressionService:
             return None
         if current.chapter_start == after_chapter + 1:
             return current
-        if current.chapter_end != after_chapter:
+        if current.chapter_start > after_chapter + 1 or current.chapter_end > after_chapter:
             return None
-        following = next((arc for arc in arcs if arc.status == "planned"), None)
+        following = next((arc for arc in arcs if arc.status == "planned"
+                          and arc.chapter_start > current.chapter_start
+                          and arc.chapter_start <= after_chapter + 1 <= arc.chapter_end), None)
         if following is None:
             return None
-        for arc in active:
-            arc.status = "completed"
+        for arc in arcs:
+            if arc.chapter_end <= after_chapter:
+                arc.status = "completed"
         following.status = "active"
         session.flush()
         return following

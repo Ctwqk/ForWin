@@ -153,7 +153,7 @@ class ChapterExecutionStage:
                     )
             if chapter_plan is None:
                 paused_chapters.append(chapter_num)
-                pause_reason = "world_conflict"
+                pause_reason = "world_conflict" if conflict is not None else "chapter_unplanned"
                 self._emit_progress(
                     "stage_changed",
                     stage="paused_for_review",
@@ -164,12 +164,12 @@ class ChapterExecutionStage:
                     failed_chapters=failed_chapters,
                     paused_chapters=paused_chapters,
                     frozen_artifacts=frozen_artifacts,
-                    payload={
-                        "reason": "world_conflict",
-                        "conflict_id": conflict.id if conflict is not None else "",
-                    },
+                    payload={"reason": pause_reason, **({"conflict_id": conflict.id} if conflict is not None else {})},
                 )
                 break
+
+            if chapter_plan.status == "accepted":
+                continue
 
             print(f"\n{'─' * 60}")
             print(f"正在生成第 {chapter_num} 章...")

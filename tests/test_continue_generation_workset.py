@@ -144,8 +144,8 @@ def test_workset_starts_at_the_first_unaccepted_chapter_and_ends_at_the_last_arc
         with Session() as session:
             workset = build_continue_generation_workset(session, "project-workset")
 
-        # A superseded arc does not extend the book; an accepted chapter after the gap is not skipped over.
-        assert workset.chapter_numbers == (2, 3, 4, 5, 6)
+        # A superseded arc does not extend the book; accepted chapters after the gap are skipped.
+        assert workset.chapter_numbers == (2, 5, 6)
     finally:
         engine.dispose()
 
@@ -246,5 +246,25 @@ def test_workset_rejects_invalid_max_chapters() -> None:
         with Session() as session:
             with pytest.raises(ValueError, match="max_chapters must be positive"):
                 build_continue_generation_workset(session, "project-workset", max_chapters=0)
+    finally:
+        engine.dispose()
+
+
+def test_workset_with_degenerate_arc_range_writes_nothing_and_warns(caplog):
+    engine, Session = _session_factory("continue-workset-rangeless")
+    try:
+        with Session.begin() as session:
+            project = _project(session)
+            project.target_total_chapters = 3
+            session.flush()
+            arc = _arc(session, project_id=project.id, arc_id="rangeless", arc_number=1,
+                       status="active", chapter_start=1, chapter_end=0)
+            _chapter(session, project_id=project.id, arc_id=arc.id, number=1, status="accepted")
+            _chapter(session, project_id=project.id, arc_id=arc.id, number=2, status="planned")
+            _chapter(session, project_id=project.id, arc_id=arc.id, number=4, status="planned")
+        with Session() as session, caplog.at_level("WARNING", logger="forwin.generation.continue_workset"):
+            result = build_continue_generation_workset(session, "project-workset")
+        assert result == ContinueWorkset((), "project_completed")
+        assert "empty arc chapter range" in caplog.text
     finally:
         engine.dispose()

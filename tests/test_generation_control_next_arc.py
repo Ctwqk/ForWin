@@ -158,12 +158,15 @@ def test_task_center_accepted_band_with_unplanned_chapters_is_resumable() -> Non
     assert item.generation_control.can_resume is True
     assert item.resumable is True
     assert item.generation_control.next_chapter == 3
+    assert item.requested_chapters == 6
+    assert (item.status, item.current_stage) == ("ready", "paused")
 
 
 def test_task_center_writing_project_without_plans_resumes_from_chapter_one() -> None:
     item = _project_item([], writable_chapters=range(1, 7))
 
-    assert item.requested_chapters == 0
+    assert item.requested_chapters == 6
+    assert (item.status, item.current_stage) == ("ready", "paused")
     assert item.generation_control.plan_state == "pending_band_plan"
     assert item.generation_control.next_chapter == 1
     assert item.generation_control.can_resume is True
@@ -300,3 +303,21 @@ def test_unwritten_chapters_are_ignored_for_projects_that_are_not_writing() -> N
         assert detail.generation_control.can_resume is False
     finally:
         engine.dispose()
+
+
+def test_task_center_resumable_failed_chapter_is_ready():
+    from forwin.generation.task_repository import TERMINAL_GENERATION_STATUSES
+    item = _project_item([_plan(1, "accepted"), _plan(2, "failed")], writable_chapters=range(1, 7))
+    assert item.requested_chapters == 6
+    assert item.resumable is True
+    assert item.status == "ready"
+    assert item.status not in TERMINAL_GENERATION_STATUSES
+    assert item.failed_chapters == [2]
+
+
+def test_task_center_fully_accepted_book_is_completed():
+    item = _project_item([_plan(1, "accepted"), _plan(2, "accepted")], writable_chapters=range(1, 3))
+    assert item.requested_chapters == 2
+    assert item.completed_chapters == [1, 2]
+    assert item.status == "completed"
+    assert item.resumable is False

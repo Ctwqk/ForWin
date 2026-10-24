@@ -402,3 +402,161 @@ def test_activation_needs_the_end_of_the_active_arc_and_a_following_arc(Session)
             session, project_id=world.project_id, after_chapter=12, policy=POLICY,
         ) is None
         assert _arc_statuses(session, world.project_id) == {first: "completed", second: "active"}
+
+
+def _continue(Session, stage, project_id, **kwargs):
+    stage._SessionFactory = Session
+    stage._make_state_helpers = lambda session: (StateRepository(session), StateUpdater(session), SimpleNamespace())
+    stage._bind_audit_context = lambda **_: None
+    stage._clear_audit_context = lambda: None
+    stage._record_decision_event = lambda **_: None
+    stage.arc_envelope_manager = SimpleNamespace(
+        ensure_active_arc_resolution=lambda **_: pytest.fail("continue must not call old arc activation"),
+    )
+    return stage.continue_project(project_id, **kwargs)
+
+
+def _reset_with_draft(Session, world, number, *, status="planned"):
+    from forwin.models.draft import ChapterDraft
+    with Session.begin() as session:
+        plan = _plans(session, world.project_id)[number]
+        session.add(ChapterDraft(chapter_plan_id=plan.id, body_text="previous draft"))
+        plan.status = status
+        return plan.id, plan.title, plan.goals_json
+
+
+def test_continue_historical_gap_never_hands_accepted_chapters_to_writer(Session):
+    world, (arc,) = _book(Session, arcs=[(1, 6, "active")], target=6)
+    _accept(Session, world, arc, range(1, 5))
+    _reset_with_draft(Session, world, 2)
+    events = []
+    client = StubLLM(_band(world, (5, 6)))
+    stage = _Stage(band_planner=_planner(client), arc_progression=ArcProgressionService(_beat_sheets()), events=events)
+    for number in (2, 5, 6):
+        _continue(Session, stage, world.project_id, max_chapters=1)
+        with Session.begin() as session:
+            _plans(session, world.project_id)[number].status = "accepted"
+    assert events == ["write:2:written-2", "write:5:title-5", "write:6:title-6"]
+    # A stale caller supplying accepted chapters is also safe.
+    _run(Session, stage, world.project_id, (3, 4))
+    assert events == ["write:2:written-2", "write:5:title-5", "write:6:title-6"]
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize("status", ["planned", "failed"])
+@pytest.mark.parametrize("arc_status", ["active", "completed"])
+def test_drafted_old_plan_is_preserved_in_sheetless_arc(Session, status, arc_status):
+    world, arcs = _book(Session, arcs=[(1, 6, arc_status), (7, 12, "active" if arc_status == "completed" else "planned")], target=12)
+    _accept(Session, world, arcs[0], range(1, 7))
+    original = _reset_with_draft(Session, world, 3, status=status)
+    client = StubLLM()
+    planner = _planner(client)
+    with Session.begin() as session:
+        plan = planner.ensure_plan_for_chapter(session, project_id=world.project_id, chapter_number=3, policy=POLICY)
+        assert (plan.id, plan.title, plan.goals_json) == original
+        assert (plan.status, plan.band_plan_id) == (status, None)
+    events = []
+    stage = _Stage(band_planner=planner, arc_progression=ArcProgressionService(_beat_sheets()), events=events)
+    _run(Session, stage, world.project_id, (3,))
+    assert events == ["write:3:written-3"]
+    assert client.calls == []
+    with Session() as session:
+        assert _arc_statuses(session, world.project_id) == {
+            arcs[0]: arc_status, arcs[1]: "active" if arc_status == "completed" else "planned",
+        }
+        assert list(session.scalars(select(ArcBeatSheetRow).where(ArcBeatSheetRow.project_id == world.project_id))) == []
+
+
+def test_historical_rewrite_continue_keeps_active_arc_and_later_plans_next_arc(Session):
+    world, (first, second, third) = _book(
+        Session, arcs=[(1, 6, "completed"), (7, 12, "active"), (13, 18, "planned")], target=18,
+    )
+    _accept(Session, world, first, range(1, 7))
+    _accept(Session, world, second, range(7, 13))
+    original = _reset_with_draft(Session, world, 3)
+    events = []
+    stage = _Stage(band_planner=_planner(StubLLM(_band(world, range(13, 19)))),
+                   arc_progression=ArcProgressionService(_beat_sheets()), events=events)
+    _continue(Session, stage, world.project_id, max_chapters=1)
+    with Session.begin() as session:
+        assert _arc_statuses(session, world.project_id) == {first: "completed", second: "active", third: "planned"}
+        plan = _plans(session, world.project_id)[3]
+        assert (plan.id, plan.title, plan.goals_json) == original
+        plan.status = "accepted"
+    _continue(Session, stage, world.project_id, max_chapters=1)
+    assert events == ["write:3:written-3", "write:13:title-13"]
+    with Session() as session:
+        assert _arc_statuses(session, world.project_id) == {first: "completed", second: "completed", third: "active"}
+        assert ArcBeatSheetRepository(session).active_for_arc(third) is not None
+        assert _plans(session, world.project_id)[13].band_plan_id is not None
+
+
+def test_run_control_recovers_arc_activation_that_lags_multiple_arcs(Session):
+    world, (first, second, third) = _book(
+        Session, arcs=[(1, 6, "active"), (7, 12, "planned"), (13, 18, "planned")], target=18,
+    )
+    _accept(Session, world, first, range(1, 7))
+    _accept(Session, world, second, range(7, 13))
+    stage = _Stage(band_planner=_planner(StubLLM(_band(world, range(13, 19)))),
+                   arc_progression=ArcProgressionService(_beat_sheets()), events=[])
+    _continue(Session, stage, world.project_id, max_chapters=1)
+    assert stage.events == ["write:13:title-13"]
+    with Session() as session:
+        assert _arc_statuses(session, world.project_id) == {first: "completed", second: "completed", third: "active"}
+        assert ArcBeatSheetRepository(session).active_for_arc(third) is not None
+        assert _plans(session, world.project_id)[13].band_plan_id is not None
+
+
+def test_arc_activation_serializes_callers_during_status_flip(Session):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from time import monotonic
+    from sqlalchemy import event, inspect
+
+    world, (first, second) = _book(Session, arcs=[(1, 6, "active"), (7, 12, "planned")], target=12)
+    locked, release, rival_started = Event(), Event(), Event()
+    backend_ids, flips = [], []
+
+    class HoldingProgression(ArcProgressionService):
+        def _activate(self, session, **kwargs):
+            arc = super()._activate(session, **kwargs)
+            locked.set()
+            assert release.wait(10), "test did not release the arc flip"
+            return arc
+
+    def record_flip(session, *_):
+        for row in session.dirty:
+            if isinstance(row, ArcPlanVersion) and row.status == "active" and inspect(row).attrs.status.history.has_changes():
+                flips.append(row.id)
+
+    def activate(service, *, rival=False):
+        with Session() as session:
+            event.listen(session, "before_flush", record_flip)
+            session.execute(text("SET lock_timeout = '10s'"))
+            if rival:
+                backend_ids.append(session.scalar(text("SELECT pg_backend_pid()")))
+                rival_started.set()
+            return service.activate_next_arc_if_needed(
+                session, project_id=world.project_id, after_chapter=6, policy=POLICY,
+            ).id
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a = pool.submit(activate, HoldingProgression(_beat_sheets()))
+        try:
+            assert locked.wait(5)
+            b = pool.submit(activate, ArcProgressionService(_beat_sheets()), rival=True)
+            assert rival_started.wait(5)
+            deadline = monotonic() + 5
+            with Session() as observer:
+                while not observer.scalar(text("SELECT cardinality(pg_blocking_pids(:pid)) > 0"), {"pid": backend_ids[0]}):
+                    assert monotonic() < deadline, "second caller did not contend on the project lock"
+                    assert not b.done()
+                    release.wait(0.01)
+        finally:
+            release.set()
+        assert a.result(timeout=10) == b.result(timeout=10) == second
+    assert flips == [second]
+    with Session() as session:
+        assert _arc_statuses(session, world.project_id) == {first: "completed", second: "active"}
+        sheets = list(session.scalars(select(ArcBeatSheetRow).where(ArcBeatSheetRow.arc_plan_id == second)))
+        assert [(sheet.version, sheet.status) for sheet in sheets] == [(1, "active")]

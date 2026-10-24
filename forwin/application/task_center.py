@@ -255,7 +255,7 @@ class TaskCenterService:
         writable_chapters: range = range(0),
         open_world_conflicts: Sequence[WorldConflictBlockInfo] = (),
     ) -> TaskCenterItemResponse:
-        requested = len(plans)
+        requested = len(writable_chapters)
         config = self.config_provider()
         review_interval = max(
             0, int(getattr(config, "review_interval_chapters", 0) if config else 0)
@@ -279,6 +279,9 @@ class TaskCenterService:
         elif paused:
             status = "needs_review"
             current_stage = "paused_for_review"
+        elif generation_control.can_resume:
+            status = "ready"
+            current_stage = "paused"
         elif failed and not generated:
             status = "failed"
             current_stage = "failed"

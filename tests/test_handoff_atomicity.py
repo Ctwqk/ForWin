@@ -18,6 +18,9 @@ from forwin.http.request_support import _active_genesis_revision, _require_genes
 from forwin.map.protocol import BookMapGenerationResult, MapValidationReport
 from forwin.models.audit import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.book_state import GraphDeltaRow
+from forwin.models.genesis import PromptTrace
+from forwin.models.planning_v6 import ArcBeatSheetRow
 from forwin.models.project import Project
 from forwin.models.task import GenerationTask
 from forwin.runtime.policy import RuntimePolicy
@@ -149,6 +152,13 @@ def test_failed_handoff_leaves_no_generation_task(db) -> None:
     with db.session_factory() as session:
         assert _project_tasks(session, project_id) == []
         assert session.get(Project, project_id).creation_status == "genesis_ready"
+        assert session.scalar(select(ArcBeatSheetRow.id).where(ArcBeatSheetRow.project_id == project_id)) is None
+        assert session.scalar(select(GraphDeltaRow.id).where(
+            GraphDeltaRow.project_id == project_id, GraphDeltaRow.source_type == "plan_constraint",
+        )) is None
+        assert session.scalar(select(PromptTrace.id).where(
+            PromptTrace.project_id == project_id, PromptTrace.stage_key == "plan.arc_beats",
+        )) is None
         event_types = session.execute(
             select(DecisionEvent.event_type).where(DecisionEvent.project_id == project_id)
         ).scalars()

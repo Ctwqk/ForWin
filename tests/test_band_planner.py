@@ -912,3 +912,23 @@ def test_concurrent_planners_write_one_band_plan(Session) -> None:
     assert (winner.band_plan_id, [issue.code for issue in winner.issues]) == (band_plan.id, ["clock_unanswered"])
     # The loser's draft was discarded, so are its warnings; it reports the plan that stands.
     assert (loser.band_plan_id, loser.chapter_plan_ids, loser.issues) == (band_plan.id, [], [])
+
+
+def test_ensure_plans_around_previously_drafted_old_row(Session):
+    """Planning another chapter in the band must also preserve a reset historical plan."""
+    world, arc_id, _ = _book(Session)
+    with Session.begin() as session:
+        plan = StateUpdater(session).create_chapter_plan(world.project_id, arc_id, 2, "original-2", "original-line", ["original-goal"])
+        plan.status = "planned"
+        session.add(ChapterDraft(chapter_plan_id=plan.id, body_text="previously written"))
+        original = (plan.id, plan.title, plan.one_line, plan.goals_json)
+    client = StubLLM(_band(world, (1, 3, 4)))
+    with Session.begin() as session:
+        assert _planner(client).ensure_plan_for_chapter(
+            session, project_id=world.project_id, chapter_number=1, policy=POLICY,
+        ).chapter_number == 1
+    assert client.payload(0)["chapters_to_plan"] == [1, 3, 4]
+    with Session() as session:
+        plan = _plans(session, world.project_id)[2]
+        assert (plan.id, plan.title, plan.one_line, plan.goals_json) == original
+        assert plan.band_plan_id is None

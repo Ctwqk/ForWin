@@ -11,6 +11,7 @@ from forwin.models.project import (
 )
 from forwin.generation.continue_workset import build_continue_generation_workset
 from forwin.models.draft import ChapterDraft
+from forwin.planning.band_planner.service import BandPlanUnavailable
 from forwin.audit.events import DecisionEventType
 from forwin.observability.context import OperationContext
 from sqlalchemy import select
@@ -391,7 +392,13 @@ class RunControlStage:
         conflict that blocks the chapter. Both steps may call a model, so nothing is left locked first.
         """
         session.commit()
-        active = StateRepository(session).get_active_arc_plan(project_id)
+        repo = StateRepository(session)
+        active = repo.get_active_arc_plan(project_id)
+        if active is not None and chapter_number < active.chapter_start:
+            existing = repo.get_chapter_plan(project_id, chapter_number)
+            if existing is not None:
+                session.refresh(existing)
+                return existing
         if active is None or not active.chapter_start <= chapter_number <= active.chapter_end:
             self.arc_progression.activate_next_arc_if_needed(
                 session, project_id=project_id, after_chapter=chapter_number - 1, policy=policy
@@ -400,7 +407,7 @@ class RunControlStage:
             plan = self.band_planner.ensure_plan_for_chapter(
                 session, project_id=project_id, chapter_number=chapter_number, policy=policy
             )
-        except LookupError:
+        except BandPlanUnavailable:
             # The active arc has no beat sheet: it was activated before beat sheets, or by an
             # activation that stopped before writing one. Without an active arc there is nothing to plan from.
             session.rollback()
@@ -500,24 +507,7 @@ class RunControlStage:
             )
             if self._abort_requested():
                 return self._cancelled_result(project_id, len(pending_chapter_numbers))
-            self.arc_envelope_manager.ensure_active_arc_resolution(
-                session=session,
-                project_id=project_id,
-                activation_chapter=min(pending_chapter_numbers),
-            )
-            session.commit()
-            workset = build_continue_generation_workset(
-                session,
-                project_id,
-                max_chapters=max_chapters,
-            )
-            chapter_numbers = list(workset.chapter_numbers)
-            if not chapter_numbers:
-                return RunResult(
-                    project_id=project_id,
-                    requested_chapters=0,
-                )
-
+            chapter_numbers = pending_chapter_numbers
             return self._run_project_chapters(
                 session=session,
                 repo=repo,

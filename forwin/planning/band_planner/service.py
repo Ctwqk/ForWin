@@ -17,6 +17,7 @@ from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.schema import ACTOR_NODE_TYPES, WORLD_NODE_FIELDS
 from forwin.models.planning_v6 import ArcBeatSheetRow, BandPlanRow
+from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.observability.llm_trace import (
@@ -63,6 +64,10 @@ _ALLOWED = {
 }
 
 
+class BandPlanUnavailable(LookupError):
+    """The chapter has no arc, active beat sheet, or band to plan from."""
+
+
 class BandPlanner:
     """Writes band plans in the caller's session; the caller commits.
 
@@ -99,7 +104,7 @@ class BandPlanner:
     ) -> BandPlanOutcome:
         """Plan the band's chapters that are still to write; a failure only returns its issues."""
         rows = _band_rows(session, project_id, band)
-        numbers = _rewritable(band, rows, from_chapter=band.chapter_start)
+        numbers = _rewritable(session, band, rows, from_chapter=band.chapter_start)
         if not numbers:
             return BandPlanOutcome(band_plan_id=_active_band_plan_id(session, project_id, arc_plan.id, band))
         return self._plan(
@@ -113,23 +118,24 @@ class BandPlanner:
         """The chapter's plan row, planning its whole band when it has none.
 
         A row in any status comes back as it is, except one the old planner wrote (no band plan) that is still to
-        write: the band is planned, rewriting that row in place (Ruling P4a-R27). When the band cannot be planned
+        write and was never drafted: the band is planned, rewriting that row in place (Ruling P4a-R31).
+        Rows with draft or candidate history keep their existing plans. When the band cannot be planned
         this opens a ``band_planning`` conflict that blocks the band and returns None; while that conflict is open
         it returns None at once. A concurrent band plan that won the band without this chapter is followed by one
         more planning call.
         """
         existing = _chapter_plan(session, project_id, chapter_number)
-        if _band_planned(existing):
+        if _band_planned(session, existing):
             return existing
         arc_plan = _arc_for_chapter(session, project_id, chapter_number)
         repo = ArcBeatSheetRepository(session)
         beat_sheet_row = repo.active_for_arc(arc_plan.id)
         if beat_sheet_row is None:
-            raise LookupError(f"arc plan {arc_plan.id} has no active beat sheet to plan chapter {chapter_number} from")
+            raise BandPlanUnavailable(f"arc plan {arc_plan.id} has no active beat sheet to plan chapter {chapter_number} from")
         band = next((item for item in repo.load(beat_sheet_row).band_breakdown
                      if item.chapter_start <= chapter_number <= item.chapter_end), None)
         if band is None:
-            raise LookupError(f"beat sheet {beat_sheet_row.id} has no band for chapter {chapter_number}")
+            raise BandPlanUnavailable(f"beat sheet {beat_sheet_row.id} has no band for chapter {chapter_number}")
         if _open_band_conflict(session, project_id, band) is not None:
             return None
 
@@ -137,14 +143,14 @@ class BandPlanner:
             rows = _band_rows(session, project_id, band, refresh=True)
             return self._plan(
                 session, project_id=project_id, arc_plan=arc_plan, beat_sheet_row=beat_sheet_row, band=band,
-                chapter_numbers=_rewritable(band, rows, from_chapter=band.chapter_start), rows=rows, policy=policy,
+                chapter_numbers=_rewritable(session, band, rows, from_chapter=band.chapter_start), rows=rows, policy=policy,
                 notes=(), reason=reason,
             )
 
         result = plan_rewritable("ensure_plan")
-        if not result.failed and not _band_planned(_chapter_plan(session, project_id, chapter_number)):
+        if not result.failed and not _band_planned(session, _chapter_plan(session, project_id, chapter_number)):
             result = plan_rewritable("ensure_plan_retry")
-        if not result.failed and _band_planned(plan := _chapter_plan(session, project_id, chapter_number)):
+        if not result.failed and _band_planned(session, plan := _chapter_plan(session, project_id, chapter_number)):
             return plan
         issues = result.outcome.issues if result.failed else [_error(
             "chapter_unplanned", f"concurrent band plans left chapter {chapter_number} without a plan",
@@ -152,7 +158,7 @@ class BandPlanner:
         # Serialize with other planners before blocking the band: one may have planned the chapter, or opened the
         # conflict, since. No conflict row is locked here, so the project lock keeps the usual order.
         session.execute(select(Project).where(Project.id == project_id).with_for_update(key_share=True)).scalar_one()
-        if _band_planned(plan := _chapter_plan(session, project_id, chapter_number)):
+        if _band_planned(session, plan := _chapter_plan(session, project_id, chapter_number)):
             return plan
         if _open_band_conflict(session, project_id, band) is None:
             _band_planning_conflict(session, project_id=project_id, band=band, issues=issues, as_of=result.as_of)
@@ -179,7 +185,7 @@ class BandPlanner:
             raise LookupError(f"band plan {active.id} has no arc plan with an active beat sheet")
         band = BandSpan(band_index=active.band_index, chapter_start=active.chapter_start, chapter_end=active.chapter_end)
         rows = _band_rows(session, project_id, band)
-        numbers = _rewritable(band, rows, from_chapter=from_chapter)
+        numbers = _rewritable(session, band, rows, from_chapter=from_chapter)
         if not numbers:
             return BandPlanOutcome(band_plan_id=active.id)
         return self._plan(
@@ -240,8 +246,7 @@ class BandPlanner:
         # Locked, so a status change by a writer that does not take the project lock waits for this plan.
         fresh = _band_rows(session, project_id, band, refresh=True, lock=True)
         writable = [chapter for chapter in call.draft.chapters
-                    if chapter.chapter_number not in fresh
-                    or fresh[chapter.chapter_number].status in REWRITABLE_PLAN_STATUSES]
+                    if _can_rewrite(session, fresh.get(chapter.chapter_number))]
         if not writable:
             # Every chapter was taken up for writing during the model call: nothing is left to plan.
             lock_scope.rollback()
@@ -491,7 +496,7 @@ def _arc_for_chapter(session: Session, project_id: str, chapter_number: int) -> 
     ).order_by(ArcPlanVersion.version.desc(), ArcPlanVersion.id))
     arc = min(arcs, key=lambda item: item.status != "active", default=None)
     if arc is None:
-        raise LookupError(f"project {project_id} has no arc plan holding chapter {chapter_number}")
+        raise BandPlanUnavailable(f"project {project_id} has no arc plan holding chapter {chapter_number}")
     return arc
 
 
@@ -502,9 +507,24 @@ def _chapter_plan(session: Session, project_id: str, chapter_number: int) -> Cha
     ).execution_options(populate_existing=True))
 
 
-def _band_planned(plan: ChapterPlan | None) -> bool:
-    """Whether the row needs no planning: anything but an old planner's row (no band plan) still to write."""
-    return plan is not None and (plan.band_plan_id is not None or plan.status not in REWRITABLE_PLAN_STATUSES)
+def _has_draft_history(session: Session, plan: ChapterPlan) -> bool:
+    return session.scalar(select(ChapterDraft.id).where(
+        ChapterDraft.chapter_plan_id == plan.id,
+    ).limit(1)) is not None or session.scalar(select(CandidateDraftRecord.id).where(
+        CandidateDraftRecord.project_id == plan.project_id,
+        CandidateDraftRecord.chapter_number == plan.chapter_number,
+    ).limit(1)) is not None
+
+
+def _band_planned(session: Session, plan: ChapterPlan | None) -> bool:
+    """Whether a plan already exists or its draft history requires preserving the old planner's row."""
+    return plan is not None and (plan.band_plan_id is not None or not _can_rewrite(session, plan))
+
+
+def _can_rewrite(session: Session, plan: ChapterPlan | None) -> bool:
+    return plan is None or (plan.status in REWRITABLE_PLAN_STATUSES and (
+        plan.band_plan_id is not None or not _has_draft_history(session, plan)
+    ))
 
 
 def _band_rows(
@@ -522,10 +542,10 @@ def _band_rows(
     return {plan.chapter_number: plan for plan in session.scalars(statement)}
 
 
-def _rewritable(band: BandSpan, rows: Mapping[int, ChapterPlan], *, from_chapter: int) -> list[int]:
+def _rewritable(session: Session, band: BandSpan, rows: Mapping[int, ChapterPlan], *, from_chapter: int) -> list[int]:
     """The band's chapters from ``from_chapter`` on that have no plan row, or one still to write."""
     return [number for number in range(max(from_chapter, band.chapter_start), band.chapter_end + 1)
-            if number not in rows or rows[number].status in REWRITABLE_PLAN_STATUSES]
+            if _can_rewrite(session, rows.get(number))]
 
 
 def _active_band_plan_id(session: Session, project_id: str, arc_plan_id: str, band: BandSpan) -> str | None:
@@ -546,4 +566,4 @@ def _feedback_line(issue: PlanIssue) -> str:
     return f"{where}[{issue.code}] {issue.message}"
 
 
-__all__ = ["AUDIT_ERROR", "BAND_PLANNING_SOURCE", "INFEASIBLE", "NO_STORY_CALENDAR", "STAGE_KEY", "BandPlanner"]
+__all__ = ["AUDIT_ERROR", "BAND_PLANNING_SOURCE", "INFEASIBLE", "NO_STORY_CALENDAR", "STAGE_KEY", "BandPlanner", "BandPlanUnavailable"]

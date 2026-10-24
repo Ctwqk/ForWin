@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -7,6 +8,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -33,7 +37,7 @@ def build_continue_generation_workset(
     resume_from_chapter: int | None = None,
     preloaded_plans: Sequence[ChapterPlan] | None = None,
 ) -> ContinueWorkset:
-    """The book's chapters from the first one not accepted, consecutively up to its last writable chapter.
+    """The book's unaccepted chapters in order, up to its last writable chapter.
 
     Whether a chapter has a plan row does not matter: run control plans each band just in time. A chapter
     waiting for review or acceptance blocks the run. ``resume_from_chapter`` is the lowest chapter to list;
@@ -58,7 +62,7 @@ def build_continue_generation_workset(
     first = max(book.start, int(resume_from_chapter or 0))
     while statuses.get(first) == "accepted":
         first += 1
-    numbers = tuple(range(first, book.stop))
+    numbers = tuple(number for number in range(first, book.stop) if statuses.get(number) != "accepted")
     if max_chapters is not None:
         numbers = numbers[: int(max_chapters)]
     return ContinueWorkset(numbers, "chapters_pending" if numbers else "project_completed")
@@ -69,7 +73,9 @@ def writable_chapter_ranges(session: Session, project_ids: Sequence[str]) -> dic
     ``min(target_total_chapters, its arcs' furthest chapter_end)``.
 
     No arc holds a chapter outside the range, so none could be planned. Superseded arcs do not count; a
-    ``target_total_chapters`` of 0 leaves the arcs uncapped. Projects without an arc are left out.
+    ``target_total_chapters`` of 0 leaves the arcs uncapped. A project whose arcs give an empty range
+    (``chapter_end < chapter_start``, e.g. older rows with the default ``chapter_end = 0``) has nothing to write and is logged; the
+    deploy preflight lists such projects for repair.
     """
     if not project_ids:
         return {}
@@ -90,6 +96,10 @@ def writable_chapter_ranges(session: Session, project_ids: Sequence[str]) -> dic
         if int(target or 0) > 0:
             last = min(last, int(target))
         result[str(project_id)] = range(max(1, int(arc_start or 0)), last + 1)
+    for project_id, chapters in result.items():
+        if not chapters:
+            logger.warning("project %s has an empty arc chapter range; nothing is writable until it is repaired",
+                           project_id)
     return result
 
 

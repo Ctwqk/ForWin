@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
 from forwin.experience.chapter_planner import ChapterExperiencePlanner
 from forwin.experience.persistence import ExperiencePersistence
@@ -25,8 +26,10 @@ from forwin.planning.future_plan_audit.patches import FuturePlanPatchMixin
 from forwin.protocol.subworld import ChapterEntryTarget
 from forwin.state.updater import StateUpdater
 from forwin.world_engine.conflict_repository import PLAN_PATCH_REF_PREFIX, WorldConflictRepository
-from forwin.world_engine.conflict_resolution import PLOT_RESPONSE_PATCH_TYPE, record_plot_response_patch
-from forwin.world_engine.superseded_resolutions import PLAN_PATCH_REVERT_TYPE
+from forwin.world_engine.conflict_resolution import (
+    PLOT_RESPONSE_PATCH_TYPE, reachable_response_plans, record_plot_response_patch,
+)
+from forwin.world_engine.superseded_resolutions import PLAN_PATCH_REVERT_TYPE, retire_response_patches
 
 
 # The admission rule band-planned chapters carry: named characters come from the plan's onstage refs.
@@ -100,11 +103,15 @@ def persist_band_plan(
         session.add(plan)
         plans[chapter.chapter_number] = plan
     conflicts = WorldConflictRepository(session)
-    carriers = response_carriers(draft.chapters, inputs.offered.pending)
+    latest = BookStateRepository(session).latest_canon_chapter(project_id) or 0
+    reachable = {plan.chapter_number for plan in reachable_response_plans(session, project_id, latest_chapter=latest)}
+    carriers = response_carriers([chapter for chapter in draft.chapters if chapter.chapter_number in reachable],
+                                 inputs.offered.pending)
     for row in pending_conflicts:
         carrier = carriers.get(row.id)
         if carrier is None:
             continue
+        retire_response_patches(session, row, reason="response_carrier_replanned")
         patch_id = record_plot_response_patch(session, row, plans[carrier.chapter_number])
         conflicts.attach_result_refs(row, [f"{PLAN_PATCH_REF_PREFIX}{patch_id}"])
     session.flush()

@@ -49,7 +49,8 @@ from .actor_turns import ActorTurnRunner, ActorView, build_actor_view, rank_acto
 from .adjudicator import WorldAdjudicator
 from .clocks import expire_clocks
 from .conflict_delegate import WorldConflictDelegate
-from .conflict_resolution import PropagatedNews, propagation_candidate
+from .conflict_repository import WorldConflictRepository
+from .conflict_resolution import PropagatedNews, propagation_candidate, reconcile_plot_responses
 from .conflict_types import ConflictDraft
 from .constraints import ConstraintIssue, apply_budgets, check_narrative_boundaries, classify_impact
 from .delta_builder import WorldTickDeltaBuilder
@@ -210,19 +211,23 @@ class _Tick:
         self.dropped: list[str] = []
         # Due offstage intents the tick did not ask about: beyond the cap, they wait for a later tick.
         self.unasked: list[str] = []
+        self.responses = WorldConflictRepository(session).active_plot_responses(project_id)
+        self.book_complete = False
 
     def finish_holds(self) -> WorldTickResult:
         """The last chapter answers its holds without starting any new world activity."""
-        interactions = _interactions(self.chapter)
-        bound, _, _ = onstage_plan_bindings(self.session, self.context.project_id, self.context.chapter_number)
+        self.book_complete = True
+        bound = frozenset(node.id for node in self.runtime.world.nodes_by_id.values()
+                          if node.node_type == "intent" and self.runtime.world.get_state(node.id).get("status") == "held")
+        interactions = [item for item in _interactions(self.chapter) if item.get("intent_id") in bound]
         candidates = [
             *apply_intent_interactions(self.runtime, interactions=interactions),
             *release_held_intents(self.runtime, bound_intent_refs=bound, interactions=interactions,
                                  now=self.context.now),
         ]
-        if not candidates:
-            return _skipped(self.tick_id, "book_complete")
         delta_ids, warnings = self._commit(candidates, spread_news=False)
+        if not delta_ids:
+            return _skipped(self.tick_id, "book_complete")
         return WorldTickResult(tick_id=self.tick_id, graph_delta_ids=delta_ids, conflict_ids=[],
                                dropped_candidate_ids=list(self.dropped), postponed_candidate_ids=[], warnings=warnings)
 
@@ -296,7 +301,11 @@ class _Tick:
         bound_intent_refs, band_ended, band_bound_intent_refs = onstage_plan_bindings(
             self.session, self.context.project_id, self.context.chapter_number,
         )
-        released = release_held_intents(runtime, bound_intent_refs=bound_intent_refs,
+        answered = frozenset(row.intent_ref for row in self.responses if any(
+            plan.chapter_number <= self.context.chapter_number
+            for plan in WorldConflictRepository(self.session).response_carriers(row)
+        ))
+        released = release_held_intents(runtime, bound_intent_refs=bound_intent_refs | answered,
                                        interactions=interactions, now=now)
         onstage = onstage_bookkeeping(
             runtime,
@@ -545,14 +554,27 @@ class _Tick:
                 delta.node_patches, delta.edge_patches, delta.fact_patches, delta.cognition_patches,
                 delta.narrative_patches,
             ))
-            if not changes and not self.conflicts.resolutions:
+            if not changes and not self.conflicts.resolutions and not self.responses:
                 # A quiet tick takes no lock and holds none through the rest of the world step.
                 return [], warnings
+            # Lifecycle rows follow the same conflict-before-project lock order as decisions.
+            repo = WorldConflictRepository(self.session)
+            responses = [repo.get(context.project_id, row.id, for_update=True)
+                         for row in sorted(self.responses, key=lambda row: row.id)]
             self._lock_fresh_canon()
             try:
                 with self.session.begin_nested():
                     graph_delta_ids = self._commit_delta(delta) if changes else ()
                     self.conflicts.close_resolutions(graph_delta_ids=graph_delta_ids, warnings=warnings)
+                    statuses = {node.id: self.runtime.world.get_state(node.id).get("status")
+                                for node in self.runtime.world.nodes_by_id.values() if node.node_type == "intent"}
+                    for candidate in candidates:
+                        statuses.update(candidate.intent_status_changes)
+                    reconcile_plot_responses(
+                        self.session, [row for row in responses if row is not None],
+                        latest_chapter=context.chapter_number, book_complete=self.book_complete,
+                        finished_refs={ref for ref, status in statuses.items() if status != "held"},
+                    )
                     self.session.flush()
             except ResolutionUnavailable as exc:
                 # The SAVEPOINT rolled the commit back with it; build again without that option.

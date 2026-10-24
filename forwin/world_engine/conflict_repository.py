@@ -6,7 +6,10 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.models.project import ChapterPlan, Project
 from forwin.models.world_conflict import WorldPlanConflictRow
+from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.narrative_obligations.types import NarrativePlanPatch
 
 from .conflict_types import ConflictDecider, ConflictDecision, ConflictDraft, ConflictOption
 
@@ -105,31 +108,56 @@ class WorldConflictRepository:
         self.session.flush()
 
     def clear_pending_plan_response(self, row: WorldPlanConflictRow) -> None:
-        """Retire a response whose world change left canon, retaining the resolution record."""
+        """Retire response work, retaining the once-per-intent resolution history."""
         payload = json.loads(row.decision_json or "{}")
-        if payload.get("pending_plan_response") is True:
+        if payload.get("option") == "plot_responds":
             payload["pending_plan_response"] = False
+            payload["response_retired"] = True
             row.decision_json = serialize_conflict_decision(payload)
             self.session.flush()
 
-    def pending_plot_responses(self, project_id: str) -> list[WorldPlanConflictRow]:
-        """Resolved plot_responds conflicts still waiting for a plan to answer them, oldest first.
+    def active_plot_responses(self, project_id: str) -> list[WorldPlanConflictRow]:
+        """Outstanding hold responses, oldest first; resolutions from before holding stay historical."""
+        rows = self.session.scalars(select(WorldPlanConflictRow).where(
+            WorldPlanConflictRow.project_id == project_id, WorldPlanConflictRow.status == "resolved",
+        ).order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id))
+        return [row for row in rows
+                if (decision := json.loads(row.decision_json or "{}")).get("option") == "plot_responds"
+                and decision.get("pending_plan_response") is not False
+                and not decision.get("response_retired")
+                and (decision.get("pending_plan_response") is True or self.response_patches(row))]
 
-        A resolution waits when it found no plan to bind (``pending_plan_response`` in its decision) and no
-        band plan has bound it since (no ``plan_patch:`` ref).
-        """
-        rows = self.session.scalars(
-            select(WorldPlanConflictRow)
-            .where(WorldPlanConflictRow.project_id == project_id, WorldPlanConflictRow.status == "resolved")
-            .order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id)
-        )
-        pending = []
-        for row in rows:
-            decision = json.loads(row.decision_json or "{}")
-            if (decision.get("option") == "plot_responds" and decision.get("pending_plan_response") is True
-                    and not any(ref.startswith(PLAN_PATCH_REF_PREFIX) for ref in conflict_result_refs(row))):
-                pending.append(row)
-        return pending
+    def response_patches(self, row: WorldPlanConflictRow) -> list[NarrativePlanPatch]:
+        """The response's unreverted patches, including P3-era bare result refs."""
+        ledger = NarrativeObligationRepository(self.session)
+        patches = ledger.list_patches_by_ids([
+            ref.removeprefix(PLAN_PATCH_REF_PREFIX) for ref in conflict_result_refs(row)
+        ])
+        return [patch for patch in patches if patch.patch_type == "world_conflict_response"
+                and patch.applied and not any(
+                    other.patch_type == "plan_patch_revert"
+                    and other.metadata.get("reverted_plan_patch_id") == patch.id
+                    for other in ledger.list_patches_for_plan(row.project_id, target_plan_id=patch.target_plan_id)
+                )]
+
+    def response_carriers(self, row: WorldPlanConflictRow) -> list[ChapterPlan]:
+        """Existing bound carriers; drafted/accepted carriers may finish their original response."""
+        project = self.session.get(Project, row.project_id)
+        total = int(project.target_total_chapters or 0) if project is not None else 0
+        plan_ids = [patch.target_plan_id for patch in self.response_patches(row)]
+        plans = self.session.scalars(select(ChapterPlan).where(ChapterPlan.id.in_(plan_ids))
+                                     .execution_options(populate_existing=True))
+        return [plan for plan in plans if plan is not None and plan.project_id == row.project_id
+                and 0 < plan.chapter_number <= total
+                and plan.status in {"planned", "failed", "drafted", "needs_review", "accepted"}
+                and (not row.intent_ref or any(
+                    binding.get("kind") == "intent" and binding.get("ref") == row.intent_ref
+                    for binding in json.loads(plan.world_bindings_json or "[]")
+                ))]
+
+    def pending_plot_responses(self, project_id: str) -> list[WorldPlanConflictRow]:
+        """Unbound responses and responses whose carrier disappeared or became unreachable."""
+        return [row for row in self.active_plot_responses(project_id) if not self.response_carriers(row)]
 
     def attach_result_refs(self, row: WorldPlanConflictRow, refs: Sequence[str]) -> None:
         """Append ``refs`` to the row's result_refs, each once."""

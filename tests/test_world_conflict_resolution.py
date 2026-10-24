@@ -1359,7 +1359,7 @@ def test_pending_plot_response_side_effect_is_discoverable(pending_side_effect_s
     assert repo.pending_plot_responses(row.project_id) == [row]
     assert session.scalars(select(NarrativePlanPatchRow)).all() == []
     repo.attach_result_refs(row, ["plan_patch:later-response"])
-    assert repo.pending_plot_responses(row.project_id) == []
+    assert repo.pending_plot_responses(row.project_id) == [row]
 
 
 def test_accept_with_obligation_without_next_plan_records_obligation_only(pending_side_effect_session):
@@ -2116,3 +2116,255 @@ def test_plot_response_preserves_due_news_without_committing_it(pending_side_eff
     assert not delta.cognition_patches
     assert delta.metadata["news_in_transit"] == queue
     assert json.loads(row.decision_json)["pending_plan_response"] is True
+
+
+# F4 fix round 2: carrier reachability and the book-complete cleanup boundary.
+def _response_lifecycle_tick(session, project_id, *, interactions=(), final=False):
+    from types import SimpleNamespace
+    from forwin.models.canon import CanonCommitRecord
+    from forwin.world_engine.tick import WorldTickService
+
+    session.get(Project, project_id).target_total_chapters = 2 if final else 4
+    chapter = GraphDelta(id="lifecycle-chapter", project_id=project_id, chapter_number=2,
+                         summary="chapter", source_type="chapter_extraction", story_time_start=50,
+                         story_time_end=100, metadata={"intent_interactions": list(interactions)})
+    BookStateRepository(session).append_graph_delta(chapter)
+    session.flush()
+    committed = []
+
+    class CaptureAdmission:
+        def commit_world_tick(self, **kwargs):
+            committed.extend(kwargs["approved_changes"].graph_deltas)
+            return SimpleNamespace(idempotent=False, graph_delta_ids=tuple(d.id for d in committed))
+
+    service = WorldTickService(llm_client=None, admission=CaptureAdmission(), adjudicator=None,
+                               actor_runner=None, conflict_delegate=None, audit_writer_factory=lambda: None,
+                               save_prompt_trace=lambda *_: "")
+    result = service.run(session, CanonCommitRecord(id="lifecycle-commit", project_id=project_id,
+                         chapter_number=2, graph_delta_ids_json='["lifecycle-chapter"]'), policy=POLICY)
+    return result, committed
+
+
+def _response_lifecycle_nodes(session, project_id, statuses):
+    from forwin.protocol.book_state import WorldNode
+
+    repo = BookStateRepository(session)
+    for ref, status in statuses.items():
+        repo.create_world_node(WorldNode(id=ref, project_id=project_id, node_type="intent", name=ref,
+            profile={"owner_ref": "actor"}, state={"status": status, "scheduled_at": 5}),
+            version_chapter=1, version_state={"status": status, "scheduled_at": 5})
+
+
+@pytest.mark.parametrize("carrier_status,carrier_number", [("drafted", 2), ("planned", 3), ("draft-history", 2)])
+def test_plot_response_selects_only_unwritten_carriers_within_target(
+    pending_side_effect_session, carrier_status, carrier_number,
+):
+    session, row = pending_side_effect_session
+    session.get(Project, row.project_id).target_total_chapters = 2
+    arc = ArcPlanVersion(project_id=row.project_id, arc_synopsis="arc", chapter_start=1, chapter_end=4)
+    session.add(arc)
+    session.flush()
+    plan = ChapterPlan(project_id=row.project_id, arc_plan_id=arc.id, chapter_number=carrier_number,
+                       title="unreachable", status="planned" if carrier_status == "draft-history" else carrier_status)
+    session.add(plan)
+    session.flush()
+    if carrier_status == "draft-history":
+        from forwin.models.draft import ChapterDraft
+        session.add(ChapterDraft(chapter_plan_id=plan.id, body_text="already written"))
+        session.flush()
+    from forwin.world_engine.conflict_resolution import record_option_side_effects
+    effects = record_option_side_effects(session, row, _decision("plot_responds"), latest_chapter=1)
+    assert effects.pending_plan_response and effects.plan_patch_id == ""
+    assert json.loads(plan.world_bindings_json or "[]") == []
+
+
+@pytest.mark.parametrize("carrier", ["unbound", "beyond-target", "missing", "lost-binding"])
+def test_final_tick_retires_every_response_without_world_activity(pending_side_effect_session, monkeypatch, carrier):
+    from forwin.world_engine import tick
+    from forwin.world_engine.conflict_resolution import record_plot_response_patch
+    from forwin.planning.band_planner.persistence import reapply_active_patches
+
+    session, row = pending_side_effect_session
+    row.intent_ref = "held"
+    _response_lifecycle_nodes(session, row.project_id, {"held": "held", "other": "planned", "settled": "resolved"})
+    from forwin.protocol.book_state import FactNode, WorldNode
+    world = BookStateRepository(session)
+    for node in (
+        WorldNode(id="actor", project_id=row.project_id, node_type="character",
+                  state={"alive_status": "alive", "next_turn_at": 60}),
+        WorldNode(id="clock", project_id=row.project_id, node_type="clock",
+                  state={"status": "running", "due_at": 60}),
+    ):
+        world.create_world_node(node, version_chapter=1, version_state=node.state)
+    world.create_fact_node(FactNode(id="news", project_id=row.project_id, proposition="queued news"))
+    queue = [{"fact_ref": "fact:news", "observer_ref": "actor", "arrive_at": 60}]
+    world.append_graph_delta(GraphDelta(id="earlier-news", project_id=row.project_id, chapter_number=1,
+        summary="earlier", source_type="world_engine", story_time_start=0, story_time_end=50,
+        metadata={"news_in_transit": queue}))
+    arc = ArcPlanVersion(project_id=row.project_id, arc_synopsis="arc", chapter_start=1, chapter_end=4)
+    session.add(arc)
+    session.flush()
+    plan = ChapterPlan(project_id=row.project_id, arc_plan_id=arc.id, chapter_number=3,
+                       title="response", status="planned", goals_json='["original"]')
+    session.add(plan)
+    session.flush()
+    refs = ["hold-delta"]
+    if carrier != "unbound":
+        refs.append(record_plot_response_patch(session, row, plan))
+    repo = WorldConflictRepository(session)
+    repo.mark_resolved(row, decision=_decision("plot_responds"), result_refs=refs,
+                       pending_plan_response=carrier == "unbound")
+    if carrier == "missing":
+        session.delete(plan)
+        session.flush()
+    elif carrier == "lost-binding":
+        plan.world_bindings_json = "[]"
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Final cleanup must not run world activity")
+
+    for name in ("expire_clocks", "adjudicate", "take_turns", "propagation_candidate"):
+        monkeypatch.setattr(tick, name, forbidden)
+    _, deltas = _response_lifecycle_tick(session, row.project_id, final=True, interactions=[
+        {"intent_id": "other", "effect": "fulfilled"}, {"intent_id": "settled", "effect": "disrupted"},
+    ])
+    assert [_patches(d) for d in deltas] == [[
+        ("held", "set", "state.status", "held", "planned"),
+        ("held", "set", "state.scheduled_at", 5, 100),
+    ]]
+    assert all(not d.fact_patches and not d.cognition_patches and not d.narrative_patches for d in deltas)
+    assert deltas[0].metadata["news_in_transit"] == queue
+    assert repo.pending_plot_responses(row.project_id) == []
+    assert json.loads(row.decision_json)["pending_plan_response"] is False
+    assert repo.has_plot_response(row.project_id, "held")
+    if carrier != "missing":
+        reapply_active_patches(session, plan)
+        assert json.loads(plan.world_bindings_json or "[]") == []
+        assert load_goals_json(plan.goals_json) == ["original"]
+
+
+@pytest.mark.parametrize("held", [False, True])
+def test_final_tick_interactions_touch_only_held_intents(pending_side_effect_session, monkeypatch, held):
+    from forwin.world_engine import tick
+
+    session, row = pending_side_effect_session
+    _response_lifecycle_nodes(session, row.project_id, {"held": "held" if held else "resolved", "other": "planned"})
+    def forbidden(*args, **kwargs):
+        pytest.fail("Final cleanup must not run world activity")
+    for name in ("expire_clocks", "adjudicate", "take_turns", "propagation_candidate"):
+        monkeypatch.setattr(tick, name, forbidden)
+    result, deltas = _response_lifecycle_tick(session, row.project_id, final=True, interactions=[
+        {"intent_id": "held", "effect": "disrupted"}, {"intent_id": "other", "effect": "fulfilled"},
+    ])
+    assert [_patches(d) for d in deltas] == ([[
+        ("held", "set", "state.status", "held", "disrupted"),
+    ]] if held else [])
+    assert result.skipped_reason == ("" if held else "book_complete")
+
+
+@pytest.mark.parametrize("invalidate", ["missing", "lost-binding", "beyond-target", "cancelled"])
+def test_stale_response_carrier_is_rebound_and_survives_replanning(pending_side_effect_session, invalidate):
+    from forwin.world_engine.conflict_resolution import record_plot_response_patch
+    from forwin.planning.band_planner.persistence import reapply_active_patches
+
+    session, row = pending_side_effect_session
+    row.intent_ref = "held"
+    _response_lifecycle_nodes(session, row.project_id, {"held": "held"})
+    arc = ArcPlanVersion(project_id=row.project_id, arc_synopsis="arc", chapter_start=1, chapter_end=8)
+    session.add(arc)
+    session.flush()
+    old = ChapterPlan(project_id=row.project_id, arc_plan_id=arc.id, chapter_number=5 if invalidate == "beyond-target" else 3,
+                      title="old", status="planned", goals_json='["original"]')
+    new = ChapterPlan(project_id=row.project_id, arc_plan_id=arc.id, chapter_number=4, title="new", status="planned")
+    session.add_all([old, new])
+    session.flush()
+    patch = record_plot_response_patch(session, row, old)
+    repo = WorldConflictRepository(session)
+    repo.mark_resolved(row, decision=_decision("plot_responds"), result_refs=["hold", patch])
+    if invalidate == "missing":
+        session.delete(old)
+    elif invalidate == "lost-binding":
+        old.world_bindings_json = "[]"
+        old.status = "drafted"
+    elif invalidate == "cancelled":
+        old.status = "cancelled"
+    session.get(Project, row.project_id).target_total_chapters = 4
+    session.flush()
+    assert repo.pending_plot_responses(row.project_id) == [row]
+    _, deltas = _response_lifecycle_tick(session, row.project_id)
+    assert deltas == []
+    assert repo.pending_plot_responses(row.project_id) == []
+    assert json.loads(new.world_bindings_json)[0]["ref"] == "held"
+    new.world_bindings_json = "[]"
+    reapply_active_patches(session, new)
+    assert [item["ref"] for item in json.loads(new.world_bindings_json)] == ["held"]
+    if invalidate != "missing":
+        old.status = "planned"
+        old.world_bindings_json = "[]"
+        assert patch not in reapply_active_patches(session, old)
+        assert json.loads(old.world_bindings_json) == []
+
+
+def test_response_recorded_while_final_chapter_is_drafted_is_retired_on_acceptance(pending_side_effect_session):
+    from forwin.world_engine.conflict_resolution import record_option_side_effects
+
+    session, row = pending_side_effect_session
+    row.intent_ref = "held"
+    _response_lifecycle_nodes(session, row.project_id, {"held": "held"})
+    session.get(Project, row.project_id).target_total_chapters = 2
+    arc = ArcPlanVersion(project_id=row.project_id, arc_synopsis="arc", chapter_start=1, chapter_end=2)
+    session.add(arc)
+    session.flush()
+    final = ChapterPlan(project_id=row.project_id, arc_plan_id=arc.id, chapter_number=2,
+                        title="final", status="drafted")
+    session.add(final)
+    session.flush()
+    effects = record_option_side_effects(session, row, _decision("plot_responds"), latest_chapter=1)
+    assert effects.pending_plan_response and not effects.plan_patch_id
+    repo = WorldConflictRepository(session)
+    repo.mark_resolved(row, decision=_decision("plot_responds"), result_refs=["hold"], pending_plan_response=True)
+    final.status = "accepted"
+    _, deltas = _response_lifecycle_tick(session, row.project_id, final=True)
+    assert [_patches(d) for d in deltas] == [[
+        ("held", "set", "state.status", "held", "planned"),
+        ("held", "set", "state.scheduled_at", 5, 100),
+    ]]
+    assert repo.pending_plot_responses(row.project_id) == []
+    assert json.loads(row.decision_json)["response_retired"] is True
+
+
+def test_stale_response_without_replacement_stays_pending(pending_side_effect_session):
+    from forwin.world_engine.conflict_resolution import record_plot_response_patch
+
+    session, row = pending_side_effect_session
+    row.intent_ref = "held"
+    _response_lifecycle_nodes(session, row.project_id, {"held": "held"})
+    arc = ArcPlanVersion(project_id=row.project_id, arc_synopsis="arc", chapter_start=1, chapter_end=8)
+    session.add(arc)
+    session.flush()
+    plan = ChapterPlan(project_id=row.project_id, arc_plan_id=arc.id, chapter_number=5, title="beyond", status="planned")
+    session.add(plan)
+    session.flush()
+    patch_id = record_plot_response_patch(session, row, plan)
+    repo = WorldConflictRepository(session)
+    repo.mark_resolved(row, decision=_decision("plot_responds"), result_refs=["hold", patch_id])
+    _, deltas = _response_lifecycle_tick(session, row.project_id)
+    assert deltas == []
+    assert repo.pending_plot_responses(row.project_id) == [row]
+    assert json.loads(row.decision_json)["pending_plan_response"] is True
+    assert repo.response_patches(row) == []
+    assert json.loads(plan.world_bindings_json) == []
+
+
+def test_final_tick_retires_settled_response_without_patching_it(pending_side_effect_session):
+    session, row = pending_side_effect_session
+    row.intent_ref = "settled"
+    _response_lifecycle_nodes(session, row.project_id, {"settled": "resolved"})
+    repo = WorldConflictRepository(session)
+    repo.mark_resolved(row, decision=_decision("plot_responds"), result_refs=["hold"], pending_plan_response=True)
+    result, deltas = _response_lifecycle_tick(session, row.project_id, final=True, interactions=[
+        {"intent_id": "settled", "effect": "disrupted"},
+    ])
+    assert result.skipped_reason == "book_complete" and deltas == []
+    assert repo.pending_plot_responses(row.project_id) == []
+    assert json.loads(row.decision_json)["response_retired"] is True

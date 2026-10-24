@@ -418,3 +418,190 @@ def test_http_refuses_second_plot_response_even_for_stale_offered_option(conflic
     assert _resolution_deltas(Session, book, second) == []
     with Session() as session:
         assert WorldConflictRepository(session).get(book.project_id, second).status == "open"
+
+
+def test_concurrent_http_plot_responses_consume_one_intent_once(conflict_api, monkeypatch):
+    """Both conflict rows are locked before either session competes for the project lock."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Lock
+    from sqlalchemy import text
+    from forwin.models import NarrativePlanPatchRow
+    from tests.test_world_conflict_resolution import _held, _resolution_deltas
+    from tests.test_world_tick_delta import _patches
+
+    client, Session, book, _ = conflict_api
+    ids = [_conflict(Session, book, proposed_change=_held(book).model_dump(mode="json"),
+                     violated=violation) for violation in ("impact_review", "onstage_slip")]
+    barrier = Barrier(2, timeout=8)
+    backend_ids = set()
+    guard = Lock()
+    original = WorldConflictRepository.get
+
+    def lock_both(repo, project_id, conflict_id, *, for_update=False):
+        if for_update and conflict_id in ids:
+            repo.session.execute(text("SET LOCAL lock_timeout = '5s'"))
+            repo.session.execute(text("SET LOCAL statement_timeout = '10s'"))
+        row = original(repo, project_id, conflict_id, for_update=for_update)
+        if for_update and conflict_id in ids:
+            assert row.status == "open"
+            assert "plot_responds" in json.loads(row.options_json)
+            with guard:
+                backend_ids.add(repo.session.scalar(text("SELECT pg_backend_pid()")))
+            barrier.wait()
+        return row
+
+    monkeypatch.setattr(WorldConflictRepository, "get", lock_both)
+    root = f"/api/projects/{book.project_id}/world-conflicts"
+    def resolve(conflict_id):
+        return client.post(f"{root}/{conflict_id}/resolve", json={
+            "option": "plot_responds", "rationale": "respond first", "reason": "concurrent review",
+        })
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(resolve, conflict_id) for conflict_id in ids]
+        responses = [future.result(timeout=20) for future in futures]
+    assert len(backend_ids) == 2
+    assert sorted(response.status_code for response in responses) == [200, 400], [r.text for r in responses]
+    winner, loser = sorted(zip(ids, responses), key=lambda pair: pair[1].status_code)
+    [delta] = _resolution_deltas(Session, book, winner[0])
+    assert _patches(delta) == [(book.later, "set", "state.status", "planned", "held")]
+    assert not delta.fact_patches and not delta.cognition_patches
+    assert _resolution_deltas(Session, book, loser[0]) == []
+    with Session() as session:
+        assert WorldConflictRepository(session).get(book.project_id, loser[0]).status == "open"
+        patches = session.scalars(select(NarrativePlanPatchRow).where(
+            NarrativePlanPatchRow.project_id == book.project_id,
+            NarrativePlanPatchRow.patch_type == "world_conflict_response",
+        )).all()
+        assert len(patches) == 1
+        resolved = session.scalars(select(DecisionEvent).where(
+            DecisionEvent.project_id == book.project_id,
+            DecisionEvent.event_type == DecisionEventType.WORLD_CONFLICT_RESOLVED,
+        )).all()
+        assert len(resolved) == 1
+
+
+def test_http_response_between_tick_staging_and_snapshot_lock_rolls_back_tick(monkeypatch):
+    """A staged response loses to committed HTTP canon, then retry cannot offer it again."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from sqlalchemy import text
+    from forwin.book_state.repository import BookStateRepository
+    from forwin.canon import CanonStaleVersion
+    from forwin.config import InfrastructureConfig
+    from forwin.models import NarrativePlanPatchRow
+    from forwin.world_engine import tick as tick_module
+    from forwin.world_engine.conflict_types import ConflictDraft
+    from tests.test_world_conflict_resolution import _Book, _held, _resolution_deltas
+    from tests.test_world_tick_service import (
+        _ambushing, _canon_commit, _chapter, _later, _plan, _seed_tick_world, _service,
+        _tick, _tick_deltas, _WorldLLM, _quiet_turns, POLICY,
+    )
+    from tests.test_world_tick_delta import _patches
+
+    engine, Session = _session_factory()
+    # Lifespan builds its own container engine; share the URL created by postgres_test_url().
+    database_url = engine.url.render_as_string(hide_password=False)
+    monkeypatch.setenv("FORWIN_DATABASE_URL", database_url)
+    config = InfrastructureConfig(database_url=database_url)
+    staged, resume = Event(), Event()
+    try:
+        world = _seed_tick_world(Session, monkeypatch)
+        _plan(Session, world, 2)
+        chapter = _chapter(Session, world, 1)
+        book = _Book(world, chapter, {})
+        conflict_id = _conflict(Session, book, proposed_change=_held(book).model_dump(mode="json"),
+                                violated="onstage_slip", actor_ref=world.hero)
+        original = tick_module._Tick._lock_fresh_canon
+        staged_ids = []
+
+        def pause_before_lock(tick):
+            if tick.context.project_id == world.project_id and not staged.is_set():
+                assert len(tick.conflicts.resolutions) == 1
+                resolution = tick.conflicts.resolutions[0]
+                assert resolution.decision.option == "plot_responds"
+                staged_ids.append(resolution.conflict_id)
+                staged.set()
+                assert resume.wait(12), "HTTP response never completed while the tick was staged"
+            return original(tick)
+
+        monkeypatch.setattr(tick_module._Tick, "_lock_fresh_canon", pause_before_lock)
+        # Bound both the blocked database statements and the Python synchronization.
+        original_get = WorldConflictRepository.get
+        def bounded_get(repo, project_id, row_id, *, for_update=False):
+            if for_update:
+                repo.session.execute(text("SET LOCAL lock_timeout = '5s'"))
+                repo.session.execute(text("SET LOCAL statement_timeout = '10s'"))
+            return original_get(repo, project_id, row_id, for_update=for_update)
+        monkeypatch.setattr(WorldConflictRepository, "get", bounded_get)
+
+        def run_tick():
+            with Session.begin() as session:
+                session.execute(text("SET LOCAL lock_timeout = '5s'"))
+                session.execute(text("SET LOCAL statement_timeout = '10s'"))
+                return _service(Session, _ambushing(world, chapter, "plot_responds")).run(
+                    session, _canon_commit(chapter), policy=POLICY,
+                )
+
+        with TestClient(HttpRuntimeHarness(session_factory=Session, engine=engine, config=config).app) as client:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(run_tick)
+                try:
+                    assert staged.wait(12), "Tick never reached its staged response"
+                    response = client.post(
+                        f"/api/projects/{world.project_id}/world-conflicts/{conflict_id}/resolve",
+                        json={"option": "plot_responds", "rationale": "respond first", "reason": "competing HTTP"},
+                    )
+                    assert response.status_code == 200, response.text
+                finally:
+                    resume.set()
+                with pytest.raises(CanonStaleVersion, match="Canon moved"):
+                    future.result(timeout=20)
+        [delta] = _resolution_deltas(Session, book, conflict_id)
+        assert _patches(delta) == [(_later(world), "set", "state.status", "planned", "held")]
+        assert not delta.fact_patches and not delta.cognition_patches
+        assert [row.id for row in _tick_deltas(Session, world)] == [delta.id]
+        with Session() as session:
+            assert WorldConflictRepository(session).get(world.project_id, staged_ids[0]) is None
+            runtime = BookStateProjection(session).load_runtime_as_of(world.project_id, as_of_chapter=1)
+            assert runtime.world.get_state(world.rival)["alive_status"] == "alive"
+            assert len(session.scalars(select(NarrativePlanPatchRow).where(
+                NarrativePlanPatchRow.project_id == world.project_id,
+                NarrativePlanPatchRow.patch_type == "world_conflict_response",
+            )).all()) == 1
+            assert len(session.scalars(select(DecisionEvent).where(
+                DecisionEvent.project_id == world.project_id,
+                DecisionEvent.event_type == DecisionEventType.WORLD_CONFLICT_RESOLVED,
+            )).all()) == 1
+            assert all(not d.fact_patches and not d.cognition_patches for d in
+                       BookStateRepository(session).list_graph_deltas(world.project_id, after_chapter=0,
+                                                                      through_chapter=1)
+                       if d.source_type == "world_engine")
+
+        # Observe routing in the retry itself: a fresh conflict for this held intent must omit the option.
+        retry_options = []
+        original_collect = tick_module._Tick._collect
+        def collect_with_conflict(tick):
+            candidates = original_collect(tick)
+            draft = ConflictDraft(project_id=world.project_id, source="world_tick", detected_after_chapter=1,
+                story_time=chapter.story_time_end, involved_refs=[_later(world)], violated="impact_review",
+                impact_level="major", summary="retry", proposed_change=_held(book).model_dump(mode="json"),
+                intent_ref=_later(world), actor_ref=world.hero, blocks_from_chapter=2)
+            tick.conflicts.hold(draft, extra={})
+            row = tick.conflicts.repo.get(world.project_id, tick.conflicts.conflict_ids[-1])
+            retry_options.extend(json.loads(row.options_json))
+            return candidates
+        monkeypatch.setattr(tick_module._Tick, "_collect", collect_with_conflict)
+        from tests.test_world_tick_service import _policy
+        _tick(Session, _WorldLLM(actor_turn=_quiet_turns), chapter, policy=_policy(conflict_delegate="human"))
+        assert retry_options == ["veto_world", "amend_plan"]
+        with Session() as session:
+            assert BookStateProjection(session).load_runtime_as_of(
+                world.project_id, as_of_chapter=1).world.get_state(_later(world))["status"] == "held"
+            assert len(session.scalars(select(NarrativePlanPatchRow).where(
+                NarrativePlanPatchRow.project_id == world.project_id,
+                NarrativePlanPatchRow.patch_type == "world_conflict_response",
+            )).all()) == 1
+    finally:
+        resume.set()
+        engine.dispose()

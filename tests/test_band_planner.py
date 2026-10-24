@@ -16,7 +16,7 @@ from forwin.models.draft import ChapterDraft
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.planning_v6 import BandPlanRow
-from forwin.models.project import ArcPlanVersion, ChapterPlan
+from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
@@ -97,7 +97,7 @@ def _book(Session) -> tuple[_World, str, str]:
     with Session.begin() as session:
         project = StateUpdater(session).create_project(
             title="band planner", premise="band planner", genre="test",
-            runtime_policy=POLICY, creation_status="genesis_ready",
+            target_total_chapters=12, runtime_policy=POLICY, creation_status="genesis_ready",
         )
         revision = BookGenesisRevision(project_id=project.id, pack_json=json.dumps(pack, ensure_ascii=False))
         session.add(revision)
@@ -513,7 +513,14 @@ def test_pending_plot_response_is_bound_and_attached(Session) -> None:
     conflict_id = _pending_conflict(Session, world)
     # A P3-era plot response (no pending flag) and one a plan already answers are not pending.
     _pending_conflict(Session, world, flag=False)
-    _pending_conflict(Session, world, refs=("delta-2", "plan_patch:patch-0"))
+    bound_id = _pending_conflict(Session, world, refs=("delta-2",))
+    with Session.begin() as session:
+        from forwin.world_engine.conflict_resolution import record_plot_response_patch
+        plan = StateUpdater(session).create_chapter_plan(world.project_id, arc_id, 5, "later", "", [])
+        repo = WorldConflictRepository(session)
+        row = repo.get(world.project_id, bound_id)
+        patch_id = record_plot_response_patch(session, row, plan)
+        repo.attach_result_refs(row, [f"plan_patch:{patch_id}"])
     with Session() as session:
         assert [row.id for row in WorldConflictRepository(session).pending_plot_responses(world.project_id)] == [
             conflict_id,
@@ -541,6 +548,33 @@ def test_pending_plot_response_is_bound_and_attached(Session) -> None:
         conflict = session.get(WorldPlanConflictRow, conflict_id)
         assert json.loads(conflict.result_refs_json) == ["delta-1", f"plan_patch:{patch.id}"]
         assert WorldConflictRepository(session).pending_plot_responses(world.project_id) == []
+
+
+def test_plot_response_with_only_carrier_beyond_target_stays_pending(Session) -> None:
+    from forwin.world_engine.conflict_resolution import record_plot_response_patch
+
+    world, arc_id, _sheet_id = _book(Session)
+    conflict_id = _pending_conflict(Session, world)
+    with Session.begin() as session:
+        target = session.get(Project, world.project_id).target_total_chapters
+        plan = StateUpdater(session).create_chapter_plan(world.project_id, arc_id, target + 1, "later", "", [])
+        repo = WorldConflictRepository(session)
+        row = repo.get(world.project_id, conflict_id)
+        patch_id = record_plot_response_patch(session, row, plan)
+        repo.attach_result_refs(row, [f"plan_patch:{patch_id}"])
+        plan_id = plan.id
+
+    with Session() as session:
+        repo = WorldConflictRepository(session)
+        row = repo.get(world.project_id, conflict_id)
+        (patch,) = repo.response_patches(row)
+        assert (patch.id, patch.target_plan_id, patch.affected_chapters) == (patch_id, plan_id, [target + 1])
+        plan = session.get(ChapterPlan, plan_id)
+        assert plan.status == "planned"
+        assert any(item["kind"] == "intent" and item["ref"] == _intent(world)
+                   for item in json.loads(plan.world_bindings_json))
+        assert repo.response_carriers(row) == []
+        assert [pending.id for pending in repo.pending_plot_responses(world.project_id)] == [conflict_id]
 
 
 def test_superseding_a_bound_plot_response_reverts_its_patch(Session) -> None:
@@ -935,3 +969,38 @@ def test_ensure_plans_around_previously_drafted_old_row(Session):
         plan = _plans(session, world.project_id)[2]
         assert (plan.id, plan.title, plan.one_line, plan.goals_json) == original
         assert plan.band_plan_id is None
+
+
+def test_planner_rebinds_an_orphaned_response_and_retires_its_old_patch(Session):
+    from forwin.world_engine.conflict_resolution import record_plot_response_patch
+    from forwin.planning.band_planner.persistence import reapply_active_patches
+
+    world, arc_id, sheet_id = _book(Session)
+    conflict_id = _pending_conflict(Session, world)
+    with Session.begin() as session:
+        old = StateUpdater(session).create_chapter_plan(world.project_id, arc_id, 5, "old", "", ["old-goal"])
+        repo = WorldConflictRepository(session)
+        row = repo.get(world.project_id, conflict_id)
+        old_patch = record_plot_response_patch(session, row, old)
+        repo.attach_result_refs(row, [f"plan_patch:{old_patch}"])
+        old_id = old.id
+        old.status = "cancelled"
+    bound = {"world_bindings": [{"kind": "intent", "ref": _intent(world), "how": "response"}]}
+    client = StubLLM(_band(world, range(1, 5), {2: bound}))
+    outcome = _plan_band(Session, _planner(client), world, arc_id, sheet_id)
+    assert outcome.band_plan_id is not None
+    assert [item["id"] for item in client.payload(0)["pending_responses"]] == [conflict_id]
+    with Session.begin() as session:
+        repo = WorldConflictRepository(session)
+        row = repo.get(world.project_id, conflict_id)
+        assert repo.pending_plot_responses(world.project_id) == []
+        [patch] = repo.response_patches(row)
+        assert patch.id != old_patch and patch.affected_chapters == [2]
+        new = _plans(session, world.project_id)[2]
+        new.world_bindings_json = "[]"
+        assert patch.id in reapply_active_patches(session, new)
+        assert [item["ref"] for item in json.loads(new.world_bindings_json)] == [_intent(world)]
+        old = session.get(ChapterPlan, old_id)
+        old.status, old.world_bindings_json = "planned", "[]"
+        assert old_patch not in reapply_active_patches(session, old)
+        assert json.loads(old.world_bindings_json) == []

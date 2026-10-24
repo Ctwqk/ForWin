@@ -393,9 +393,53 @@ def _record_obligation(
 
 
 def _record_plot_response(session: Session, conflict: WorldPlanConflictRow, *, latest_chapter: int) -> str:
-    """Put the response goal first in the next unaccepted plan's goals and progress markers."""
-    plan = _next_unaccepted_plan(session, conflict.project_id, latest_chapter=latest_chapter)
+    """Bind the earliest reachable chapter, or leave the response pending for planning."""
+    project = session.get(Project, conflict.project_id)
+    total = int(project.target_total_chapters or 0) if project is not None else 0
+    if total <= latest_chapter:
+        raise ConflictOptionUnavailable(f"No chapter follows chapter {latest_chapter} within the book's {total}")
+    plans = reachable_response_plans(session, conflict.project_id, latest_chapter=latest_chapter)
+    plan = plans[0] if plans else None
     return record_plot_response_patch(session, conflict, plan) if plan is not None else ""
+
+
+def reachable_response_plans(session: Session, project_id: str, *, latest_chapter: int) -> list[ChapterPlan]:
+    """Earliest unwritten plan first, within the fixed book target."""
+    from forwin.models.draft import ChapterDraft
+
+    project = session.get(Project, project_id)
+    total = int(project.target_total_chapters or 0) if project is not None else 0
+    return list(session.scalars(select(ChapterPlan).where(
+        ChapterPlan.project_id == project_id,
+        ChapterPlan.chapter_number > latest_chapter, ChapterPlan.chapter_number <= total,
+        ChapterPlan.status.in_(("planned", "failed")),
+        ~select(ChapterDraft.id).where(ChapterDraft.chapter_plan_id == ChapterPlan.id).exists(),
+    ).order_by(ChapterPlan.chapter_number, ChapterPlan.id)))
+
+
+def reconcile_plot_responses(
+    session: Session, rows: Sequence[WorldPlanConflictRow], *, latest_chapter: int,
+    finished_refs: set[str], book_complete: bool = False,
+) -> None:
+    """Under conflict/project locks, retire answered work or rebind stale carriers deterministically."""
+    from .superseded_resolutions import retire_response_patches
+
+    repo = WorldConflictRepository(session)
+    for row in rows:
+        decision = json.loads(row.decision_json or "{}")
+        if row.status != "resolved" or decision.get("pending_plan_response") is False or decision.get("response_retired"):
+            continue
+        if book_complete or row.intent_ref in finished_refs:
+            retire_response_patches(session, row, reason="response_finished")
+            repo.clear_pending_plan_response(row)
+        elif not repo.response_carriers(row):
+            retire_response_patches(session, row, reason="response_carrier_unavailable")
+            decision["pending_plan_response"] = True
+            row.decision_json = json.dumps(decision, ensure_ascii=False, separators=(",", ":"))
+            plans = reachable_response_plans(session, row.project_id, latest_chapter=latest_chapter)
+            if plans:
+                patch_id = record_plot_response_patch(session, row, plans[0])
+                repo.attach_result_refs(row, [f"plan_patch:{patch_id}"])
 
 
 def record_plot_response_patch(session: Session, conflict: WorldPlanConflictRow, plan: ChapterPlan) -> str:

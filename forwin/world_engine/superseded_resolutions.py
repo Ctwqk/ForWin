@@ -106,6 +106,24 @@ def supersede_resolutions(
     )
 
 
+def retire_response_patches(session: Session, row: WorldPlanConflictRow, *, reason: str) -> None:
+    """Tombstone obsolete response patches even when their plan was deleted or already written."""
+    ledger = NarrativeObligationRepository(session)
+    for patch in WorldConflictRepository(session).response_patches(row):
+        plan = session.get(ChapterPlan, patch.target_plan_id)
+        if plan is not None and plan.status in _UNACCEPTED_PLAN_STATUSES:
+            FuturePlanPatchMixin.revert_plan_patch(plan, patch, still_applied=_active_resolution_patches(
+                session, ledger, project_id=row.project_id, plan_id=plan.id, superseded_conflict_ids={row.id},
+            ))
+        ledger.create_plan_patch(NarrativePlanPatch(
+            project_id=row.project_id, patch_type=PLAN_PATCH_REVERT_TYPE, target_scope="chapter",
+            target_plan_id=patch.target_plan_id, target_arc_id=patch.target_arc_id,
+            affected_chapters=patch.affected_chapters, new_contract={"reverted_plan_patch_id": patch.id},
+            diff_summary=f"Revert plan patch {patch.id}: {reason}", validation_status="passed", applied=True,
+            metadata={"reverted_plan_patch_id": patch.id, "conflict_id": row.id},
+        ))
+
+
 def _active_resolution_patches(
     session: Session,
     ledger: NarrativeObligationRepository,

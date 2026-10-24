@@ -11,8 +11,12 @@ import httpx
 
 from forwin.config import InfrastructureConfig
 from forwin.codex_bridge.runner import CodexExecRequest, CodexExecResult, CodexExecRunner
+from forwin.genesis import BookGenesisService
+from forwin.genesis.constants import GENESIS_STAGE_ORDER
+from forwin.genesis.handoff.commands import StartWritingCommand
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
+from forwin.state.updater import StateUpdater
 from forwin.writer.llm import OpenAICompatibleAdapter
 
 from .reporting import render_markdown_summary, summarize_attempts
@@ -22,6 +26,57 @@ from .variants import apply_cache_buster, variant_seed
 
 
 AdapterFactory = Callable[[EvalProfile], Any]
+
+
+def _load_mini_genesis_pack(path: str) -> dict[str, Any]:
+    """Load caller-owned story data; runtime code carries no evaluation story fixture."""
+    if not path.strip():
+        raise ValueError("mini real run needs mini_genesis_file")
+    pack = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(pack, dict) or any(
+        not isinstance(pack.get(key), dict) or not pack[key]
+        for key in ("world", "world_seed", "book_arc_blueprint")
+    ):
+        raise ValueError("mini_genesis_file must contain world, world_seed and book_arc_blueprint objects")
+    arcs = pack["book_arc_blueprint"].get("arcs")
+    if not isinstance(arcs, list) or not arcs:
+        raise ValueError("mini_genesis_file must contain blueprint arcs")
+    next_chapter = 1
+    for arc in arcs:
+        if not isinstance(arc, dict) or int(arc.get("chapter_start", 0)) != next_chapter:
+            raise ValueError("mini_genesis_file arc ranges must cover chapters consecutively from 1")
+        end = int(arc.get("chapter_end", 0))
+        if end < next_chapter:
+            raise ValueError("mini_genesis_file contains an empty arc range")
+        next_chapter = end + 1
+    if next_chapter < 3:
+        raise ValueError("mini_genesis_file must cover at least two chapters")
+    return pack
+
+
+def _seed_mini_real_project(
+    pipeline, *, pack: dict[str, Any], premise: str, genre: str, policy: RuntimePolicy,
+) -> str:
+    """Lock the supplied Genesis fixture and perform the normal writing handoff."""
+    genesis = BookGenesisService(llm_client=pipeline.llm_client)
+    with pipeline._SessionFactory.begin() as session:
+        updater = StateUpdater(session)
+        project = updater.create_project(
+            title=premise[:60], premise=premise, genre=genre, runtime_policy=policy,
+            target_total_chapters=int(pack["book_arc_blueprint"]["arcs"][-1]["chapter_end"]),
+        )
+        revision = genesis.create_initial_revision(session=session, updater=updater, project=project)
+        revision = genesis.patch_pack(
+            session=session, updater=updater, project=project, revision=revision, patch=pack,
+        )
+        for stage_key in GENESIS_STAGE_ORDER:
+            revision = genesis.lock_stage(
+                session=session, updater=updater, project=project, revision=revision, stage_key=stage_key,
+            )
+        genesis.handoff.start_writing(
+            session=session, updater=updater, command=StartWritingCommand(project_id=project.id),
+        )
+        return project.id
 
 
 def _json_dump_line(path: Path, payload: dict[str, Any]) -> None:
@@ -292,7 +347,11 @@ class LLMReliabilityRunner:
                         profile,
                         reason="codex_cli_direct_eval_only",
                     )
-                elif not (self.config.mini_premise.strip() and self.config.mini_genre.strip()):
+                elif not (
+                    self.config.mini_premise.strip()
+                    and self.config.mini_genre.strip()
+                    and self.config.mini_genesis_file.strip()
+                ):
                     self._record_skipped_mini_real_for_profile(
                         profile,
                         reason="skipped_mini_real",
@@ -472,6 +531,7 @@ class LLMReliabilityRunner:
         genre = self.config.mini_genre.strip()
         if not premise or not genre:
             raise ValueError("mini real run needs both mini_premise and mini_genre")
+        pack = _load_mini_genesis_pack(self.config.mini_genesis_file)
         database_url = os.environ.get("FORWIN_EVAL_DATABASE_URL", InfrastructureConfig.from_env().database_url)
         artifact_root = self.run_dir / f"mini_real_{profile.id}_artifacts"
         started_at = time.perf_counter()
@@ -517,11 +577,10 @@ class LLMReliabilityRunner:
             container.close()
             raise
         try:
-            result = pipeline.run(
-                premise=premise,
-                genre=genre,
-                num_chapters=2,
+            project_id = _seed_mini_real_project(
+                pipeline, pack=pack, premise=premise, genre=genre, policy=policy,
             )
+            result = pipeline.continue_project(project_id, max_chapters=2)
             payload.update(
                 {
                     "status": "completed" if not result.failed_chapters else "partial_failed",

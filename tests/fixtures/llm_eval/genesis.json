@@ -1,0 +1,160 @@
+{
+  "world": {
+    "world_bible": {
+      "overview": "A sealed ruin beside an old city."
+    },
+    "map_atlas": {
+      "overview": "",
+      "nodes": [
+        {
+          "id": "node-old-city",
+          "name": "旧城",
+          "kind": "city"
+        },
+        {
+          "id": "node-ruins",
+          "name": "地下遗迹",
+          "kind": "ruin"
+        }
+      ]
+    },
+    "story_engine": {
+      "core_cast": [
+        {
+          "id": "cast-hero",
+          "name": "陶然",
+          "role": "旧城修复师",
+          "desire": "找回失落的禁术卷宗",
+          "fear": "旧术反噬",
+          "current_base": "node-old-city",
+          "affiliated_faction": "faction-lamp"
+        }
+      ],
+      "opposition": [
+        {
+          "id": "opp-warden",
+          "name": "顾衡",
+          "role": "遗迹守门人",
+          "desire": "封死旧术",
+          "base_location": "node-ruins"
+        }
+      ],
+      "factions": [
+        {
+          "id": "faction-lamp",
+          "name": "守灯会",
+          "role": "旧城秩序",
+          "goal": "垄断禁术",
+          "base_location": "node-old-city"
+        }
+      ],
+      "long_arcs": []
+    }
+  },
+  "world_seed": {
+    "calendar": {
+      "epoch_label": "旧历",
+      "opening_minute": 0,
+      "units": [
+        {
+          "name": "日",
+          "minutes": 1440
+        }
+      ]
+    },
+    "lexicon": {},
+    "actors": [
+      {
+        "ref": "cast-hero",
+        "actor_tier": "major",
+        "location_ref": "node-old-city",
+        "agendas": [
+          {
+            "id": "agenda-scroll",
+            "goal": "找回禁术卷宗",
+            "motivation": "洗清旧债",
+            "priority": 3,
+            "horizon": "arc",
+            "means_refs": [],
+            "constraints": [],
+            "secrecy_refs": []
+          }
+        ],
+        "intents": [
+          {
+            "id": "intent-descend",
+            "agenda_id": "agenda-scroll",
+            "action_type": "move",
+            "summary": "潜入地下遗迹",
+            "target_refs": [],
+            "location_ref": "node-ruins",
+            "scheduled_in": {
+              "amount": 1,
+              "unit": "日"
+            },
+            "requires_onstage": true,
+            "impact_level": "moderate"
+          }
+        ]
+      },
+      {
+        "ref": "opp-warden",
+        "actor_tier": "minor",
+        "location_ref": "node-ruins"
+      },
+      {
+        "ref": "faction-lamp",
+        "actor_tier": "minor",
+        "location_ref": "node-old-city"
+      }
+    ],
+    "relations": [
+      {
+        "source": "cast-hero",
+        "target": "faction-lamp",
+        "edge_type": "member_of",
+        "note": "",
+        "visibility": "public",
+        "appellation": ""
+      }
+    ],
+    "facts": [
+      {
+        "id": "fact-seal",
+        "proposition": "遗迹封印正在松动",
+        "truth_value": true,
+        "sensitivity": "secret",
+        "related_refs": [
+          "opp-warden"
+        ],
+        "nobody_knows": false
+      }
+    ],
+    "knowledge": [
+      {
+        "observer_ref": "opp-warden",
+        "fact_id": "fact-seal",
+        "state": "knows",
+        "channel": "seeded"
+      }
+    ],
+    "rules": [],
+    "clocks": [],
+    "reader_promises": [],
+    "reveal_candidates": []
+  },
+  "book_arc_blueprint": {
+    "arcs": [
+      {
+        "arc_number": 1,
+        "title": "The sealed ruin",
+        "arc_synopsis": "The repairer investigates the ruin.",
+        "goal": "Find the missing scroll",
+        "chapter_start": 1,
+        "chapter_end": 2,
+        "chapter_count": 2,
+        "target_size": 2
+      }
+    ]
+  }
+}

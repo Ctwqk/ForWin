@@ -235,6 +235,7 @@ def test_mini_real_pipeline_build_failure_closes_container(
     runner = LLMReliabilityRunner(
         EvalRunConfig(
             run_id="pipeline-build-failure",
+            mini_genesis_file=str(Path(__file__).parent / "fixtures/llm_eval/genesis.json"),
             artifact_root=str(tmp_path),
             mini_premise="a premise",
             mini_genre="a genre",
@@ -311,6 +312,8 @@ def test_llm_eval_cli_parses_fixture_files_and_optional_mini_run_inputs() -> Non
             "some premise",
             "--mini-genre",
             "some genre",
+            "--mini-genesis-file",
+            "genesis.json",
         ]
     )
     bare = parser.parse_args(
@@ -328,6 +331,8 @@ def test_llm_eval_cli_parses_fixture_files_and_optional_mini_run_inputs() -> Non
     assert args.cases_file == "cases.json"
     assert (args.mini_premise, args.mini_genre) == ("some premise", "some genre")
     assert (bare.mini_premise, bare.mini_genre) == ("", "")
+    assert args.mini_genesis_file == "genesis.json"
+    assert bare.mini_genesis_file == ""
 
 
 def test_llm_eval_cli_dry_run_loads_cases_from_files(
@@ -435,8 +440,8 @@ def test_mini_real_run_is_skipped_without_premise(
         schema_name="scene_breakdown",
         messages=[{"role": "user", "content": "只输出 JSON"}],
     )
-    # --mini-genre alone is not enough: the run needs both inputs.
-    for premise, genre in (("", ""), ("", "some genre"), ("some premise", "")):
+    # A mini run needs both metadata inputs and an explicit Genesis fixture.
+    for premise, genre in (("", ""), ("", "some genre"), ("some premise", ""), ("some premise", "some genre")):
         runner = LLMReliabilityRunner(
             EvalRunConfig(
                 run_id=f"skip-{bool(premise)}-{bool(genre)}",
@@ -462,16 +467,15 @@ def test_mini_real_run_is_skipped_without_premise(
         ]
 
 
-def test_mini_real_run_receives_premise_and_genre_from_config(
+def test_mini_real_run_seeds_genesis_before_continuing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    pipeline_calls: list[dict[str, object]] = []
+    calls: list[object] = []
+    fixture = Path(__file__).parent / "fixtures/llm_eval/genesis.json"
 
     class Pipeline:
-        def run(self, *, premise: str, genre: str, num_chapters: int):
-            pipeline_calls.append(
-                {"premise": premise, "genre": genre, "num_chapters": num_chapters}
-            )
+        def continue_project(self, project_id: str, *, max_chapters: int):
+            calls.append(("continue", project_id, max_chapters))
 
             class Result:
                 project_id = "p1"
@@ -481,7 +485,7 @@ def test_mini_real_run_receives_premise_and_genre_from_config(
             return Result()
 
         def close(self) -> None:
-            return None
+            calls.append("close")
 
     class Container:
         def build_chapter_pipeline(self):
@@ -490,26 +494,32 @@ def test_mini_real_run_receives_premise_and_genre_from_config(
         def close(self) -> None:
             return None
 
+    def seed(pipeline, *, pack, premise, genre, policy):
+        assert isinstance(pipeline, Pipeline)
+        assert pack == json.loads(fixture.read_text())
+        assert policy.chapter_length.target_chars == 900
+        calls.append(("seed", premise, genre))
+        return "p1"
+
+    monkeypatch.setattr(runner_module, "_seed_mini_real_project", seed)
     monkeypatch.setattr(
         runner_module.RuntimeContainer, "from_config", lambda *_a, **_k: Container()
     )
     monkeypatch.setenv("FORWIN_EVAL_DATABASE_URL", "postgresql+psycopg://unused/forwin")
     runner = LLMReliabilityRunner(
         EvalRunConfig(
-            run_id="mini-real-inputs",
-            artifact_root=str(tmp_path),
-            mini_premise="a premise",
-            mini_genre="a genre",
+            run_id="mini-real-inputs", artifact_root=str(tmp_path),
+            mini_premise="a premise", mini_genre="a genre", mini_genesis_file=str(fixture),
         )
     )
     profile = EvalProfile(id="p", base_url="https://example.invalid/v1", model="m")
 
     payload = runner.run_mini_real_for_profile(profile)
 
-    assert payload["status"] == "completed"
-    assert pipeline_calls == [
-        {"premise": "a premise", "genre": "a genre", "num_chapters": 2}
-    ]
+    assert payload["status"] == "completed", payload
+    assert payload["project_id"] == "p1"
+    assert payload["completed_chapters"] == [1, 2]
+    assert calls == [("seed", "a premise", "a genre"), ("continue", "p1", 2), "close"]
 
 
 def test_mini_real_run_without_inputs_is_rejected_before_building(
@@ -526,3 +536,29 @@ def test_mini_real_run_without_inputs_is_rejected_before_building(
 
     with pytest.raises(ValueError, match="mini_premise"):
         runner.run_mini_real_for_profile(profile)
+
+
+@pytest.mark.parametrize("fixture_kind", ["missing", "non_pack", "gap", "one_chapter"])
+def test_mini_real_run_rejects_invalid_genesis_before_building(monkeypatch, tmp_path, fixture_kind):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("invalid fixtures must not construct a runtime")
+
+    monkeypatch.setattr(runner_module.RuntimeContainer, "from_config", forbidden)
+    fixture_path = ""
+    if fixture_kind != "missing":
+        fixture = json.loads((Path(__file__).parent / "fixtures/llm_eval/genesis.json").read_text())
+        if fixture_kind == "non_pack":
+            fixture = []
+        elif fixture_kind == "gap":
+            fixture["book_arc_blueprint"]["arcs"][0]["chapter_start"] = 2
+        else:
+            fixture["book_arc_blueprint"]["arcs"][0]["chapter_end"] = 1
+        path = tmp_path / "genesis.json"
+        path.write_text(json.dumps(fixture))
+        fixture_path = str(path)
+    runner = LLMReliabilityRunner(EvalRunConfig(
+        run_id="bad-genesis", artifact_root=str(tmp_path), mini_premise="premise",
+        mini_genre="genre", mini_genesis_file=fixture_path,
+    ))
+    with pytest.raises(ValueError, match="mini_genesis_file"):
+        runner.run_mini_real_for_profile(EvalProfile(id="p", base_url="https://example.invalid/v1", model="m"))

@@ -370,14 +370,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-mini-real-run", action="store_true", help="只跑 direct stage probes"
     )
     eval_run.add_argument(
+        "--mini-genesis-file",
+        default="",
+        help="Genesis pack JSON fixture for the mini real run; also requires --mini-premise and --mini-genre",
+    )
+    eval_run.add_argument(
         "--mini-premise",
         default="",
-        help="mini real run 的 premise；与 --mini-genre 同时提供才会执行 mini real run",
+        help="Premise for the mini real run; requires --mini-genre and --mini-genesis-file",
     )
     eval_run.add_argument(
         "--mini-genre",
         default="",
-        help="mini real run 的题材；与 --mini-premise 同时提供才会执行 mini real run",
+        help="Genre for the mini real run; requires --mini-premise and --mini-genesis-file",
     )
     eval_report = eval_sub.add_parser("report", help="读取并打印 LLM eval 报告")
     eval_report.add_argument("--run-id", required=True, help="run id")

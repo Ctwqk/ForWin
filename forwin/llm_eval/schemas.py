@@ -90,6 +90,7 @@ class EvalRunConfig(BaseModel):
     include_mini_real_run: bool = True
     mini_premise: str = ""
     mini_genre: str = ""
+    mini_genesis_file: str = ""
     request_interval_seconds: float = 6.0
     burst_every_seconds: float = 120.0
     burst_size: int = 3

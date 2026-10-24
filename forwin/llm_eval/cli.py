@@ -63,6 +63,7 @@ def run_eval_from_args(args) -> int:  # noqa: ANN001
             include_mini_real_run=not bool(getattr(args, "skip_mini_real_run", False)),
             mini_premise=str(getattr(args, "mini_premise", "") or ""),
             mini_genre=str(getattr(args, "mini_genre", "") or ""),
+            mini_genesis_file=str(getattr(args, "mini_genesis_file", "") or ""),
             rounds=int(getattr(args, "rounds", 0) or (1 if str(getattr(args, "suite", "medium")) == "smoke" else 20)),
         )
     )

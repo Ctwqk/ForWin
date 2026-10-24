@@ -19,6 +19,7 @@ from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
+from tests.pipeline_harness import seeded_book
 
 
 def _build_pipeline(database_url: str, *, progress_callback=None):  # noqa: ANN001
@@ -240,40 +241,9 @@ class ArcExecutionScopingTests(unittest.TestCase):
             init_db(engine)
             session_factory = get_session_factory(engine)
 
-            with session_factory() as session:
-                updater = StateUpdater(session)
-                project = updater.create_project(
-                    title="测试书",
-                    premise="前提",
-                    genre="玄幻",
-                    target_total_chapters=20,
-                    runtime_policy=RuntimePolicy.for_profile("standard"),
-                )
-                arc_one = updater.create_arc_plan(
-                    project.id, "开篇弧", status="active", chapter_start=1, chapter_end=2
-                )
-                arc_two = updater.create_arc_plan(
-                    project.id, "第二弧", status="planned", chapter_start=3, chapter_end=4
-                )
-                for chapter_number in (1, 2):
-                    updater.create_chapter_plan(
-                        project_id=project.id,
-                        arc_plan_id=arc_one.id,
-                        chapter_number=chapter_number,
-                        title=f"第{chapter_number}章",
-                        one_line="开篇推进",
-                        goals=["推进", "升级"],
-                    )
-                for chapter_number in (3, 4):
-                    updater.create_chapter_plan(
-                        project_id=project.id,
-                        arc_plan_id=arc_two.id,
-                        chapter_number=chapter_number,
-                        title=f"第{chapter_number}章",
-                        one_line="后续推进",
-                        goals=["推进", "升级"],
-                    )
-                session.commit()
+            project_id = seeded_book(
+                session_factory, chapters=4, arc_ranges=[(1, 2), (3, 4)],
+            )
 
             captured: dict[str, object] = {}
             progress_events: list[tuple[str, dict[str, object]]] = []
@@ -298,7 +268,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
                     "_run_project_chapters",
                     side_effect=fake_run_project_chapters,
                 ):
-                    pipeline.continue_project(project.id)
+                    pipeline.continue_project(project_id)
             finally:
                 pipeline.llm_client.close()
                 pipeline.engine.dispose()

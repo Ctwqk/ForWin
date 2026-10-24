@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from tests.postgres import postgres_test_url
+from tests.pipeline_harness import write_one_chapter
 from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction, ChapterTime
 from forwin.canon import (
     CanonAdmissionOutcome,
@@ -159,27 +160,6 @@ class _Attempt:
     def __init__(self, repair_scope: str, repair_phase: str):
         self.repair_scope = repair_scope
         self.repair_phase = repair_phase
-
-
-def _one_chapter_arc(arc_synopsis: str) -> dict[str, object]:
-    return {
-        "arc_synopsis": arc_synopsis,
-        "setting_summary": "无",
-        "chapters": [
-            {
-                "chapter_number": 1,
-                "title": "第一章",
-                "one_line": "开场",
-                "goals": ["推进主线"],
-            }
-        ],
-        "characters": [],
-        "locations": [],
-        "factions": [],
-        "relations": [],
-        "plot_threads": [],
-        "initial_time": {"label": "开始", "description": "开始"},
-    }
 
 
 def _writer_output(chapter_number: int, marker: str = "ok") -> WriterOutput:
@@ -607,9 +587,6 @@ def test_canon_admission_exception_pauses_chapter_instead_of_accepting(monkeypat
     db_path = postgres_test_url("canon-apply-exception-no-freeze")
     pipeline = _build_pipeline(db_path)
     try:
-        pipeline.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: (
-            _one_chapter_arc("canon apply exception")
-        )
         pipeline.writer.write_chapter = lambda context: _writer_output(
             context.chapter_number
         )
@@ -624,7 +601,7 @@ def test_canon_admission_exception_pauses_chapter_instead_of_accepting(monkeypat
             fail_canon_quality_gate,
         )
 
-        result = pipeline.run("p", "g", 1)
+        result = write_one_chapter(pipeline)
 
         engine = get_engine(db_path)
         session = get_session_factory(engine)()
@@ -699,24 +676,6 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
     pipeline = _build_pipeline(db_path, max_rewrites=1)
     apply_calls = {"count": 0}
     try:
-        pipeline.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: {
-            "arc_synopsis": "canon repair admission",
-            "setting_summary": "无",
-            "chapters": [
-                {
-                    "chapter_number": 1,
-                    "title": "第一章",
-                    "one_line": "开场",
-                    "goals": ["推进主线"],
-                }
-            ],
-            "characters": [],
-            "locations": [],
-            "factions": [],
-            "relations": [],
-            "plot_threads": [],
-            "initial_time": {"label": "开始", "description": "开始"},
-        }
         pipeline.writer.write_chapter = lambda context: WriterOutput(
             chapter_number=context.chapter_number,
             title=f"第{context.chapter_number}章",
@@ -748,7 +707,7 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
 
         pipeline.canon_preparation.quality_evaluator = evaluate_canon_candidate
 
-        result = pipeline.run("p", "g", 1)
+        result = write_one_chapter(pipeline)
 
         engine = get_engine(db_path)
         session = get_session_factory(engine)()
@@ -804,9 +763,6 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(
     db_path = postgres_test_url("canon-repair-exhaustion-task6")
     pipeline = _build_pipeline(db_path, max_rewrites=1)
     try:
-        pipeline.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: (
-            _one_chapter_arc("canon repair exhaustion")
-        )
         pipeline.writer.write_chapter = lambda context: _writer_output(
             context.chapter_number
         )
@@ -848,7 +804,7 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(
 
         pipeline.canon_preparation.quality_evaluator = evaluate_canon_candidate
 
-        result = pipeline.run("p", "g", 1)
+        result = write_one_chapter(pipeline)
 
         engine = get_engine(db_path)
         session = get_session_factory(engine)()
@@ -910,9 +866,6 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
     db_path = postgres_test_url("canon-system-block-task6")
     pipeline = _build_pipeline(db_path, max_rewrites=1)
     try:
-        pipeline.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: (
-            _one_chapter_arc("canon system block")
-        )
         pipeline.writer.write_chapter = lambda context: _writer_output(
             context.chapter_number
         )
@@ -938,7 +891,7 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
             )
         )
 
-        result = pipeline.run("p", "g", 1)
+        result = write_one_chapter(pipeline)
 
         engine = get_engine(db_path)
         session = get_session_factory(engine)()
@@ -991,24 +944,6 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
     apply_calls = {"count": 0}
     repair_calls = {"count": 0}
     try:
-        pipeline.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: {
-            "arc_synopsis": "canon repair force accept fail",
-            "setting_summary": "无",
-            "chapters": [
-                {
-                    "chapter_number": 1,
-                    "title": "第一章",
-                    "one_line": "开场",
-                    "goals": ["推进主线"],
-                }
-            ],
-            "characters": [],
-            "locations": [],
-            "factions": [],
-            "relations": [],
-            "plot_threads": [],
-            "initial_time": {"label": "开始", "description": "开始"},
-        }
         pipeline.writer.write_chapter = lambda context: WriterOutput(
             chapter_number=context.chapter_number,
             title=f"第{context.chapter_number}章",
@@ -1080,7 +1015,7 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
         pipeline.canon_preparation.quality_evaluator = evaluate_canon_candidate
         pipeline.repair.repair_canon_block = failed_canon_repair
 
-        result = pipeline.run("p", "g", 1)
+        result = write_one_chapter(pipeline)
     finally:
         pipeline.llm_client.close()
         pipeline.engine.dispose()

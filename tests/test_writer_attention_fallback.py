@@ -16,6 +16,7 @@ from forwin.protocol.writer import WriterOutput
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from tests.postgres import postgres_test_url
+from tests.pipeline_harness import seeded_book
 
 
 def _build_pipeline(
@@ -286,37 +287,6 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                 writer_attention_retries=2,
             )
             try:
-                pipeline.arc_director.plan_arc = lambda premise, genre, num_chapters: {
-                    "arc_synopsis": "瞬时故障",
-                    "setting_summary": "无",
-                    "chapters": [
-                        {
-                            "chapter_number": 1,
-                            "title": "第一章",
-                            "one_line": "开场",
-                            "goals": ["推进主线"],
-                        },
-                        {
-                            "chapter_number": 2,
-                            "title": "第二章",
-                            "one_line": "展开",
-                            "goals": ["继续"],
-                        },
-                        {
-                            "chapter_number": 3,
-                            "title": "第三章",
-                            "one_line": "转折",
-                            "goals": ["升级"],
-                        },
-                    ],
-                    "characters": [],
-                    "locations": [],
-                    "factions": [],
-                    "relations": [],
-                    "plot_threads": [],
-                    "initial_time": {"label": "开始", "description": "开始"},
-                }
-
                 chapter_calls: list[int] = []
 
                 def transient_fail(context: SimpleNamespace) -> WriterOutput:
@@ -337,7 +307,10 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                         return_value=None,
                     ),
                 ):
-                    result = pipeline.run("p", "玄幻", 3)
+                    project_id = seeded_book(
+                        pipeline._SessionFactory, chapters=3, policy=pipeline.policy,
+                    )
+                    result = pipeline.continue_project(project_id)
 
                 engine = get_engine(db_path)
                 session = get_session_factory(engine)()

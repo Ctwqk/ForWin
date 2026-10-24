@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from forwin.protocol.book_state import CognitionPatch, ObserverType
+from forwin.protocol.book_state import CognitionPatch, ObserverType, WorldNode
+
+if TYPE_CHECKING:
+    from forwin.book_state.runtime import ObjectiveWorldGraph
 
 KNOWLEDGE_STATES = ("heard", "suspects", "believes", "knows", "disbelieves", "misled")
 KNOWLEDGE_CHANNELS = ("witnessed", "told", "rumor", "document", "inferred", "seeded")
 HIDDEN_SENSITIVITY = frozenset({"hidden", "secret", "must_not_reveal"})
 FACT_REF_PREFIX = "fact:"
+
+
+def is_concealed(world: ObjectiveWorldGraph, node: WorldNode) -> bool:
+    level = world.get_state(node.id).get("visibility_level") or node.profile.get("visibility_level")
+    return str(level or "") in HIDDEN_SENSITIVITY
 
 
 @dataclass(frozen=True)
@@ -53,6 +62,7 @@ __all__ = [
     "KNOWLEDGE_CHANNELS",
     "KNOWLEDGE_STATES",
     "KnowledgeEvent",
+    "is_concealed",
     "knowledge_event_to_patch",
     "knowledge_evidence_ref",
 ]

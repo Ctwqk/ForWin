@@ -591,3 +591,29 @@ def test_view_types_load_without_the_context_protocol():
     script = "import sys, forwin.world_view.types; print('forwin.protocol.context' in sys.modules)"
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
     assert result.stdout.strip() == "False"
+
+
+@pytest.mark.parametrize("profile_level, state_level, expected", [
+    ("", "", False),
+    ("public", "", False),
+    ("hidden", "", True),
+    ("secret", "", True),
+    ("must_not_reveal", "", True),
+    ("secret", "public", False),
+    ("public", "hidden", True),
+])
+def test_writer_and_planner_share_concealment_state_precedence(source, profile_level, state_level, expected):
+    from forwin.book_state import knowledge
+    from forwin.planning.band_planner.inputs import _concealed_names
+
+    predicate = getattr(knowledge, "is_concealed", None)
+    assert callable(predicate)
+    world = source.runtime.world
+    node = _node("subject", profile={"visibility_level": profile_level}, visibility_level=state_level)
+    world.add_node(node)
+    assert predicate(world, node) is expected
+    view = _build(source, plan=_plan(onstage_refs_json=json.dumps(["hero", "subject"])))
+    subject = next(entity for entity in view.onstage if entity.ref == "subject")
+    assert subject.concealed is expected
+    assert subject.name == ("" if expected else node.name)
+    assert (node.id in _concealed_names(source.runtime)) is expected

@@ -791,3 +791,50 @@ def test_expired_running_lease_is_reported_reclaimable() -> None:
     assert chapter.status == "stale"
     assert chapter.runs[0].lease_active is False
     assert chapter.runs[0].reclaimable is True
+
+
+def test_feedback_step_uses_each_project_profile_without_mutating_shared_analyzer() -> None:
+    from forwin.audience.comment_analysis import CommentAnalyzer
+    from forwin.models import CommentSignalCandidate, PublisherRawComment
+    from forwin.runtime.policy_store import ProjectPolicyStore
+
+    class LLM:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, **kwargs):
+            self.calls += 1
+            return json.dumps({"signals": [{
+                "comment_index": 0, "signal_type": "prediction", "target_type": "plot",
+                "target_name": "", "severity": 1, "confidence": 0.9, "evidence_span": "逻辑",
+            }]})
+
+    service, sessions, _ = _durable_service()
+    client = LLM()
+    service.comment_analyzer = CommentAnalyzer(llm_client=client)
+    try:
+        with sessions.begin() as session:
+            for index, profile in enumerate(("pulp", "standard", "pulp")):
+                project_id = f"feedback-{index}"
+                ProjectPolicyStore(session).initialize(
+                    Project(id=project_id, title=project_id, premise="Premise", genre="test"),
+                    RuntimePolicy.for_profile(profile),
+                )
+                session.add(PublisherRawComment(
+                    id=f"comment-{index}", project_id=project_id, platform_id="test",
+                    remote_comment_id=f"remote-{index}", work_name=project_id, body_text="逻辑",
+                ))
+                session.flush()
+                commit = SimpleNamespace(project_id=project_id, chapter_number=3)
+                service._run_feedback_step(session, commit)
+                service._run_feedback_step(session, commit)
+                rows = session.scalars(select(CommentSignalCandidate).where(
+                    CommentSignalCandidate.project_id == project_id,
+                )).all()
+                assert len(rows) == 1
+                assert rows[0].signal_type == ("risk" if profile == "pulp" else "prediction")
+                assert rows[0].chapter_number == 3
+        assert client.calls == 1
+        assert service.comment_analyzer.llm_client is client
+    finally:
+        sessions.kw["bind"].dispose()

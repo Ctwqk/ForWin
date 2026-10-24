@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
 from forwin.book_state.cognition import CognitionView
-from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
+from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY, is_concealed
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.projection import BookStateProjection
@@ -205,7 +205,7 @@ def _allowed_reveals(
             proposition=fact.proposition, observer=observer,
             observer_name=(
                 node.name if node is not None and str(node.node_type) in ACTOR_NODE_TYPES
-                and not _concealed(world, node) else ""
+                and not is_concealed(world, node) else ""
             ),
             target_state=str(item.get("target_state") or ""),
             topic=forbidden_topic_text(names) if names else "",
@@ -309,7 +309,7 @@ def _subject_names(runtime: BookStateRuntime, fact: FactNode) -> list[str]:
         node = runtime.world.get_node(ref)
         place = runtime.map.nodes_by_id.get(ref)
         if node is not None:
-            if str(node.node_type) in _TOPIC_SUBJECT_TYPES and not _concealed(runtime.world, node):
+            if str(node.node_type) in _TOPIC_SUBJECT_TYPES and not is_concealed(runtime.world, node):
                 names.append(node.name.strip())
         elif place is not None:
             names.append(place.name.strip())
@@ -340,7 +340,7 @@ def _known_entities(
     nodes = [
         node for ref in refs
         if (node := world.get_node(ref)) is not None and node.is_active and node.name.strip()
-        and str(node.node_type) in _TOPIC_SUBJECT_TYPES and not _concealed(world, node)
+        and str(node.node_type) in _TOPIC_SUBJECT_TYPES and not is_concealed(world, node)
     ]
     nodes.sort(key=lambda node: (-node.importance, node.name, node.id))
     return [ViewEntity(ref=node.id, name=node.name, aliases=list(node.aliases)) for node in nodes[:VIEW_KNOWN_ENTITIES]]
@@ -385,7 +385,7 @@ def _onstage(
         restraint = state.get("restraint")
         restraint = restraint.get("state") if isinstance(restraint, dict) else restraint
         location = runtime.map.nodes_by_id.get(resolve_world_node_location_id(world, ref))
-        concealed = ref != pov_ref and _concealed(world, node)
+        concealed = ref != pov_ref and is_concealed(world, node)
         entities.append(OnstageEntity(
             ref=ref,
             name="" if concealed else node.name,
@@ -395,16 +395,11 @@ def _onstage(
             restraint="" if restraint in (None, "", "free") else _text(restraint),
             health=_text(state.get("health")),
             held_items=[
-                item.name or item.id for item in held.get(ref, ()) if ref == pov_ref or not _concealed(world, item)
+                item.name or item.id for item in held.get(ref, ()) if ref == pov_ref or not is_concealed(world, item)
             ],
             public_identity=_text(node.profile.get("public_identity")),
         ))
     return entities
-
-
-def _concealed(world: ObjectiveWorldGraph, node: WorldNode) -> bool:
-    level = world.get_state(node.id).get("visibility_level") or node.profile.get("visibility_level")
-    return str(level or "") in HIDDEN_SENSITIVITY
 
 
 def _locations(

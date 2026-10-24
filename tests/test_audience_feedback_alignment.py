@@ -45,6 +45,7 @@ from forwin.runtime import container as container_module
 from forwin.runtime.container import RuntimeContainer
 from forwin.maintenance.post_canon import PostCanonMaintenanceService
 from forwin.runtime.policy import RuntimePolicy
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.storage import ArtifactStore
 from forwin.publishers.manager import PublisherManager
 from forwin.state.repo import StateRepository
@@ -155,6 +156,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
 
     def test_feedback_step_analyzes_new_comments_before_aggregation(self) -> None:
         project = self._create_project()
+        ProjectPolicyStore(self.session).initialize(project, RuntimePolicy.for_profile("standard"))
         comment = self._add_comment(
             project_id=project.id, work_name=project.title, body="剧情有逻辑矛盾",
             remote_comment_id="new-feedback", author_id="reader-1", author_name="reader",
@@ -1177,8 +1179,10 @@ def test_analyze_recent_comments_scopes_limits_and_replays(comment_project_id) -
     try:
         Base.metadata.create_all(engine)
         with Session(engine) as session:
-            session.add(Project(id="p", title="title", premise="premise", genre="genre"))
-            session.flush()
+            ProjectPolicyStore(session).initialize(
+                Project(id="p", title="title", premise="premise", genre="genre"),
+                RuntimePolicy.for_profile("standard"),
+            )
             for i in range(10):
                 session.add(PublisherRawComment(
                     id=f"comment-{i}", project_id=comment_project_id, work_name="title", body_text="bug",

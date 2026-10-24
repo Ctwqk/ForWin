@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
-from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
+from forwin.book_state.knowledge import FACT_REF_PREFIX, is_concealed
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
@@ -360,8 +360,7 @@ def _concealed_names(runtime: BookStateRuntime) -> dict[str, str]:
     world = runtime.world
     names = {}
     for node in world.nodes_by_id.values():
-        level = world.get_state(node.id).get("visibility_level") or node.profile.get("visibility_level")
-        if node.is_active and str(level or "") in HIDDEN_SENSITIVITY and len(name := (node.name or "").strip()) >= 2:
+        if node.is_active and is_concealed(world, node) and len(name := (node.name or "").strip()) >= 2:
             names[node.id] = name
     return names
 

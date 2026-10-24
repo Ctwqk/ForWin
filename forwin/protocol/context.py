@@ -188,7 +188,6 @@ class ChapterContextPack(BaseModel):
     active_threads: list[PlotThreadSnapshot] = Field(default_factory=list)
     timeline: TimelineSnapshot | None = None
     retrieved_memories: list[MemorySnippet] = Field(default_factory=list)
-    reader_feedback: ReaderFeedbackView | None = None
     audience_hints: AudienceHintView | None = None
     reader_promise: ReaderPromise | None = None
     arc_payoff_map: ArcPayoffMap | None = None

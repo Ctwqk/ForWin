@@ -34,7 +34,7 @@ from forwin.maintenance.trace_upload import enqueue_trace_upload
 from forwin.observability.llm_trace import build_llm_decision_event_payloads, prepare_prompt_trace_payload
 from forwin.observability.payloads import safe_error_summary
 from forwin.runtime.policy_store import ProjectPolicyStore
-from forwin.audience.comment_analysis import analyze_recent_comments
+from forwin.audience.comment_analysis import CommentAnalyzer, analyze_recent_comments
 from forwin.state.updater import StateUpdater
 
 if TYPE_CHECKING:
@@ -932,11 +932,16 @@ class PostCanonMaintenanceService:
         session: Session,
         commit: CanonCommitRecord,
     ) -> Mapping[str, Any]:
+        project = session.get(Project, commit.project_id)
+        if project is None:
+            raise ValueError(f"Project not found: {commit.project_id}")
+        policy = ProjectPolicyStore(session).load(project).policy
+        analyzer = self.comment_analyzer if policy.quality_profile == "standard" else CommentAnalyzer()
         analyze_recent_comments(
             session,
             commit.project_id,
             analyzer=partial(
-                self.comment_analyzer.analyze_and_store,
+                analyzer.analyze_and_store,
                 chapter_number=commit.chapter_number,
             ),
         )

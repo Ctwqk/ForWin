@@ -61,12 +61,8 @@ def build_review_context_pack(
         if review_query is not None
         else []
     )
-    reader_feedback = context.reader_feedback
-    if (
-        reader_feedback is None
-        and repo is not None
-        and hasattr(repo, "get_recent_reader_feedback")
-    ):
+    reader_feedback = None
+    if repo is not None and hasattr(repo, "get_recent_reader_feedback"):
         reader_feedback = repo.get_recent_reader_feedback(
             context.project_id,
             before_chapter=context.chapter_number,

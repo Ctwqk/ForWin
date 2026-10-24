@@ -1085,7 +1085,6 @@ def sample_runtime_policy() -> dict[str, Any]:
         "planning": {
             "future_constraints": True,
             "plan_health": True,
-            "context_recency_window": 0,
         },
         "canon": {
             "hard_floor": True,

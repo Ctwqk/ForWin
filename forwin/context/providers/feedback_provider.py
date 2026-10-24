@@ -26,4 +26,3 @@ class FeedbackContextProvider:
             if audience_hints_raw is not None
             else None
         )
-        draft.data.setdefault("reader_feedback", None)

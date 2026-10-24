@@ -161,7 +161,6 @@ class WebNovelExperienceReviewer:
             active_rules=[],
             active_threads=list(context.active_threads),
             timeline=context.timeline,
-            reader_feedback=context.reader_feedback,
             audience_hints=context.audience_hints,
             reader_promise=context.reader_promise,
             arc_payoff_map=context.arc_payoff_map,

@@ -1190,8 +1190,42 @@ def test_application_read_models_have_one_current_owner() -> None:
     assert offenders == []
 
 
-def test_removed_simulation_package_cannot_be_imported() -> None:
-    assert not (ROOT / "forwin/simulation").exists()
+P4A_REMOVED_PATHS = (
+    "forwin/simulation",
+    "forwin/models/phase4.py",
+    "forwin/retrieval/broker_core/helpers.py",
+    "forwin/retrieval/broker_core/visibility.py",
+    "forwin/planning/world_" + "contracts.py",
+    "forwin/planning/world_" + "contract_service.py",
+    "forwin/models/world_" + "contract.py",
+    "forwin/planning/stage_" + "analysis.py",
+    "forwin/planning/macro_" + "progression.py",
+    "forwin/planning/future_plan_audit/macro_" + "progression.py",
+    "forwin/book_state/macro_" + "status.py",
+    "forwin/director",
+    "forwin/experience/arc_experience_planner.py",
+    "forwin/genesis/handoff/chapter_materializer.py",
+    "forwin/planning/arc_envelope.py",
+    "forwin/planning/arc_envelope_resolver.py",
+    "forwin/planning/arc_structure_service.py",
+    "forwin/planning/band_window.py",
+    "forwin/planning/band_plan_service.py",
+    "forwin/planning/arc_activation_service.py",
+    "forwin/subworld_" + "manager.py",
+    "forwin/context/gates/recency_" + "truncate.py",
+    "forwin/codex_bridge/governed_" + "actions.py",
+)
+P4A_REMOVED_TABLES = (
+    "world_simulation_turns",
+    "arc_world_" + "contracts", "band_world_" + "contracts",
+    "chapter_world_delta_intents", "project_stage_analyses", "project_replan_events",
+    "arc_envelopes", "arc_envelope_analyses", "arc_structure_drafts",
+    "provisional_promotion_records", "sub_world_" + "roster_" + "items",
+)
+
+
+def _assert_no_p4a_removed_imports() -> None:
+    modules = [path.removesuffix(".py").replace("/", ".") for path in P4A_REMOVED_PATHS]
     for path in (ROOT / "forwin").rglob("*.py"):
         if "migrations" in path.parts:
             continue
@@ -1204,7 +1238,37 @@ def test_removed_simulation_package_cannot_be_imported() -> None:
                 imports = [alias.name for alias in node.names]
             else:
                 imports = []
-            assert not any(name == "forwin.simulation" or name.startswith("forwin.simulation.") for name in imports), path
+            assert not any(
+                name == module or name.startswith(module + ".")
+                for name in imports for module in modules
+            ), path
+
+
+def test_p4a_deleted_modules_and_tables_stay_gone() -> None:
+    from forwin.models import Base
+    from forwin.runtime.policy import PlanningPolicy
+
+    assert [path for path in P4A_REMOVED_PATHS if (ROOT / path).exists()] == []
+    assert set(P4A_REMOVED_TABLES).isdisjoint(Base.metadata.tables)
+    assert "context_recency_" + "window" not in PlanningPolicy.model_fields
+    _assert_no_p4a_removed_imports()
+    production = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "forwin").rglob("*.py")
+        if "migrations" not in path.parts
+    )
+    assert [table for table in P4A_REMOVED_TABLES if table in production] == []
+    migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
+    upgrade = inspect.getsource(migration.upgrade)
+    downgrade = inspect.getsource(migration.downgrade)
+    for family in ("retired_arc_planner_tables", "subworld_character_paths"):
+        assert f"_drop_{family}()" in upgrade
+        assert f"_restore_{family}()" in downgrade
+        upgrade += inspect.getsource(getattr(migration, f"_drop_{family}"))
+        downgrade += inspect.getsource(getattr(migration, f"_restore_{family}"))
+    for table in P4A_REMOVED_TABLES:
+        assert f'op.drop_table("{table}")' in upgrade
+        assert f'"{table}",' in downgrade
 
 
 @pytest.mark.parametrize("source", [
@@ -1220,32 +1284,7 @@ def test_simulation_import_guard_catches_import_forms(tmp_path, monkeypatch, sou
     (package / "consumer.py").write_text(source, encoding="utf-8")
     monkeypatch.setitem(globals(), "ROOT", tmp_path)
     with pytest.raises(AssertionError):
-        test_removed_simulation_package_cannot_be_imported()
-
-
-def test_world_contract_modules_and_tables_are_gone() -> None:
-    from forwin.models import Base
-
-    modules = (
-        "forwin/planning/world_" + "contracts.py",
-        "forwin/planning/world_" + "contract_service.py",
-        "forwin/models/world_" + "contract.py",
-    )
-    tables = ("arc_world_" + "contracts", "band_world_" + "contracts", "chapter_world_delta_intents")
-    assert not [path for path in modules if (ROOT / path).exists()]
-    assert set(tables).isdisjoint(Base.metadata.tables)
-    production = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in (ROOT / "forwin").rglob("*.py")
-        if "migrations" not in path.parts
-    )
-    for module in modules:
-        assert module.removesuffix(".py").replace("/", ".") not in production
-    assert not [table for table in tables if table in production]
-    migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
-    for table in tables:
-        assert f'op.drop_table("{table}")' in inspect.getsource(migration.upgrade)
-        assert f'"{table}"' in inspect.getsource(migration.downgrade)
+        _assert_no_p4a_removed_imports()
 
 
 def test_broker_has_no_world_model_pack() -> None:
@@ -1286,16 +1325,7 @@ def test_broker_has_no_world_model_pack() -> None:
 def test_replanner_and_macro_progression_are_gone() -> None:
     from forwin.models import Base
 
-    modules = (
-        "forwin/planning/stage_" + "analysis.py",
-        "forwin/planning/macro_" + "progression.py",
-        "forwin/planning/future_plan_audit/macro_" + "progression.py",
-        "forwin/book_state/macro_" + "status.py",
-    )
-    tables = ("project_stage_analyses", "project_replan_events")
     column = "macro_" + "progression_json"
-    assert not [path for path in modules if (ROOT / path).exists()]
-    assert set(tables).isdisjoint(Base.metadata.tables)
     assert column not in Base.metadata.tables["arc_plan_versions"].c
     production = "\n".join(
         path.read_text(encoding="utf-8")
@@ -1310,28 +1340,10 @@ def test_replanner_and_macro_progression_are_gone() -> None:
     ):
         assert token not in production
     migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
-    for table in tables:
-        assert f'op.drop_table("{table}")' in inspect.getsource(migration.upgrade)
-        assert f'"{table}"' in inspect.getsource(migration.downgrade)
     assert f'op.drop_column("arc_plan_versions", "{column}")' in inspect.getsource(migration.upgrade)
 
 
-def test_legacy_planner_modules_and_tables_are_gone() -> None:
-    from forwin.models import Base
-
-    removed = (
-        "director", "planning/arc_envelope.py", "planning/arc_envelope_resolver.py",
-        "planning/arc_structure_service.py", "planning/band_window.py",
-        "planning/band_plan_service.py", "planning/arc_activation_service.py",
-    )
-    assert [name for name in removed if (ROOT / "forwin" / name).exists()] == []
-    tables = ("arc_envelopes", "arc_envelope_analyses", "arc_structure_drafts",
-              "provisional_promotion_records")
-    assert [name for name in tables if name in Base.metadata.tables] == []
-    migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
-    source = inspect.getsource(migration)
-    for name in tables:
-        assert f'op.drop_table("{name}")' in source
+def test_legacy_pipeline_run_entry_is_gone() -> None:
     from forwin.generation.pipeline_core.run_control import RunControlStage
     assert not hasattr(RunControlStage, "run")
 
@@ -1386,7 +1398,6 @@ def test_literal_llm_stages_have_registered_prompt_trace_owners() -> None:
 
 
 def test_subworld_role_paths_are_gone() -> None:
-    assert not (ROOT / "forwin" / ("subworld_" + "manager.py")).exists()
     forbidden = (
         "SubWorld" + "Manager", "SubWorld" + "RosterItem", "sub_world_" + "roster",
         "roster_" + "item", "plan_band_" + "activation", "ensure_initial_" + "registry",

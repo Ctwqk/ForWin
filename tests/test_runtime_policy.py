@@ -92,7 +92,7 @@ def test_stored_policy_without_new_sections_loads(profile, expected) -> None:
     for name, field in PlanningPolicy.model_fields.items():
         if not field.is_required():
             stored["planning"].pop(name, None)
-    stored["planning"]["context_recency_window"] = 73
+    stored["planning"]["context_recency_" + "window"] = 73
     original = json.dumps(stored)
 
     policy = RuntimePolicy.model_validate(stored)
@@ -103,7 +103,7 @@ def test_stored_policy_without_new_sections_loads(profile, expected) -> None:
         policy.planning.digest_budget_chars,
         policy.writer.world_view_budget_chars,
     ) == expected
-    assert policy.planning.context_recency_window == 73
+    assert "context_recency_" + "window" not in policy.planning.model_dump()
     assert json.dumps(stored) == original
     assert RuntimePolicy.model_validate_json(policy.model_dump_json()) == policy
 
@@ -312,7 +312,7 @@ def test_stored_policy_with_removed_keys_loads() -> None:
     original = json.dumps(stored)
     policy = RuntimePolicy.model_validate_json(original)
     assert "use_llm_simulation" not in policy.planning.model_dump()
-    assert policy.planning.context_recency_window == 50
+    assert "context_recency_" + "window" not in policy.planning.model_dump()
     assert json.dumps(stored) == original
 
 

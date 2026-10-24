@@ -49,14 +49,12 @@ class DraftReviewService:
         publisher_compliance_review_enabled: bool = False,
         llm_client=None,
         llm_enabled: bool | None = None,
-        continuity_reviewer=None,
         plan_reviewer=None,
         experience_reviewer=None,
         world_consistency_reviewer=None,
         personality_reviewer=None,
         publisher_compliance_reviewer=None,
         lint_collector=None,
-        llm_webnovel_reviewer=None,
         observability=None,
         travel_tolerance: float = DEFAULT_TRAVEL_TOLERANCE,
     ) -> None:
@@ -69,7 +67,6 @@ class DraftReviewService:
         self.publisher_compliance_review_enabled = bool(
             publisher_compliance_review_enabled
         )
-        self.continuity_reviewer = continuity_reviewer
         self.plan_reviewer = plan_reviewer or PlanContractReviewer()
         self.experience_reviewer = experience_reviewer or ExperienceReviewer(
             enabled=experience_review_enabled,
@@ -89,7 +86,6 @@ class DraftReviewService:
         self.lint_collector = lint_collector or LintSignalCollector(
             enabled=lint_review_enabled
         )
-        self.llm_webnovel_reviewer = llm_webnovel_reviewer
         self.llm_client = llm_client
         self.llm_enabled = (
             bool(llm_client) if llm_enabled is None else bool(llm_enabled)

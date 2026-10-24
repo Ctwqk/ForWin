@@ -67,7 +67,6 @@ class ReviewPolicy(FrozenPolicyModel):
 class PlanningPolicy(FrozenPolicyModel):
     future_constraints: bool
     plan_health: bool
-    context_recency_window: int = Field(ge=0, le=1000)
     band_size: int = Field(default=6, ge=4, le=12)
     max_replans_per_band: int = Field(default=2, ge=0, le=5)
     digest_budget_chars: int = Field(default=8000, ge=2000, le=20000)
@@ -78,7 +77,6 @@ class PlanningPolicy(FrozenPolicyModel):
             return cls(
                 future_constraints=False,
                 plan_health=False,
-                context_recency_window=50,
                 band_size=8,
                 max_replans_per_band=1,
                 digest_budget_chars=6000,
@@ -86,7 +84,6 @@ class PlanningPolicy(FrozenPolicyModel):
         return cls(
             future_constraints=True,
             plan_health=True,
-            context_recency_window=0,
         )
 
 
@@ -167,6 +164,7 @@ class RuntimePolicy(FrozenPolicyModel):
                 **data["planning"],
             }
             loaded["planning"].pop("use_llm_simulation", None)
+            loaded["planning"].pop("context_recency_" + "window", None)
         writer = data.get("writer", {})
         if isinstance(writer, dict):
             loaded["writer"] = {

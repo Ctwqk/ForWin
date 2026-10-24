@@ -281,8 +281,11 @@ def test_planner_prompts_mark_the_fields_that_reach_the_writer():
     arguments = {"payload": {}, "digest_text": "digest", "output_schema": {}, "allowed": {}}
     # Milestone descriptions become the experience plan's curiosity-beat questions.
     arc = writer_facing(ARC_BEATS_INSTRUCTIONS, "purpose", "milestones 的 description", "reader_promise",
-                        "arc_payoff_map", "revelation_layers", "summary", "ambiguity_constraints")
-    assert "chapter_window" in arc
+                        "arc_payoff_map", "ambiguity_constraints")
+    assert "revelation_layers.summary 仅是作者侧规划笔记，永不交给写作者" in arc
+    assert "chapter_window 用章号或起止章号范围，仅用于规划揭示节奏" in arc
+    assert "规划者保留完整 arc_payoff_map" in arc
+    assert "本章揭示只通过世界视图中的本章 reveal_directives 交给写作者" in arc
     assert "purpose 与 milestones 的 description 按卷起始章的读者知情权限填写" in arc
     assert "band 的每一章" in arc
     assert "本阶段起始章或更早的 reveal_targets" in arc

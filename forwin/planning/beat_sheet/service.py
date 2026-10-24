@@ -467,7 +467,7 @@ def _writer_text_issues(
             issues.append(f"{path} states the proposition of {ref}, which {when}; it reaches the writer verbatim, "
                           f"so hint at it instead")
     for index, layer in enumerate(data.arc_payoff_map.revelation_layers):
-        # Match writer_payoff_map's window semantics; only summary is rendered from a layer.
+        # Keep window-based naming checks for planner hygiene; writer projections omit revelation layers (FU-R48).
         window = re.fullmatch(r"\s*([0-9]+)(?:\s*[-–—]\s*([0-9]+))?\s*", layer.chapter_window)
         if window and 1 <= int(window[1]) and (window[2] is None or int(window[2]) >= int(window[1])):
             texts.append((f"arc_payoff_map.revelation_layers[{index}].summary", layer.summary, int(window[1])))

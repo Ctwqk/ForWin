@@ -682,21 +682,6 @@ def _context_memory_pruned_count(events: list[DecisionEvent]) -> int:
     return total
 
 
-def _event_has_issue_type(event: DecisionEvent, issue_type: str) -> bool:
-    payload = _json_loads(event.payload_json, {})
-    if not isinstance(payload, dict):
-        return False
-    issues = payload.get("issues")
-    if isinstance(issues, list):
-        for issue in issues:
-            if isinstance(issue, dict) and issue.get("issue_type") == issue_type:
-                return True
-    blocking_reasons = payload.get("blocking_reasons")
-    if isinstance(blocking_reasons, list):
-        return any(str(reason).startswith(issue_type) for reason in blocking_reasons)
-    return False
-
-
 def _progression_rule_violation_rate(events: list[DecisionEvent]) -> float | None:
     rule_events = [
         event

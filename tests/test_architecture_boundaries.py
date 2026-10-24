@@ -1229,7 +1229,9 @@ def _assert_no_p4a_removed_imports() -> None:
     for path in (ROOT / "forwin").rglob("*.py"):
         if "migrations" in path.parts:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        source = path.read_text(encoding="utf-8")
+        assert not any(module in source for module in modules), path
+        tree = ast.parse(source)
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 imports = [node.module or ""]
@@ -1279,6 +1281,20 @@ def test_p4a_deleted_modules_and_tables_stay_gone() -> None:
     "from forwin import simulation as removed",
 ])
 def test_simulation_import_guard_catches_import_forms(tmp_path, monkeypatch, source) -> None:
+    package = tmp_path / "forwin"
+    package.mkdir()
+    (package / "consumer.py").write_text(source, encoding="utf-8")
+    monkeypatch.setitem(globals(), "ROOT", tmp_path)
+    with pytest.raises(AssertionError):
+        _assert_no_p4a_removed_imports()
+
+
+@pytest.mark.parametrize("source", [
+    'importlib.import_module("forwin.planning.world_' + 'contracts")',
+    'importlib.import_module("forwin.planning.world_' + 'contract_service")',
+    'importlib.import_module("forwin.models.world_' + 'contract")',
+])
+def test_p4a_import_guard_catches_literal_dynamic_imports(tmp_path, monkeypatch, source) -> None:
     package = tmp_path / "forwin"
     package.mkdir()
     (package / "consumer.py").write_text(source, encoding="utf-8")

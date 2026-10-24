@@ -88,12 +88,6 @@ def _story_basics_section(context: ChapterContextPack) -> str:
         revision_id = str(context.genesis_context_refs.get("genesis_revision_id", "") or "")
         if revision_id:
             lines.append(f"Genesis 根层版本：{revision_id}")
-    if getattr(context, "genesis_world_overview", ""):
-        lines.append(f"Genesis 世界总览：{context.genesis_world_overview}")
-    if getattr(context, "genesis_map_overview", ""):
-        lines.append(f"Genesis 地图总览：{context.genesis_map_overview}")
-    if getattr(context, "genesis_story_engine_summary", ""):
-        lines.append(f"Genesis 长线引擎：{context.genesis_story_engine_summary}")
     return "\n".join(lines)
 
 

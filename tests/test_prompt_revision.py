@@ -30,7 +30,7 @@ EXPECTED_PROMPT_REVISIONS = {
     "scene_breakdown_basic": "f850d8f67a2ab110",
     "single_final_chapter": "99ba13c66fc3b92d",
     "single_obligation_visible": "e2d92a093b20360c",
-    "single_world_view": "e265894506eae8c9",
+    "single_world_view": "c2b1aeb4f6ab3556",
 }
 
 

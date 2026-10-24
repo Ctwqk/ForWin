@@ -246,6 +246,12 @@
       "premise": "主角：陈星，空间站事故调查员。",
       "genre": "科幻悬疑",
       "setting_summary": "近未来轨道城和失联空间站。",
+      "genesis_context_refs": {
+        "genesis_revision_id": "genesis-regression-1"
+      },
+      "genesis_world_overview": "AUTHOR_ONLY_WORLD_OVERVIEW",
+      "genesis_map_overview": "AUTHOR_ONLY_MAP_OVERVIEW",
+      "genesis_story_engine_summary": "AUTHOR_ONLY_LONG_ARC_SUMMARY",
       "chapter_number": 7,
       "chapter_plan_title": "第二舱段",
       "chapter_plan_one_line": "陈星与韩遥进入第二舱段。",

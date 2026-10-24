@@ -140,6 +140,17 @@ class WorldConflictRepository:
         row.required_decider = "human"
         self.session.flush()
 
+    def has_plot_response(self, project_id: str, intent_ref: str) -> bool:
+        """A resolved response consumes the intent's one offer, including after a rewrite."""
+        if not intent_ref:
+            return False
+        decisions = self.session.scalars(select(WorldPlanConflictRow.decision_json).where(
+            WorldPlanConflictRow.project_id == project_id,
+            WorldPlanConflictRow.intent_ref == intent_ref,
+            WorldPlanConflictRow.status == "resolved",
+        ))
+        return any(json.loads(decision or "{}").get("option") == "plot_responds" for decision in decisions)
+
     def reroll_count(self, project_id: str, *, actor_ref: str, since_chapter: int = 0) -> int:
         """The actor's veto_world resolutions on conflicts whose detected_after_chapter >= ``since_chapter``."""
         decisions = self.session.scalars(

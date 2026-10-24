@@ -72,7 +72,7 @@ def _conflict(session: Session, **overrides):
     draft = _draft(**overrides)
     policy = _policy()
     row = WorldConflictRepository(session).create(
-        draft, required_decider=route_conflict(draft, policy=policy), options=available_options(draft),
+        draft, required_decider=route_conflict(draft, policy=policy), options=available_options(draft, live_intent=True),
     )
     session.commit()
     return row

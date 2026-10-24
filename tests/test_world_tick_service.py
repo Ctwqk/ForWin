@@ -916,7 +916,7 @@ def test_tick_skips_a_chapter_that_is_no_longer_the_latest() -> None:
     engine.dispose()
 
 
-def test_plot_responds_without_next_plan_is_pending_not_escalated(monkeypatch) -> None:
+def test_plot_responds_holds_the_intent_and_commits_no_world_change(monkeypatch) -> None:
     engine, Session = _session_factory()
 
     def ambushed(*, plan: bool) -> tuple[_World, GraphDelta]:
@@ -927,27 +927,28 @@ def test_plot_responds_without_next_plan_is_pending_not_escalated(monkeypatch) -
         _tick(Session, _ambushing(world, chapter, "plot_responds"), chapter)
         return world, chapter
 
-    # The world change commits now; a later band plan will supply its response.
+    # Only the hold commits; a later band plan will supply its response.
     world, _chapter_one = ambushed(plan=False)
     [conflict] = _conflicts(Session, world)
     assert (conflict.status, conflict.required_decider) == ("resolved", "codex")
     assert json.loads(conflict.decision_json)["pending_plan_response"] is True
     assert _events(Session, world, DecisionEventType.WORLD_CONFLICT_ESCALATED) == []
-    assert _runtime(Session, world).world.get_state(world.rival)["alive_status"] == "dead"
+    assert _runtime(Session, world).world.get_state(world.rival)["alive_status"] == "alive"
+    assert _runtime(Session, world).world.get_state(_later(world))["status"] == "held"
     [resolved] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_RESOLVED)
     assert _payload(resolved)["plan_patch_id"] == ""
     with Session() as session:
         assert [row.id for row in WorldConflictRepository(session).pending_plot_responses(world.project_id)] == [conflict.id]
 
-    # With one, the held change commits in the tick's own delta, its news spreads and the next plan responds.
+    # With a plan, the hold commits and the next plan is bound to the intent.
     world, chapter = ambushed(plan=True)
     [conflict] = _conflicts(Session, world)
     assert (conflict.status, json.loads(conflict.decision_json)["option"]) == ("resolved", "plot_responds")
     runtime = _runtime(Session, world)
-    assert runtime.world.get_state(world.rival)["alive_status"] == "dead"
-    assert runtime.world.get_state(_later(world))["status"] == "resolved"
+    assert runtime.world.get_state(world.rival)["alive_status"] == "alive"
+    assert runtime.world.get_state(_later(world))["status"] == "held"
     ambush = tick_event_fact_ref(world.project_id, _tick_id(chapter), f"adjudication:{_later(world)}", 0)
-    assert _knows(runtime, world.faction, ambush) == "knows"
+    assert ambush not in runtime.cognition_by_observer[("faction", world.faction)].knowledge_by_ref
     with Session() as session:
         plan = session.scalars(select(ChapterPlan).where(
             ChapterPlan.project_id == world.project_id, ChapterPlan.chapter_number == 2,
@@ -1535,7 +1536,7 @@ def _duel(world: _World, chapter: GraphDelta) -> _WorldLLM:
              }},
         ),
         actor_turn=_quiet_turns,
-        review=_review("plot_responds"),
+        review=_review("accept_with_obligation"),
     )
 
 
@@ -1545,7 +1546,11 @@ def test_an_in_tick_resolution_that_no_longer_holds_goes_to_a_human(monkeypatch)
     _plan(Session, world, 2)
     chapter = _chapter(Session, world, 1)
 
-    # Both deaths are major; Codex lets the plot respond to both, but only one can happen.
+    from forwin.world_engine import tick_conflicts
+    original_options = tick_conflicts.available_options
+    monkeypatch.setattr(tick_conflicts, "available_options", lambda draft, **kwargs:
+                        (*original_options(draft, **kwargs), "accept_with_obligation"))
+    # Both deaths are major; accepting them in order makes the second stale.
     result = _tick(Session, _duel(world, chapter), chapter, policy=_policy(max_major_events_per_tick=2))
 
     first, second = sorted((_later(world), _strike(world)))
@@ -1580,11 +1585,16 @@ def test_resolving_a_held_change_that_canon_has_since_ruled_out_is_stale(monkeyp
     _tick(Session, _duel(world, chapter), chapter, policy=policy)
     conflicts = {row.intent_ref: row.id for row in _conflicts(Session, world) if row.status == "open"}
 
+    with Session.begin() as session:
+        for conflict_id in conflicts.values():
+            row = WorldConflictRepository(session).get(world.project_id, conflict_id)
+            row.options_json = json.dumps([*json.loads(row.options_json), "accept_with_obligation"])
+
     def resolve(intent_id: str) -> None:
         with Session.begin() as session:
             ConflictResolutionService(session, admission=CanonAdmissionService(), policy=policy).resolve(
                 project_id=world.project_id, conflict_id=conflicts[intent_id],
-                decision=ConflictDecision(option="plot_responds", decided_by="human", actor_id="human",
+                decision=ConflictDecision(option="accept_with_obligation", decided_by="human", actor_id="human",
                                           rationale="r", decided_at=datetime.now(UTC)),
             )
 
@@ -1932,3 +1942,58 @@ def test_declared_critical_bookkeeping_keeps_informational_refs_without_mileston
     ))
     assert review.draft.violated == "impact_review"
     assert review.draft.involved_refs == ["hero"]
+
+
+def test_held_intent_is_released_after_its_bound_chapter_without_interaction():
+    from tests.test_world_tick_steps import _intent, _runtime as runtime_for
+    from forwin.world_engine.intents import release_held_intents
+
+    runtime = runtime_for(_intent("held", "actor", at=5, status="held"),
+                          _intent("unbound", "actor", at=5, status="held"))
+    [release] = release_held_intents(runtime, bound_intent_refs=frozenset({"held"}), interactions=[], now=100)
+    assert release.intent_status_changes == {"held": "planned"}
+    assert [(change.ref, change.field, change.new_value) for change in release.effects.entity_changes] == [
+        ("held", "scheduled_at", 100),
+    ]
+
+
+@pytest.mark.parametrize("effect,status", [("fulfilled", "resolved"), ("disrupted", "disrupted")])
+def test_held_intent_settled_by_its_bound_chapter_stays_settled(effect, status):
+    from tests.test_world_tick_steps import _intent, _runtime as runtime_for
+    from forwin.world_engine.intents import apply_intent_interactions, release_held_intents
+
+    interactions = [{"intent_id": "held", "effect": effect, "evidence": "chapter"}]
+    runtime = runtime_for(_intent("held", "actor", at=5, status="held"))
+    assert release_held_intents(runtime, bound_intent_refs=frozenset({"held"}), interactions=interactions, now=100) == []
+    assert apply_intent_interactions(runtime, interactions=interactions)[0].intent_status_changes == {"held": status}
+    settled = runtime_for(_intent("held", "actor", at=5, status=status))
+    assert release_held_intents(settled, bound_intent_refs=frozenset({"held"}), interactions=[], now=100) == []
+
+
+@pytest.mark.parametrize("effect,expected", [(None, "planned"), ("fulfilled", "resolved"), ("disrupted", "disrupted")])
+@pytest.mark.parametrize("last_chapter", [False, True], ids=["continuing", "final"])
+def test_tick_releases_or_settles_bound_holds_after_acceptance(monkeypatch, effect, expected, last_chapter):
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    _plan(Session, world, 2)
+    first = _chapter(Session, world, 1)
+    _tick(Session, _ambushing(world, first, "plot_responds"), first)
+    assert _runtime(Session, world).world.get_state(_later(world))["status"] == "held"
+    with Session.begin() as session:
+        plan = session.scalar(select(ChapterPlan).where(ChapterPlan.project_id == world.project_id,
+                                                       ChapterPlan.chapter_number == 2))
+        plan.status = "accepted"
+        if last_chapter:
+            session.get(Project, world.project_id).target_total_chapters = 2
+    fields = _time(1, "日")
+    if effect is not None:
+        fields["intent_interactions"] = [{"intent_ref": _later(world), "effect": effect, "evidence": "chapter"}]
+    second = _delta(Session, world, 2, fields)
+    _commit(Session, world, second)
+    _tick(Session, _WorldLLM(actor_turn=_quiet_turns), second)
+    state = _runtime(Session, world, chapter=2).world.get_state(_later(world))
+    assert state["status"] == expected
+    if effect is None:
+        assert state["scheduled_at"] == second.story_time_end
+    assert _runtime(Session, world, chapter=2).world.get_state(world.rival)["alive_status"] == "alive"
+    engine.dispose()

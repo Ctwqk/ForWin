@@ -179,6 +179,7 @@ def _tick_three(project_id: str, *patches: NodePatch) -> GraphDelta:
 
 def _resolve_in_tick(
     Session, project_id: str, chapter: int, delta_id: str, options: tuple[ConflictOption, ...],
+    *, intent_ref: str = "",
 ) -> dict[str, str]:
     """Conflicts the chapter's tick decided in-tick, recorded the way its close_resolutions records them."""
     resolved: dict[str, str] = {}
@@ -190,6 +191,7 @@ def _resolve_in_tick(
                     project_id=project_id, source="world_tick", detected_after_chapter=chapter, story_time=0,
                     involved_refs=[CAMP], violated="impact_review", impact_level="major",
                     summary=f"world change {chapter} {option}", proposed_change={}, blocks_from_chapter=chapter + 1,
+                    intent_ref=intent_ref,
                 ),
                 required_decider="codex",
                 options=(option,),
@@ -199,7 +201,8 @@ def _resolve_in_tick(
             )
             effects = record_option_side_effects(session, row, decision, latest_chapter=chapter)
             refs = [delta_id, effects.obligation_id, effects.plan_patch_id]
-            repository.mark_resolved(row, decision=decision, result_refs=[ref for ref in refs if ref])
+            repository.mark_resolved(row, decision=decision, result_refs=[ref for ref in refs if ref],
+                                     pending_plan_response=effects.pending_plan_response)
             session.add(conflict_resolved_event(row, chapter_number=chapter, extra={
                 "graph_delta_ids": [delta_id],
                 "obligation_id": effects.obligation_id,
@@ -214,6 +217,7 @@ def _book(
     *,
     list_chapter_two_tick: bool = True,
     with_plan_constraint: bool = False,
+    chapter_one: tuple[NodePatch, ...] = (),
     chapter_three: tuple[NodePatch | EdgePatch, ...] = (),
     tick_three: tuple[NodePatch, ...] = (),
     tick_two_resolutions: tuple[ConflictOption, ...] = (),
@@ -244,6 +248,8 @@ def _book(
         project_id, 1, "delta-ch1",
         _create(project_id, GATE, description="gate description", phase="closed"),
         _create(project_id, CAMP, mood="calm"),
+        *(patch.model_copy(update={"new_value": {"project_id": project_id, **patch.new_value}})
+          for patch in chapter_one),
     )])}
     if with_plan_constraint:
         from forwin.planning.beat_sheet.types import ProtectionSpec
@@ -973,3 +979,38 @@ def test_rewrite_aborts_when_protection_fact_disappears(Session):
     assert "rewriting chapter 2 removes fact:temporary-fact, which beat-sheet protection" in outcome.failure_reason
     assert _outcome_snapshot(book) == before
     assert set(tick_ids + protection.graph_delta_ids) <= _delta_ids(book)
+
+
+
+@pytest.mark.parametrize("bound", [False, True], ids=["pending", "bound"])
+def test_rewrite_superseding_a_plot_response_unholds_the_intent(Session, bound):
+    intent = "held-response-intent"
+    owner = "held-response-owner"
+    book = _book(Session, chapter_one=(NodePatch(
+        node_id=owner, node_type="character", op="create",
+        new_value={"id": owner, "node_type": "character", "name": "owner",
+                   "state": {"alive_status": "alive"}},
+    ), NodePatch(
+        node_id=intent, node_type="intent", op="create",
+        new_value={"id": intent, "node_type": "intent", "name": "response",
+                   "profile": {"owner_ref": owner, "action_type": "negotiate"},
+                   "state": {"status": "planned", "scheduled_at": 100}},
+    ),), tick_three=(NodePatch(node_id=intent, node_type="intent", op="set", field_path="state.status",
+                              old_value="planned", new_value="held"),))
+    if not bound:
+        with Session.begin() as session:
+            session.get(ChapterPlan, book.chapter_ids[4]).status = "drafted"
+    conflict_id = _resolve_in_tick(Session, book.project_id, 3, book.tick_3, ("plot_responds",),
+                                   intent_ref=intent)["plot_responds"]
+    with Session() as session:
+        runtime = BookStateProjection(session).load_runtime_as_of(book.project_id, as_of_chapter=3)
+        assert runtime.world.get_state(intent)["status"] == "held"
+    outcome = _wary_rewrite(book)
+    assert outcome.blocked is False, outcome.failure_reason
+    with Session() as session:
+        runtime = BookStateProjection(session).load_runtime_as_of(book.project_id, as_of_chapter=3)
+        assert runtime.world.get_state(intent)["status"] == "planned"
+        repo = WorldConflictRepository(session)
+        assert repo.pending_plot_responses(book.project_id) == []
+        assert json.loads(repo.get(book.project_id, conflict_id).decision_json).get("pending_plan_response") is not True
+        assert json.loads(session.get(ChapterPlan, book.chapter_ids[4]).world_bindings_json) == []

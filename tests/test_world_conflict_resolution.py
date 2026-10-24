@@ -170,7 +170,8 @@ def _conflict(
                 project_id=book.project_id, source=source, detected_after_chapter=detected_after_chapter,
                 story_time=book.now,
                 involved_refs=[ref for ref in (intent_ref, actor_ref) if ref], violated=violated,
-                impact_level=impact, summary=SUMMARY, proposed_change=proposed_change, intent_ref=intent_ref,
+                impact_level=impact, summary=SUMMARY, proposed_change=proposed_change,
+                intent_ref=intent_ref or str(proposed_change.get("intent_id") or ""),
                 actor_ref=actor_ref, blocks_from_chapter=2,
             ),
             required_decider="human",
@@ -398,10 +399,12 @@ def test_replay_cas_veto_acknowledges_and_an_unreadable_held_change_cannot_commi
     assert _row(Session, book, replay) == ("resolved", [], "veto_world")
     assert len(_resolved_events(Session, book, replay)) == 1
 
-    unreadable = _conflict(Session, book, proposed_change={"patches": []}, options=["veto_world", "plot_responds"])
+    unreadable = _conflict(Session, book, proposed_change={"patches": []},
+                           options=["veto_world", "plot_responds"], intent_ref=book.later)
     _resolve_failing(Session, book, unreadable, "plot_responds", ConflictOptionUnavailable)
-    _resolve(Session, book, unreadable, "veto_world")
-    assert _row(Session, book, unreadable) == ("resolved", [], "veto_world")
+    veto = _resolve(Session, book, unreadable, "veto_world")
+    assert _row(Session, book, unreadable) == ("resolved", list(veto.graph_delta_ids), "veto_world")
+    assert _runtime(Session, book).world.get_state(book.later)["status"] == "vetoed"
     engine.dispose()
 
 
@@ -519,7 +522,7 @@ def test_plot_responds_adds_goal_to_next_unwritten_plan(monkeypatch) -> None:
     engine, Session = _session_factory()
     book = _book(Session, monkeypatch)
     held = _held(book)
-    # Ending a relation that does not exist only warns; the rest of the change still lands.
+    # A held relation change is not attempted, so it emits no builder warning.
     held = held.model_copy(update={"effects": held.effects.model_copy(update={"relation_changes": [
         EffectRelationChange(
             source_ref=book.world.hero, target_ref=book.world.rival, edge_type="ally_of", change="end",
@@ -533,10 +536,9 @@ def test_plot_responds_adds_goal_to_next_unwritten_plan(monkeypatch) -> None:
     with Session() as session:
         row = WorldConflictRepository(session).get(book.project_id, conflict_id)
         assert json.loads(row.decision_json)["reason"] == "reason-1"
-    assert [warning["code"] for warning in result.warnings] == ["relation_missing"]
+    assert result.warnings == ()
     [(_actor_type, payload)] = _resolved_events(Session, book, conflict_id)
     assert payload["warnings"] == [dict(warning) for warning in result.warnings]
-    assert set(payload["warnings"][0]) == {"code", "message"}
 
     delta_id = _delta_id(book, conflict_id)
     goal = plot_response_goal("event-held")
@@ -552,7 +554,7 @@ def test_plot_responds_adds_goal_to_next_unwritten_plan(monkeypatch) -> None:
         assert (patch.patch_type, patch.target_scope, patch.target_plan_id, patch.applied) == (
             "world_conflict_response", "chapter", book.plans[2], True,
         )
-    assert _runtime(Session, book).world.get_state(book.later)["status"] == "resolved"
+    assert _runtime(Session, book).world.get_state(book.later)["status"] == "held"
     assert _row(Session, book, conflict_id) == ("resolved", [delta_id, result.plan_patch_id], "plot_responds")
     engine.dispose()
 
@@ -568,7 +570,7 @@ def test_plot_responds_without_an_unwritten_plan_is_pending(monkeypatch) -> None
     result = _resolve(Session, book, conflict_id, "plot_responds")
 
     assert result.graph_delta_ids and result.plan_patch_id == ""
-    assert _runtime(Session, book).world.get_state(book.later)["status"] == "resolved"
+    assert _runtime(Session, book).world.get_state(book.later)["status"] == "held"
     with Session() as session:
         row = WorldConflictRepository(session).get(book.project_id, conflict_id)
         assert row.status == "resolved"
@@ -708,7 +710,8 @@ def test_plot_responds_cannot_commit_a_change_that_breaks_an_active_protection(m
         ("protect-rival", {"ref": world.rival, "kind": "must_be_alive", "until_chapter": 0, "source": "test"}),
     ])
     held = TickCandidate(
-        candidate_id="adjudication:kill", origin="adjudication", actor_id=book.world.hero, summary="summary-kill",
+        candidate_id="adjudication:kill", origin="adjudication", actor_id=book.world.hero,
+        intent_id=book.later, summary="summary-kill",
         effects=WorldEffects(entity_changes=[
             EffectEntityChange(ref=book.world.rival, field="alive_status", new_value="dead"),
         ]),
@@ -1028,7 +1031,7 @@ def test_a_held_movement_within_the_chapter_still_resolves(monkeypatch) -> None:
     )
     conflict_id = _conflict(Session, book, proposed_change=walk.model_dump(mode="json"))
 
-    result = _resolve(Session, book, conflict_id, "plot_responds")
+    result = _resolve(Session, book, conflict_id, "accept_with_obligation")
 
     assert result.graph_delta_ids == (_delta_id(book, conflict_id),)
     assert _runtime(Session, book).world.get_state(book.world.hero)["location_id"] == book.world.loc(2)
@@ -1842,11 +1845,14 @@ def test_planless_obligation_is_in_band_planner_inputs(pending_side_effect_sessi
 
 @pytest.mark.parametrize("option", ["plot_responds", "accept_with_obligation"])
 def test_resolution_without_plan_reaches_later_band_planner(option):
-    from tests.test_band_planner import _book as planner_book, _band, _planner, _plan_band, StubLLM
+    from tests.test_band_planner import (
+        _book as planner_book, _band, _planner, _plan_band, StubLLM, _intent as planner_intent,
+    )
 
     engine, Session = _session_factory()
     world, arc_id, sheet_id = planner_book(Session)
-    held = TickCandidate(candidate_id="held", origin="adjudication", actor_id=world.hero, summary="held",
+    held = TickCandidate(candidate_id="held", origin="adjudication", actor_id=world.hero,
+                         intent_id=planner_intent(world), summary="held",
                          effects=WorldEffects(entity_changes=[
                              EffectEntityChange(ref=world.rival, field="mood", new_value="wary"),
                          ]))
@@ -1855,7 +1861,8 @@ def test_resolution_without_plan_reaches_later_band_planner(option):
         row = WorldConflictRepository(session).create(ConflictDraft(
             project_id=world.project_id, source="world_tick", detected_after_chapter=0, story_time=1000,
             involved_refs=[world.rival], violated="impact_review", impact_level="moderate", summary="held",
-            proposed_change=held.model_dump(mode="json"), actor_ref=world.hero, blocks_from_chapter=1,
+            proposed_change=held.model_dump(mode="json"), actor_ref=world.hero,
+            intent_ref=planner_intent(world), blocks_from_chapter=1,
         ), required_decider="human", options=ALL_OPTIONS)
         conflict_id = row.id
     with Session.begin() as session:
@@ -1876,3 +1883,236 @@ def test_resolution_without_plan_reaches_later_band_planner(option):
         else:
             assert [item["id"] for item in client.payload(0)["open_obligations"]] == [result.obligation_id]
     engine.dispose()
+
+
+# R42: the plot answers a live intent before its outcome can land.
+def test_plot_responds_holds_the_intent_and_commits_no_world_change(pending_side_effect_session):
+    from tests.test_world_tick_steps import _actor, _intent, _runtime as runtime_for
+    from forwin.book_state.lexicon import BookLexicon
+    from forwin.world_engine.delta_builder import _TickBuilder
+    from forwin.world_engine.types import TickContext
+
+    _, row = pending_side_effect_session
+    row.intent_ref = "intent"
+    row.actor_ref = "actor"
+    held = TickCandidate(candidate_id="held", origin="adjudication", summary="private",
+                         intent_id="intent", effects=WorldEffects(entity_changes=[
+                             EffectEntityChange(ref="actor", field="alive_status", new_value="dead"),
+                         ]), intent_status_changes={"intent": "resolved"})
+    row.proposed_change_json = held.model_dump_json()
+    runtime = runtime_for(_actor("actor"), _intent("intent", "actor", at=5))
+    candidates = option_candidates(row, _decision("plot_responds"), runtime=runtime,
+                                   policy=POLICY, reroll_count=0, now=100)
+    built = _TickBuilder(context=TickContext(project_id=runtime.project_id, chapter_number=3,
+                                            now=100, window_start=0, seed=1), tick_id="hold",
+                         runtime=runtime, calendar=None, lexicon=BookLexicon()).build(candidates, [])
+    assert built.delta is not None, built.issues
+    assert _patches(built.delta) == [("intent", "set", "state.status", "planned", "held")]
+    assert not built.delta.fact_patches and not built.delta.cognition_patches
+
+
+@pytest.mark.parametrize("status", ["missing", "resolved", "disrupted", "vetoed", "inactive", "actor"])
+def test_plot_responds_unavailable_without_a_live_intent(pending_side_effect_session, status):
+    from tests.test_world_tick_steps import _actor, _intent, _runtime as runtime_for
+    from forwin.world_engine.conflict_routing import available_options, live_intent
+
+    _, row = pending_side_effect_session
+    row.intent_ref = "intent"
+    row.proposed_change_json = TickCandidate(candidate_id="held", origin="adjudication", summary="held",
+                                            effects=WorldEffects()).model_dump_json()
+    node = (_actor("intent") if status == "actor" else
+            _intent("intent", "actor", at=5, status="planned" if status == "inactive" else status))
+    if status == "inactive":
+        node = node.model_copy(update={"is_active": False})
+    runtime = runtime_for(*([] if status == "missing" else [node]))
+    draft = ConflictDraft(project_id=row.project_id, source="world_tick", detected_after_chapter=1,
+                          story_time=100, involved_refs=[], violated="impact_review", impact_level="moderate",
+                          summary="held", proposed_change={}, intent_ref="intent", blocks_from_chapter=2)
+    assert "plot_responds" not in available_options(draft, live_intent=live_intent(runtime, row.intent_ref))
+    with pytest.raises(ConflictOptionUnavailable):
+        option_candidates(row, _decision("plot_responds"), runtime=runtime, policy=POLICY, reroll_count=0, now=100)
+
+
+def test_plot_responds_is_offered_once_per_intent(pending_side_effect_session):
+    from forwin.world_engine.conflict_routing import available_options
+    from tests.test_world_tick_steps import _intent, _runtime as runtime_for
+
+    session, row = pending_side_effect_session
+    row.intent_ref = "intent"
+    repo = WorldConflictRepository(session)
+    draft = ConflictDraft(project_id=row.project_id, source="world_tick", detected_after_chapter=2,
+                          story_time=100, involved_refs=[], violated="impact_review", impact_level="moderate",
+                          summary="held", proposed_change={}, intent_ref="intent", blocks_from_chapter=3)
+    assert "plot_responds" in available_options(draft, live_intent=True,
+                                               plot_responded=repo.has_plot_response(row.project_id, "intent"))
+    repo.mark_resolved(row, decision=_decision("plot_responds"), result_refs=["hold"], pending_plan_response=True)
+    assert "plot_responds" not in available_options(draft, live_intent=True,
+                                                   plot_responded=repo.has_plot_response(row.project_id, "intent"))
+    assert not repo.has_plot_response(row.project_id, "other")
+    from forwin.world_engine.tick_conflicts import TickConflicts
+    from forwin.world_engine.types import TickContext
+    routed = TickConflicts(session, context=TickContext(project_id=row.project_id, chapter_number=2,
+                                                       now=100, window_start=0, seed=1),
+                           runtime=runtime_for(_intent("intent", "a", at=1)),
+                           policy=_policy(conflict_delegate="human"), tick_id="again", delegate=None,
+                           audit_writer_factory=lambda: None)
+    routed.hold(draft, extra={})
+    offered = repo.get(row.project_id, routed.conflict_ids[0])
+    assert "plot_responds" not in json.loads(offered.options_json)
+    stale_offer = repo.create(draft, required_decider="human", options=ALL_OPTIONS)
+    with pytest.raises(ConflictOptionUnavailable):
+        option_candidates(stale_offer, _decision("plot_responds"), runtime=runtime_for(_intent("intent", "a", at=1)),
+                          policy=POLICY, reroll_count=0, now=100, plot_responded=True)
+
+
+def test_plot_response_binding_survives_replanning_and_reverts(pending_side_effect_session):
+    from forwin.world_engine.conflict_resolution import record_plot_response_patch
+    from forwin.narrative_obligations.repository import NarrativeObligationRepository
+    from forwin.planning.band_planner.persistence import reapply_active_patches
+    from forwin.world_engine.superseded_resolutions import supersede_resolutions
+
+    session, row = pending_side_effect_session
+    row.intent_ref = "held-intent"
+    arc = ArcPlanVersion(project_id=row.project_id, arc_synopsis="arc", chapter_start=1, chapter_end=8)
+    session.add(arc)
+    session.flush()
+    plan = ChapterPlan(project_id=row.project_id, arc_plan_id=arc.id, chapter_number=2, title="response",
+                       goals_json='["original"]', world_bindings_json='[]', status="planned")
+    session.add(plan)
+    session.flush()
+    patch_id = record_plot_response_patch(session, row, plan)
+    repo = WorldConflictRepository(session)
+    repo.mark_resolved(row, decision=_decision("plot_responds"), result_refs=["hold", f"plan_patch:{patch_id}"],
+                       pending_plan_response=True)
+    binding = {"kind": "intent", "ref": "held-intent", "how": PLOT_RESPONSE_GENERIC_GOAL}
+    assert json.loads(plan.world_bindings_json) == [binding]
+    plan.world_bindings_json = '[]'
+    reapply_active_patches(session, plan)
+    reapply_active_patches(session, plan)
+    assert json.loads(plan.world_bindings_json) == [binding]
+    supersede_resolutions(session, project_id=row.project_id, graph_delta_id="hold", reason="rewrite")
+    assert json.loads(plan.world_bindings_json) == []
+    assert json.loads(row.decision_json)["pending_plan_response"] is False
+    assert repo.has_plot_response(row.project_id, row.intent_ref)
+    assert len(NarrativeObligationRepository(session).list_patches_for_plan(row.project_id, target_plan_id=plan.id)) == 2
+
+
+@pytest.mark.parametrize("impact,expected", [
+    ("moderate", ("veto_world", "amend_plan", "accept_with_obligation")),
+    ("major", ("veto_world", "amend_plan")),
+])
+def test_answered_intent_keeps_existing_acceptance_eligibility(impact, expected):
+    from forwin.world_engine.conflict_routing import available_options
+
+    draft = ConflictDraft(project_id="project", source="world_tick", detected_after_chapter=2,
+                          story_time=100, involved_refs=[], violated="impact_review", impact_level=impact,
+                          summary="held", proposed_change={}, intent_ref="intent", blocks_from_chapter=3)
+    assert available_options(draft, live_intent=True, plot_responded=True) == expected
+
+
+def test_accept_with_obligation_reports_builder_warnings(monkeypatch):
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    held = _held(book)
+    held = held.model_copy(update={"effects": held.effects.model_copy(update={"relation_changes": [
+        EffectRelationChange(source_ref=book.world.hero, target_ref=book.world.rival,
+                             edge_type="ally_of", change="end"),
+    ]})})
+    conflict_id = _conflict(Session, book, proposed_change=held.model_dump(mode="json"))
+    result = _resolve(Session, book, conflict_id, "accept_with_obligation")
+    assert [warning["code"] for warning in result.warnings] == ["relation_missing"]
+    [(_, payload)] = _resolved_events(Session, book, conflict_id)
+    assert payload["warnings"] == [dict(warning) for warning in result.warnings]
+    assert set(payload["warnings"][0]) == {"code", "message"}
+    assert _runtime(Session, book).world.get_state(book.later)["status"] == "resolved"
+    engine.dispose()
+
+
+@pytest.mark.parametrize("last_chapter", [False, True], ids=["continuing", "final"])
+@pytest.mark.parametrize("effect,expected", [(None, "planned"), ("advanced", "planned"),
+                                             ("fulfilled", "resolved"), ("disrupted", "disrupted")])
+def test_bound_hold_lifecycle_through_tick_without_postgres(pending_side_effect_session, last_chapter, effect, expected):
+    from types import SimpleNamespace
+    from forwin.models.canon import CanonCommitRecord
+    from forwin.protocol.book_state import WorldNode
+    from forwin.world_engine.tick import WorldTickService
+
+    session, row = pending_side_effect_session
+    project_id = row.project_id
+    session.get(Project, project_id).target_total_chapters = 1 if last_chapter else 20
+    repo = BookStateRepository(session)
+    for node in (
+        WorldNode(id="actor", project_id=project_id, node_type="character", name="actor",
+                  state={"alive_status": "alive", "next_turn_at": 200}),
+        WorldNode(id="intent", project_id=project_id, node_type="intent", name="intent",
+                  profile={"owner_ref": "actor"}, state={"status": "held", "scheduled_at": 5}),
+    ):
+        repo.create_world_node(node, version_chapter=1, version_state=node.state)
+    arc = ArcPlanVersion(project_id=project_id, arc_synopsis="arc", chapter_start=1, chapter_end=20)
+    session.add(arc)
+    session.flush()
+    session.add(ChapterPlan(project_id=project_id, arc_plan_id=arc.id, chapter_number=1, title="answer",
+                            status="accepted", world_bindings_json='[{"kind":"intent","ref":"intent"}]'))
+    chapter = GraphDelta(id="chapter", project_id=project_id, chapter_number=1, summary="chapter",
+                         source_type="chapter_extraction", story_time_start=0, story_time_end=100,
+                         metadata={"intent_interactions": ([{"intent_id": "intent", "effect": effect}]
+                                                           if effect else [])})
+    repo.append_graph_delta(chapter)
+    session.flush()
+    committed = []
+
+    class CaptureAdmission:
+        def commit_world_tick(self, **kwargs):
+            committed.extend(kwargs["approved_changes"].graph_deltas)
+            return SimpleNamespace(idempotent=False, graph_delta_ids=tuple(delta.id for delta in committed))
+
+    service = WorldTickService(llm_client=None, admission=CaptureAdmission(), adjudicator=None, actor_runner=None,
+                               conflict_delegate=None, audit_writer_factory=lambda: None, save_prompt_trace=lambda *_: "")
+    result = service.run(session, CanonCommitRecord(id="commit", project_id=project_id, chapter_number=1,
+                                                    graph_delta_ids_json='["chapter"]'), policy=POLICY)
+    assert result.graph_delta_ids and not result.skipped_reason
+    [delta] = committed
+    expected_patches = [("intent", "set", "state.status", "held", expected)]
+    if expected == "planned":
+        expected_patches.append(("intent", "set", "state.scheduled_at", 5, 100))
+    assert _patches(delta) == expected_patches
+    assert not delta.fact_patches and not delta.cognition_patches
+
+
+def test_plot_response_preserves_due_news_without_committing_it(pending_side_effect_session):
+    from types import SimpleNamespace
+    from forwin.protocol.book_state import FactNode, WorldNode
+
+    session, row = pending_side_effect_session
+    project_id = row.project_id
+    repo = BookStateRepository(session)
+    for node in (
+        WorldNode(id="actor", project_id=project_id, node_type="character", state={"alive_status": "alive"}),
+        WorldNode(id="intent", project_id=project_id, node_type="intent", state={"status": "planned"}),
+    ):
+        repo.create_world_node(node, version_chapter=1, version_state=node.state)
+    repo.create_fact_node(FactNode(id="news", project_id=project_id, proposition="news"))
+    queue = [{"fact_ref": "fact:news", "observer_ref": "actor", "arrive_at": 50}]
+    repo.append_graph_delta(GraphDelta(id="earlier", project_id=project_id, chapter_number=1, summary="earlier",
+                                       source_type="world_engine", story_time_start=0, story_time_end=100,
+                                       metadata={"news_in_transit": queue}))
+    row.intent_ref = "intent"
+    row.proposed_change_json = TickCandidate(candidate_id="held", origin="adjudication", summary="held",
+                                            intent_id="intent", effects=WorldEffects()).model_dump_json()
+    session.flush()
+    committed = []
+
+    class CaptureAdmission:
+        def commit_world_tick(self, **kwargs):
+            committed.extend(kwargs["approved_changes"].graph_deltas)
+            return SimpleNamespace(graph_delta_ids=tuple(delta.id for delta in committed))
+
+    result = _service(session, admission=CaptureAdmission()).resolve(
+        project_id=project_id, conflict_id=row.id, decision=_decision("plot_responds"),
+    )
+    [delta] = committed
+    assert result.graph_delta_ids == (delta.id,)
+    assert _patches(delta) == [("intent", "set", "state.status", "planned", "held")]
+    assert not delta.cognition_patches
+    assert delta.metadata["news_in_transit"] == queue
+    assert json.loads(row.decision_json)["pending_plan_response"] is True

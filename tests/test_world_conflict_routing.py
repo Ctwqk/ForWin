@@ -14,6 +14,7 @@ def _draft(*, source: str = "world_tick", impact_level: str = "major", violated:
         detected_after_chapter=3,
         story_time=3_000,
         involved_refs=["actor-1"],
+        intent_ref="intent-1",
         violated=violated or ("replay_cas" if source == "historical_rewrite" else "impact_review"),
         impact_level=impact_level,
         summary="A protected state would change.",
@@ -67,7 +68,7 @@ def test_auto_route_defaults_to_veto() -> None:
 def test_available_options_by_source_and_impact(
     source: str, impact_level: str, expected: tuple[str, ...]
 ) -> None:
-    options = available_options(_draft(source=source, impact_level=impact_level))
+    options = available_options(_draft(source=source, impact_level=impact_level), live_intent=True)
 
     assert options == expected
     assert "rewrite_chapter" not in options
@@ -81,7 +82,7 @@ def test_broken_boundary_offers_only_veto_or_amend(violated: str, impact_level: 
 
 @pytest.mark.parametrize("violated", ["onstage_slip", "feasibility", "impact_review"])
 def test_other_violations_keep_the_impact_options(violated: str) -> None:
-    assert available_options(_draft(impact_level="minor", violated=violated)) == (
+    assert available_options(_draft(impact_level="minor", violated=violated), live_intent=True) == (
         "veto_world", "plot_responds", "amend_plan", "accept_with_obligation",
     )
 

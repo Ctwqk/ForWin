@@ -536,6 +536,8 @@ def test_pending_plot_response_is_bound_and_attached(Session) -> None:
         )
         assert (patch.metadata["conflict_id"], patch.affected_chapters) == (conflict_id, [2])
         assert json.loads(plans[2].goals_json) == [PLOT_RESPONSE_GENERIC_GOAL, "goal-2"]
+        assert any(item["kind"] == "intent" and item["ref"] == _intent(world)
+                   for item in json.loads(plans[2].world_bindings_json))
         conflict = session.get(WorldPlanConflictRow, conflict_id)
         assert json.loads(conflict.result_refs_json) == ["delta-1", f"plan_patch:{patch.id}"]
         assert WorldConflictRepository(session).pending_plot_responses(world.project_id) == []
@@ -559,6 +561,7 @@ def test_superseding_a_bound_plot_response_reverts_its_patch(Session) -> None:
         assert superseded.reverted_plan_patch_ids == (patch.id,)
         assert revert.metadata["reverted_plan_patch_id"] == patch.id
         assert json.loads(plan.goals_json) == ["goal-1"]
+        assert json.loads(plan.world_bindings_json) == []
 
 
 @pytest.mark.parametrize("client", [

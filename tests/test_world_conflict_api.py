@@ -303,7 +303,7 @@ def test_response_without_next_plan_is_pending_not_escalated_over_http(conflict_
     assert response.json()["status"] == "resolved"
     with Session() as session:
         runtime = BookStateProjection(session).load_runtime_as_of(book.project_id, as_of_chapter=1)
-        assert runtime.world.get_state(book.later)["status"] == "resolved"
+        assert runtime.world.get_state(book.later)["status"] == ("held" if option == "plot_responds" else "resolved")
         assert session.scalars(select(NarrativePlanPatchRow).where(
             NarrativePlanPatchRow.project_id == book.project_id,
         )).all() == []
@@ -382,3 +382,39 @@ def test_planless_obligation_budget_rejection_over_http_rolls_back(conflict_api)
         )).all()) == 3
         runtime = BookStateProjection(session).load_runtime_as_of(book.project_id, as_of_chapter=1)
         assert runtime.world.get_state(book.later)["status"] == "planned"
+
+
+
+def test_plot_responds_holds_the_intent_and_commits_no_world_change(conflict_api):
+    from tests.test_world_conflict_resolution import _held, _resolution_deltas
+    from tests.test_world_tick_delta import _patches
+
+    client, Session, book, _ = conflict_api
+    conflict_id = _conflict(Session, book, proposed_change=_held(book).model_dump(mode="json"))
+    response = client.post(f"/api/projects/{book.project_id}/world-conflicts/{conflict_id}/resolve", json={
+        "option": "plot_responds", "rationale": "respond first", "reason": "reviewed",
+    })
+    assert response.status_code == 200, response.text
+    [delta] = _resolution_deltas(Session, book, conflict_id)
+    assert _patches(delta) == [(book.later, "set", "state.status", "planned", "held")]
+    assert not delta.fact_patches and not delta.cognition_patches
+    assert all(str(patch.op) != "create" for patch in delta.node_patches)
+    with Session() as session:
+        from forwin.models.project import ChapterPlan
+        bindings = json.loads(session.get(ChapterPlan, book.plans[2]).world_bindings_json)
+        assert [(item["kind"], item["ref"]) for item in bindings] == [("intent", book.later)]
+
+
+
+def test_http_refuses_second_plot_response_even_for_stale_offered_option(conflict_api):
+    from tests.test_world_conflict_resolution import _held, _resolution_deltas
+
+    client, Session, book, _ = conflict_api
+    first, second = [_conflict(Session, book, proposed_change=_held(book).model_dump(mode="json")) for _ in range(2)]
+    payload = {"option": "plot_responds", "rationale": "respond first", "reason": "reviewed"}
+    root = f"/api/projects/{book.project_id}/world-conflicts"
+    assert client.post(f"{root}/{first}/resolve", json=payload).status_code == 200
+    assert client.post(f"{root}/{second}/resolve", json=payload).status_code == 400
+    assert _resolution_deltas(Session, book, second) == []
+    with Session() as session:
+        assert WorldConflictRepository(session).get(book.project_id, second).status == "open"

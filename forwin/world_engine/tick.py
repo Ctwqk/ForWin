@@ -53,7 +53,9 @@ from .conflict_resolution import PropagatedNews, propagation_candidate
 from .conflict_types import ConflictDraft
 from .constraints import ConstraintIssue, apply_budgets, check_narrative_boundaries, classify_impact
 from .delta_builder import WorldTickDeltaBuilder
-from .intents import apply_intent_interactions, due_onstage_intents, onstage_bookkeeping, select_due_intents
+from .intents import (
+    apply_intent_interactions, due_onstage_intents, onstage_bookkeeping, release_held_intents, select_due_intents,
+)
 from .plan_bindings import onstage_plan_bindings
 from .propagation import chapter_events, latest_news_in_transit, tick_events
 from .running_state import RunningStateCheck
@@ -151,9 +153,7 @@ class WorldTickService:
         number = int(commit.chapter_number or 0)
         project = session.get(Project, commit.project_id)
         total = int(project.target_total_chapters or 0) if project is not None else 0
-        if 0 < total <= number:
-            # The book's last chapter is written: nothing follows for the world to move towards.
-            return _skipped(tick_id, "book_complete")
+        book_complete = 0 < total <= number
         # A rewritten chapter's world step runs after later chapters landed: the world already moved on.
         latest = BookStateRepository(session).latest_canon_chapter(commit.project_id) or 0
         if number != latest:
@@ -170,7 +170,8 @@ class WorldTickService:
         # on twice for one chapter. A direct resolve's delta ("conflict-") is no tick of the chapter.
         if any(delta_tick_id.startswith(TICK_ID_PREFIX) for _delta_id, delta_tick_id in ticks):
             return _skipped(tick_id, "chapter_already_ticked")
-        return _Tick(self, session, commit, policy=policy, tick_id=tick_id).run()
+        tick = _Tick(self, session, commit, policy=policy, tick_id=tick_id)
+        return tick.finish_holds() if book_complete else tick.run()
 
 
 class _Tick:
@@ -209,6 +210,21 @@ class _Tick:
         self.dropped: list[str] = []
         # Due offstage intents the tick did not ask about: beyond the cap, they wait for a later tick.
         self.unasked: list[str] = []
+
+    def finish_holds(self) -> WorldTickResult:
+        """The last chapter answers its holds without starting any new world activity."""
+        interactions = _interactions(self.chapter)
+        bound, _, _ = onstage_plan_bindings(self.session, self.context.project_id, self.context.chapter_number)
+        candidates = [
+            *apply_intent_interactions(self.runtime, interactions=interactions),
+            *release_held_intents(self.runtime, bound_intent_refs=bound, interactions=interactions,
+                                 now=self.context.now),
+        ]
+        if not candidates:
+            return _skipped(self.tick_id, "book_complete")
+        delta_ids, warnings = self._commit(candidates, spread_news=False)
+        return WorldTickResult(tick_id=self.tick_id, graph_delta_ids=delta_ids, conflict_ids=[],
+                               dropped_candidate_ids=list(self.dropped), postponed_candidate_ids=[], warnings=warnings)
 
     def run(self) -> WorldTickResult:
         from forwin.planning.beat_sheet.service import milestone_refs_for_chapter
@@ -280,6 +296,8 @@ class _Tick:
         bound_intent_refs, band_ended, band_bound_intent_refs = onstage_plan_bindings(
             self.session, self.context.project_id, self.context.chapter_number,
         )
+        released = release_held_intents(runtime, bound_intent_refs=bound_intent_refs,
+                                       interactions=interactions, now=now)
         onstage = onstage_bookkeeping(
             runtime,
             onstage_due=_unique([*due.onstage, *onstage_named], excluded=touched),
@@ -306,7 +324,7 @@ class _Tick:
         self.unasked = [adjudication_candidate_id(intent.id) for intent in unasked]
         adjudicated = self._settled(results)
         turns = self._settled(self._take_turns())
-        return [*applied, *clocks, *onstage.candidates, *adjudicated, *turns]
+        return [*applied, *released, *clocks, *onstage.candidates, *adjudicated, *turns]
 
     def _adjudicate_within_guard(
         self, intents: Sequence[WorldNode], *, limit: int,
@@ -480,7 +498,7 @@ class _Tick:
 
     # build and commit
 
-    def _commit(self, base: list[TickCandidate]) -> tuple[list[str], list[dict[str, str]]]:
+    def _commit(self, base: list[TickCandidate], *, spread_news: bool = True) -> tuple[list[str], list[dict[str, str]]]:
         """Build the tick's delta, dropping what does not build, and commit it with the in-tick resolutions.
 
         Each pass checks what is left against the running state first. Each retry drops a candidate or a
@@ -489,7 +507,6 @@ class _Tick:
         context = self.context
         # Canon read before the project lock: a writer landing meanwhile changes the snapshot checked below.
         queue = latest_news_in_transit(self.session, context.project_id)
-        spread_news = True
         while True:
             base = self._admitted(base)
             candidates = [*base, *(item for resolution in self.conflicts.resolutions for item in resolution.candidates)]

@@ -11,7 +11,7 @@ from forwin.book_state.schema import ACTOR_TIERS, IMPACT_LEVELS
 from forwin.protocol.book_state import WorldNode
 
 from .conflict_types import ConflictDraft
-from .types import TickCandidate, WorldEffects
+from .types import EffectEntityChange, TickCandidate, WorldEffects
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,23 @@ def apply_intent_interactions(
         for intent_id, (status, evidence) in statuses.items()
         if runtime.world.get_state(intent_id).get("status") != status
     ]
+
+
+def release_held_intents(
+    runtime: BookStateRuntime, *, bound_intent_refs: frozenset[str], interactions: Sequence[Mapping], now: int,
+) -> list[TickCandidate]:
+    """A canon chapter answered its bound holds; settlement takes precedence over release."""
+    settled = {str(item.get("intent_id") or "").strip() for item in interactions
+               if str(item.get("effect") or "") in _INTENT_STATUS_BY_EFFECT}
+    return [TickCandidate(
+        candidate_id=f"release:{intent.id}", origin="intent_interaction", intent_id=intent.id,
+        actor_id=_owner(intent), summary=_summary(intent),
+        intent_status_changes={intent.id: "planned"},
+        effects=WorldEffects(entity_changes=[
+            EffectEntityChange(ref=intent.id, field="scheduled_at", new_value=now),
+        ]),
+    ) for intent in _intents(runtime, status="held")
+        if intent.id in bound_intent_refs and intent.id not in settled]
 
 
 def select_due_intents(runtime: BookStateRuntime, *, now: int) -> DueIntents:
@@ -208,5 +225,6 @@ __all__ = [
     "apply_intent_interactions",
     "due_onstage_intents",
     "onstage_bookkeeping",
+    "release_held_intents",
     "select_due_intents",
 ]

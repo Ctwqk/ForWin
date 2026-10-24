@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from forwin.runtime.policy import RuntimePolicy
+from forwin.book_state.runtime import BookStateRuntime
 
 from .conflict_types import ConflictDecider, ConflictDraft, ConflictOption
 
@@ -22,7 +23,15 @@ _OBLIGATION_IMPACTS = frozenset({"minor", "moderate"})
 _CODEX_IMPACTS = frozenset({"moderate", "major"})
 
 
-def available_options(draft: ConflictDraft) -> tuple[ConflictOption, ...]:
+def live_intent(runtime: BookStateRuntime, intent_ref: str) -> bool:
+    node = runtime.world.get_node(intent_ref.strip()) if intent_ref else None
+    return (node is not None and node.is_active and str(node.node_type) == "intent"
+            and runtime.world.get_state(node.id).get("status") in {"planned", "due", "held"})
+
+
+def available_options(
+    draft: ConflictDraft, *, live_intent: bool = False, plot_responded: bool = False,
+) -> tuple[ConflictOption, ...]:
     """A rewrite can only undo what the world did, an infeasible plan can only be amended, a broken
     boundary is vetoed or amended around, and lighter conflicts may also leave an obligation."""
     if draft.source == "historical_rewrite":
@@ -31,9 +40,10 @@ def available_options(draft: ConflictDraft) -> tuple[ConflictOption, ...]:
         return _PLAN_CONFLICT_OPTIONS
     if draft.violated in _BOUNDARY_VIOLATIONS:
         return _BOUNDARY_OPTIONS
+    options = _PLAN_OPTIONS if draft.intent_ref and live_intent and not plot_responded else _BOUNDARY_OPTIONS
     if draft.impact_level in _OBLIGATION_IMPACTS:
-        return (*_PLAN_OPTIONS, "accept_with_obligation")
-    return _PLAN_OPTIONS
+        return (*options, "accept_with_obligation")
+    return options
 
 
 def route_conflict(draft: ConflictDraft, *, policy: RuntimePolicy) -> ConflictDecider:
@@ -49,4 +59,4 @@ def route_conflict(draft: ConflictDraft, *, policy: RuntimePolicy) -> ConflictDe
     return "human"
 
 
-__all__ = ["PLAN_BOUNDARY_VIOLATIONS", "AUTO_OPTION", "PLAN_CONFLICT_SOURCES", "available_options", "route_conflict"]
+__all__ = ["PLAN_BOUNDARY_VIOLATIONS", "AUTO_OPTION", "PLAN_CONFLICT_SOURCES", "available_options", "live_intent", "route_conflict"]

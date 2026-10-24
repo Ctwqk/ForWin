@@ -33,7 +33,7 @@ from .conflict_resolution import (
     option_candidates,
     record_option_side_effects,
 )
-from .conflict_routing import AUTO_OPTION, available_options, route_conflict
+from .conflict_routing import AUTO_OPTION, available_options, live_intent, route_conflict
 from .conflict_types import ConflictDecision, ConflictDraft
 from .constraints import check_narrative_boundaries, milestone_change_references
 from .types import TickCandidate, TickContext
@@ -156,7 +156,10 @@ class TickConflicts:
         if draft.intent_ref and key in self._open:
             return self._open[key]
         decider = route_conflict(draft, policy=self.policy)
-        row = self.repo.create(draft, required_decider=decider, options=available_options(draft))
+        row = self.repo.create(draft, required_decider=decider, options=available_options(
+            draft, live_intent=live_intent(self.runtime, draft.intent_ref),
+            plot_responded=self._plot_responded(draft.intent_ref),
+        ))
         if draft.intent_ref:
             self._open[key] = row.id
         self.session.add(conflict_detected_event(
@@ -183,6 +186,13 @@ class TickConflicts:
                     decided_at=_utcnow(),
                 ), trace_id=delegation.trace_id)
         return ""
+
+    def _plot_responded(self, intent_ref: str) -> bool:
+        return self.repo.has_plot_response(self.context.project_id, intent_ref) or any(
+            item.decision.option == "plot_responds"
+            and self.repo.get(self.context.project_id, item.conflict_id).intent_ref == intent_ref
+            for item in self.resolutions
+        )
 
     def cancel(self, conflict_id: str, *, failure_reason: str, detail: str) -> None:
         """Drop a decided option from the tick and hand its conflict to a human; the change stays held."""
@@ -237,6 +247,7 @@ class TickConflicts:
         try:
             candidates = option_candidates(
                 row, decision, runtime=self.runtime, policy=self.policy, reroll_count=reroll_count, now=context.now,
+                plot_responded=self._plot_responded(row.intent_ref),
             )
         except ConflictOptionUnavailable as exc:
             self._escalate(row, OPTION_UNAVAILABLE, option=decision.option, detail=str(exc), trace_id=trace_id)

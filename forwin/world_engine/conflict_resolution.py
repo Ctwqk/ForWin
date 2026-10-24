@@ -42,7 +42,7 @@ from forwin.runtime.policy import RuntimePolicy
 from forwin.writer.prompt_core.world_engine import world_change_response
 
 from .conflict_repository import ConflictNotOpen, WorldConflictRepository, conflict_result_refs
-from .conflict_routing import PLAN_BOUNDARY_VIOLATIONS, PLAN_CONFLICT_SOURCES
+from .conflict_routing import PLAN_BOUNDARY_VIOLATIONS, PLAN_CONFLICT_SOURCES, live_intent
 from .conflict_types import ConflictDecision
 from .constraints import check_narrative_boundaries
 from .delta_builder import WorldTickDeltaBuilder
@@ -124,13 +124,15 @@ def option_candidates(
     policy: RuntimePolicy,
     reroll_count: int,
     now: int,
+    plot_responded: bool = False,
 ) -> list[TickCandidate]:
     """The world changes that carry out the decision; none when the option changes nothing in the world.
 
     ``runtime`` is the latest canon chapter's. veto_world stops the conflict's intent and, while
-    ``reroll_count`` is under ``world.max_rerolls``, has its actor act again at ``now``. The other
-    options commit the held change; amend_plan also ends the protections it breaks with that chapter,
-    and the other two refuse a change that still breaks one (ConflictOptionUnavailable). A held
+    ``reroll_count`` is under ``world.max_rerolls``, has its actor act again at ``now``. A plot
+    response holds only its intent; accept and amend commit the proposed change. amend_plan
+    also ends the protections it breaks with that chapter; the other options refuse a change
+    that still breaks one (ConflictOptionUnavailable). A held
     change that sets the status of an intent canon has since settled is stale (ConflictStale).
     Milestone and reveal-schedule conflicts accept only veto_world or amend_plan.
     """
@@ -142,6 +144,8 @@ def option_candidates(
     if decision.option == "veto_world":
         veto = _veto_candidate(conflict, runtime, policy=policy, reroll_count=reroll_count, now=now)
         return [veto] if veto is not None else []
+    if decision.option == "plot_responds" and (plot_responded or not live_intent(runtime, conflict.intent_ref)):
+        raise ConflictOptionUnavailable(f"Conflict {conflict.id}: plot_responds requires a live, unanswered intent")
     held = _held_change(conflict)
     _check_intents_unsettled(conflict, held, runtime)
     if decision.option != "amend_plan":
@@ -149,6 +153,13 @@ def option_candidates(
             raise ConflictOptionUnavailable(
                 f"Conflict {conflict.id}: the held change breaks an active protection; veto it or amend the plan"
             )
+        if decision.option == "plot_responds":
+            return [TickCandidate(
+                candidate_id=f"conflict:{conflict.id}:hold", origin="conflict_resolution",
+                actor_id=conflict.actor_ref, intent_id=conflict.intent_ref,
+                summary=conflict.summary, effects=WorldEffects(),
+                intent_status_changes={conflict.intent_ref: "held"},
+            )]
         return [held]
     release = _release_candidate(conflict, held, runtime)
     return [held, release] if release is not None else [held]
@@ -398,7 +409,9 @@ def record_plot_response_patch(session: Session, conflict: WorldPlanConflictRow,
         target_plan_id=plan.id,
         target_arc_id=plan.arc_plan_id,
         affected_chapters=[plan.chapter_number],
-        new_contract={"form_instruction": goal, "conflict_id": conflict.id},
+        new_contract={"form_instruction": goal, "conflict_id": conflict.id,
+                      "world_bindings": ([{"kind": "intent", "ref": conflict.intent_ref, "how": goal}]
+                                         if conflict.intent_ref else [])},
         diff_summary=goal,
         writer_context_injections=[{"type": PLOT_RESPONSE_PATCH_TYPE, "conflict_id": conflict.id, "instruction": goal}],
         reviewer_context_injections=[
@@ -512,6 +525,7 @@ class ConflictResolutionService:
         context = _resolution_context(session, project_id, chapter_number=latest, fallback_now=row.story_time)
         candidates = option_candidates(
             row, decision, runtime=runtime, policy=self.policy, reroll_count=reroll_count, now=context.now,
+            plot_responded=repo.has_plot_response(project_id, row.intent_ref),
         )
         tick_id = f"conflict-{row.id}"
         self._check_against_canon(row, candidates, runtime=runtime, context=context, tick_id=tick_id)
@@ -670,16 +684,15 @@ class ConflictResolutionService:
         """Build the candidates and their news into one world_engine delta on the latest canon chapter,
         commit it, and return its ids with the builder's warnings."""
         project_id = conflict.project_id
-        news = propagation_candidate(
-            runtime,
-            BookLexiconRepository(self.session).get(project_id),
-            events=tick_events(project_id, tick_id, candidates),
-            # Read under the project lock, so no other writer's queue is lost.
-            in_transit=latest_news_in_transit(self.session, project_id),
-            now=context.now,
-            candidate_id=f"conflict:{conflict.id}:news",
-            summary=conflict.summary,
-        )
+        # A plot response writes only the hold; queued news waits for an actual world tick.
+        # Read under the project lock, so no other writer's queue is lost.
+        queue = latest_news_in_transit(self.session, project_id)
+        news = (PropagatedNews(candidate=None, in_transit=queue) if decision.option == "plot_responds" else
+                propagation_candidate(
+                    runtime, BookLexiconRepository(self.session).get(project_id),
+                    events=tick_events(project_id, tick_id, candidates), in_transit=queue, now=context.now,
+                    candidate_id=f"conflict:{conflict.id}:news", summary=conflict.summary,
+                ))
         build = WorldTickDeltaBuilder(self.session).build(
             context=context,
             candidates=[*candidates, news.candidate] if news.candidate is not None else candidates,

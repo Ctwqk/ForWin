@@ -103,6 +103,15 @@ class FuturePlanPatchMixin:
     @staticmethod
     def apply_form_plan_patch(plan: ChapterPlan, patch: NarrativePlanPatch) -> None:
         """Put the patch's form instruction first in the plan's goals and progress markers."""
+        if additions := patch.new_contract.get("world_bindings", []):
+            bindings = _loads(plan.world_bindings_json, [])
+            existing = {_binding_key(item) for item in bindings}
+            for binding in additions:
+                key = _binding_key(binding)
+                if key and key not in existing:
+                    bindings.append(binding)
+                    existing.add(key)
+            plan.world_bindings_json = _json(bindings)
         instruction = _form_instruction(patch)
         if not instruction:
             return
@@ -156,11 +165,24 @@ def _contributions(patch: NarrativePlanPatch) -> dict[str, set[str]]:
             "rule_anchors": set(payoff_tests),
         }
     instruction = _form_instruction(patch)
-    return {"goals": {instruction}, "progress_markers": {instruction}} if instruction else {}
+    result = {"goals": {instruction}, "progress_markers": {instruction}} if instruction else {}
+    bindings = {key for item in patch.new_contract.get("world_bindings", []) if (key := _binding_key(item))}
+    if bindings:
+        result["world_bindings"] = bindings
+    return result
+
+
+def _binding_key(binding: Mapping) -> str:
+    return _json([binding.get("kind"), binding.get("ref")]) if isinstance(binding, Mapping) else ""
 
 
 def _remove_from_plan(plan: ChapterPlan, removed: Mapping[str, set[str]]) -> None:
     """Drop removed["goals"] from the plan's goals and each other key's items from that experience plan list."""
+    if "world_bindings" in removed:
+        plan.world_bindings_json = _json([
+            item for item in _loads(plan.world_bindings_json, [])
+            if _binding_key(item) not in removed["world_bindings"]
+        ])
     goals = removed.get("goals", set())
     plan.goals_json = _json([
         goal for item in _loads(plan.goals_json, []) if (goal := str(item).strip()) and goal not in goals
@@ -169,7 +191,7 @@ def _remove_from_plan(plan: ChapterPlan, removed: Mapping[str, set[str]]) -> Non
     if not isinstance(experience, dict):
         return
     for key, items in removed.items():
-        if key != "goals" and isinstance(experience.get(key), list):
+        if key not in {"goals", "world_bindings"} and isinstance(experience.get(key), list):
             experience[key] = [item for item in experience[key] if str(item).strip() not in items]
     plan.experience_plan_json = _json(experience)
 

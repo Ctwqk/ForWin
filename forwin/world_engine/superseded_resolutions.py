@@ -63,8 +63,9 @@ def supersede_resolutions(
     reverted: list[str] = []
     for row in rows:
         refs = _result_refs(row)
-        if not any(ref.startswith(PLAN_PATCH_REF_PREFIX) for ref in conflict_result_refs(row)):
-            WorldConflictRepository(session).clear_pending_plan_response(row)
+        # The canon range rewind already removed the hold's status patch. Retire the
+        # response even when a planner attached a patch, so it can never be rebound.
+        WorldConflictRepository(session).clear_pending_plan_response(row)
         for ref in refs:
             if ledger.cancel_obligation(ref, reason=reason) is not None:
                 cancelled.append(ref)

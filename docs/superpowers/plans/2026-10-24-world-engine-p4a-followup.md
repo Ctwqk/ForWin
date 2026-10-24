@@ -170,3 +170,27 @@ Background: FU-R45 removed the raw premise, setting and Genesis overviews from t
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `.venv/bin/python -m pytest -q tests/test_arc_beat_sheet.py tests/test_planner_writer_text.py tests/test_writer_secret_sources.py tests/test_writer_world_view_prompt.py tests/test_planning_multi_genre.py tests/test_prompt_revision.py tests/test_no_story_content_in_runtime.py`. Expect PASS.
 - [ ] **Step 5: Commit**: `feat(planning): give the writer a validated setting brief from the beat sheet`.
+
+### Task F7: Arc-level writer text checks reader knowledge from before the arc starts (FU-R52)
+
+Background: the F6 review found that `_generate` validates every writer-facing beat-sheet text against `reader_known_facts` of the runtime at the latest canon chapter. When the sheet is revised mid-arc, after chapter N, a phase purpose, milestone, `reader_promise` field, ambiguity constraint or `setting_brief` may state a fact the reader learned in a chapter of this arc. A historical rewrite (`forwin/canon/historical_rewrite.py`) of an earlier chapter of the same arc then renders that text into a chapter where the reader does not yet know the fact. The F6 review's two test gaps are folded in.
+
+**Files:**
+- Modify: `forwin/planning/beat_sheet/service.py` (`_generate`, `beat_sheet_issues`, `_writer_text_issues` and its docstring)
+- Test: `tests/test_planner_writer_text.py`, `tests/test_arc_beat_sheet.py`, `tests/test_planning_v6_schema.py`
+
+**Interfaces:**
+- `beat_sheet_issues(..., reader_known: frozenset[str] | None = None)`. These are the fact node ids the reader knows before `chapter_start`. `None` means `reader_known_facts(runtime)`, which is correct whenever the runtime is as of `chapter_start - 1` or earlier.
+- `_writer_text_issues` uses `reader_known` in place of `reader_known_facts(runtime)` for both checks: the stated-proposition concealed set and the concealed-name `revealed_nodes`.
+- `_generate` passes `reader_known=reader_known_facts(runtime as of chapter_start - 1)`. It loads that runtime only when `chapter_start - 1` is below the latest canon chapter; otherwise it reuses the runtime it already has. Fact refs, actors and the digest are still checked against the latest-canon runtime.
+- The reveal schedule (`reveal_chapters` plus the sheet's own reader targets) keeps each text's own start, unchanged.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `test_mid_arc_revise_checks_reader_knowledge_from_arc_start`: the reader's knowledge records fact F at chapter N inside the arc (unscheduled), and the sheet is revised after N. A `setting_brief` or `reader_promise` stating F's proposition gets the writer-text issue. A sheet for the next arc, starting after N, may state it.
+  - The same case for a concealed name whose only revealing fact was learned inside the arc: it is rejected in `setting_brief`.
+  - The F6 review's Minor 3: a reader reveal scheduled at the second phase's start. The concealed name is allowed in `phases[1].purpose` and rejected in `setting_brief`.
+  - The F6 review's Minor 2: `_assert_planning_schema` checks that the migrated `arc_beat_sheets.setting_brief` is NOT NULL with a server default of `''`.
+- [ ] **Step 2: Run them; confirm the behaviour tests fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** `.venv/bin/python -m pytest -q tests/test_arc_beat_sheet.py tests/test_planner_writer_text.py tests/test_planning_v6_schema.py tests/test_planning_multi_genre.py tests/test_plan_feasibility.py`. Expect PASS.
+- [ ] **Step 5: Commit**: `fix(planning): check arc-level writer text against reader knowledge from before the arc`.

@@ -195,6 +195,7 @@
   - **W16**：
     - 快照排序不再依赖事务开始时间。`world_snapshots` 增加 `seq` 列（数据库序列），排序改为 `as_of_chapter desc, seq desc`。
     - 原来在 `historical_rewrite.py` 中的规避逻辑删除。
+  - **B1（P4a 审计；P4a R24 M11 原定在此）**：`plan.band` 的 payload 加字符上限 `planning.band_payload_budget_chars`（默认 60000）。地点只取本 band 的 subworld 加主角邻近；事实只取 offered 行动者相关的；意图只取 offered 行动者的。`OfferedRefs` 同步收窄，保证校验器不会拒绝 prompt 没有提供的 ref。测试：大地图夹具的 payload 不超过上限，校验与 prompt 一致。
   - **C11**：
     - 义务仓储的 `mark_obligation_planned`、`mark_obligation_resolved`、`expire_obligation` 遇到已关闭的状态时拒绝。
     - `chapter_input` 只提供状态为 active 的 `obligations_to_resolve`。
@@ -577,9 +578,11 @@
 1. 确认线上没有活跃的生成任务：`task_active_generation_check`。暂停全部任务，优先 `task_pause`。关闭自动调度。暂停 post-Canon worker。
 2. 备份：`pg_dump`，加上外部存储（MinIO 中的 artifacts、Qdrant 的 `chapter_memories` 与 `llm_kb_vectors`、`data/llm_kb`、`data/world_vaults`、`data/publisher_covers`）。
 3. 清库：用 P0 的 `scripts/purge_all_projects.py`，先 dry-run，再执行。
-4. 迁移前检查：
+4. 迁移前检查（另见 `docs/operations/world-engine-p4-deploy-preflight.md` 与 P4a 台账中标为 “For the deploy runbook” 的各条；清库之后，待重新抽取的草稿、过期候选、旧计划行等条目已不存在，runbook 写明“清库后不适用”）：
    - `SELECT project_id, chapter_number, count(*) FROM chapter_plans GROUP BY 1,2 HAVING count(*) > 1`：清库后应为空。
    - 列出存储中名字或 base_url 含 codex-spark、但 model 不在 `FORWIN_CODEX_MODELS` 中的 model profile（P3 裁定 P3）。
+   - 运行 preflight 文档中的退化卷范围 SQL（P4a R34），清库后应为空。
+   - 0006 只在 P4b 最后一次追加之后部署一次。部署后重启各服务（Qdrant 就绪缓存）。
 5. 合入 master，执行 `alembic upgrade head`，从 `0001` 升到 `0006_planning_v6`。
 6. 配置 `FORWIN_CODEX_MODELS`，用一次只读调用确认 Codex bridge 以 `gpt-6-astra` 应答，且 `actual_model` 一致。
 7. 通过 150 sync 部署：`ssh infra-150 '/home/taiwei/deploy-github-sync/bin/deploy-github-sync.sh --apply --project forwin'`。
@@ -591,14 +594,60 @@
 
 ---
 
+## P4a 审计追加（2026-10-24）
+
+来源：`.superpowers/sdd/2026-10-24-world-engine-audit/comparison.md`（opus 与 fable 两份独立审计，控制者已逐条核实）。A 类的泄密、W9 与 `plot_responds` 已在 P4a follow-up 中修复（`docs/superpowers/plans/2026-10-24-world-engine-p4a-followup.md`）。下面是 B 类中没有归属的部分，B1 已并入 Task 2，B12 已并入 Task 14。
+
+### Task 15: PromptTrace 独立落盘与 world 步骤拆分事务（B2、B3）
+
+**Files:** `forwin/maintenance/post_canon.py`、`forwin/world_engine/tick.py`、`forwin/planning/band_planner/service.py`、`forwin/naming/entity_registrar.py`、`forwin/generation/pipeline_core/review_autofix.py`；Test: 对应测试文件
+
+- world 步骤、band 规划器 `audit_error` 路径、实体准入分类器的 PromptTrace 与 LLM DecisionEvent 在独立事务里提交（照 Codex delegate 的 `own_transaction_audit_writer`）；步骤回滚或 tick 过期重试时，已花费的调用仍有 trace。实体准入分类器的 attempts 不再被下一个 trace 吸走。
+- world 步骤改为多个已提交单元（照 plan 步骤）：LLM 调用阶段不在任何打开的事务里；只在提交 tick delta 时上锁。trace 与事件插入不再长时间持有项目行的 key-share 锁。
+- 测试：stale 重试后 trace 数等于真实调用数；分类器调用有自己的 trace；world 步骤的 LLM 调用期间，另一连接能拿到项目行 `FOR UPDATE`。
+
+### Task 16: canon 不变式与类型化查询（B5、B6、B13、band_plans 唯一性）
+
+**Files:** `forwin/book_state/reviewer.py`、`forwin/book_state/compiler.py`、`forwin/canon/admission.py`、`forwin/world_engine/{actor_turns,superseded_resolutions,conflict_repository}.py`、`forwin/models/{world_conflict,planning_v6,book_state}.py`、`0006_planning_v6.py`；Test: 对应测试文件
+
+- 审查门新增 error `missing_old_value`：对已存在目标的非 create 补丁缺少 `old_value` 时拒绝（保留 P2 R8 的合并例外与 protection 状态特例）。
+- 用类型化列取代 JSON 文本匹配：`world_plan_conflicts.decision_option`（索引）、tick id 列（索引）、结果引用的关联表或数组列；删除 `actor_turns` 的 LIKE、`superseded_resolutions` 的 contains、`admission` 的 metadata contains。CAS 失败按异常类型判断，不再匹配消息文本。
+- `band_plans` 增加唯一约束 `(arc_plan_id, band_index, version)`。
+- 去掉 `+1µs` 时间戳规避（与 Task 2 的 W16 `seq` 列一起）；排查三条 flake（`test_accepting_a_change_to_a_settled_intent_is_stale`、`test_tick_after_chapter_one…[urban_mystery]`、`test_an_intent_too_large_alone_gives_its_slot_to_the_next_due_intent`）在并发负载下的原因并修复。
+
+### Task 17: 分层与去重复（B4、B7）
+
+**Files:** `forwin/book_state/**`、`forwin/world_engine/**`、`forwin/planning/**`、`forwin/map/**`、`forwin/observability/llm_trace.py`、`tests/test_bare_imports.py`；Test: 对应测试文件
+
+- `book_state` 不再向上依赖：`READER_OBSERVER`、`chapter_plan_fingerprint`、节拍表揭示目标读取、`estimate_travel` 的类型移到叶子模块；完成 P4a R30 搁置的地图 ORM 行迁入 `forwin/models`，删除 `map/__init__` 的导入顺序修补。
+- 翻译器的私有名字提升为公共的共享模块（关系规划器合并为一份，按来源参数化）；五份 LLM attempt/trace 管道抽成 `forwin/observability/llm_trace.py` 的一个帮助函数；“事实是否为秘密”的判定合并为一个函数；重复常量（`_MINUTE_EPSILON`、reader 记号、事件事实类型、overlay key 等）合并。
+- 修复 5 个冷导入循环（`maintenance.events`、`maintenance.post_canon`、`maintenance.state`、`pipeline_core.world_projection`、`protocol.trope_md_loader`），`tests/test_bare_imports.py` 改为扫描全部 `forwin` 模块。
+- 把以过程命名的测试文件（`test_task9_fix1_unit.py`、`test_final_fix_run_a.py`）并入主题测试；overfit 扫描器补上函数内 CJK 列表、`.startswith((…))`、拼接字面量等盲区（P4a 审计 D-14）。
+
+### Task 18: 删除死代码与第二套 protection（B8、B9）
+
+**Files:** `forwin/planning/band_plan/`、`forwin/planning/service.py`、`forwin/protocol/book_state.py`、`forwin/state/query_helpers.py`、`forwin/experience/service.py`、`forwin/writer/llm/routing.py`、`forwin/map/models.py`、`forwin/models/{book_state,planning_control}.py`、`forwin/application/project_control/operations.py`、read models、`forwin/api_schema/project.py`、`forwin/ui_assets/home/app_task_control.js`、`0006_planning_v6.py`；Test: 对应测试文件
+
+- 删除：`planning/band_plan/` 包及其测试、`PlanningService`、`CognitionState`、`_active_arc_rows_for_projects`、`load_long_window_audience_trends`、`SqlBookStateQueryInterface`、`world_line` 残留（`graph_deltas.world_line_id`、`active_world_line_ids_json`、narrative `world_line` 类型）、`routing.py` 中无调用者的 family/stage、`MapEdge.access_rule_id`。部署后的兼容垫片（`policy.py` 的 map_movement 映射与 recency 键 pop、`trace_upload` 旧步骤名、`MAP_MOVEMENT_REVIEW_ISSUE`）在 Task 14 部署之后的收尾提交中删除。
+- `narrative_constraints`：六种类型中五种自 P2 起已不生效。改为由操作员创建 source=human 的 `review_constraint` protection（经 `commit_plan_constraints`），迁移现有行后删除旧表、API 字段与 UI 编辑器；或者经用户决定直接删除。实施前向用户确认。
+
+### Task 19: 成本与自治的度量（B10、B11、B14 余项）
+
+**Files:** `forwin/context/**`、`forwin/knowledge_system/**`、`forwin/retrieval/broker_core/broker.py`、`forwin/observability/cost_ledger.py`、`forwin/planning/world_digest.py`、`forwin/planning/feasibility.py`；Test: 对应测试文件
+
+- 写作上下文组装共享一次 BookState runtime（目前一次组装约 15 次加载）；`WorldContextPack` 只在 LLM 审稿需要时惰性组装。加载计数测试：一章的组装不超过 3 次加载。
+- 每章报告：各角色 LLM 调用次数与 token、世界冲突数与人工冲突数（P5 验收的度量，对应设计“验证”第 5 条与审计的自治风险）。
+- 世界简报改为逐行降级裁剪（避免整段裁掉只剩主角）；`exit_state` 的值与 BookState 比较（不再只看是否被触及）。
+
+---
+
 ## 执行分工（沿用 P3 / P4a 模式）
 
-- Codex `gpt-6-astra`：Task 0、2、7、11
-- Codex `gpt-6.1-sol`：Task 13
-- Claude opus：Task 1、3、4、5、6、8、9、10、12
+- 按用户偏好（P4a R32），实现、修复与任务审查都交给 Codex：`gpt-6-astra` 负责 Task 0–12、15–19，`gpt-6.1-sol` 负责 Task 13 与简单的修复；控制者运行全部 PostgreSQL 测试与全量测试；最终的整支审查用 Claude。
 - Task 14：仅控制者执行
 - 依赖顺序：
   - 0 → 1、2 并行 → 3 → 4、5 并行 → 6。
   - 8 → 9 → 10 依次进行，因为它们共用世界引擎文件。
   - 7、11 从 3 开始可以并行。
-  - 12 → 13 → 14。
+  - 15 在 1 之后；16 与 2 共用 W16，放在 2 之后；17 放在 3、10 之后（分层改动面大，避免与功能任务冲突）；18 在 17 之后；19 在 15、17 之后。
+  - 12 → 13 → 14，13 的文档覆盖 15–19。

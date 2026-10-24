@@ -9,7 +9,7 @@ from .schemas import EvalValidationResult
 
 REQUIRED_JSON_KEYS: dict[str, list[str]] = {
     "genesis_brief": ["title", "one_line", "audience"],
-    "arc_plan": ["chapters"],
+    "band_plan": ["chapters"],
     "scene_breakdown": ["scenes"],
     "review_json": ["verdict", "issues"],
     "comment_analysis": ["signals"],

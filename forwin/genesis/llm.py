@@ -337,17 +337,14 @@ def _call_json_with_trace_impl(
     ]
     for attempt_no, attempt in enumerate(retry_plan, start=1):
         try:
-            is_chapter_plan = str(stage_key or "").startswith("launch_arc_")
             raw = self._call_llm_chat(
                 effective_messages,
                 temperature=attempt["temperature"],
                 max_tokens=attempt["max_tokens"],
                 response_format={"type": "json_object"},
-                task_family="chapter_plan_materialization"
-                if is_chapter_plan
-                else "genesis",
+                task_family="genesis",
                 stage_key=stage_key,
-                codex_allowed=not is_chapter_plan,
+                codex_allowed=True,
                 output_schema={"type": "object"},
             )
             try:
@@ -425,10 +422,7 @@ def _resolve_skill_layers(self, *, stage_key: str):
     normalized_stage_key = str(stage_key or "").strip()
     selection_stage_key = normalized_stage_key
     task_family = "generate_stage_payload"
-    if normalized_stage_key.startswith("launch_arc_"):
-        selection_stage_key = "book_blueprint"
-        task_family = "launch_arc_plan"
-    elif ":refine" in normalized_stage_key:
+    if ":refine" in normalized_stage_key:
         selection_stage_key = normalized_stage_key.split(":", 1)[0]
         task_family = "refine_stage_payload"
     selections = self.skill_router.select(

@@ -42,9 +42,6 @@ class _Container:
     def build_chapter_pipeline(self):
         return SimpleNamespace(
             policy=self.policy,
-            arc_envelope_manager=SimpleNamespace(
-                backfill_missing_resolutions=lambda *, session: 0
-            ),
         )
 
     def close(self) -> None:

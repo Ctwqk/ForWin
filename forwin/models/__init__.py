@@ -25,12 +25,8 @@ from .narrative_obligation import (
     NarrativePlanPatchRow,
 )
 from .phase import (
-    ArcEnvelope,
-    ArcEnvelopeAnalysis,
-    ArcStructureDraft,
     BandExperiencePlan,
     ChapterRewriteAttempt,
-    ProvisionalPromotionRecord,
 )
 from .progression import ProjectProgressionRule
 from .publisher import (
@@ -118,12 +114,8 @@ __all__ = [
     "NarrativeObligationRow",
     "NarrativePlanPatchRow",
     "FuturePlanAuditRunRow",
-    "ArcEnvelope",
-    "ArcStructureDraft",
-    "ArcEnvelopeAnalysis",
     "BandExperiencePlan",
     "ChapterRewriteAttempt",
-    "ProvisionalPromotionRecord",
     # draft
     "ChapterDraft",
     "ChapterReview",

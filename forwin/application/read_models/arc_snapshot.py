@@ -189,9 +189,7 @@ def _band_checkpoint_detail(row: BandCheckpoint | None) -> BandCheckpointDetail 
 
 
 def project_arc_snapshot_payload(
-    latest_arc_envelope,
-    latest_arc_analysis,
-    latest_arc_structure=None,
+    latest_beat_sheet=None,
     latest_band_experience=None,
 ) -> dict[str, Any]:
     payload = {
@@ -215,44 +213,15 @@ def project_arc_snapshot_payload(
         "active_band_curiosity_beats": [],
         "active_band_template_ids": [],
     }
-    if latest_arc_envelope is not None:
-        payload.update(
-            {
-                "active_arc_id": str(getattr(latest_arc_envelope, "arc_id", "") or ""),
-                "active_arc_policy_tier": latest_arc_envelope.source_policy_tier,
-                "active_arc_target_size": latest_arc_envelope.resolved_target_size,
-                "active_arc_soft_min": latest_arc_envelope.resolved_soft_min,
-                "active_arc_soft_max": latest_arc_envelope.resolved_soft_max,
-                "active_arc_detailed_band_size": latest_arc_envelope.detailed_band_size,
-                "active_arc_frozen_zone_size": latest_arc_envelope.frozen_zone_size,
-                "active_arc_confidence": latest_arc_envelope.current_confidence,
-            }
-        )
-    if latest_arc_analysis is not None:
-        payload.update(
-            {
-                "active_arc_recommendation": latest_arc_analysis.recommendation,
-                "active_arc_analysis_confidence": latest_arc_analysis.confidence,
-                "active_arc_evidence": _json_list_strings(
-                    latest_arc_analysis.evidence_json
-                ),
-                "active_arc_expansion_signals": _json_list_strings(
-                    latest_arc_analysis.expansion_signals_json
-                ),
-                "active_arc_compression_signals": _json_list_strings(
-                    latest_arc_analysis.compression_signals_json
-                ),
-            }
-        )
-    if latest_arc_structure is not None:
+    if latest_beat_sheet is not None:
         if not payload.get("active_arc_id"):
             payload["active_arc_id"] = str(
-                getattr(latest_arc_structure, "arc_id", "") or ""
+                getattr(latest_beat_sheet, "arc_plan_id", "") or ""
             )
         payload["active_reader_promise"] = _json_object(
-            latest_arc_structure.reader_promise_json
+            latest_beat_sheet.reader_promise_json
         )
-        arc_payoff_map = _json_object(latest_arc_structure.arc_payoff_map_json)
+        arc_payoff_map = _json_object(latest_beat_sheet.arc_payoff_map_json)
         payload["active_revelation_layers"] = [
             item
             for item in (arc_payoff_map.get("revelation_layers") or [])

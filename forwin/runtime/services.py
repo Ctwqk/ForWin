@@ -41,12 +41,10 @@ class CoreRuntimeServices:
 class GenerationRuntimeServices:
     llm_client: ModelAdapter
     skill_runtime: SkillRuntimeBundle
-    arc_director: Any
     book_genesis: Any
     subworld_manager: Any
     retrieval_broker: Any
     comment_analyzer: Any
-    arc_envelope_manager: Any
     draft_review: DraftReviewService
     writer: Any
     repair: RepairService

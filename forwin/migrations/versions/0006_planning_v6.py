@@ -29,6 +29,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
+    _drop_retired_arc_planner_tables()
     op.create_table(
         "arc_beat_sheets",
         sa.Column("id", sa.String(), nullable=False),
@@ -131,6 +132,7 @@ def _drop_simulation_from_policies() -> None:
 
 def downgrade() -> None:
     """Revert schema; the maintenance step data rewrite is not reversed."""
+    _restore_retired_arc_planner_tables()
     op.create_table(
         "project_replan_events",
         sa.Column("id", sa.String(), nullable=False),
@@ -274,3 +276,138 @@ def downgrade() -> None:
     op.drop_table("band_plans")
     op.drop_index("ix_arc_beat_sheets_project_status", table_name="arc_beat_sheets")
     op.drop_table("arc_beat_sheets")
+
+
+# Task 17a: removed planner schema; downgrade restores schema, not deleted rows.
+def _drop_retired_arc_planner_tables() -> None:
+    op.drop_index("ix_arc_envelope_analyses_project_arc", table_name="arc_envelope_analyses")
+    op.drop_index("ix_arc_envelopes_project_arc", table_name="arc_envelopes")
+    op.drop_index("ix_arc_structure_drafts_project_arc", table_name="arc_structure_drafts")
+    op.drop_index("ix_provisional_promotions_project_arc_band", table_name="provisional_promotion_records")
+    op.drop_table("arc_envelope_analyses")
+    op.drop_table("arc_envelopes")
+    op.drop_table("arc_structure_drafts")
+    op.drop_table("provisional_promotion_records")
+
+
+def _restore_retired_arc_planner_tables() -> None:
+    op.create_table(
+        "arc_envelope_analyses",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("arc_id", sa.String(), nullable=False),
+        sa.Column("based_on_band_id", sa.String(), nullable=False),
+        sa.Column("recommendation", sa.String(), nullable=False),
+        sa.Column("evidence_json", sa.Text(), nullable=False),
+        sa.Column("expansion_signals_json", sa.Text(), nullable=False),
+        sa.Column("compression_signals_json", sa.Text(), nullable=False),
+        sa.Column("suggested_target", sa.Integer(), nullable=False),
+        sa.Column("suggested_soft_min", sa.Integer(), nullable=False),
+        sa.Column("suggested_soft_max", sa.Integer(), nullable=False),
+        sa.Column("confidence", sa.Float(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["arc_id"],
+            ["arc_plan_versions.id"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_arc_envelope_analyses_project_arc",
+        "arc_envelope_analyses",
+        ["project_id", "arc_id"],
+        unique=False,
+    )
+    op.create_table(
+        "arc_envelopes",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("arc_id", sa.String(), nullable=False),
+        sa.Column("base_target_size", sa.Integer(), nullable=False),
+        sa.Column("base_soft_min", sa.Integer(), nullable=False),
+        sa.Column("base_soft_max", sa.Integer(), nullable=False),
+        sa.Column("resolved_target_size", sa.Integer(), nullable=False),
+        sa.Column("resolved_soft_min", sa.Integer(), nullable=False),
+        sa.Column("resolved_soft_max", sa.Integer(), nullable=False),
+        sa.Column("detailed_band_size", sa.Integer(), nullable=False),
+        sa.Column("frozen_zone_size", sa.Integer(), nullable=False),
+        sa.Column("current_projected_size", sa.Integer(), nullable=False),
+        sa.Column("current_confidence", sa.Float(), nullable=False),
+        sa.Column("source_policy_tier", sa.String(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["arc_id"],
+            ["arc_plan_versions.id"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_arc_envelopes_project_arc",
+        "arc_envelopes",
+        ["project_id", "arc_id"],
+        unique=False,
+    )
+    op.create_table(
+        "arc_structure_drafts",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("arc_id", sa.String(), nullable=False),
+        sa.Column("phase_layout_json", sa.Text(), nullable=False),
+        sa.Column("key_beats_json", sa.Text(), nullable=False),
+        sa.Column("thread_priorities_json", sa.Text(), nullable=False),
+        sa.Column("hotspot_candidates_json", sa.Text(), nullable=False),
+        sa.Column("compression_candidates_json", sa.Text(), nullable=False),
+        sa.Column("reader_promise_json", sa.Text(), nullable=False),
+        sa.Column("arc_payoff_map_json", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["arc_id"],
+            ["arc_plan_versions.id"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_arc_structure_drafts_project_arc",
+        "arc_structure_drafts",
+        ["project_id", "arc_id"],
+        unique=False,
+    )
+    op.create_table(
+        "provisional_promotion_records",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("arc_id", sa.String(), nullable=False),
+        sa.Column("band_id", sa.String(), nullable=False),
+        sa.Column("promoted_chapter_ids_json", sa.Text(), nullable=False),
+        sa.Column("promotion_reason", sa.Text(), nullable=False),
+        sa.Column("based_on_analysis_id", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["arc_id"],
+            ["arc_plan_versions.id"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_provisional_promotions_project_arc_band",
+        "provisional_promotion_records",
+        ["project_id", "arc_id", "band_id"],
+        unique=False,
+    )

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 from forwin.genesis.arc_activation_review import build_arc_activation_review_pack
-from forwin.genesis.planning import _plan_arc_chapters
 from forwin.book_state.repository import BookStateRepository
 from forwin.models import (
     ArcPlanVersion,
@@ -131,94 +130,3 @@ def test_arc_activation_review_pack_collects_canon_feedback() -> None:
         engine.dispose()
 
 
-def test_plan_arc_chapters_injects_arc_activation_review_pack() -> None:
-    class Owner:
-        def __init__(self) -> None:
-            self.messages = []
-            self.max_tokens = 0
-
-        def _call_json_with_trace(self, *, messages, fallback, stage_key, max_tokens):  # noqa: ANN001
-            self.messages = messages
-            self.max_tokens = max_tokens
-            return {
-                "chapters": [
-                    {
-                        "title": "第二卷开局",
-                        "one_line": "围绕玄铁令代价开局。",
-                        "goals": ["回收玄铁令代价"],
-                    }
-                ]
-            }, {"input_snapshot": {}}
-
-    owner = Owner()
-    planned, trace = _plan_arc_chapters(
-        owner,
-        project=Project(id="project-1", title="测试", premise="前提", genre="玄幻"),
-        pack={"book_brief": {"title": "测试"}, "world": {}},
-        arc_payload={"arc_number": 2, "arc_synopsis": "第二卷"},
-        chapter_count=1,
-        arc_activation_review_pack={
-            "accepted_chapter_summaries": [{"chapter_number": 1, "summary": "林夜获得玄铁令。"}],
-            "open_obligations": [{"priority": "P0", "summary": "解释玄铁令代价"}],
-        },
-    )
-
-    prompt = owner.messages[-1]["content"]
-    assert "ArcActivationReviewPack" in prompt
-    assert "林夜获得玄铁令" in prompt
-    assert "解释玄铁令代价" in prompt
-    assert owner.max_tokens >= 1800
-    assert trace["input_snapshot"]["arc_activation_review_pack"]["open_obligations"][0]["priority"] == "P0"
-    assert planned[0]["title"] == "第二卷开局"
-
-
-def test_plan_arc_chapters_rebases_generic_numeric_titles_to_absolute_chapters() -> None:
-    class Owner:
-        max_tokens = 2000
-
-        def _call_json_with_trace(self, *, messages, fallback, stage_key, max_tokens):  # noqa: ANN001
-            return {
-                "chapters": [
-                    {"title": "第1章", "one_line": "重启追踪。", "goals": ["推进"]},
-                    {"title": "第2章：潮门", "one_line": "抵达潮门。", "goals": ["抵达"]},
-                    {"title": "债权人的回声", "one_line": "揭示新债权人。", "goals": ["揭示"]},
-                ]
-            }, {"input_snapshot": {}}
-
-    planned, _trace = _plan_arc_chapters(
-        Owner(),
-        project=Project(id="project-1", title="测试", premise="前提", genre="玄幻"),
-        pack={"book_brief": {"title": "测试"}, "world": {}},
-        arc_payload={
-            "arc_number": 3,
-            "arc_synopsis": "第三卷",
-            "chapter_start": 28,
-            "chapter_end": 30,
-            "chapter_count": 3,
-        },
-        chapter_count=3,
-        arc_activation_review_pack={},
-    )
-
-    assert [item["title"] for item in planned] == ["第28章", "第29章：潮门", "债权人的回声"]
-
-
-def test_plan_arc_chapters_marks_deterministic_fallback_as_degraded() -> None:
-    class Owner:
-        max_tokens = 2000
-
-        def _call_json_with_trace(self, *, messages, fallback, stage_key, max_tokens):  # noqa: ANN001
-            return fallback, {"output_summary": {"mode": "fallback"}, "input_snapshot": {}}
-
-    planned, trace = _plan_arc_chapters(
-        Owner(),
-        project=Project(id="project-1", title="测试", premise="前提", genre="玄幻"),
-        pack={"book_brief": {"title": "测试"}, "world": {}},
-        arc_payload={"arc_number": 2, "arc_synopsis": "第二卷"},
-        chapter_count=1,
-        arc_activation_review_pack={},
-    )
-
-    assert trace["arc_planning_status"] == "degraded"
-    assert trace["output_summary"]["planning_status"] == "degraded"
-    assert planned[0]["planning_status"] == "degraded"

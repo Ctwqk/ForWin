@@ -67,19 +67,19 @@
       ]
     },
     {
-      "case_id": "arc_plan",
-      "stage_key": "launch_arc_1",
-      "task_family": "genesis",
+      "case_id": "band_plan",
+      "stage_key": "plan.band",
+      "task_family": "planning",
       "expected_output_kind": "json",
-      "schema_name": "arc_plan",
+      "schema_name": "band_plan",
       "messages": [
         {
           "role": "system",
-          "content": "你是 Arc 细化编辑，只输出 JSON 对象。"
+          "content": "你是 band 规划编辑，只输出 JSON 对象。"
         },
         {
           "role": "user",
-          "content": "请为当前 arc 规划恰好 3 章，只返回 JSON，顶层格式为 {\"chapters\":[{\"title\":\"...\",\"one_line\":\"...\",\"goals\":[\"...\"]}]}。Arc：潮雾旧城开局，目标是让主角查清罗盘第一层代价。"
+          "content": "请为当前 band 的第 1–3 章规划章节，只返回 JSON，顶层为 chapters 数组。每章包含 chapter_number、title、one_line、goals、pov_ref、onstage_refs、location_refs、expected_span（amount 与 unit）、world_bindings、reveal_directives、hint_directives、intended_changes、milestone_ids、reward_slot、trope_ids 和 hook。可用人物引用只有 hero，可用地点引用只有 old-city；主角在潮雾旧城查清罗盘第一层代价。时间单位用 minute。没有依据的列表留空。"
         }
       ],
       "response_format": {

@@ -81,8 +81,6 @@ class _FakeRepo:
     def get_current_timeline(self, project_id: str):
         return None
 
-    def get_active_arc_envelope(self, project_id: str):
-        return None
 
     def get_reader_promise(self, project_id: str):
         return ReaderPromise(genre_promise="玄幻网文", core_pleasures=["查谜", "升级"])

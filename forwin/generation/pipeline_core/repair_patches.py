@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from forwin.experience.chapter_planner import ChapterExperiencePlanner
+
 from forwin.protocol.experience import (
     ArcPayoffMap,
     BandDelightSchedule,
     ChapterExperiencePlan,
 )
 from forwin.models.phase import (
-    ArcStructureDraft,
     BandExperiencePlan,
 )
 import json
@@ -14,14 +15,6 @@ from forwin.models import new_id
 from forwin.protocol.review import RepairInstruction
 from sqlalchemy.orm import Session
 from forwin.state.repo import StateRepository
-
-
-def _reader_promise_from_row(arc_structure: ArcStructureDraft):
-    from forwin.protocol.experience import ReaderPromise
-
-    return ReaderPromise.model_validate(
-        json.loads(arc_structure.reader_promise_json or "{}") or {}
-    )
 
 
 def _current_chapter_repair_experience_plan(
@@ -184,7 +177,6 @@ class RepairPlanningStage:
         project_id: str,
         chapter_number: int,
         schedule: BandDelightSchedule,
-        arc_structure: ArcStructureDraft | None,
         repair_instruction: RepairInstruction | None = None,
     ) -> None:
         active_arc = repo.get_active_arc_plan(project_id)
@@ -209,16 +201,16 @@ class RepairPlanningStage:
                 ),
             )
         )
-        structure_data = self._structure_data_from_row(arc_structure)
+        experience = repo.get_beat_sheet_experience(project_id)
         for number in range(
             max(chapter_number, schedule.chapter_start), schedule.chapter_end + 1
         ):
             plan = repo.get_chapter_plan(project_id, number)
             if plan is None:
                 continue
-            experience_plan = self.arc_envelope_manager._derive_chapter_experience_plan(
+            experience_plan = ChapterExperiencePlanner().derive_chapter_experience_plan(
                 chapter_number=number,
-                structure=structure_data,
+                experience=experience,
                 schedule=schedule,
                 chapter_plan=plan,
             )
@@ -232,41 +224,6 @@ class RepairPlanningStage:
             )
             session.add(plan)
 
-    @classmethod
-    def _structure_data_from_row(cls, arc_structure: ArcStructureDraft | None):
-        from forwin.planning.arc_envelope import ArcStructureDraftData
-        from forwin.protocol.experience import ReaderPromise
-
-        if arc_structure is None:
-            return ArcStructureDraftData(
-                phase_layout=[],
-                key_beats=[],
-                thread_priorities=[],
-                hotspot_candidates=[],
-                compression_candidates=[],
-                reader_promise=ReaderPromise(),
-                arc_payoff_map=ArcPayoffMap(),
-            )
-        return ArcStructureDraftData(
-            phase_layout=json.loads(arc_structure.phase_layout_json or "[]") or [],
-            key_beats=json.loads(arc_structure.key_beats_json or "[]") or [],
-            thread_priorities=json.loads(arc_structure.thread_priorities_json or "[]")
-            or [],
-            hotspot_candidates=json.loads(arc_structure.hotspot_candidates_json or "[]")
-            or [],
-            compression_candidates=json.loads(
-                arc_structure.compression_candidates_json or "[]"
-            )
-            or [],
-            reader_promise=cls._reader_promise_from_row(arc_structure),
-            arc_payoff_map=ArcPayoffMap.model_validate(
-                json.loads(arc_structure.arc_payoff_map_json or "{}") or {}
-            ),
-        )
-
-    @staticmethod
-    def _reader_promise_from_row(arc_structure: ArcStructureDraft):
-        return _reader_promise_from_row(arc_structure)
 
     @staticmethod
     def _current_chapter_repair_experience_plan(

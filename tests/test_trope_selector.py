@@ -7,10 +7,8 @@ import pytest
 from forwin.experience.band_scheduler import BandExperienceScheduler
 from forwin.experience.service import AudienceCalibrationProfile
 from forwin.experience.trope_selector import TropeSelectionContext, TropeSelector
-from forwin.experience.types import ArcExperienceBundle, BeatSheetExperienceInput
+from forwin.experience.types import BeatSheetExperienceInput
 from forwin.models.project import ChapterPlan
-from forwin.planning.arc_structure_service import ArcStructureDraftData
-from forwin.planning.band_plan_service import BandPlanningRequest, BandPlanService
 from forwin.protocol.experience import ArcPayoffMap, MacroPayoff, ReaderPromise
 from forwin.protocol.trope_library import TropeTemplate, load_trope_template_library, trope_template_index
 
@@ -18,13 +16,9 @@ from forwin.protocol.trope_library import TropeTemplate, load_trope_template_lib
 PULP_LIBRARY_PATH = "Design-docs/trope_library_pulp_v1.md"
 
 
-def _structure() -> ArcStructureDraftData:
-    return ArcStructureDraftData(
-        phase_layout=["setup", "pressure", "payoff"],
+def _structure() -> BeatSheetExperienceInput:
+    return BeatSheetExperienceInput(
         key_beats=["开局承压", "确认代价", "阶段兑现"],
-        thread_priorities=[],
-        hotspot_candidates=[],
-        compression_candidates=[],
     )
 
 
@@ -58,16 +52,18 @@ def _chapter_band(count: int) -> list[ChapterPlan]:
     ]
 
 
-def _arc_experience(*, macro_payoffs: list[MacroPayoff] | None = None) -> ArcExperienceBundle:
-    return ArcExperienceBundle(
+def _arc_experience(*, macro_payoffs: list[MacroPayoff] | None = None) -> BeatSheetExperienceInput:
+    return BeatSheetExperienceInput(
         reader_promise=ReaderPromise(genre_promise="玄幻", core_pleasures=["翻盘"]),
         arc_payoff_map=ArcPayoffMap(macro_payoffs=macro_payoffs or []),
     )
 
 
 def _experience(*, macro_payoffs: list[MacroPayoff] | None = None) -> BeatSheetExperienceInput:
-    return BeatSheetExperienceInput.from_structure(
-        _structure().key_beats, _arc_experience(macro_payoffs=macro_payoffs),
+    return BeatSheetExperienceInput(
+        key_beats=_structure().key_beats,
+        reader_promise=_arc_experience().reader_promise,
+        arc_payoff_map=ArcPayoffMap(macro_payoffs=macro_payoffs or []),
     )
 
 
@@ -249,85 +245,3 @@ def test_boost_reward_density_does_not_duplicate_mid_power_reward() -> None:
     assert len(mid_power_rewards) == 1
 
 
-def test_band_plan_service_passes_trope_cost_ceiling_to_scheduler() -> None:
-    class _Scheduler:
-        cost_ceiling: int | None = None
-
-        def derive_band_delight_schedule(self, **kwargs):
-            self.cost_ceiling = kwargs["cost_ceiling"]
-            return SimpleNamespace(
-                active_subworld_ids=[],
-                chapter_entry_targets=[],
-                model_copy=lambda update: SimpleNamespace(
-                    active_subworld_ids=[],
-                    chapter_entry_targets=[],
-                    model_copy=lambda update: SimpleNamespace(
-                        active_subworld_ids=[],
-                        chapter_entry_targets=[],
-                    ),
-                ),
-            )
-
-    class _WindowResolver:
-        def resolve(self, **_kwargs):
-            return SimpleNamespace(
-                band_id="band:1:1",
-                chapter_start=1,
-                chapter_end=1,
-                active_band=_chapters()[:1],
-            )
-
-    class _ExperienceService:
-        def build_audience_calibration_profile(self, **_kwargs):
-            return AudienceCalibrationProfile()
-
-    class _SubworldManager:
-        def plan_band_activation(self, **_kwargs):
-            return SimpleNamespace(active_subworld_ids=[], chapter_entry_targets=[])
-
-    class _ChapterPlanner:
-        def derive_chapter_experience_plan(self, **_kwargs):
-            return SimpleNamespace(model_copy=lambda update: SimpleNamespace())
-
-    class _Persistence:
-        def save_band_experience_plan(self, **_kwargs) -> None:
-            return None
-
-        def save_chapter_experience_plan(self, **_kwargs) -> None:
-            return None
-
-    class _Session:
-        def get(self, *_args, **_kwargs):
-            return None
-
-        def add(self, *_args, **_kwargs) -> None:
-            return None
-
-        def flush(self) -> None:
-            return None
-
-    scheduler = _Scheduler()
-    service = BandPlanService(
-        subworld_manager=_SubworldManager(),
-        experience_service=_ExperienceService(),
-        scheduler=scheduler,
-        chapter_planner=_ChapterPlanner(),
-        persistence=_Persistence(),
-        window_resolver=_WindowResolver(),
-        trope_cost_ceiling=1,
-    )
-
-    service.ensure_current_band_plan(
-        session=_Session(),
-        request=BandPlanningRequest(
-            project_id="project-1",
-            arc_id="arc-1",
-            activation_chapter=1,
-            detailed_band_size=1,
-            chapter_plans=_chapters()[:1],
-            structure=_structure(),
-            arc_experience=_arc_experience(),
-        ),
-    )
-
-    assert scheduler.cost_ceiling == 1

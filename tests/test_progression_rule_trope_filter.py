@@ -3,9 +3,8 @@ from sqlalchemy.orm import sessionmaker
 
 from forwin.experience.band_scheduler import BandExperienceScheduler
 from forwin.experience.service import AudienceCalibrationProfile, ExperiencePlanningService
-from forwin.experience.types import ArcExperienceBundle, BeatSheetExperienceInput
+from forwin.experience.types import BeatSheetExperienceInput
 from forwin.models import Base, SignalWindowAggregate
-from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
 from forwin.protocol.trope_library import load_trope_template_library
 
@@ -19,18 +18,14 @@ def _session():
     return sessionmaker(bind=engine)()
 
 
-def _structure() -> ArcStructureDraftData:
-    return ArcStructureDraftData(
-        phase_layout=["setup", "pressure", "payoff"],
+def _structure() -> BeatSheetExperienceInput:
+    return BeatSheetExperienceInput(
         key_beats=["开局承压", "确认代价", "阶段兑现"],
-        thread_priorities=[],
-        hotspot_candidates=[],
-        compression_candidates=[],
     )
 
 
-def _arc_experience() -> ArcExperienceBundle:
-    return ArcExperienceBundle(
+def _arc_experience() -> BeatSheetExperienceInput:
+    return BeatSheetExperienceInput(
         reader_promise=ReaderPromise(genre_promise="都市", core_pleasures=["打脸"]),
         arc_payoff_map=ArcPayoffMap(),
     )
@@ -49,7 +44,7 @@ def test_scheduler_filters_progression_rule_blocked_template_ids(monkeypatch) ->
         band_id="b1",
         chapter_start=1,
         chapter_end=4,
-        experience=BeatSheetExperienceInput.from_structure(_structure().key_beats, _arc_experience()),
+        experience=BeatSheetExperienceInput(key_beats=_structure().key_beats, reader_promise=_arc_experience().reader_promise, arc_payoff_map=_arc_experience().arc_payoff_map),
         active_band=[],
         calibration=calibration,
         cost_ceiling=3,

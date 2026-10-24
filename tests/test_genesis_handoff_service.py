@@ -10,7 +10,6 @@ from forwin.audit.events import DecisionEventType
 from forwin.book_state import BookStateRepository
 from forwin.book_state.projection import BookStateProjection
 from forwin.genesis import BookGenesisService
-from forwin.genesis.handoff.chapter_materializer import _arc_payload_from_row
 from forwin.genesis.handoff.commands import HandoffStageError, StartWritingCommand
 from forwin.genesis.handoff.map_bootstrap import (
     GenesisMapBootstrap,
@@ -481,7 +480,6 @@ class GenesisHandoffServiceTests(unittest.TestCase):
                 (arc.title, arc.goal, arc.stakes, arc.payoff_direction)
                 for arc in arcs
             ]
-            payload = _arc_payload_from_row(arcs[0])
 
         self.assertEqual(
             fields,
@@ -489,15 +487,6 @@ class GenesisHandoffServiceTests(unittest.TestCase):
                 ("旧城开局", "立主冲突", "会失去立足点与关键同伴", "局部揭秘"),
                 ("遗迹升级", "升级世界冲突", "旧术外泄导致更大灾难", "更大悬念"),
             ],
-        )
-        self.assertEqual(
-            (
-                payload["title"],
-                payload["goal"],
-                payload["stakes"],
-                payload["payoff_direction"],
-            ),
-            fields[0],
         )
 
     def test_handoff_retry_reuses_seed(self) -> None:

@@ -137,9 +137,7 @@ def build_project_summaries(
 
     payload: list[ProjectSummary] = []
     for project in projects:
-        latest_arc_envelope = runtime_maps["latest_arc_envelope_map"].get(project.id)
-        latest_arc_analysis = runtime_maps["latest_arc_analysis_map"].get(project.id)
-        latest_arc_structure = runtime_maps["latest_arc_structure_map"].get(project.id)
+        latest_beat_sheet = runtime_maps["latest_beat_sheet_map"].get(project.id)
         latest_band_experience = runtime_maps["latest_band_experience_map"].get(
             project.id
         )
@@ -206,9 +204,7 @@ def build_project_summaries(
                 blocking_reason=generation_control.blocking_reason,
                 next_gate=generation_control.next_gate,
                 **project_arc_snapshot_payload(
-                    latest_arc_envelope,
-                    latest_arc_analysis,
-                    latest_arc_structure,
+                    latest_beat_sheet,
                     latest_band_experience,
                 ),
             )

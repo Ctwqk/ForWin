@@ -404,29 +404,6 @@ def _canon_name_anchor_section(
     )
 
 
-def _arc_envelope_section(context: ChapterContextPack, *, compact: bool = False) -> str | None:
-    envelope = getattr(context, "current_arc_envelope", None)
-    if not envelope:
-        return None
-    if compact:
-        return (
-            "【当前 Arc Envelope】\n"
-            f"  · tier：{envelope.source_policy_tier}\n"
-            f"  · target：{envelope.resolved_target_size} 章\n"
-            f"  · range：{envelope.resolved_soft_min} ~ {envelope.resolved_soft_max} 章\n"
-            f"  · detailed band：{envelope.detailed_band_size} 章\n"
-            f"  · frozen zone：{envelope.frozen_zone_size} 章"
-        )
-    return (
-        "【当前 Arc Envelope】\n"
-        f"  · policy tier：{envelope.source_policy_tier}\n"
-        f"  · resolved target：{envelope.resolved_target_size} 章\n"
-        f"  · soft range：{envelope.resolved_soft_min} ~ {envelope.resolved_soft_max} 章\n"
-        f"  · detailed band：{envelope.detailed_band_size} 章\n"
-        f"  · frozen zone：{envelope.frozen_zone_size} 章"
-    )
-
-
 def _audience_hints_section(context: ChapterContextPack) -> str | None:
     hints = getattr(context, "audience_hints", None)
     if not hints:
@@ -477,7 +454,6 @@ __all__ = [
     '_subworld_control_section',
     '_active_threads_section',
     '_canon_name_anchor_section',
-    '_arc_envelope_section',
     '_audience_hints_section',
     '_retrieved_memories_section',
 ]

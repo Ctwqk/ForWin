@@ -1,16 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from forwin.planning.beat_sheet.types import ArcBeatSheetData, BandSpan
 from forwin.protocol.experience import ArcPayoffMap, ChapterExperiencePlan, ReaderPromise
-
-
-@dataclass(slots=True)
-class ArcExperienceBundle:
-    reader_promise: ReaderPromise
-    arc_payoff_map: ArcPayoffMap
 
 
 @dataclass(slots=True)
@@ -38,15 +31,6 @@ class BeatSheetExperienceInput:
             key_beats=[text for beat in beats if (text := beat.strip())],
             reader_promise=data.reader_promise,
             arc_payoff_map=data.arc_payoff_map,
-        )
-
-    @classmethod
-    def from_structure(cls, key_beats: Sequence[str], arc_experience: ArcExperienceBundle) -> BeatSheetExperienceInput:
-        """The input for callers that still hold an ``ArcStructureDraftData``: its key beats and the arc experience."""
-        return cls(
-            key_beats=[str(beat) for beat in key_beats],
-            reader_promise=arc_experience.reader_promise,
-            arc_payoff_map=arc_experience.arc_payoff_map,
         )
 
 

@@ -8,8 +8,6 @@ from sqlalchemy.orm import Session
 
 from forwin.models.draft import ChapterDraft
 from forwin.models.phase import (
-    ArcEnvelope,
-    ArcEnvelopeAnalysis,
     ChapterRewriteAttempt,
 )
 from forwin.models.project import ArcPlanVersion
@@ -156,85 +154,6 @@ def load_latest_rewrite_attempts_by_chapter(
         for row in rows
         if (chapter_number := int(row.chapter_number or 0)) > 0
     }
-
-
-def load_latest_active_arc_envelope_by_project(
-    session: Session,
-    project_ids: Iterable[str],
-) -> dict[str, ArcEnvelope]:
-    ids = _as_list(project_ids)
-    if not ids:
-        return {}
-
-    active_arcs = _active_arc_rows_for_projects(ids)
-    ranked = (
-        select(
-            ArcEnvelope.id.label("row_id"),
-            ArcEnvelope.project_id.label("project_id"),
-            func.row_number()
-            .over(
-                partition_by=ArcEnvelope.project_id,
-                order_by=(
-                    ArcEnvelope.updated_at.desc(),
-                    ArcEnvelope.created_at.desc(),
-                    ArcEnvelope.id.desc(),
-                ),
-            )
-            .label("rn"),
-        )
-        .join(active_arcs, ArcEnvelope.arc_id == active_arcs.c.arc_id)
-        .where(active_arcs.c.arc_rn == 1)
-        .subquery()
-    )
-    rows = (
-        session.execute(
-            select(ArcEnvelope)
-            .join(ranked, ArcEnvelope.id == ranked.c.row_id)
-            .where(ranked.c.rn == 1)
-        )
-        .scalars()
-        .all()
-    )
-    return {row.project_id: row for row in rows}
-
-
-def load_latest_arc_envelope_analysis_by_project(
-    session: Session,
-    project_ids: Iterable[str],
-) -> dict[str, ArcEnvelopeAnalysis]:
-    ids = _as_list(project_ids)
-    if not ids:
-        return {}
-
-    active_arcs = _active_arc_rows_for_projects(ids)
-    ranked = (
-        select(
-            ArcEnvelopeAnalysis.id.label("row_id"),
-            ArcEnvelopeAnalysis.project_id.label("project_id"),
-            func.row_number()
-            .over(
-                partition_by=ArcEnvelopeAnalysis.project_id,
-                order_by=(
-                    ArcEnvelopeAnalysis.created_at.desc(),
-                    ArcEnvelopeAnalysis.id.desc(),
-                ),
-            )
-            .label("rn"),
-        )
-        .join(active_arcs, ArcEnvelopeAnalysis.arc_id == active_arcs.c.arc_id)
-        .where(active_arcs.c.arc_rn == 1)
-        .subquery()
-    )
-    rows = (
-        session.execute(
-            select(ArcEnvelopeAnalysis)
-            .join(ranked, ArcEnvelopeAnalysis.id == ranked.c.row_id)
-            .where(ranked.c.rn == 1)
-        )
-        .scalars()
-        .all()
-    )
-    return {row.project_id: row for row in rows}
 
 
 def load_latest_task_stage_by_project(

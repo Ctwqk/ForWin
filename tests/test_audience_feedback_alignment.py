@@ -37,7 +37,6 @@ from forwin.audience.feedback import (
     score_signal_aggregate_v1,
 )
 from forwin.arc_sizing import policy_for_total_chapters
-from forwin.planning.arc_envelope import ArcEnvelopeManager, ArcStructureDraftData
 from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
 from forwin.audience import comment_analysis
 from forwin.audience.comment_analysis import CommentAnalyzer
@@ -67,21 +66,6 @@ class _FakeLLM:
 class _RaisingLLM:
     def chat(self, prompt, **_kwargs):  # noqa: ANN001
         raise RuntimeError("LLM unavailable")
-
-
-class _CapturingDirector:
-    def __init__(self) -> None:
-        self.last_kwargs: dict | None = None
-
-    def draft_arc_structure(self, **kwargs):  # noqa: ANN003
-        self.last_kwargs = kwargs
-        return {
-            "phase_layout": ["setup", "pressure", "turn", "payoff"],
-            "key_beats": ["beat-1", "beat-2"],
-            "thread_priorities": [{"name": "主线", "priority": 1, "reason": "测试"}],
-            "hotspot_candidates": ["热点A"],
-            "compression_candidates": ["压缩A"],
-        }
 
 
 class AudienceFeedbackAlignmentTests(unittest.TestCase):
@@ -1065,67 +1049,6 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(len(feedback_action_queries), 1)
 
 
-    def test_arc_envelope_manager_passes_long_window_audience_trends_to_director(self) -> None:
-        project = self._create_project()
-        self.session.add(
-            SignalWindowAggregate(
-                id=new_id(),
-                project_id=project.id,
-                signal_key="confusion:character:主角动机",
-                signal_type="confusion",
-                target_type="character",
-                target_name="主角动机",
-                window_type="long",
-                window_chapter_start=1,
-                window_chapter_end=12,
-                hit_comment_count=5,
-                unique_user_count=4,
-                total_comment_count=10,
-                reader_estimate=500,
-                reader_tier=2,
-                max_severity=2,
-                avg_confidence=0.8,
-                signal_level="confirmed",
-            )
-        )
-        self.session.commit()
-
-        director = _CapturingDirector()
-        manager = ArcEnvelopeManager(director=director)
-        chapter_plans = [
-            ChapterPlan(
-                id=new_id(),
-                project_id=project.id,
-                arc_plan_id="arc-1",
-                chapter_number=1,
-                title="第一章",
-                one_line="推进一",
-                goals_json='["g1"]',
-            ),
-            ChapterPlan(
-                id=new_id(),
-                project_id=project.id,
-                arc_plan_id="arc-1",
-                chapter_number=2,
-                title="第二章",
-                one_line="推进二",
-                goals_json='["g2"]',
-            ),
-        ]
-
-        structure = manager._build_structure_draft(  # noqa: SLF001
-            session=self.session,
-            project=project,
-            total_chapters=120,
-            chapter_plans=chapter_plans,
-            policy=policy_for_total_chapters(120),
-            base_target_size=18,
-        )
-
-        self.assertEqual(structure.phase_layout, ["setup", "pressure", "turn", "payoff"])
-        assert director.last_kwargs is not None
-        self.assertEqual(director.last_kwargs["audience_trends"], ["主角动机:confusion:confirmed"])
-
     def test_score_v1_and_repo_trends_surface_rising_signal(self) -> None:
         project = self._create_project()
         older = SignalWindowAggregate(
@@ -1178,147 +1101,6 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(trends[0].current_level, "confirmed")
         self.assertEqual(trends[0].trend_type, "rising")
         self.assertGreater(trends[0].current_score, trends[0].previous_score)
-
-    def test_arc_envelope_manager_calibrates_overlay_from_audience_signals(self) -> None:
-        project = self._create_project()
-        self.session.add_all(
-            [
-                SignalWindowAggregate(
-                    id=new_id(),
-                    project_id=project.id,
-                    signal_key="pacing:arc:节奏",
-                    signal_type="pacing",
-                    target_type="arc",
-                    target_name="节奏",
-                    window_type="long",
-                    window_chapter_start=1,
-                    window_chapter_end=10,
-                    hit_comment_count=5,
-                    unique_user_count=4,
-                    total_comment_count=10,
-                    reader_estimate=400,
-                    reader_tier=2,
-                    max_severity=2,
-                    avg_confidence=0.82,
-                    signal_level="confirmed",
-                ),
-                SignalWindowAggregate(
-                    id=new_id(),
-                    project_id=project.id,
-                    signal_key="confusion:setting:规则边界",
-                    signal_type="confusion",
-                    target_type="setting",
-                    target_name="规则边界",
-                    window_type="long",
-                    window_chapter_start=1,
-                    window_chapter_end=10,
-                    hit_comment_count=4,
-                    unique_user_count=4,
-                    total_comment_count=10,
-                    reader_estimate=400,
-                    reader_tier=2,
-                    max_severity=2,
-                    avg_confidence=0.81,
-                    signal_level="confirmed",
-                ),
-                SignalWindowAggregate(
-                    id=new_id(),
-                    project_id=project.id,
-                    signal_key="relationship_interest:character:两人关系线",
-                    signal_type="relationship_interest",
-                    target_type="character",
-                    target_name="两人关系线",
-                    window_type="long",
-                    window_chapter_start=1,
-                    window_chapter_end=10,
-                    hit_comment_count=5,
-                    unique_user_count=5,
-                    total_comment_count=10,
-                    reader_estimate=400,
-                    reader_tier=2,
-                    max_severity=2,
-                    avg_confidence=0.87,
-                    signal_level="confirmed",
-                ),
-            ]
-        )
-        self.session.commit()
-
-        manager = ArcEnvelopeManager(director=_CapturingDirector())
-        profile = manager._build_audience_calibration_profile(  # noqa: SLF001
-            session=self.session,
-            project_id=project.id,
-        )
-        self.assertTrue(profile.boost_reward_density)
-        self.assertTrue(profile.clarify_rule_legibility)
-        self.assertTrue(profile.protect_character_heat)
-
-        chapter_plans = [
-            ChapterPlan(
-                id=new_id(),
-                project_id=project.id,
-                arc_plan_id="arc-1",
-                chapter_number=1,
-                title="第一章",
-                one_line="开局承压",
-                goals_json='["推进主线"]',
-            ),
-            ChapterPlan(
-                id=new_id(),
-                project_id=project.id,
-                arc_plan_id="arc-1",
-                chapter_number=2,
-                title="第二章",
-                one_line="压力扩大",
-                goals_json='["确认代价"]',
-            ),
-            ChapterPlan(
-                id=new_id(),
-                project_id=project.id,
-                arc_plan_id="arc-1",
-                chapter_number=3,
-                title="第三章",
-                one_line="悬念抬升",
-                goals_json='["抬高问题"]',
-            ),
-        ]
-        structure = ArcStructureDraftData(
-            phase_layout=["setup", "pressure", "payoff"],
-            key_beats=["开局承压", "确认代价", "抬高问题"],
-            thread_priorities=[],
-            hotspot_candidates=[],
-            compression_candidates=[],
-            reader_promise=ReaderPromise(
-                genre_promise="悬疑网文",
-                pleasure_promise="稳定给出悬念和兑现",
-                core_pleasures=["悬念", "翻盘"],
-                ambiguity_mode="stable",
-                world_legibility_target="规则必须看得懂",
-            ),
-            arc_payoff_map=ArcPayoffMap(ambiguity_constraints=["翻盘必须遵守代价"]),
-        )
-        schedule = manager._derive_band_delight_schedule(  # noqa: SLF001
-            band_id="band:1:3",
-            chapter_start=1,
-            chapter_end=3,
-            structure=structure,
-            active_band=chapter_plans,
-            calibration=profile,
-        )
-        plan = manager._derive_chapter_experience_plan(  # noqa: SLF001
-            chapter_number=2,
-            structure=structure,
-            schedule=schedule,
-            chapter_plan=chapter_plans[1],
-            calibration=profile,
-        )
-
-        reward_categories = [item.category for item in schedule.scheduled_rewards]
-        self.assertGreaterEqual(reward_categories.count("power"), 3)
-        self.assertIn("emotion", reward_categories)
-        self.assertTrue(any("规则" in item.question_resolve or "代价" in item.question_resolve for item in schedule.curiosity_beats))
-        self.assertTrue(any("规则" in item or "代价" in item for item in plan.rule_anchors))
-        self.assertIn("relationship", plan.minimum_progress_channels)
 
 
 def test_feedback_comment_attempts_save_prompt_trace_and_events(tmp_path) -> None:

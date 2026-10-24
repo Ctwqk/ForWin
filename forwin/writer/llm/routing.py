@@ -277,7 +277,7 @@ class RoutingMixin:
             return "prose_generation"
         if stage == "chapter_preview":
             return "writer_preview"
-        if stage in {"scene_breakdown", "genesis_brief", "brief", "arc_plan"} or stage.startswith("launch_arc_"):
+        if stage in {"scene_breakdown", "genesis_brief", "brief"}:
             return "planning_json_low_risk" if wants_json else "planning_prose"
         if stage in {
             "world",
@@ -286,7 +286,6 @@ class RoutingMixin:
             "book_blueprint",
             "world_seed",
             "band_plan",
-            "chapter_plan",
         } or family in {
             "genesis",
             "planning",

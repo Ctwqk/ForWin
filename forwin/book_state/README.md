@@ -33,7 +33,7 @@ Deferred scope and design choices:
 
 - The seed's `location_ref` is a Genesis map id, translated at commit to a database map-node id in `state.location_id`. `reveal_candidates` stays in the frozen Genesis pack; `reveal_schedule.earliest_reveal_chapters` reads it as each secret's earliest reveal chapter (its arc's `chapter_start`).
 - P2 implements chapter-level story-time spans, time monotonicity / flashback rules, and map `travel_time` conversion to minutes.
-- P4 owns removal of `finalization._seed_state`, `RunControlStage.run`, and `SubWorldManager.apply_initial_arc_plan` with ArcDirector, plus replacement of `sub_world_roster_items` / `plan_band_activation` by band `onstage_refs`. The P3 world engine is implemented; the beat-table planner remains deferred to P4.
+- P4 uses Genesis handoff for chapter-zero canon and beat sheets plus just-in-time band planning for chapter production. Replacement of `sub_world_roster_items` / `plan_band_activation` by band `onstage_refs` remains a separate cleanup.
 
 P2 chapter pipeline:
 

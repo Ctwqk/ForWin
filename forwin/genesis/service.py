@@ -25,9 +25,7 @@ from forwin.genesis.messages import (
 )
 from forwin.genesis.materialize import (
     materialize_book_arcs,
-    materialize_arc_chapter_plans,
     _ensure_arc_map_expansion,
-    promote_next_arc_if_needed,
 )
 from forwin.genesis.llm import (
     _generate_stage_payload,
@@ -49,7 +47,7 @@ from forwin.genesis.normalize import (
     _normalize_map_payload,
     _normalize_story_engine_payload,
 )
-from forwin.genesis.planning import _refine_support_context, _plan_arc_chapters
+from forwin.genesis.planning import _refine_support_context
 
 if TYPE_CHECKING:
     from forwin.planning.beat_sheet.service import ArcBeatSheetService
@@ -218,9 +216,7 @@ class BookGenesisService:
     _build_stage_generation_messages = _build_stage_generation_messages
     _build_stage_refine_messages = _build_stage_refine_messages
     materialize_book_arcs = materialize_book_arcs
-    materialize_arc_chapter_plans = materialize_arc_chapter_plans
     _ensure_arc_map_expansion = _ensure_arc_map_expansion
-    promote_next_arc_if_needed = promote_next_arc_if_needed
     _generate_stage_payload = _generate_stage_payload
     _refine_stage_payload = _refine_stage_payload
     _call_json_with_trace = _call_json_with_trace
@@ -238,7 +234,6 @@ class BookGenesisService:
     _normalize_map_payload = _normalize_map_payload
     _normalize_story_engine_payload = _normalize_story_engine_payload
     _refine_support_context = _refine_support_context
-    _plan_arc_chapters = _plan_arc_chapters
 
 
 __all__ = ["BookGenesisService"]

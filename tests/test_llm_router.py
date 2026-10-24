@@ -81,21 +81,6 @@ class CapturingLLM:
 
 
 class LLMRouterTests(unittest.TestCase):
-    def test_chapter_plan_materialization_never_uses_codex(self) -> None:
-        ordinary = OrdinaryAdapter()
-        codex = FakeCodexClient()
-        router = LLMCallRouter(ordinary_adapter=ordinary, codex_client=codex, codex_enabled=True)
-
-        result = router.chat(
-            [{"role": "user", "content": "plan chapters"}],
-            intent=LLMCallIntent(task_family="chapter_plan_materialization", stage_key="launch_arc_1"),
-        )
-
-        self.assertEqual(result, '{"source":"ordinary"}')
-        self.assertEqual(len(codex.calls), 0)
-        self.assertEqual(len(ordinary.calls), 1)
-        self.assertEqual(ordinary.calls[0]["kwargs"]["task_family"], "chapter_plan_materialization")
-        self.assertEqual(ordinary.calls[0]["kwargs"]["stage_key"], "launch_arc_1")
 
     def test_codex_primary_for_genesis_when_enabled(self) -> None:
         ordinary = OrdinaryAdapter()
@@ -390,7 +375,7 @@ class LLMRouterTests(unittest.TestCase):
         finally:
             container.close()
 
-    def test_book_genesis_marks_stage_calls_for_codex_and_excludes_launch_arc(self) -> None:
+    def test_book_genesis_marks_stage_calls_for_codex(self) -> None:
         client = CapturingLLM()
         service = BookGenesisService(llm_client=client)
 
@@ -399,17 +384,10 @@ class LLMRouterTests(unittest.TestCase):
             fallback={},
             stage_key="world",
         )
-        service._call_json_with_trace(
-            messages=[{"role": "user", "content": "arc chapters"}],
-            fallback={"chapters": []},
-            stage_key="launch_arc_1",
-        )
 
         self.assertEqual(client.calls[0]["kwargs"]["task_family"], "genesis")
         self.assertEqual(client.calls[0]["kwargs"]["stage_key"], "world")
         self.assertTrue(client.calls[0]["kwargs"]["codex_allowed"])
-        self.assertEqual(client.calls[1]["kwargs"]["task_family"], "chapter_plan_materialization")
-        self.assertFalse(client.calls[1]["kwargs"]["codex_allowed"])
 
     def test_world_seed_stage_routes_as_general_planning_json(self) -> None:
         for task_family in ("genesis", ""):

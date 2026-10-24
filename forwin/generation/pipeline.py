@@ -10,7 +10,6 @@ from forwin.canon import (
     CanonPreparationContext,
     CanonPreparationService,
 )
-from forwin.director import ArcDirector
 from forwin.generation.gate_delegation import GateDelegationService
 from forwin.generation.pipeline_core.acceptance import AcceptanceStage
 from forwin.generation.pipeline_core.finalization import FinalizationStage
@@ -29,7 +28,6 @@ from forwin.model_adapter import ModelAdapter
 from forwin.maintenance.post_canon import PostCanonMaintenanceService
 from forwin.observability.ports import SpanHandle
 from forwin.observability.service import ObservabilityService
-from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.planning.arc_progression import ArcProgressionService
 from forwin.planning.band_planner.service import BandPlanner
 from forwin.retrieval import RetrievalBroker
@@ -67,7 +65,6 @@ class ChapterPipeline(
         llm_client: ModelAdapter,
         skill_router: SkillRouter,
         skill_prompt_layer_builder: SkillPromptLayerBuilder,
-        arc_director: ArcDirector,
         book_genesis: BookGenesisService,
         subworld_manager: SubWorldManager,
         retrieval_broker: RetrievalBroker,
@@ -75,7 +72,6 @@ class ChapterPipeline(
         observability: ObservabilityService,
         writer: ChapterWriter,
         comment_analyzer: CommentAnalyzer,
-        arc_envelope_manager: ArcEnvelopeManager,
         draft_review: DraftReviewService,
         repair: RepairService,
         repair_verifier: RepairVerifier,
@@ -110,7 +106,6 @@ class ChapterPipeline(
         self.llm_client = llm_client
         self.skill_router = skill_router
         self.skill_prompt_layer_builder = skill_prompt_layer_builder
-        self.arc_director = arc_director
         self.book_genesis = book_genesis
         self.subworld_manager = subworld_manager
         self.retrieval_broker = retrieval_broker
@@ -118,7 +113,6 @@ class ChapterPipeline(
         self.observability = observability
         self.writer = writer
         self.comment_analyzer = comment_analyzer
-        self.arc_envelope_manager = arc_envelope_manager
         self.draft_review = draft_review
         self.repair = repair
         self.repair_verifier = repair_verifier
@@ -131,7 +125,6 @@ class ChapterPipeline(
             post_canon_maintenance
             or PostCanonMaintenanceService(
                 session_factory=self._SessionFactory,
-                arc_envelope_manager=self.arc_envelope_manager,
                 comment_analyzer=self.comment_analyzer,
                 artifact_store=self.artifact_store,
                 llm_client=self.llm_client,

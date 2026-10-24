@@ -14,7 +14,6 @@ from forwin.audit.events import (
     DecisionEventType,
 )
 from forwin.map.service import ensure_book_map_from_genesis_atlas
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 from forwin.state.updater import StateUpdater
 
@@ -32,28 +31,6 @@ def materialize_book_arcs(
         updater=updater,
         project=project,
         revision=revision,
-    )
-
-
-def materialize_arc_chapter_plans(
-    self,
-    *,
-    session: Session,
-    updater: StateUpdater,
-    project: Project,
-    revision,
-    arc_number: int,
-    decision_event_id: str = "",
-    ensure_arc_map: bool = True,
-) -> ArcPlanVersion:
-    return self.handoff.chapter_materializer.materialize_arc_chapter_plans(
-        session=session,
-        updater=updater,
-        project=project,
-        revision=revision,
-        arc_number=arc_number,
-        decision_event_id=decision_event_id,
-        ensure_arc_map=ensure_arc_map,
     )
 
 
@@ -169,54 +146,7 @@ def _ensure_arc_map_expansion(
     )
 
 
-def promote_next_arc_if_needed(
-    self,
-    *,
-    session: Session,
-    updater: StateUpdater,
-    project: Project,
-    revision,
-) -> bool:
-    next_arc = session.execute(
-        select(ArcPlanVersion)
-        .where(
-            ArcPlanVersion.project_id == project.id,
-            ArcPlanVersion.status == "planned",
-        )
-        .order_by(ArcPlanVersion.arc_number.asc(), ArcPlanVersion.created_at.asc())
-        .limit(1)
-    ).scalar_one_or_none()
-    if next_arc is None:
-        return False
-    active_rows = (
-        session.execute(
-            select(ArcPlanVersion).where(
-                ArcPlanVersion.project_id == project.id,
-                ArcPlanVersion.status == "active",
-            )
-        )
-        .scalars()
-        .all()
-    )
-    for row in active_rows:
-        row.status = "completed"
-        session.add(row)
-    next_arc.status = "active"
-    session.add(next_arc)
-    self.materialize_arc_chapter_plans(
-        session=session,
-        updater=updater,
-        project=project,
-        revision=revision,
-        arc_number=next_arc.arc_number,
-    )
-    session.flush()
-    return True
-
-
 __all__ = [
     "materialize_book_arcs",
-    "materialize_arc_chapter_plans",
     "_ensure_arc_map_expansion",
-    "promote_next_arc_if_needed",
 ]

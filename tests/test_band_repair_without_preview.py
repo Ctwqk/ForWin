@@ -29,7 +29,6 @@ def test_band_schedule_repair_commits_without_preview_callback() -> None:
     repo = SimpleNamespace(
         get_chapter_experience_plan=Mock(return_value=ChapterExperiencePlan()),
         get_band_experience_plan_for_chapter=Mock(return_value=schedule),
-        get_latest_arc_structure_draft=Mock(return_value=None),
     )
     session = Mock()
     chapter_plan = SimpleNamespace(chapter_number=2)

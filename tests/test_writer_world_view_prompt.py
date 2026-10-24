@@ -93,7 +93,6 @@ def _old_surfaces(*truths: str) -> dict:
                                                  markdown=" ".join(rest) or first)],
             active_secrets=[WorldModelPage(page_key="s", title="secret-page", markdown=first)],
         ),
-        "current_arc_envelope": {"source_policy_tier": "tier", "resolved_target_size": 30},
     }
 
 

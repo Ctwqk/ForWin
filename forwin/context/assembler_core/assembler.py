@@ -116,7 +116,6 @@ class ChapterContextAssembler:
             active_threads=data.get("threads", []),
             timeline=data.get("timeline"),
             reader_feedback=data.get("reader_feedback"),
-            current_arc_envelope=data.get("current_arc_envelope"),
             audience_hints=data.get("audience_hints"),
             reader_promise=data.get("reader_promise"),
             arc_payoff_map=data.get("arc_payoff_map"),

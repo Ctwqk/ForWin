@@ -31,7 +31,6 @@ from forwin.models.audit import DecisionEvent
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.planning_v6 import ArcBeatSheetRow
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
-from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.skills import build_skill_runtime_components
 from forwin.state.updater import StateUpdater
@@ -651,99 +650,6 @@ class BookGenesisFlowTests(unittest.TestCase):
             all(issue.startswith("unresolved_location_ref ") for issue in issues)
         )
 
-    def test_arc_envelope_uses_genesis_persisted_arc_sizing(self) -> None:
-        created = api_module.create_project(
-            ProjectCreateRequest.model_validate(
-                {
-                    "title": "Genesis Sizing 书",
-                    "premise": "先锁定根蓝图，再启动写作。",
-                    "genre": "玄幻",
-                    "target_total_chapters": 30,
-                }
-            )
-        )
-
-        api_module.patch_project_genesis(
-            created.project_id,
-            BookGenesisPatchRequest.model_validate(
-                {
-                    "world": {
-                        "world_bible": {"overview": "世界规则已锁定。"},
-                        "map_atlas": seeded_map_atlas("一城一野一遗迹。"),
-                        "story_engine": seeded_story_engine(["根冲突", "外部升级"]),
-                    },
-                    "book_arc_blueprint": {
-                        "summary": "单 arc 启动蓝图",
-                        "arcs": [
-                            {
-                                "arc_number": 1,
-                                "title": "开篇长弧",
-                                "arc_synopsis": "主角被卷入根冲突并逐步看见世界代价。",
-                                "goal": "建立根冲突",
-                                "stakes": "失去立足点",
-                                "payoff_direction": "局部揭秘",
-                                "chapter_start": 1,
-                                "chapter_end": 5,
-                                "chapter_count": 5,
-                                "target_size": 9,
-                                "soft_min": 7,
-                                "soft_max": 11,
-                            }
-                        ],
-                    },
-                    "world_seed": seeded_world_seed(),
-                }
-            ),
-        )
-
-        for stage_key in (
-            "brief",
-            "world",
-            "map",
-            "story_engine",
-            "book_blueprint",
-            "world_seed",
-        ):
-            api_module.lock_project_genesis_stage(created.project_id, stage_key)
-
-        def beat_sheet_model_down(_service, _messages):
-            # No network in tests: arc 1 gets the deterministic fallback sheet.
-            raise ConnectionError("beat sheet model unavailable")
-
-        with (
-            patch(
-                "forwin.planning.beat_sheet.service.ArcBeatSheetService._chat",
-                new=beat_sheet_model_down,
-            ),
-            patch(
-                "forwin.http.app._create_continue_generation_task",
-                return_value="task-genesis-size-001",
-            ),
-        ):
-            api_module.start_project_writing(created.project_id)
-
-        with self.session_factory() as session:
-            project = session.get(Project, created.project_id)
-            active_arc = session.execute(
-                select(ArcPlanVersion)
-                .where(ArcPlanVersion.project_id == created.project_id)
-                .where(ArcPlanVersion.status == "active")
-            ).scalar_one()
-            manager = ArcEnvelopeManager(director=None)
-            envelope = manager.ensure_active_arc_resolution(
-                session=session,
-                project_id=created.project_id,
-                activation_chapter=1,
-            )
-
-        assert project is not None
-        self.assertEqual(project.creation_status, "writing")
-        self.assertEqual(active_arc.planned_target_size, 9)
-        self.assertEqual(active_arc.planned_soft_min, 7)
-        self.assertEqual(active_arc.planned_soft_max, 11)
-        self.assertEqual(envelope.base_target_size, 9)
-        self.assertEqual(envelope.base_soft_min, 7)
-        self.assertEqual(envelope.base_soft_max, 11)
 
     def test_patch_story_engine_persists_structured_entities_and_relations(self) -> None:
         created = api_module.create_project(

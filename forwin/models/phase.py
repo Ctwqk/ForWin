@@ -2,109 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from .base import Base, new_id
-
-
-class ArcEnvelope(Base):
-    __tablename__ = "arc_envelopes"
-    __table_args__ = (
-        Index("ix_arc_envelopes_project_arc", "project_id", "arc_id"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(
-        String, ForeignKey("projects.id"), nullable=False
-    )
-    arc_id: Mapped[str] = mapped_column(
-        String, ForeignKey("arc_plan_versions.id"), nullable=False
-    )
-    base_target_size: Mapped[int] = mapped_column(Integer, default=0)
-    base_soft_min: Mapped[int] = mapped_column(Integer, default=0)
-    base_soft_max: Mapped[int] = mapped_column(Integer, default=0)
-    resolved_target_size: Mapped[int] = mapped_column(Integer, default=0)
-    resolved_soft_min: Mapped[int] = mapped_column(Integer, default=0)
-    resolved_soft_max: Mapped[int] = mapped_column(Integer, default=0)
-    detailed_band_size: Mapped[int] = mapped_column(Integer, default=0)
-    frozen_zone_size: Mapped[int] = mapped_column(Integer, default=0)
-    current_projected_size: Mapped[int] = mapped_column(Integer, default=0)
-    current_confidence: Mapped[float] = mapped_column(Float, default=0.0)
-    source_policy_tier: Mapped[str] = mapped_column(String, default="short")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=func.now(), onupdate=func.now()
-    )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-
-class ArcStructureDraft(Base):
-    __tablename__ = "arc_structure_drafts"
-    __table_args__ = (
-        Index("ix_arc_structure_drafts_project_arc", "project_id", "arc_id"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(
-        String, ForeignKey("projects.id"), nullable=False
-    )
-    arc_id: Mapped[str] = mapped_column(
-        String, ForeignKey("arc_plan_versions.id"), nullable=False
-    )
-    phase_layout_json: Mapped[str] = mapped_column(Text, default="[]")
-    key_beats_json: Mapped[str] = mapped_column(Text, default="[]")
-    thread_priorities_json: Mapped[str] = mapped_column(Text, default="[]")
-    hotspot_candidates_json: Mapped[str] = mapped_column(Text, default="[]")
-    compression_candidates_json: Mapped[str] = mapped_column(Text, default="[]")
-    reader_promise_json: Mapped[str] = mapped_column(Text, default="{}")
-    arc_payoff_map_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-
-class ArcEnvelopeAnalysis(Base):
-    __tablename__ = "arc_envelope_analyses"
-    __table_args__ = (
-        Index("ix_arc_envelope_analyses_project_arc", "project_id", "arc_id"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(
-        String, ForeignKey("projects.id"), nullable=False
-    )
-    arc_id: Mapped[str] = mapped_column(
-        String, ForeignKey("arc_plan_versions.id"), nullable=False
-    )
-    based_on_band_id: Mapped[str] = mapped_column(String, default="")
-    recommendation: Mapped[str] = mapped_column(String, default="keep")
-    evidence_json: Mapped[str] = mapped_column(Text, default="[]")
-    expansion_signals_json: Mapped[str] = mapped_column(Text, default="[]")
-    compression_signals_json: Mapped[str] = mapped_column(Text, default="[]")
-    suggested_target: Mapped[int] = mapped_column(Integer, default=0)
-    suggested_soft_min: Mapped[int] = mapped_column(Integer, default=0)
-    suggested_soft_max: Mapped[int] = mapped_column(Integer, default=0)
-    confidence: Mapped[float] = mapped_column(Float, default=0.0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-
-class ProvisionalPromotionRecord(Base):
-    __tablename__ = "provisional_promotion_records"
-    __table_args__ = (
-        Index("ix_provisional_promotions_project_arc_band", "project_id", "arc_id", "band_id"),
-    )
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(
-        String, ForeignKey("projects.id"), nullable=False
-    )
-    arc_id: Mapped[str] = mapped_column(
-        String, ForeignKey("arc_plan_versions.id"), nullable=False
-    )
-    band_id: Mapped[str] = mapped_column(String, default="")
-    promoted_chapter_ids_json: Mapped[str] = mapped_column(Text, default="[]")
-    promotion_reason: Mapped[str] = mapped_column(Text, default="")
-    based_on_analysis_id: Mapped[str] = mapped_column(String, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
 class BandExperiencePlan(Base):

@@ -61,27 +61,10 @@ def test_startup_builds_core_only_and_shutdown_does_not_resolve_unused_bundles(
     assert calls == ["core", "scheduler.start", "scheduler.stop", "container.close"]
 
 
-def test_pipeline_is_built_and_backfilled_once_on_first_access() -> None:
+def test_pipeline_is_built_once_without_database_mutation() -> None:
     calls: list[str] = []
 
-    class Session:
-        def __enter__(self):
-            calls.append("session.enter")
-            return self
-
-        def __exit__(self, *_args):
-            calls.append("session.exit")
-
-        def commit(self) -> None:
-            calls.append("commit")
-
-        def rollback(self) -> None:
-            calls.append("rollback")
-
-    manager = SimpleNamespace(
-        backfill_missing_resolutions=lambda *, session: calls.append("backfill") or 2
-    )
-    pipeline = SimpleNamespace(arc_envelope_manager=manager)
+    pipeline = SimpleNamespace()
 
     class Container:
         def build_chapter_pipeline(self):
@@ -91,12 +74,12 @@ def test_pipeline_is_built_and_backfilled_once_on_first_access() -> None:
     runtime = HttpRuntime(
         config=InfrastructureConfig(minimax_api_key=""),
         container=Container(),  # type: ignore[arg-type]
-        session_factory=lambda: Session(),  # type: ignore[arg-type]
+        session_factory=lambda: (_ for _ in ()).throw(AssertionError("pipeline access must not open a session")),  # type: ignore[arg-type]
     )
 
     assert runtime.get_pipeline() is pipeline
     assert runtime.get_pipeline() is pipeline
-    assert calls == ["build", "session.enter", "backfill", "commit", "session.exit"]
+    assert calls == ["build"]
 
 
 def test_publisher_manager_recovers_interrupted_attempts_once_on_first_access(

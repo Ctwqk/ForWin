@@ -146,7 +146,6 @@ class PostCanonMaintenanceService:
         self,
         *,
         session_factory: Callable[[], Session],
-        arc_envelope_manager: Any,
         comment_analyzer: Any,
         artifact_store: Any,
         llm_client: Any,
@@ -157,7 +156,6 @@ class PostCanonMaintenanceService:
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.session_factory = session_factory
-        self.arc_envelope_manager = arc_envelope_manager
         self.comment_analyzer = comment_analyzer
         self.artifact_store = artifact_store
         self.llm_client = llm_client

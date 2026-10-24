@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state import BookStateRepository
 from forwin.book_state.query import BookStateQuery
-from forwin.director.arc_director import ArcDirector
 from forwin.models import (
     ChapterPlan,
     Entity,
@@ -70,8 +69,6 @@ class BandActivationPlan:
 
 
 class SubWorldManager:
-    def __init__(self, *, director: ArcDirector | None = None) -> None:
-        self.director = director
 
     def ensure_registry(self, session: Session, project_id: str) -> str:
         global_core = session.execute(
@@ -223,26 +220,6 @@ class SubWorldManager:
             )
         return result
 
-    def apply_initial_arc_plan(
-        self,
-        *,
-        session: Session,
-        project_id: str,
-        arc_id: str,
-        arc_plan: dict,
-    ) -> None:
-        self.ensure_registry(session, project_id)
-        delta = SubWorldPlanDelta.model_validate(
-            arc_plan.get("subworld_delta")
-            or self._fallback_initial_delta(arc_plan)
-        )
-        self.apply_arc_delta(
-            session=session,
-            project_id=project_id,
-            arc_id=arc_id,
-            delta=delta,
-            chapter_number=0,
-        )
 
     def apply_arc_delta(
         self,
@@ -796,13 +773,3 @@ class SubWorldManager:
         for lookup_key in lookup_keys:
             roster_lookup[lookup_key] = row.id
 
-    def _fallback_initial_delta(self, arc_plan: dict) -> SubWorldPlanDelta:
-        return SubWorldPlanDelta(
-            reuse_subworld_ids=[],
-            retire_subworld_ids=[],
-            # Older/custom ArcDirector outputs may not provide subworld planning.
-            # In that case, keep bootstrap conservative and avoid inventing
-            # canonical people or slots that were never present in the arc plan.
-            new_subworlds=[],
-            initial_active_subworld_ids=[],
-        )

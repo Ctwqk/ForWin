@@ -39,7 +39,6 @@ class ChapterWriter:
 
         client = LLMClient(api_key="...")
         writer = ChapterWriter(client)
-        arc    = writer.plan_arc(premise, genre, num_chapters=3)
         output = writer.write_chapter(context_pack)
     """
 

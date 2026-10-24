@@ -170,7 +170,7 @@ def _maintenance(Session, world, plan_id, number, llm, plan_step):
         commit_id = commit.id
     maintenance = PostCanonMaintenanceService(
         session_factory=Session,
-        arc_envelope_manager=object(), comment_analyzer=object(), artifact_store=None, llm_client=llm,
+        comment_analyzer=object(), artifact_store=None, llm_client=llm,
         plan_step=plan_step,
     )
     maintenance.heartbeat = lambda _claim: None

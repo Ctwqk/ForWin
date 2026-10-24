@@ -945,8 +945,9 @@ def override_band_experience(
         session.add(band_row)
 
         if pipeline is not None:
-            arc_structure = repo.get_latest_arc_structure_draft(project_id)
-            structure_data = pipeline._structure_data_from_row(arc_structure)
+            from forwin.experience.chapter_planner import ChapterExperiencePlanner
+
+            experience = repo.get_beat_sheet_experience(project_id)
             for chapter_number in range(
                 schedule.chapter_start, schedule.chapter_end + 1
             ):
@@ -954,9 +955,9 @@ def override_band_experience(
                 if chapter_plan is None:
                     continue
                 experience_plan = (
-                    pipeline.arc_envelope_manager._derive_chapter_experience_plan(
+                    ChapterExperiencePlanner().derive_chapter_experience_plan(
                         chapter_number=chapter_number,
-                        structure=structure_data,
+                        experience=experience,
                         schedule=schedule,
                         chapter_plan=chapter_plan,
                     )

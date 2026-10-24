@@ -68,20 +68,6 @@ class MemorySnippet(BaseModel):
     score: float = 0.0
 
 
-class ArcEnvelopeView(BaseModel):
-    source_policy_tier: str = ""
-    base_target_size: int = 0
-    base_soft_min: int = 0
-    base_soft_max: int = 0
-    resolved_target_size: int = 0
-    resolved_soft_min: int = 0
-    resolved_soft_max: int = 0
-    detailed_band_size: int = 0
-    frozen_zone_size: int = 0
-    current_projected_size: int = 0
-    current_confidence: float = 0.0
-
-
 class ReaderCommentView(BaseModel):
     platform_id: str = ""
     author_name: str = ""
@@ -203,7 +189,6 @@ class ChapterContextPack(BaseModel):
     timeline: TimelineSnapshot | None = None
     retrieved_memories: list[MemorySnippet] = Field(default_factory=list)
     reader_feedback: ReaderFeedbackView | None = None
-    current_arc_envelope: ArcEnvelopeView | None = None
     audience_hints: AudienceHintView | None = None
     reader_promise: ReaderPromise | None = None
     arc_payoff_map: ArcPayoffMap | None = None

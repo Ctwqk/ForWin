@@ -255,7 +255,7 @@ def test_load_eval_cases_builds_prompts_from_fixture_text() -> None:
         "writer_preview",
         "scene_breakdown",
         "genesis_brief",
-        "arc_plan",
+        "band_plan",
         "review_json",
         "comment_analysis",
     ]

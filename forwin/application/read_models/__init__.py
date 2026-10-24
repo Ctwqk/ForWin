@@ -32,7 +32,7 @@ from .generation import (
 )
 
 from .runtime_maps import (
-    _load_latest_arc_structure_by_project,
+    _load_active_beat_sheets_by_project,
     _load_latest_band_experience_by_project,
     normalize_project_automation,
     load_project_upload_stats,
@@ -76,7 +76,7 @@ __all__ = [
     'load_open_world_conflicts',
     'load_open_world_conflicts_by_project',
     'build_generation_control',
-    '_load_latest_arc_structure_by_project',
+    '_load_active_beat_sheets_by_project',
     '_load_latest_band_experience_by_project',
     'normalize_project_automation',
     'load_project_upload_stats',

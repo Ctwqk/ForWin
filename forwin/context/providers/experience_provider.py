@@ -5,7 +5,6 @@ import logging
 
 from forwin.context.request import ContextDraft, ContextRequest
 from forwin.knowledge_system.context import KnowledgeContextQuery
-from forwin.protocol.context import ArcEnvelopeView
 from forwin.protocol.world_model import WorldContextPack
 
 logger = logging.getLogger(__name__)
@@ -18,7 +17,6 @@ class ExperienceContextProvider:
         repo = request.repo
         chapter_plan = request.chapter_plan
         project_id = request.project_id
-        arc_envelope_getter = getattr(repo, "get_active_arc_envelope", None)
         reader_promise_getter = getattr(repo, "get_reader_promise", None)
         arc_payoff_map_getter = getattr(repo, "get_arc_payoff_map", None)
         band_schedule_getter = getattr(
@@ -40,9 +38,6 @@ class ExperienceContextProvider:
         )
         next_band_summary_getter = getattr(repo, "get_next_band_summary", None)
 
-        arc_envelope_row = (
-            arc_envelope_getter(project_id) if callable(arc_envelope_getter) else None
-        )
         chapter_experience_plan = (
             chapter_experience_getter(project_id, chapter_plan.chapter_number)
             if callable(chapter_experience_getter)
@@ -78,24 +73,6 @@ class ExperienceContextProvider:
         draft.data.update(
             {
                 "goals": goals,
-                "arc_envelope_row": arc_envelope_row,
-                "current_arc_envelope": (
-                    ArcEnvelopeView(
-                        source_policy_tier=arc_envelope_row.source_policy_tier,
-                        base_target_size=arc_envelope_row.base_target_size,
-                        base_soft_min=arc_envelope_row.base_soft_min,
-                        base_soft_max=arc_envelope_row.base_soft_max,
-                        resolved_target_size=arc_envelope_row.resolved_target_size,
-                        resolved_soft_min=arc_envelope_row.resolved_soft_min,
-                        resolved_soft_max=arc_envelope_row.resolved_soft_max,
-                        detailed_band_size=arc_envelope_row.detailed_band_size,
-                        frozen_zone_size=arc_envelope_row.frozen_zone_size,
-                        current_projected_size=arc_envelope_row.current_projected_size,
-                        current_confidence=arc_envelope_row.current_confidence,
-                    )
-                    if arc_envelope_row is not None
-                    else None
-                ),
                 "reader_promise": reader_promise_getter(project_id)
                 if callable(reader_promise_getter)
                 else None,

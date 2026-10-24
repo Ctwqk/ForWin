@@ -116,15 +116,6 @@ class HttpRuntime:
                 raise RuntimeError("HTTP runtime session factory is unavailable")
 
             candidate = self.container.build_chapter_pipeline()
-            with self.session_factory() as session:
-                created = candidate.arc_envelope_manager.backfill_missing_resolutions(
-                    session=session
-                )
-                if created:
-                    session.commit()
-                    logger.info("Backfilled %d active arc envelopes.", created)
-                else:
-                    session.rollback()
             self.pipeline = candidate
             return candidate
 

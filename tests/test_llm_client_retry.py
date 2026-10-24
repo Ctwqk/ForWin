@@ -8,7 +8,6 @@ from unittest.mock import patch
 import httpx
 
 from forwin.protocol.experience import ArcPayoffMap, ReaderPromise, RevelationLayer
-from forwin.planning.arc_envelope_resolver import _coerce_unit_float
 from forwin.config import InfrastructureConfig
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
@@ -155,10 +154,6 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertEqual(payoff_map.awe_kit[0], "temporal_vastness：钟声震颤")
         self.assertEqual(payoff_map.ambiguity_constraints[0], "罗盘来源：只暗示")
 
-    def test_phase24_coerces_confidence_words(self) -> None:
-        self.assertEqual(_coerce_unit_float("high", default=0.65), 0.85)
-        self.assertEqual(_coerce_unit_float("medium", default=0.65), 0.65)
-        self.assertEqual(_coerce_unit_float("low", default=0.65), 0.35)
 
     def test_revelation_layer_coerces_window_list_to_text(self) -> None:
         layer = RevelationLayer.model_validate(
@@ -1143,30 +1138,6 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertEqual(calls, ["MiniMax-M2.7"])
         self.assertEqual(attempts[0]["llm_task_route"], "writer_preview")
 
-    def test_launch_arc_routes_as_low_risk_planning_for_minimax_fallback(self) -> None:
-        client = LLMClient(
-            api_key="minimax-key",
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            retry_attempts=1,
-        )
-        try:
-            route = client._llm_task_route(
-                task_family="genesis",
-                stage_key="launch_arc_1",
-                response_format={"type": "json_object"},
-            )
-            routed = client._route_profiles(
-                client._request_profiles(),
-                task_family="genesis",
-                stage_key="launch_arc_1",
-                response_format={"type": "json_object"},
-            )
-        finally:
-            client.close()
-
-        self.assertEqual(route, "planning_json_low_risk")
-        self.assertEqual(routed[0]["model"], "MiniMax-M2.7")
 
     def test_chapter_review_form_routes_as_review_json_for_minimax_fallback(self) -> None:
         client = LLMClient(

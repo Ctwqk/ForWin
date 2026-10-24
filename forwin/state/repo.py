@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -18,9 +18,7 @@ from forwin.planning.contracts import (
     load_plan_task_contract,
 )
 from forwin.models import (
-    ArcEnvelope,
     ArcPlanVersion,
-    ArcStructureDraft,
     BandCheckpoint,
     BandExperiencePlan,
     BookGenesisRevision,
@@ -47,6 +45,11 @@ from forwin.protocol import (
     SignalSummaryView,
     SubWorldSummary,
 )
+
+if TYPE_CHECKING:
+    from forwin.experience.types import BeatSheetExperienceInput
+    from forwin.models.planning_v6 import ArcBeatSheetRow
+
 
 logger = logging.getLogger(__name__)
 
@@ -169,55 +172,30 @@ class StateRepository:
         )
         return self.session.execute(stmt).scalar_one_or_none()
 
-    def get_active_arc_envelope(self, project_id: str) -> ArcEnvelope | None:
-        active_arc = self.get_active_arc_plan(project_id)
-        if active_arc is None:
-            return None
-        stmt = (
-            select(ArcEnvelope)
-            .where(
-                ArcEnvelope.project_id == project_id,
-                ArcEnvelope.arc_id == active_arc.id,
-            )
-            .order_by(ArcEnvelope.updated_at.desc(), ArcEnvelope.created_at.desc())
-            .limit(1)
-        )
-        return self.session.execute(stmt).scalar_one_or_none()
+    def get_active_beat_sheet(self, project_id: str) -> ArcBeatSheetRow | None:
+        from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
 
-    def get_latest_arc_structure_draft(
-        self, project_id: str
-    ) -> ArcStructureDraft | None:
-        active_arc = self.get_active_arc_plan(project_id)
-        if active_arc is None:
-            return None
-        stmt = (
-            select(ArcStructureDraft)
-            .where(
-                ArcStructureDraft.project_id == project_id,
-                ArcStructureDraft.arc_id == active_arc.id,
-            )
-            .order_by(ArcStructureDraft.created_at.desc())
-            .limit(1)
+        arc = self.get_active_arc_plan(project_id)
+        return ArcBeatSheetRepository(self.session).active_for_arc(arc.id) if arc else None
+
+    def get_beat_sheet_experience(self, project_id: str) -> BeatSheetExperienceInput:
+        from forwin.experience.types import BeatSheetExperienceInput
+        from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+
+        row = self.get_active_beat_sheet(project_id)
+        if row is None:
+            return BeatSheetExperienceInput()
+        return BeatSheetExperienceInput.from_beat_sheet(
+            ArcBeatSheetRepository(self.session).load(row)
         )
-        return self.session.execute(stmt).scalar_one_or_none()
 
     def get_reader_promise(self, project_id: str) -> ReaderPromise | None:
-        structure = self.get_latest_arc_structure_draft(project_id)
-        if structure is None:
-            return None
-        payload = _load_json_object(structure.reader_promise_json, {})
-        if not isinstance(payload, dict) or not payload:
-            return None
-        return ReaderPromise.model_validate(payload)
+        row = self.get_active_beat_sheet(project_id)
+        return ReaderPromise.model_validate_json(row.reader_promise_json) if row else None
 
     def get_arc_payoff_map(self, project_id: str) -> ArcPayoffMap | None:
-        structure = self.get_latest_arc_structure_draft(project_id)
-        if structure is None:
-            return None
-        payload = _load_json_object(structure.arc_payoff_map_json, {})
-        if not isinstance(payload, dict) or not payload:
-            return None
-        return ArcPayoffMap.model_validate(payload)
+        row = self.get_active_beat_sheet(project_id)
+        return ArcPayoffMap.model_validate_json(row.arc_payoff_map_json) if row else None
 
     # ------------------------------------------------------------------
     # Chapter Plan

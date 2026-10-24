@@ -216,9 +216,7 @@ def build_project_detail(
     narrative_constraints = _narrative_constraints_by_project(
         session, [project_id], limit=50
     ).get(project_id, [])
-    latest_arc_envelope = runtime_maps["latest_arc_envelope_map"].get(project_id)
-    latest_arc_analysis = runtime_maps["latest_arc_analysis_map"].get(project_id)
-    latest_arc_structure = runtime_maps["latest_arc_structure_map"].get(project_id)
+    latest_beat_sheet = runtime_maps["latest_beat_sheet_map"].get(project_id)
     latest_band_experience = runtime_maps["latest_band_experience_map"].get(project_id)
     active_subworld_ids: set[str] = set()
     if latest_band_experience is not None:
@@ -294,9 +292,7 @@ def build_project_detail(
         chapters=chapter_infos[:_PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT],
         latest_stage=runtime_maps["latest_task_stage_map"].get(project.id, ""),
         **project_arc_snapshot_payload(
-            latest_arc_envelope,
-            latest_arc_analysis,
-            latest_arc_structure,
+            latest_beat_sheet,
             latest_band_experience,
         ),
         generation_control=generation_control,

@@ -9,15 +9,12 @@ from typing import TYPE_CHECKING, Callable, Literal, cast
 from forwin.application.generation import GenerationApplicationService
 from forwin.canon import CanonAdmissionService, CanonPreparationService
 from forwin.config import InfrastructureConfig
-from forwin.director import ArcDirector
 from forwin.generation.gate_delegation import GateDelegationService, SparkGateDelegate
 from forwin.genesis import BookGenesisService
 from forwin.llm.factory import maybe_wrap_with_codex_router
 from forwin.models.base import get_engine, get_session_factory, require_v5_schema
 from forwin.observability.service import ObservabilityService
-from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.planning.arc_progression import ArcProgressionService
-from forwin.planning.service import PlanningService
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.retrieval import RetrievalBroker, create_memory_index
 from forwin.review.draft_service import DraftReviewService
@@ -187,7 +184,6 @@ class RuntimeContainer:
                 skill_prompt_layer_builder=(
                     generation.skill_runtime.prompt_layer_builder
                 ),
-                arc_director=generation.arc_director,
                 book_genesis=generation.book_genesis,
                 subworld_manager=generation.subworld_manager,
                 retrieval_broker=generation.retrieval_broker,
@@ -195,7 +191,6 @@ class RuntimeContainer:
                 observability=core.observability,
                 writer=generation.writer,
                 comment_analyzer=generation.comment_analyzer,
-                arc_envelope_manager=generation.arc_envelope_manager,
                 draft_review=generation.draft_review,
                 repair=generation.repair,
                 repair_verifier=generation.repair_verifier,
@@ -372,11 +367,7 @@ class RuntimeContainer:
             )
             book_genesis.observability = core.observability
 
-            arc_director = ArcDirector(
-                llm_client=llm_client,
-                max_tokens=infrastructure.max_tokens,
-            )
-            subworld_manager = SubWorldManager(director=arc_director)
+            subworld_manager = SubWorldManager()
             retrieval_broker = RetrievalBroker(
                 context_budget_chars=infrastructure.context_budget_chars,
                 max_entities=infrastructure.retrieval_max_entities,
@@ -395,16 +386,6 @@ class RuntimeContainer:
             comment_analyzer = CommentAnalyzer(
                 llm_client=llm_client
                 if policy.quality_profile == "standard" and llm_available else None
-            )
-            planning_service = PlanningService.build_default(
-                director=arc_director,
-                subworld_manager=subworld_manager,
-                trope_cost_ceiling=2 if policy.quality_profile == "pulp" else 3,
-            )
-            arc_envelope_manager = ArcEnvelopeManager(
-                director=arc_director,
-                subworld_manager=subworld_manager,
-                planning_service=planning_service,
             )
             draft_review = DraftReviewService(
                 experience_review_enabled=policy.review.allows_signal("experience"),
@@ -427,12 +408,10 @@ class RuntimeContainer:
             return GenerationRuntimeServices(
                 llm_client=llm_client,
                 skill_runtime=skill_runtime,
-                arc_director=arc_director,
                 book_genesis=book_genesis,
                 subworld_manager=subworld_manager,
                 retrieval_broker=retrieval_broker,
                 comment_analyzer=comment_analyzer,
-                arc_envelope_manager=arc_envelope_manager,
                 draft_review=draft_review,
                 writer=writer,
                 repair=RepairService(),
@@ -519,7 +498,6 @@ class RuntimeContainer:
         if service is None:
             service = PostCanonMaintenanceService(
                 session_factory=core.session_factory,
-                arc_envelope_manager=generation.arc_envelope_manager,
                 comment_analyzer=generation.comment_analyzer,
                 artifact_store=core.artifact_store,
                 llm_client=generation.llm_client,
@@ -572,29 +550,13 @@ class RuntimeContainer:
         policy = core.policy
         llm_client = self._build_llm_client(infrastructure, policy)
         try:
-            arc_director = ArcDirector(
-                llm_client=llm_client,
-                max_tokens=infrastructure.max_tokens,
-            )
-            subworld_manager = SubWorldManager(director=arc_director)
             llm_available = _llm_available(infrastructure, policy)
             comment_analyzer = CommentAnalyzer(
                 llm_client=llm_client
                 if policy.quality_profile == "standard" and llm_available else None
             )
-            planning_service = PlanningService.build_default(
-                director=arc_director,
-                subworld_manager=subworld_manager,
-                trope_cost_ceiling=2 if policy.quality_profile == "pulp" else 3,
-            )
-            arc_envelope_manager = ArcEnvelopeManager(
-                director=arc_director,
-                subworld_manager=subworld_manager,
-                planning_service=planning_service,
-            )
             service = PostCanonMaintenanceService(
                 session_factory=core.session_factory,
-                arc_envelope_manager=arc_envelope_manager,
                 comment_analyzer=comment_analyzer,
                 artifact_store=core.artifact_store,
                 llm_client=llm_client,

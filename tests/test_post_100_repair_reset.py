@@ -406,24 +406,3 @@ def test_repair_v2_no_longer_has_subworld_repair_scope() -> None:
     assert decision.sub_action["scope"] == "operator"
 
 
-def test_band_plan_entry_targets_do_not_infer_names_from_plan_text() -> None:
-    from forwin.planning.band_plan_service import _chapter_entry_targets_for_plan
-
-    plan = ChapterPlan(
-        project_id="project-1",
-        arc_plan_id="arc-1",
-        chapter_number=8,
-        title="灰鹞的条件",
-        one_line="陆明发现馆员陈潮白持有锚点。",
-        goals_json='["引入猎锚者X作为远程压力"]',
-    )
-    schedule = type(
-        "Schedule",
-        (),
-        {
-            "chapter_entry_targets": [],
-            "active_subworld_ids": ["global-core"],
-        },
-    )()
-
-    assert _chapter_entry_targets_for_plan(schedule=schedule, plan=plan) == []

@@ -1190,7 +1190,6 @@ def _apply_repair_patch(
     band_schedule = repo.get_band_experience_plan_for_chapter(
         project_id, chapter_plan.chapter_number
     )
-    arc_structure = repo.get_latest_arc_structure_draft(project_id)
     patch = dict(repair_instruction.design_patch)
     patch["repair_scope"] = repair_scope
 
@@ -1283,7 +1282,6 @@ def _apply_repair_patch(
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
             schedule=updated_schedule,
-            arc_structure=arc_structure,
             repair_instruction=repair_instruction,
         )
         session.flush()

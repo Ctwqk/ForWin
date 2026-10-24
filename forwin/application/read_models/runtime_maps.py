@@ -12,13 +12,12 @@ from forwin.api_schema import (
 )
 from forwin.long_run_policy import normalize_long_run_policy
 from forwin.models.phase import (
-    ArcStructureDraft,
     BandExperiencePlan,
 )
 from forwin.models.publisher import PublisherUploadJob
+from forwin.models.planning_v6 import ArcBeatSheetRow
+from forwin.models.project import ArcPlanVersion
 from forwin.state.query_helpers import (
-    load_latest_active_arc_envelope_by_project,
-    load_latest_arc_envelope_analysis_by_project,
     load_latest_task_stage_by_project,
 )
 from .common import (
@@ -31,20 +30,22 @@ DisplayDatetime = Callable[[datetime | None], str]
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 
 
-def _load_latest_arc_structure_by_project(
-    session: Session,
-    project_ids: list[str],
-) -> dict[str, ArcStructureDraft]:
-    return _latest_rows_by_project(
-        session,
-        ArcStructureDraft,
-        ArcStructureDraft.project_id,
-        project_ids,
-        order_by=(
-            ArcStructureDraft.created_at.desc(),
-            ArcStructureDraft.id.desc(),
-        ),
+def _load_active_beat_sheets_by_project(
+    session: Session, project_ids: list[str],
+) -> dict[str, ArcBeatSheetRow]:
+    if not project_ids:
+        return {}
+    rows = session.scalars(
+        select(ArcBeatSheetRow)
+        .join(ArcPlanVersion, ArcPlanVersion.id == ArcBeatSheetRow.arc_plan_id)
+        .where(
+            ArcBeatSheetRow.project_id.in_(project_ids),
+            ArcBeatSheetRow.status == "active",
+            ArcPlanVersion.status == "active",
+        )
+        .order_by(ArcBeatSheetRow.version)
     )
+    return {row.project_id: row for row in rows}
 
 
 def _load_latest_band_experience_by_project(
@@ -283,29 +284,19 @@ def load_project_runtime_maps(
     session: Session,
     project_ids: list[str],
 ) -> dict[str, dict[str, Any]]:
-    latest_arc_envelope_map = load_latest_active_arc_envelope_by_project(
-        session, project_ids
-    )
-    latest_arc_analysis_map = load_latest_arc_envelope_analysis_by_project(
-        session, project_ids
-    )
-    latest_arc_structure_map = _load_latest_arc_structure_by_project(
-        session, project_ids
-    )
+    latest_beat_sheet_map = _load_active_beat_sheets_by_project(session, project_ids)
     latest_band_experience_map = _load_latest_band_experience_by_project(
         session, project_ids
     )
     return {
         "latest_task_stage_map": load_latest_task_stage_by_project(session, project_ids),
-        "latest_arc_envelope_map": latest_arc_envelope_map,
-        "latest_arc_analysis_map": latest_arc_analysis_map,
-        "latest_arc_structure_map": latest_arc_structure_map,
+        "latest_beat_sheet_map": latest_beat_sheet_map,
         "latest_band_experience_map": latest_band_experience_map,
     }
 
 
 __all__ = [
-    "_load_latest_arc_structure_by_project",
+    "_load_active_beat_sheets_by_project",
     "_load_latest_band_experience_by_project",
     "normalize_project_automation",
     "load_project_upload_stats",

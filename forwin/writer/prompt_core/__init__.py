@@ -13,7 +13,6 @@ from .sections import (
     _subworld_control_section,
     _active_threads_section,
     _canon_name_anchor_section,
-    _arc_envelope_section,
     _audience_hints_section,
     _retrieved_memories_section,
 )
@@ -55,7 +54,6 @@ __all__ = [
     '_subworld_control_section',
     '_active_threads_section',
     '_canon_name_anchor_section',
-    '_arc_envelope_section',
     '_audience_hints_section',
     '_retrieved_memories_section',
     'ConstraintSection',

@@ -17,7 +17,6 @@ from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.updater import StateUpdater
 
 from .arc_materializer import GenesisArcMaterializer
-from .chapter_materializer import GenesisChapterMaterializer
 from .commands import HandoffStageError, StartWritingCommand, StartWritingHandoffResult
 from .map_bootstrap import GenesisMapBootstrap, GenesisMapBootstrapError
 from .world_seed_committer import WorldSeedCommitError, WorldSeedCommitter
@@ -33,7 +32,6 @@ class GenesisHandoffService:
     def __init__(self, owner, *, beat_sheets: ArcBeatSheetService | None = None) -> None:  # noqa: ANN001
         self.owner = owner
         self.arc_materializer = GenesisArcMaterializer(owner)
-        self.chapter_materializer = GenesisChapterMaterializer(owner)
         self.map_bootstrap = GenesisMapBootstrap()
         self.world_seed_committer = WorldSeedCommitter()
         self.beat_sheets = beat_sheets if beat_sheets is not None else _fallback_beat_sheets()

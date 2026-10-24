@@ -12,7 +12,6 @@ from forwin.book_state import BookStateRepository
 from forwin.canon_names import CanonNameAnchor, find_canon_name_violations
 from forwin.checker.rules import ContinuityChecker
 from forwin.context.assembler_core import assemble_context
-from forwin.director.arc_director import ArcDirector
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision
 from forwin.map.models import MapRegionRow
@@ -23,7 +22,6 @@ from forwin.models.subworld import (
     SubWorldRosterItem,
     project_scoped_subworld_id,
 )
-from forwin.planning.arc_envelope import ArcEnvelopeManager, ArcStructureDraftData
 from forwin.generation.pipeline import ChapterPipeline
 from forwin.protocol import (
     ArcPayoffMap,
@@ -286,83 +284,6 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual([item.id for item in detail.characters], ["char_book"])
         self.assertEqual(detail.characters[0].name, "陆沉")
 
-    def test_arc_director_plan_arc_includes_subworld_delta_and_seed_characters(self) -> None:
-        class FakeLLMClient:
-            def chat(self, messages, temperature: float, max_tokens: int, response_format=None) -> str:
-                return (
-                    '{"arc_synopsis":"弧线","setting_summary":"设定","chapters":[{"chapter_number":1,'
-                    '"title":"第一章","one_line":"开场","goals":["目标1","目标2"]}],"characters":[],'
-                    '"locations":[],"factions":[],"relations":[],"plot_threads":[],"initial_time":'
-                    '{"label":"开始","description":"开场"}}'
-                )
-
-        director = ArcDirector(FakeLLMClient(), max_tokens=2048)
-
-        plan = director.plan_arc("故事前提", "玄幻", 1)
-
-        self.assertIn("subworld_delta", plan)
-        self.assertTrue(plan["subworld_delta"]["new_subworlds"])
-        self.assertTrue(any(item["region_seeds"] for item in plan["subworld_delta"]["new_subworlds"] if item.get("scope") == "arc_local"))
-        self.assertTrue(plan["characters"])
-
-    def test_arc_director_normalize_chapters_rejects_single_character_goals(self) -> None:
-        director = ArcDirector(SimpleNamespace(chat=lambda *args, **kwargs: "{}"), max_tokens=2048)
-
-        chapters = director._normalize_chapters(
-            [
-                {
-                    "chapter_number": 1,
-                    "title": "第一章",
-                    "one_line": "周岚找到旧港火灾记录。",
-                    "goals": ["揭", "示", "周"],
-                }
-            ],
-            1,
-            "周岚调查旧港火灾。",
-        )
-
-        self.assertEqual(
-            chapters[0]["goals"],
-            ["推进本章主线冲突", "提供新的线索、代价或反转"],
-        )
-
-    def test_arc_director_tolerates_non_numeric_subworld_seed_fields(self) -> None:
-        director = ArcDirector(SimpleNamespace(chat=lambda *args, **kwargs: "{}"), max_tokens=2048)
-
-        normalized = director._normalize_subworld_delta(
-            {
-                "reuse_subworld_ids": [],
-                "retire_subworld_ids": [],
-                "initial_active_subworld_ids": [],
-                "new_subworlds": [
-                    {
-                        "name": "雾港",
-                        "scope": "arc_local",
-                        "core_named_characters": [
-                            {
-                                "name": "林夜",
-                                "description": "记录员",
-                                "role_hint": "主角",
-                                "importance": "protagonist",
-                            }
-                        ],
-                        "planned_slots": [],
-                        "region_seeds": [
-                            {
-                                "name": "旧航线档案馆",
-                                "level": "primary",
-                            }
-                        ],
-                    }
-                ],
-            },
-            fallback={"new_subworlds": []},
-        )
-        merged = director._merge_seed_characters([], normalized["new_subworlds"])
-
-        self.assertEqual(normalized["new_subworlds"][0]["core_named_characters"][0]["importance"], 5)
-        self.assertEqual(normalized["new_subworlds"][0]["region_seeds"][0]["level"], 1)
-        self.assertEqual(merged[0]["importance"], 5)
 
     def test_assemble_context_uses_book_state_entities_and_active_subworlds(self) -> None:
         with TemporaryDirectory():
@@ -1005,99 +926,6 @@ class SubWorldControlTests(unittest.TestCase):
 
         self.assertIsNone(fixed)
 
-
-    def test_phase24_persists_subworld_activation_into_band_and_chapter_plan(self) -> None:
-        with TemporaryDirectory():
-            engine = get_engine(postgres_test_url("phase24"))
-            init_db(engine)
-            session = get_session_factory(engine)()
-            try:
-                updater = StateUpdater(session)
-                project = updater.create_project(
-                    title="书",
-                    premise="p",
-                    genre="g",
-                    runtime_policy=RuntimePolicy.for_profile("standard"),
-                )
-                arc = updater.create_arc_plan(project.id, "弧线")
-                plans = [
-                    updater.create_chapter_plan(
-                        project_id=project.id,
-                        arc_plan_id=arc.id,
-                        chapter_number=number,
-                        title=f"第{number}章",
-                        one_line="推进江城线",
-                        goals=["推进江城线"],
-                    )
-                    for number in (1, 2, 3)
-                ]
-                manager = SubWorldManager()
-                BookStateRepository(session).create_world_node(
-                    WorldNode(
-                        id="char_core_qing",
-                        project_id=project.id,
-                        node_type="character",
-                        name="阿青",
-                        description="主角团成员",
-                    ),
-                    version_chapter=0,
-                )
-                manager.ensure_registry(session, project.id)
-                arc_local = updater.create_subworld(
-                    project_id=project.id,
-                    origin_arc_id=arc.id,
-                    parent_subworld_id=None,
-                    name="江城线",
-                    purpose="推进江城线",
-                    scope="arc_local",
-                    metadata={"chapter_window_hint": "1-3"},
-                )
-                updater.create_roster_item(
-                    project_id=project.id,
-                    subworld_id=arc_local.id,
-                    entity_id=None,
-                    display_name="林舟",
-                    slot_key="jiangcheng-contact",
-                    role_hint="江城关键联系人",
-                    description="本段首次进入视野的联系人",
-                    is_core=False,
-                    status="planned_slot",
-                )
-                envelope_manager = ArcEnvelopeManager(subworld_manager=manager)
-
-                envelope_manager._persist_experience_overlay(
-                    session=session,
-                    project_id=project.id,
-                    arc_id=arc.id,
-                    chapter_plans=plans,
-                    activation_chapter=1,
-                    detailed_band_size=3,
-                    structure=ArcStructureDraftData(
-                        phase_layout=["setup", "pressure", "turn"],
-                        key_beats=["江城异动", "调查推进", "真相前夜"],
-                        thread_priorities=[],
-                        hotspot_candidates=[],
-                        compression_candidates=[],
-                        reader_promise=ReaderPromise(genre_promise="玄幻"),
-                        arc_payoff_map=ArcPayoffMap(),
-                    ),
-                )
-
-                band_row = session.execute(select(BandExperiencePlan)).scalar_one()
-                band_payload = json.loads(band_row.schedule_json or "{}")
-                chapter_plan = session.execute(
-                    select(ChapterPlan)
-                    .where(ChapterPlan.project_id == project.id, ChapterPlan.chapter_number == 1)
-                ).scalar_one()
-                chapter_payload = json.loads(chapter_plan.experience_plan_json or "{}")
-            finally:
-                session.close()
-                engine.dispose()
-
-        self.assertTrue(band_payload.get("active_subworld_ids"))
-        self.assertTrue(band_payload.get("chapter_entry_targets"))
-        self.assertEqual(chapter_payload.get("entity_admission_rule"), "strict_named_character")
-        self.assertTrue(chapter_payload.get("active_subworld_ids"))
 
     def test_project_detail_exposes_subworld_summaries(self) -> None:
         with TemporaryDirectory():

@@ -220,19 +220,14 @@ def test_runtime_scenario_rehearsal_feature_family_stays_removed() -> None:
     assert "scenario_rehearsal_runs" not in baseline
     assert "scenario_plan_patches" not in baseline
 
-    arc_envelope_source = _read("forwin/planning/arc_envelope.py")
-    resolution = arc_envelope_source.index("arc_envelope_resolver.ensure_resolution")
-    band_plan = arc_envelope_source.index(
-        "self._ensure_current_band_plan_for_state(", resolution
-    )
-    assert resolution < band_plan
-
 
 def test_planning_runtime_has_one_explicit_composition_service() -> None:
     container_source = _read("forwin/runtime/container.py")
     run_control_source = _read("forwin/generation/pipeline_core/run_control.py")
 
-    assert "PlanningService.build_default" in container_source
+    assert "def _band_planner(" in container_source
+    assert "return BandPlanner(" in container_source
+    assert "self.band_planner.ensure_plan_for_chapter" in run_control_source
     assert "arc_envelope_manager.services" not in container_source
     assert "arc_envelope_manager.services" not in run_control_source
     assert "bind_runtime_hooks" not in run_control_source
@@ -1083,11 +1078,8 @@ def test_provisional_preview_runtime_is_removed() -> None:
     assert offenders == []
 
     phase_source = _read("forwin/models/phase.py")
-    resolver_source = _read("forwin/planning/arc_envelope_resolver.py")
     writer_source = _read("forwin/writer/chapter_writer.py")
-    assert "class ProvisionalPromotionRecord" in phase_source
-    assert "provisional_window" in resolver_source
-    assert "provisional_band_size" in resolver_source
+    assert "class ProvisionalPromotionRecord" not in phase_source
     assert "def write_preview_chapter(" in writer_source
 
     for removed_path in (
@@ -1322,3 +1314,72 @@ def test_replanner_and_macro_progression_are_gone() -> None:
         assert f'op.drop_table("{table}")' in inspect.getsource(migration.upgrade)
         assert f'"{table}"' in inspect.getsource(migration.downgrade)
     assert f'op.drop_column("arc_plan_versions", "{column}")' in inspect.getsource(migration.upgrade)
+
+
+def test_legacy_planner_modules_and_tables_are_gone() -> None:
+    from forwin.models import Base
+
+    removed = (
+        "director", "planning/arc_envelope.py", "planning/arc_envelope_resolver.py",
+        "planning/arc_structure_service.py", "planning/band_window.py",
+        "planning/band_plan_service.py", "planning/arc_activation_service.py",
+    )
+    assert [name for name in removed if (ROOT / "forwin" / name).exists()] == []
+    tables = ("arc_envelopes", "arc_envelope_analyses", "arc_structure_drafts",
+              "provisional_promotion_records")
+    assert [name for name in tables if name in Base.metadata.tables] == []
+    migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
+    source = inspect.getsource(migration)
+    for name in tables:
+        assert f'op.drop_table("{name}")' in source
+    from forwin.generation.pipeline_core.run_control import RunControlStage
+    assert not hasattr(RunControlStage, "run")
+
+
+# Composite writer/review traces retain the individual attempt's stage_key.
+# Each registered owner persists the trace in the chapter or maintenance transaction.
+LLM_STAGE_TRACE_OWNERS = {
+    "chapter_review_form": ("forwin/generation/pipeline_core/quality_gates.py", "save_prompt_trace("),
+    "scene_generation": ("forwin/review/repair/service.py", "self._save_prompt_trace_payload("),
+    "scene_stitch": ("forwin/review/repair/service.py", "self._save_prompt_trace_payload("),
+    "scene_breakdown": ("forwin/review/repair/service.py", "self._save_prompt_trace_payload("),
+    "chapter_review": ("forwin/review/repair/service.py", "self._save_prompt_trace_payload("),
+    "chapter_review_json_repair": ("forwin/review/repair/service.py", "self._save_prompt_trace_payload("),
+    "repair_verification": ("forwin/review/repair/service.py", "self._save_prompt_trace_payload("),
+    "comment_analysis": ("forwin/maintenance/post_canon.py", "save_world_prompt_trace("),
+    "spark_pause_gate": ("forwin/generation/gate_delegation.py", "audit_writer.save_prompt_trace("),
+    "review.world_conflict": ("forwin/generation/gate_delegation.py", "audit_writer.save_prompt_trace("),
+    "chapter_delta_extraction": ("forwin/generation/pipeline_core/review_autofix.py", "self._save_prompt_trace_payload("),
+    "world.adjudicate": ("forwin/world_engine/tick.py", "self.service.save_prompt_trace("),
+    "world.actor_turn": ("forwin/world_engine/tick.py", "self.service.save_prompt_trace("),
+    "plan.arc_beats": ("forwin/planning/beat_sheet/service.py", "self.save_trace("),
+    "plan.band": ("forwin/planning/band_planner/service.py", "self.save_trace("),
+}
+
+
+def test_literal_llm_stages_have_registered_prompt_trace_owners() -> None:
+    stages = set()
+    for path in (ROOT / "forwin").rglob("*.py"):
+        if "migrations" in path.parts:
+            continue
+        tree = ast.parse(path.read_text())
+        constants = {
+            target.id: node.value.value
+            for node in tree.body if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+            for target in node.targets if isinstance(target, ast.Name)
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg != "stage_key":
+                    continue
+                value = keyword.value
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    stages.add(value.value)
+                elif isinstance(value, ast.Name) and value.id in constants:
+                    stages.add(constants[value.id])
+    assert stages == LLM_STAGE_TRACE_OWNERS.keys()
+    for path, persistence_call in LLM_STAGE_TRACE_OWNERS.values():
+        assert persistence_call in _read(path)

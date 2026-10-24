@@ -457,7 +457,18 @@ class ReviewWorkflowStage:
             after_review=review,
             repair_instruction=repair_instruction,
         )
-        merged_review = review.model_copy(update={"repair_verification": verification})
+        trace = dict(review.prompt_trace or {})
+        client = getattr(self.repair_verifier, "llm_client", None)
+        drain = getattr(client, "drain_llm_attempt_events", None)
+        attempts = drain() if callable(drain) else []
+        if attempts:
+            trace.setdefault("trace_scope", "repair")
+            trace.setdefault("stage_key", "repair_verification")
+            trace.setdefault("input_snapshot", {"chapter_number": repaired_output.chapter_number})
+            trace["attempts"] = [*(trace.get("attempts") or []), *attempts]
+        merged_review = review.model_copy(update={
+            "repair_verification": verification, "prompt_trace": trace,
+        })
         if (
             verification.fixed_all_must_fix is not False
             and verification.preserved_all_must_preserve is not False

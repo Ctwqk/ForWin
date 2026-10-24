@@ -6,7 +6,6 @@ from forwin.generation.pipeline_core.result import RunResult
 from typing import Any
 from forwin.models.project import ChapterPlan
 from forwin.models.project import (
-    ArcPlanVersion,
     Project,
 )
 from forwin.generation.continue_workset import build_continue_generation_workset
@@ -14,7 +13,6 @@ from forwin.models.draft import ChapterDraft
 from forwin.planning.band_planner.service import BandPlanUnavailable
 from forwin.audit.events import DecisionEventType
 from forwin.observability.context import OperationContext
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
@@ -29,215 +27,11 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 
 
-def _pending_chapter_numbers_for_active_arc(
-    *,
-    session: Session,
-    project_id: str,
-    max_chapters: int | None = None,
-) -> list[int]:
-    active_arc = session.execute(
-        select(ArcPlanVersion)
-        .where(
-            ArcPlanVersion.project_id == project_id,
-            ArcPlanVersion.status == "active",
-        )
-        .order_by(ArcPlanVersion.created_at.desc(), ArcPlanVersion.id.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-    if active_arc is None:
-        return []
-    chapter_numbers = list(
-        session.execute(
-            select(ChapterPlan.chapter_number)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.arc_plan_id == active_arc.id,
-                ChapterPlan.status.in_(("planned", "failed")),
-            )
-            .order_by(ChapterPlan.chapter_number.asc())
-        )
-        .scalars()
-        .all()
-    )
-    if max_chapters is not None:
-        chapter_numbers = chapter_numbers[: max(1, int(max_chapters or 1))]
-    return chapter_numbers
 
 
 class RunControlStage:
     """Owns the run control stage behavior."""
 
-    def run(
-        self,
-        premise: str,
-        genre: str,
-        num_chapters: int = 3,
-    ) -> RunResult:
-        """Generate *num_chapters* chapters from a premise.
-
-        Returns a run summary including the project ID and chapter outcomes.
-        """
-        session: Session = self._SessionFactory()
-        try:
-            repo, updater, checker = self._make_state_helpers(session)
-            project_id = ""
-
-            # Step 1: Plan arc -----------------------------------------------
-            self._emit_progress(
-                "stage_changed",
-                stage="planning_arc",
-                requested_chapters=num_chapters,
-                current_chapter=0,
-            )
-            if self._abort_requested():
-                return self._cancelled_result(project_id, num_chapters)
-            print(f"\n{'=' * 60}")
-            print("正在规划故事大纲...")
-            print(f"{'=' * 60}")
-            arc_plan = self.arc_director.plan_arc(premise, genre, num_chapters)
-
-            # Step 2: Create project + seed state ----------------------------
-            self._emit_progress(
-                "stage_changed",
-                stage="creating_project",
-                requested_chapters=num_chapters,
-                current_chapter=0,
-            )
-            if self._abort_requested():
-                return self._cancelled_result(project_id, num_chapters)
-            title = arc_plan.get("arc_synopsis", premise[:30])[:60]
-            setting_summary = arc_plan.get("setting_summary", "")
-            project = updater.create_project(
-                title=title,
-                premise=premise,
-                genre=genre,
-                setting_summary=setting_summary,
-                target_total_chapters=num_chapters,
-                runtime_policy=self.policy,
-            )
-            project_id = project.id
-            self._bind_audit_context(project_id=project_id, updater=updater)
-
-            self._seed_state(updater, project_id, arc_plan, num_chapters)
-            session.commit()
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                event_family="business_event",
-                event_type=DecisionEventType.RUN_STARTED,
-                scope="task",
-                summary="生成 run 已启动。",
-                related_object_type="project",
-                related_object_id=project_id,
-                payload={"requested_chapters": num_chapters},
-            )
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                event_family="business_event",
-                event_type=DecisionEventType.PROJECT_CREATED,
-                scope="project",
-                summary="项目已创建并写入初始规划。",
-                related_object_type="project",
-                related_object_id=project_id,
-                payload={"requested_chapters": num_chapters},
-            )
-            session.commit()
-            self._emit_progress(
-                "project_created",
-                project_id=project_id,
-                title=project.title,
-                requested_chapters=num_chapters,
-            )
-
-            self._emit_progress(
-                "stage_changed",
-                stage="resolving_arc_envelope",
-                project_id=project_id,
-                requested_chapters=num_chapters,
-                current_chapter=0,
-            )
-            if self._abort_requested():
-                return self._cancelled_result(project_id, num_chapters)
-            self.arc_envelope_manager.ensure_active_arc_resolution(
-                session=session,
-                project_id=project_id,
-                activation_chapter=1,
-            )
-            session.commit()
-            chapter_numbers = self._pending_chapter_numbers_for_active_arc(
-                session=session,
-                project_id=project_id,
-            )
-            if not chapter_numbers:
-                return RunResult(
-                    project_id=project_id,
-                    requested_chapters=0,
-                )
-
-            print(f"项目创建完成: {project.title}")
-            print(f"项目ID: {project_id}")
-
-            result = self._run_project_chapters(
-                session=session,
-                repo=repo,
-                updater=updater,
-                checker=checker,
-                project_id=project_id,
-                chapter_numbers=chapter_numbers,
-                requested_chapters=len(chapter_numbers),
-                plan_bands=False,
-            )
-            print(f"\n{'=' * 60}")
-            if result.status == "needs_review":
-                print(
-                    "生成暂停："
-                    f"第 {result.paused_chapters[0]} 章被质量门阻断，需要修复或重试。"
-                )
-            elif result.status == "completed":
-                print(f"生成完毕！本轮完成 {len(result.completed_chapters)} 章")
-            else:
-                print(
-                    "生成结束："
-                    f"成功 {len(result.completed_chapters)} 章，"
-                    f"失败 {len(result.failed_chapters)} 章"
-                )
-                print(
-                    "失败章节: "
-                    + ", ".join(str(chapter) for chapter in result.failed_chapters)
-                )
-            print(f"项目ID: {project_id}")
-            print(f"数据库: {self.engine.url.render_as_string(hide_password=True)}")
-            print(f"{'=' * 60}\n")
-
-            self._emit_progress(
-                "stage_changed",
-                stage="paused_for_review"
-                if result.status == "needs_review"
-                else (
-                    "failed"
-                    if result.status in {"failed", "partial_failed"}
-                    else ("cancelled" if result.status == "cancelled" else "completed")
-                ),
-                project_id=project_id,
-                requested_chapters=num_chapters,
-                current_chapter=result.completed_chapters[-1]
-                if result.completed_chapters
-                else 0,
-                completed_chapters=result.completed_chapters,
-                failed_chapters=result.failed_chapters,
-                paused_chapters=result.paused_chapters,
-                frozen_artifacts=result.frozen_artifacts,
-            )
-            return result
-
-        except Exception:
-            session.rollback()
-            self._emit_progress("stage_changed", stage="failed")
-            raise
-        finally:
-            self._clear_audit_context()
-            session.close()
 
     def _emit_progress(self, event: str, **payload: Any) -> None:
         if event == "stage_changed":
@@ -521,13 +315,6 @@ class RunControlStage:
             self._clear_audit_context()
             session.close()
 
-    @staticmethod
-    def _pending_chapter_numbers_for_active_arc(
-        *, session: Session, project_id: str, max_chapters: int | None = None
-    ) -> list[int]:
-        return _pending_chapter_numbers_for_active_arc(
-            session=session, project_id=project_id, max_chapters=max_chapters
-        )
 
 
 __all__ = ["RunControlStage"]

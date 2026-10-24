@@ -173,15 +173,7 @@ def compute_summary(
             row.selected_trope_categories for row in rows
         ),
         "task_resume_success_rate": _task_resume_success_rate(tasks),
-        "arc_macro_boundary_failure_rate": _future_plan_issue_rate(
-            events,
-            issue_type="arc_macro_progression_not_met",
-        ),
         "progression_rule_violation_rate": _progression_rule_violation_rate(events),
-        "macro_status_evidence_gap_rate": _future_plan_issue_rate(
-            events,
-            issue_type="macro_status_evidence_gap",
-        ),
         "planned_trope_usage_count": int(trope_usage_counts.get("planned", 0)),
         "accepted_trope_usage_count": int(trope_usage_counts.get("accepted", 0)),
         "canon_commit_failed_count": _event_count(
@@ -688,25 +680,6 @@ def _context_memory_pruned_count(events: list[DecisionEvent]) -> int:
         except (TypeError, ValueError):
             continue
     return total
-
-
-def _future_plan_issue_rate(
-    events: list[DecisionEvent],
-    *,
-    issue_type: str,
-) -> float | None:
-    audit_events = [
-        event
-        for event in events
-        if str(event.event_type or "")
-        in {DecisionEventType.FUTURE_PLAN_AUDIT_RUN, "future_plan_audit_completed"}
-    ]
-    if not audit_events:
-        return None
-    matches = sum(
-        1 for event in audit_events if _event_has_issue_type(event, issue_type)
-    )
-    return round(matches / len(audit_events), 3)
 
 
 def _event_has_issue_type(event: DecisionEvent, issue_type: str) -> bool:

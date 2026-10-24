@@ -67,6 +67,8 @@ def _seed_legacy_chapter(session: Session) -> None:
 def _assert_planning_schema(engine: sa.Engine) -> None:
     inspector = sa.inspect(engine)
     assert {"arc_beat_sheets", "band_plans"} <= set(inspector.get_table_names())
+    assert {"project_stage_analyses", "project_replan_events"}.isdisjoint(inspector.get_table_names())
+    assert "macro_" + "progression_json" not in {c["name"] for c in inspector.get_columns("arc_plan_versions")}
     assert {c["name"] for c in inspector.get_columns("arc_beat_sheets")} == BEAT_SHEET_COLUMNS
     assert {c["name"] for c in inspector.get_columns("band_plans")} == BAND_PLAN_COLUMNS
     assert PLANNING_COLUMNS <= {c["name"] for c in inspector.get_columns("chapter_plans")}
@@ -334,4 +336,64 @@ def test_0006_contract_downgrade_definitions_match_baseline() -> None:
 
     expected = definitions(baseline.upgrade)
     assert len(expected) == 6  # Three tables and their three indexes.
+    assert definitions(migration.downgrade) == expected
+
+
+def test_0006_drops_replanner_schema_and_restores_baseline(legacy_database) -> None:
+    config, engine = legacy_database
+    tables = ("project_stage_analyses", "project_replan_events")
+    column = "macro_" + "progression_json"
+
+    def schema():
+        inspector = sa.inspect(engine)
+        return {
+            table: {
+                # A re-added column lands last; column order carries no meaning.
+                "columns": sorted((c["name"], str(c["type"]), c["nullable"], c["default"])
+                                  for c in inspector.get_columns(table)),
+                "pk": inspector.get_pk_constraint(table),
+                "fk": inspector.get_foreign_keys(table),
+                "indexes": inspector.get_indexes(table),
+                "unique": inspector.get_unique_constraints(table),
+            }
+            for table in (*tables, "arc_plan_versions")
+        }
+
+    original = schema()
+    with Session(engine) as session, session.begin():
+        _seed_legacy_chapter(session)
+    command.upgrade(config, "0006_planning_v6")
+    _assert_planning_schema(engine)
+    command.downgrade(config, "0005_world_plan_conflicts")
+    assert schema() == original
+    with engine.connect() as connection:
+        for table in tables:
+            assert connection.execute(sa.text(f"SELECT count(*) FROM {table}")).scalar_one() == 0
+        assert connection.execute(sa.text(f"SELECT {column} FROM arc_plan_versions WHERE id = 'arc-1'")).scalar_one() == "{}"
+    command.upgrade(config, "0006_planning_v6")
+    _assert_planning_schema(engine)
+
+
+def test_0006_replanner_downgrade_definitions_match_baseline() -> None:
+    import ast
+    import inspect
+
+    baseline = importlib.import_module("forwin.migrations.versions.0001_v5_baseline")
+    migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
+    tables = {"project_stage_analyses", "project_replan_events"}
+    column = "macro_" + "progression_json"
+
+    def definitions(function):
+        result = {}
+        for node in ast.walk(ast.parse(inspect.getsource(function))):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr == "create_table" and node.args[0].value in tables:
+                result[node.args[0].value] = ast.dump(node, include_attributes=False)
+            if node.func.attr == "Column" and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == column:
+                result[column] = ast.dump(node, include_attributes=False)
+        return result
+
+    expected = definitions(baseline.upgrade)
+    assert len(expected) == 3
     assert definitions(migration.downgrade) == expected

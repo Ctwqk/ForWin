@@ -39,7 +39,6 @@ from forwin.audience.feedback import (
 from forwin.arc_sizing import policy_for_total_chapters
 from forwin.planning.arc_envelope import ArcEnvelopeManager, ArcStructureDraftData
 from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
-from forwin.planning.stage_analysis import PacingStrategist
 from forwin.audience import comment_analysis
 from forwin.audience.comment_analysis import CommentAnalyzer
 from forwin.config import InfrastructureConfig
@@ -1065,62 +1064,6 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         )
         self.assertEqual(len(feedback_action_queries), 1)
 
-    def test_pacing_strategist_uses_medium_window_audience_signal_only(self) -> None:
-        project = self._create_project()
-        strategist = PacingStrategist()
-
-        self.session.add(
-            SignalWindowAggregate(
-                id=new_id(),
-                project_id=project.id,
-                signal_key="pacing:arc:节奏",
-                signal_type="pacing",
-                target_type="arc",
-                target_name="节奏",
-                window_type="short",
-                window_chapter_start=3,
-                window_chapter_end=5,
-                hit_comment_count=3,
-                unique_user_count=3,
-                total_comment_count=3,
-                reader_estimate=150,
-                reader_tier=1,
-                max_severity=2,
-                avg_confidence=0.8,
-                signal_level="confirmed",
-            )
-        )
-        self.session.commit()
-
-        no_medium = strategist.analyze(session=self.session, project_id=project.id, chapter_number=5)
-        self.assertNotEqual(no_medium.verdict, "audience_pacing_concern")
-
-        self.session.add(
-            SignalWindowAggregate(
-                id=new_id(),
-                project_id=project.id,
-                signal_key="pacing:arc:节奏",
-                signal_type="pacing",
-                target_type="arc",
-                target_name="节奏",
-                window_type="medium",
-                window_chapter_start=1,
-                window_chapter_end=5,
-                hit_comment_count=4,
-                unique_user_count=4,
-                total_comment_count=4,
-                reader_estimate=200,
-                reader_tier=1,
-                max_severity=2,
-                avg_confidence=0.85,
-                signal_level="confirmed",
-            )
-        )
-        self.session.commit()
-
-        with_medium = strategist.analyze(session=self.session, project_id=project.id, chapter_number=5)
-        self.assertEqual(with_medium.verdict, "audience_pacing_concern")
-        self.assertEqual(with_medium.risk_level, "medium")
 
     def test_arc_envelope_manager_passes_long_window_audience_trends_to_director(self) -> None:
         project = self._create_project()

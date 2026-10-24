@@ -45,9 +45,6 @@ class GenerationRuntimeServices:
     book_genesis: Any
     subworld_manager: Any
     retrieval_broker: Any
-    stage_analyzer: Any
-    pacing_strategist: Any
-    replan_governor: Any
     comment_analyzer: Any
     arc_envelope_manager: Any
     draft_review: DraftReviewService

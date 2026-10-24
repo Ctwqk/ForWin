@@ -1146,7 +1146,6 @@ def sample_project(
         "uploaded_chapter_count": 1,
         "needs_review_chapter_count": 1,
         "latest_stage": "paused_for_review",
-        "pacing_summary": "稳定推进",
         "chapters": [
             sample_chapter(1),
             sample_chapter(2, status="needs_review", has_review=True),
@@ -1191,7 +1190,6 @@ def sample_generation_control(*, can_resume: bool = False) -> dict[str, Any]:
         "failed_chapters": [],
         "review_interval_chapters": 2,
         "chapters_until_review": 1,
-        "chapters_until_replan_eligible": 2,
         "blocking_reason": {
             "code": "review_required",
             "message": "第 2 章需要人工检查",

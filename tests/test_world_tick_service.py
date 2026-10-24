@@ -642,9 +642,6 @@ def test_world_step_runs_before_plan_and_records_tick_result() -> None:
     tick_service.run = tick  # type: ignore[method-assign]
     service = PostCanonMaintenanceService(
         session_factory=Session,
-        stage_analyzer=object(),
-        pacing_strategist=object(),
-        replan_governor=object(),
         arc_envelope_manager=object(),
         comment_analyzer=object(),
         artifact_store=object(),
@@ -1406,7 +1403,7 @@ def test_without_a_model_the_tick_commits_its_deterministic_parts(monkeypatch) -
 def test_a_maintenance_service_built_without_the_container_keeps_the_tick_off_the_model() -> None:
     llm = _WorldLLM()
     service = PostCanonMaintenanceService(
-        session_factory=object(), stage_analyzer=object(), pacing_strategist=object(), replan_governor=object(),
+        session_factory=object(),
         arc_envelope_manager=object(), comment_analyzer=object(), artifact_store=object(), llm_client=llm,
     )
 

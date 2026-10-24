@@ -137,8 +137,6 @@ def build_project_summaries(
 
     payload: list[ProjectSummary] = []
     for project in projects:
-        latest_stage = runtime_maps["latest_stage_map"].get(project.id)
-        last_replan = runtime_maps["last_replan_map"].get(project.id)
         latest_arc_envelope = runtime_maps["latest_arc_envelope_map"].get(project.id)
         latest_arc_analysis = runtime_maps["latest_arc_analysis_map"].get(project.id)
         latest_arc_structure = runtime_maps["latest_arc_structure_map"].get(project.id)
@@ -152,7 +150,6 @@ def build_project_summaries(
         genesis_revision = genesis_revision_map.get(project.id)
         generation_control = build_generation_control(
             plans=plans_by_project.get(project.id, []),
-            latest_replan=last_replan,
             review_interval_chapters=policy_record.policy.pause.review_interval_chapters,
             latest_band_checkpoint=latest_checkpoint,
             decision_events=decision_timeline_map.get(project.id, []),
@@ -200,13 +197,7 @@ def build_project_summaries(
                 automation=normalize_project_automation(project.automation_json),
                 runtime_policy=policy_record.policy,
                 runtime_policy_version=policy_record.version,
-                latest_stage=latest_stage.stage_label if latest_stage else "",
-                pacing_verdict=latest_stage.pacing_verdict if latest_stage else "",
-                pacing_summary=latest_stage.pacing_summary if latest_stage else "",
-                last_replan_status=last_replan.status if last_replan else "",
-                last_replan_strategy=last_replan.strategy if last_replan else "",
-                last_replan_reason=last_replan.reason if last_replan else "",
-                current_time_label=latest_stage.timeline_label if latest_stage else "",
+                latest_stage=runtime_maps["latest_task_stage_map"].get(project.id, ""),
                 generation_control=generation_control,
                 chapters=chapters_by_project.get(project.id, [])[
                     -_PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT:

@@ -146,9 +146,6 @@ class PostCanonMaintenanceService:
         self,
         *,
         session_factory: Callable[[], Session],
-        stage_analyzer: Any,
-        pacing_strategist: Any,
-        replan_governor: Any,
         arc_envelope_manager: Any,
         comment_analyzer: Any,
         artifact_store: Any,
@@ -160,9 +157,6 @@ class PostCanonMaintenanceService:
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.session_factory = session_factory
-        self.stage_analyzer = stage_analyzer
-        self.pacing_strategist = pacing_strategist
-        self.replan_governor = replan_governor
         self.arc_envelope_manager = arc_envelope_manager
         self.comment_analyzer = comment_analyzer
         self.artifact_store = artifact_store

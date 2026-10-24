@@ -147,26 +147,6 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
                     DecisionEvent(
                         project_id=project.id,
                         chapter_number=2,
-                        event_type=DecisionEventType.FUTURE_PLAN_AUDIT_RUN,
-                        payload_json=json.dumps(
-                            {
-                                "issues": [
-                                    {
-                                        "issue_type": "arc_macro_progression_not_met",
-                                        "blocking": True,
-                                    },
-                                    {
-                                        "issue_type": "macro_status_evidence_gap",
-                                        "blocking": False,
-                                    },
-                                ]
-                            },
-                            ensure_ascii=False,
-                        ),
-                    ),
-                    DecisionEvent(
-                        project_id=project.id,
-                        chapter_number=2,
                         event_type="progression_rule_evaluated",
                         payload_json=json.dumps({"violated": True}, ensure_ascii=False),
                     ),
@@ -265,9 +245,7 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
         assert summary["repeat_trope_template_rate"] == 0.5
         assert summary["repeat_trope_category_rate"] == 0.5
         assert summary["task_resume_success_rate"] == 1
-        assert summary["arc_macro_boundary_failure_rate"] == 1
         assert summary["progression_rule_violation_rate"] == 1
-        assert summary["macro_status_evidence_gap_rate"] == 1
         assert summary["planned_trope_usage_count"] == 1
         assert summary["accepted_trope_usage_count"] == 1
         assert summary["canon_commit_failed_count"] == 1

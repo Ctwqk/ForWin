@@ -54,17 +54,11 @@ class ArcPlanVersion(Base):
     payoff_direction: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )
-    macro_progression_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
     planned_target_size: Mapped[int] = mapped_column(Integer, default=0)
     planned_soft_min: Mapped[int] = mapped_column(Integer, default=0)
     planned_soft_max: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-    def __init__(self, **kwargs):  # noqa: ANN003
-        super().__init__(**kwargs)
-        if self.macro_progression_json is None:
-            self.macro_progression_json = "{}"
 
 
 class ChapterPlan(Base):

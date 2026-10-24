@@ -32,11 +32,6 @@ from forwin.observability.service import ObservabilityService
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.planning.arc_progression import ArcProgressionService
 from forwin.planning.band_planner.service import BandPlanner
-from forwin.planning.stage_analysis import (
-    PacingStrategist,
-    ReplanGovernor,
-    StageAnalyzer,
-)
 from forwin.retrieval import RetrievalBroker
 from forwin.review.draft_service import DraftReviewService
 from forwin.review.repair import RepairExecution, RepairService, RepairVerifier
@@ -79,9 +74,6 @@ class ChapterPipeline(
         artifact_store: ArtifactStore,
         observability: ObservabilityService,
         writer: ChapterWriter,
-        stage_analyzer: StageAnalyzer,
-        pacing_strategist: PacingStrategist,
-        replan_governor: ReplanGovernor,
         comment_analyzer: CommentAnalyzer,
         arc_envelope_manager: ArcEnvelopeManager,
         draft_review: DraftReviewService,
@@ -125,9 +117,6 @@ class ChapterPipeline(
         self.artifact_store = artifact_store
         self.observability = observability
         self.writer = writer
-        self.stage_analyzer = stage_analyzer
-        self.pacing_strategist = pacing_strategist
-        self.replan_governor = replan_governor
         self.comment_analyzer = comment_analyzer
         self.arc_envelope_manager = arc_envelope_manager
         self.draft_review = draft_review
@@ -142,9 +131,6 @@ class ChapterPipeline(
             post_canon_maintenance
             or PostCanonMaintenanceService(
                 session_factory=self._SessionFactory,
-                stage_analyzer=self.stage_analyzer,
-                pacing_strategist=self.pacing_strategist,
-                replan_governor=self.replan_governor,
                 arc_envelope_manager=self.arc_envelope_manager,
                 comment_analyzer=self.comment_analyzer,
                 artifact_store=self.artifact_store,

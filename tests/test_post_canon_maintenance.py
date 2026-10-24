@@ -126,9 +126,6 @@ def _durable_service():
     calls: list[str] = []
     service = PostCanonMaintenanceService(
         session_factory=sessions,
-        stage_analyzer=object(),
-        pacing_strategist=object(),
-        replan_governor=object(),
         arc_envelope_manager=object(),
         comment_analyzer=object(),
         artifact_store=object(),
@@ -287,9 +284,6 @@ def test_trace_enqueue_failure_rolls_back_step_and_marks_run_retryable() -> None
 
     service = PostCanonMaintenanceService(
         session_factory=SimpleNamespace(begin=Transaction),
-        stage_analyzer=object(),
-        pacing_strategist=object(),
-        replan_governor=object(),
         arc_envelope_manager=object(),
         comment_analyzer=object(),
         artifact_store=object(),
@@ -364,9 +358,6 @@ def test_stale_completion_cannot_enqueue_trace() -> None:
         session_factory=SimpleNamespace(
             begin=lambda: nullcontext(FakeSession()),
         ),
-        stage_analyzer=object(),
-        pacing_strategist=object(),
-        replan_governor=object(),
         arc_envelope_manager=object(),
         comment_analyzer=object(),
         artifact_store=object(),
@@ -619,9 +610,6 @@ def test_blocked_order_controls_are_re_evaluated_until_clear() -> None:
     llm_client = SimpleNamespace(drain_llm_attempt_events=lambda: [])
     service = PostCanonMaintenanceService(
         session_factory=session_factory,
-        stage_analyzer=object(),
-        pacing_strategist=object(),
-        replan_governor=object(),
         arc_envelope_manager=object(),
         comment_analyzer=object(),
         artifact_store=object(),

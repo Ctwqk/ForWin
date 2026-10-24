@@ -9,43 +9,6 @@ from sqlalchemy.sql import func
 from .base import Base, new_id
 
 
-class ProjectStageAnalysis(Base):
-    __tablename__ = "project_stage_analyses"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(
-        String, ForeignKey("projects.id"), nullable=False
-    )
-    chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    stage_label: Mapped[str] = mapped_column(String, nullable=False)
-    progress_ratio: Mapped[float] = mapped_column(Float, default=0.0)
-    timeline_label: Mapped[str] = mapped_column(String, default="")
-    timeline_ordinal: Mapped[int] = mapped_column(Integer, default=0)
-    pacing_verdict: Mapped[str] = mapped_column(String, default="steady")
-    pacing_summary: Mapped[str] = mapped_column(Text, default="")
-    stale_threads_json: Mapped[str] = mapped_column(Text, default="[]")
-    active_thread_count: Mapped[int] = mapped_column(Integer, default=0)
-    unresolved_thread_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-
-class ProjectReplanEvent(Base):
-    __tablename__ = "project_replan_events"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
-    project_id: Mapped[str] = mapped_column(
-        String, ForeignKey("projects.id"), nullable=False
-    )
-    trigger_chapter: Mapped[int] = mapped_column(Integer, nullable=False)
-    risk_level: Mapped[str] = mapped_column(String, default="low")
-    reason: Mapped[str] = mapped_column(Text, default="")
-    focus_threads_json: Mapped[str] = mapped_column(Text, default="[]")
-    strategy: Mapped[str] = mapped_column(String, default="rearc")
-    status: Mapped[str] = mapped_column(String, default="applied")
-    cooldown_until_chapter: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-
 class ArcEnvelope(Base):
     __tablename__ = "arc_envelopes"
     __table_args__ = (

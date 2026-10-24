@@ -1252,7 +1252,6 @@
       appendControlSideRow(side, '阻断原因', control.blocking_reason?.code ? (control.blocking_reason.message || control.blocking_reason.code) : '无');
       appendControlSideRow(side, 'Next Gate', control.next_gate || '未计算');
       appendControlSideRow(side, '下次人工检查', control.review_interval_chapters ? `${control.chapters_until_review} 章后` : '未设置');
-      appendControlSideRow(side, 'Replan 可触发', `${control.chapters_until_replan_eligible || 0} 章后`);
       main.appendChild(side);
       panel.appendChild(main);
       panel.appendChild(renderGenerationQueue(item, project, chapters, guidance));

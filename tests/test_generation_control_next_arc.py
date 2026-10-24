@@ -31,7 +31,6 @@ def _plan(chapter_number: int, status: str) -> ChapterPlan:
 def test_unwritten_chapters_without_plan_rows_are_pending_band_plan() -> None:
     control = build_generation_control(
         plans=[_plan(1, "accepted"), _plan(2, "accepted")],
-        latest_replan=None,
         writable_chapters=range(1, 7),
     )
 
@@ -44,7 +43,7 @@ def test_unwritten_chapters_without_plan_rows_are_pending_band_plan() -> None:
 
 
 def test_book_without_plan_rows_is_pending_band_plan_from_chapter_one() -> None:
-    control = build_generation_control(plans=[], latest_replan=None, writable_chapters=range(1, 7))
+    control = build_generation_control(plans=[], writable_chapters=range(1, 7))
 
     assert (control.next_chapter, control.plan_state, control.can_resume) == (1, "pending_band_plan", True)
 
@@ -52,7 +51,6 @@ def test_book_without_plan_rows_is_pending_band_plan_from_chapter_one() -> None:
 def test_fully_accepted_book_stays_completed() -> None:
     control = build_generation_control(
         plans=[_plan(1, "accepted"), _plan(2, "accepted")],
-        latest_replan=None,
         writable_chapters=range(1, 3),
     )
 
@@ -65,7 +63,6 @@ def test_fully_accepted_book_stays_completed() -> None:
 def test_pending_plans_take_precedence_over_unplanned_chapters() -> None:
     control = build_generation_control(
         plans=[_plan(1, "accepted"), _plan(2, "planned")],
-        latest_replan=None,
         writable_chapters=range(1, 10),
     )
 
@@ -77,12 +74,10 @@ def test_pending_plans_take_precedence_over_unplanned_chapters() -> None:
 def test_review_and_acceptance_blockers_still_block_unplanned_chapters() -> None:
     needs_review = build_generation_control(
         plans=[_plan(1, "accepted"), _plan(2, "needs_review")],
-        latest_replan=None,
         writable_chapters=range(1, 7),
     )
     drafted = build_generation_control(
         plans=[_plan(1, "accepted"), _plan(2, "drafted")],
-        latest_replan=None,
         writable_chapters=range(1, 7),
     )
 
@@ -95,7 +90,6 @@ def test_review_and_acceptance_blockers_still_block_unplanned_chapters() -> None
 def test_open_conflict_blocks_an_unplanned_chapter() -> None:
     control = build_generation_control(
         plans=[_plan(1, "accepted")],
-        latest_replan=None,
         writable_chapters=range(1, 7),
         open_world_conflicts=[
             WorldConflictBlockInfo(conflict_id="conflict-band", blocks_from_chapter=2, summary="unplannable band"),

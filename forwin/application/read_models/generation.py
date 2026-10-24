@@ -354,7 +354,6 @@ def load_writable_chapter_ranges(
 def build_generation_control(
     *,
     plans: list[ChapterPlan],
-    latest_replan,
     review_interval_chapters: int = 0,
     active_stage: str = "",
     active_chapter: int = 0,
@@ -428,13 +427,6 @@ def build_generation_control(
             if completed_since_review
             else review_interval
         )
-    chapters_until_replan = 0
-    if latest_replan is not None:
-        cooldown_until = int(getattr(latest_replan, "cooldown_until_chapter", 0) or 0)
-        if cooldown_until:
-            chapters_until_replan = max(
-                0, cooldown_until - (max(accepted, default=0) + 1)
-            )
     blocking_reason = _derive_blocking_reason(
         plans=plans,
         latest_band_checkpoint=latest_band_checkpoint,
@@ -470,7 +462,6 @@ def build_generation_control(
         pause_requested=bool(pause_requested),
         review_interval_chapters=review_interval,
         chapters_until_review=chapters_until_review,
-        chapters_until_replan_eligible=chapters_until_replan,
         blocking_reason=blocking_reason,
         latest_band_checkpoint=_band_checkpoint_detail(latest_band_checkpoint),
         next_gate=next_gate,

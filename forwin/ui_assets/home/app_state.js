@@ -887,7 +887,6 @@
         Number(control.current_chapter || 0),
         Number(control.next_chapter || 0),
         Number(control.chapters_until_review || 0),
-        Number(control.chapters_until_replan_eligible || 0),
         control.can_resume ? '1' : '0',
         numberListFingerprint(control.accepted_chapters),
         numberListFingerprint(control.drafted_chapters),

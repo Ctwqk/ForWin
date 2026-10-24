@@ -11,10 +11,9 @@ from forwin.models.phase import (
     ArcEnvelope,
     ArcEnvelopeAnalysis,
     ChapterRewriteAttempt,
-    ProjectReplanEvent,
-    ProjectStageAnalysis,
 )
 from forwin.models.project import ArcPlanVersion
+from forwin.models.task import GenerationTask
 
 
 def _as_list(values: Iterable[str]) -> list[str]:
@@ -159,40 +158,6 @@ def load_latest_rewrite_attempts_by_chapter(
     }
 
 
-def load_latest_stage_analysis_by_project(
-    session: Session,
-    project_ids: Iterable[str],
-) -> dict[str, ProjectStageAnalysis]:
-    return _load_latest_partitioned_rows(
-        session,
-        ProjectStageAnalysis,
-        ProjectStageAnalysis.project_id,
-        project_ids,
-        order_by=(
-            ProjectStageAnalysis.chapter_number.desc(),
-            ProjectStageAnalysis.created_at.desc(),
-            ProjectStageAnalysis.id.desc(),
-        ),
-    )
-
-
-def load_latest_replan_event_by_project(
-    session: Session,
-    project_ids: Iterable[str],
-) -> dict[str, ProjectReplanEvent]:
-    return _load_latest_partitioned_rows(
-        session,
-        ProjectReplanEvent,
-        ProjectReplanEvent.project_id,
-        project_ids,
-        order_by=(
-            ProjectReplanEvent.trigger_chapter.desc(),
-            ProjectReplanEvent.created_at.desc(),
-            ProjectReplanEvent.id.desc(),
-        ),
-    )
-
-
 def load_latest_active_arc_envelope_by_project(
     session: Session,
     project_ids: Iterable[str],
@@ -270,3 +235,34 @@ def load_latest_arc_envelope_analysis_by_project(
         .all()
     )
     return {row.project_id: row for row in rows}
+
+
+def load_latest_task_stage_by_project(
+    session: Session,
+    project_ids: Iterable[str],
+) -> dict[str, str]:
+    ids = _as_list(project_ids)
+    if not ids:
+        return {}
+    ranked = (
+        select(
+            GenerationTask.project_id,
+            GenerationTask.current_stage,
+            func.row_number().over(
+                partition_by=GenerationTask.project_id,
+                order_by=(GenerationTask.updated_at.desc(), GenerationTask.id.desc()),
+            ).label("rn"),
+        )
+        .where(
+            GenerationTask.project_id.in_(ids),
+            GenerationTask.task_kind == "generation",
+            GenerationTask.deleted_at.is_(None),
+        )
+        .subquery()
+    )
+    return {
+        project_id: str(stage or "")
+        for project_id, stage in session.execute(
+            select(ranked.c.project_id, ranked.c.current_stage).where(ranked.c.rn == 1)
+        )
+    }

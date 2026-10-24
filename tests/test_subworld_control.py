@@ -24,7 +24,6 @@ from forwin.models.subworld import (
     project_scoped_subworld_id,
 )
 from forwin.planning.arc_envelope import ArcEnvelopeManager, ArcStructureDraftData
-from forwin.planning.stage_analysis import ReplanGovernor, StageAssessment
 from forwin.generation.pipeline import ChapterPipeline
 from forwin.protocol import (
     ArcPayoffMap,
@@ -1006,118 +1005,6 @@ class SubWorldControlTests(unittest.TestCase):
 
         self.assertIsNone(fixed)
 
-    def test_rearc_creates_new_subworlds_via_director_delta(self) -> None:
-        class FakeDirector:
-            def plan_subworld_delta(self, **kwargs):
-                return {
-                    "reuse_subworld_ids": [kwargs["existing_subworlds"][0].id],
-                    "retire_subworld_ids": [],
-                    "new_subworlds": [
-                        {
-                            "name": "新舞台",
-                            "purpose": "rearc 后的新局部舞台",
-                            "scope": "arc_local",
-                            "chapter_window_hint": "2-4",
-                            "region_seeds": [
-                                {
-                                    "name": "新舞台核心区",
-                                    "level": 1,
-                                    "kind": "frontier_domain",
-                                    "parent_region_name": "",
-                                    "summary": "新舞台的核心地区",
-                                    "culture_traits": ["高压边境"],
-                                    "climate": "寒冷干燥",
-                                    "terrain": ["山地"],
-                                    "controller_factions": ["新舞台势力"],
-                                }
-                            ],
-                            "core_named_characters": [
-                                {
-                                    "name": "沈知遥",
-                                    "description": "新的核心人物",
-                                    "role_hint": "新盟友",
-                                    "importance": 8,
-                                }
-                            ],
-                            "planned_slots": [],
-                        }
-                    ],
-                    "initial_active_subworld_ids": [kwargs["existing_subworlds"][0].id],
-                }
-
-        with TemporaryDirectory():
-            engine = get_engine(postgres_test_url("rearc"))
-            init_db(engine)
-            session = get_session_factory(engine)()
-            try:
-                updater = StateUpdater(session)
-                project = updater.create_project(
-                    title="书",
-                    premise="p",
-                    genre="g",
-                    runtime_policy=RuntimePolicy.for_profile("standard"),
-                )
-                old_arc = updater.create_arc_plan(project.id, "旧弧线", version=1)
-                for number in (1, 2, 3):
-                    updater.create_chapter_plan(
-                        project_id=project.id,
-                        arc_plan_id=old_arc.id,
-                        chapter_number=number,
-                        title=f"第{number}章",
-                        one_line="推进",
-                        goals=["推进"],
-                    )
-                manager = SubWorldManager()
-                manager.ensure_registry(session, project.id)
-                governor = ReplanGovernor(
-                    cooldown_chapters=3,
-                    director=FakeDirector(),
-                    subworld_manager=manager,
-                )
-
-                governor._apply_rearc(
-                    session=session,
-                    project_id=project.id,
-                    chapter_number=1,
-                    stage=StageAssessment("midpoint", 0.5, "", 0),
-                    focus_threads=["旧线"],
-                )
-
-                active_arcs = session.execute(
-                    select(ChapterPlan.arc_plan_id).where(ChapterPlan.project_id == project.id, ChapterPlan.chapter_number > 1)
-                ).all()
-                subworld_names = [
-                    row.name
-                    for row in session.execute(
-                        select(SubWorld).where(SubWorld.project_id == project.id)
-                    ).scalars().all()
-                ]
-                active_arc_rows = session.execute(
-                    select(SubWorld.origin_arc_id, SubWorld.name)
-                    .where(SubWorld.project_id == project.id, SubWorld.name == "新舞台")
-                ).all()
-                new_subworld = session.execute(
-                    select(SubWorld)
-                    .where(SubWorld.project_id == project.id, SubWorld.name == "新舞台")
-                ).scalar_one()
-                new_region = session.execute(
-                    select(MapRegionRow)
-                    .where(MapRegionRow.project_id == project.id, MapRegionRow.subworld_id == new_subworld.id)
-                ).scalar_one()
-            finally:
-                session.close()
-                engine.dispose()
-
-        self.assertIn("新舞台", subworld_names)
-        self.assertEqual(len({arc_id for arc_id, in active_arcs}), 1)
-        self.assertTrue(active_arc_rows)
-        metadata = json.loads(new_subworld.metadata_json or "{}")
-        self.assertEqual(metadata.get("region_source"), "runtime_generated")
-        self.assertEqual(metadata.get("region_promotion_state"), "draft")
-        self.assertEqual(metadata.get("region_drafts", [])[0]["name"], "新舞台核心区")
-        region_metadata = json.loads(new_region.metadata_json or "{}")
-        self.assertEqual(region_metadata.get("region_source"), "runtime_generated")
-        self.assertNotIn("legacy_source", region_metadata)
 
     def test_phase24_persists_subworld_activation_into_band_and_chapter_plan(self) -> None:
         with TemporaryDirectory():

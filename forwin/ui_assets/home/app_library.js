@@ -459,7 +459,6 @@
           book.premise ? `Premise：${book.premise}` : '',
           book.target_total_chapters ? `计划总章数：${book.target_total_chapters}` : '',
           book.latest_stage ? `最近阶段：${book.latest_stage}` : '',
-          book.pacing_summary ? `节奏：${book.pacing_summary}` : '',
           book.upload_task_count ? `上传任务：${book.upload_task_count}` : '',
           book.automation?.publish?.platform
             ? `发布默认：${book.automation.publish.platform} · ${book.automation.publish.create_if_missing ? '平台未建书，首次上传先建书' : '平台已有书目，只传章节'}`

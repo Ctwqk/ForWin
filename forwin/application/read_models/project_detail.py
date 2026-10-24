@@ -216,12 +216,10 @@ def build_project_detail(
     narrative_constraints = _narrative_constraints_by_project(
         session, [project_id], limit=50
     ).get(project_id, [])
-    latest_stage = runtime_maps["latest_stage_map"].get(project_id)
     latest_arc_envelope = runtime_maps["latest_arc_envelope_map"].get(project_id)
     latest_arc_analysis = runtime_maps["latest_arc_analysis_map"].get(project_id)
     latest_arc_structure = runtime_maps["latest_arc_structure_map"].get(project_id)
     latest_band_experience = runtime_maps["latest_band_experience_map"].get(project_id)
-    replan_events = runtime_maps["recent_replans_map"].get(project_id, [])
     active_subworld_ids: set[str] = set()
     if latest_band_experience is not None:
         try:
@@ -256,7 +254,6 @@ def build_project_detail(
     ]
     generation_control = build_generation_control(
         plans=plans,
-        latest_replan=replan_events[0] if replan_events else None,
         review_interval_chapters=policy_record.policy.pause.review_interval_chapters,
         latest_band_checkpoint=latest_checkpoint,
         decision_events=decision_timeline,
@@ -295,11 +292,7 @@ def build_project_detail(
         subworlds=subworlds,
         threads=thread_infos,
         chapters=chapter_infos[:_PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT],
-        latest_stage=latest_stage.stage_label if latest_stage else "",
-        progress_ratio=latest_stage.progress_ratio if latest_stage else 0.0,
-        pacing_verdict=latest_stage.pacing_verdict if latest_stage else "",
-        pacing_summary=latest_stage.pacing_summary if latest_stage else "",
-        current_time_label=latest_stage.timeline_label if latest_stage else "",
+        latest_stage=runtime_maps["latest_task_stage_map"].get(project.id, ""),
         **project_arc_snapshot_payload(
             latest_arc_envelope,
             latest_arc_analysis,
@@ -312,18 +305,6 @@ def build_project_detail(
         next_gate=generation_control.next_gate,
         decision_timeline=decision_timeline,
         narrative_constraints=narrative_constraints,
-        recent_replans=[
-            {
-                "trigger_chapter": item.trigger_chapter,
-                "risk_level": item.risk_level,
-                "strategy": item.strategy,
-                "status": item.status,
-                "reason": item.reason,
-                "cooldown_until_chapter": item.cooldown_until_chapter,
-                "created_at": display_datetime(item.created_at),
-            }
-            for item in replan_events
-        ],
     )
 
 

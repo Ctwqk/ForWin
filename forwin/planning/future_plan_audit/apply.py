@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.book_state.query_interface import SqlBookStateQueryInterface
 from forwin.models.base import new_id
-from forwin.models.narrative_obligation import FuturePlanAuditRunRow
 from forwin.models.phase import BandExperiencePlan
-from forwin.models.project import ArcPlanVersion, ChapterPlan
+from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.planning.band_plan_patcher import BandPlanPatcher
@@ -19,7 +15,6 @@ from forwin.planning.plan_patch_validator import PlanPatchValidator
 from .helpers import (
     _minimum_scope_for_obligation,
 )
-from .macro_progression import audit_arc_macro_boundary
 from .models import AuditStatus, FuturePlanAuditIssue, FuturePlanAuditRun
 
 
@@ -49,12 +44,6 @@ class FuturePlanApplyMixin:
             target_total_chapters=target_total_chapters,
             include_current=include_current,
             band_rows=band_rows,
-        )
-        result = _with_macro_progression_boundary_issues(
-            session=session,
-            project_id=project_id,
-            current_chapter=current_chapter,
-            result=result,
         )
         plans_by_id = {str(plan.id or ""): plan for plan in plans}
         bands_by_id = {str(row.band_id or ""): row for row in band_rows or []}
@@ -207,116 +196,6 @@ def _patch_resolves_issue(
         if shared_keys and all(issue_metadata[key] == patch_metadata[key] for key in shared_keys):
             return True
     return not issue_metadata
-
-
-def _with_macro_progression_boundary_issues(
-    *,
-    session: Session,
-    project_id: str,
-    current_chapter: int,
-    result: FuturePlanAuditRun,
-) -> FuturePlanAuditRun:
-    macro_status = SqlBookStateQueryInterface(session).get_protagonist_macro_status(
-        project_id=project_id,
-        as_of_chapter=int(current_chapter or 0),
-    )
-    successful_audited_arc_ids = _successful_macro_boundary_audited_arc_ids(
-        session,
-        project_id=project_id,
-    )
-    boundary_arcs = session.execute(
-        select(ArcPlanVersion).where(
-            ArcPlanVersion.project_id == project_id,
-            ArcPlanVersion.chapter_end > 0,
-            ArcPlanVersion.chapter_end <= int(current_chapter or 0),
-        )
-        .order_by(ArcPlanVersion.chapter_end.asc(), ArcPlanVersion.arc_number.asc())
-    ).scalars().all()
-    boundary_arcs = [
-        arc
-        for arc in boundary_arcs
-        if str(arc.id or "") not in successful_audited_arc_ids
-    ]
-    audited_arc_ids = sorted(
-        {
-            *successful_audited_arc_ids,
-            *[str(arc.id or "") for arc in boundary_arcs if str(arc.id or "")],
-        }
-    )
-    result = result.model_copy(
-        update={
-            "metadata": {
-                **dict(result.metadata or {}),
-                "macro_boundary_audited_arc_ids": audited_arc_ids,
-            }
-        }
-    )
-    macro_issues = [
-        issue
-        for arc in boundary_arcs
-        for issue in audit_arc_macro_boundary(
-            arc=arc,
-            current_chapter=int(current_chapter or 0),
-            status=macro_status,
-        )
-    ]
-    if not macro_issues:
-        return result
-    blocking_reasons = [
-        *result.blocking_reasons,
-        *[
-            f"{issue.issue_type}:{issue.metadata.get('arc_id', '')}"
-            for issue in macro_issues
-            if issue.blocking
-        ],
-    ]
-    return result.model_copy(
-        update={
-            "issues": [*result.issues, *macro_issues],
-            "status": "fail",
-            "blocking_reasons": blocking_reasons,
-        }
-    )
-
-
-def _successful_macro_boundary_audited_arc_ids(
-    session: Session,
-    *,
-    project_id: str,
-) -> set[str]:
-    rows = session.execute(
-        select(FuturePlanAuditRunRow)
-        .where(
-            FuturePlanAuditRunRow.project_id == project_id,
-            FuturePlanAuditRunRow.status != "fail",
-        )
-        .order_by(FuturePlanAuditRunRow.created_at.asc())
-    ).scalars().all()
-    audited: set[str] = set()
-    for row in rows:
-        metadata = _loads_json(row.metadata_json, {})
-        if isinstance(metadata, dict):
-            ids = metadata.get("macro_boundary_audited_arc_ids")
-            if isinstance(ids, list):
-                audited.update(str(item) for item in ids if str(item).strip())
-        issues = _loads_json(row.issues_json, [])
-        if isinstance(issues, list):
-            for issue in issues:
-                if not isinstance(issue, dict):
-                    continue
-                if issue.get("patch_type") != "macro_progression_boundary":
-                    continue
-                metadata = issue.get("metadata")
-                if isinstance(metadata, dict) and metadata.get("arc_id"):
-                    audited.add(str(metadata["arc_id"]))
-    return audited
-
-
-def _loads_json(value: Any, fallback: Any) -> Any:
-    try:
-        return json.loads(value or "")
-    except (TypeError, json.JSONDecodeError):
-        return fallback
 
 
 __all__ = ["FuturePlanApplyMixin"]

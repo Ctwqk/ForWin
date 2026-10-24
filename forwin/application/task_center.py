@@ -262,7 +262,6 @@ class TaskCenterService:
         )
         generation_control = build_generation_control(
             plans=plans,
-            latest_replan=None,
             review_interval_chapters=review_interval,
             latest_band_checkpoint=latest_band_checkpoint,
             decision_events=decision_events,

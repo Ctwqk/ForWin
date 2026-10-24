@@ -109,12 +109,6 @@ class ProjectSummary(ProjectArcSnapshotFields):
     runtime_policy: RuntimePolicy
     runtime_policy_version: int
     latest_stage: str = ""
-    pacing_verdict: str = ""
-    pacing_summary: str = ""
-    last_replan_status: str = ""
-    last_replan_strategy: str = ""
-    last_replan_reason: str = ""
-    current_time_label: str = ""
     generation_control: GenerationControlInfo = Field(
         default_factory=GenerationControlInfo
     )
@@ -192,11 +186,6 @@ class ProjectDetail(ProjectArcSnapshotFields):
     threads: list[ThreadInfo] = []
     chapters: list[ChapterInfo] = []
     latest_stage: str = ""
-    progress_ratio: float = 0.0
-    pacing_verdict: str = ""
-    pacing_summary: str = ""
-    current_time_label: str = ""
-    recent_replans: list[dict[str, object]] = []
     generation_control: GenerationControlInfo = Field(
         default_factory=GenerationControlInfo
     )

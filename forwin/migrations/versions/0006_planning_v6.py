@@ -106,6 +106,10 @@ def upgrade() -> None:
     op.drop_table("world_simulation_turns")
     _drop_simulation_from_policies()
 
+    op.drop_table("project_stage_analyses")
+    op.drop_table("project_replan_events")
+    op.drop_column("arc_plan_versions", "macro_progression_json")
+
 
 def _drop_simulation_from_policies() -> None:
     bind = op.get_bind()
@@ -127,6 +131,49 @@ def _drop_simulation_from_policies() -> None:
 
 def downgrade() -> None:
     """Revert schema; the maintenance step data rewrite is not reversed."""
+    op.create_table(
+        "project_replan_events",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("trigger_chapter", sa.Integer(), nullable=False),
+        sa.Column("risk_level", sa.String(), nullable=False),
+        sa.Column("reason", sa.Text(), nullable=False),
+        sa.Column("focus_threads_json", sa.Text(), nullable=False),
+        sa.Column("strategy", sa.String(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("cooldown_until_chapter", sa.Integer(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_table(
+        "project_stage_analyses",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("chapter_number", sa.Integer(), nullable=False),
+        sa.Column("stage_label", sa.String(), nullable=False),
+        sa.Column("progress_ratio", sa.Float(), nullable=False),
+        sa.Column("timeline_label", sa.String(), nullable=False),
+        sa.Column("timeline_ordinal", sa.Integer(), nullable=False),
+        sa.Column("pacing_verdict", sa.String(), nullable=False),
+        sa.Column("pacing_summary", sa.Text(), nullable=False),
+        sa.Column("stale_threads_json", sa.Text(), nullable=False),
+        sa.Column("active_thread_count", sa.Integer(), nullable=False),
+        sa.Column("unresolved_thread_count", sa.Integer(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.add_column(
+        "arc_plan_versions",
+        sa.Column("macro_progression_json", sa.Text(), server_default="{}", nullable=False),
+    )
     op.create_table(
         "arc_world_contracts",
         sa.Column("id", sa.String(), nullable=False),

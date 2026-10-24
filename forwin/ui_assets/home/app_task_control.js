@@ -924,7 +924,6 @@
         `Review：${control.review_state || '-'}`,
         `下一章：${control.next_chapter || 0}`,
         `距人工检查：${control.review_interval_chapters ? control.chapters_until_review : '未设置'}`,
-        `距 replan 可触发：${control.chapters_until_replan_eligible || 0}`,
       ];
       misc.appendChild(createNode('div', controlLines.join('\\n'), 'meta-line'));
       body.appendChild(misc);

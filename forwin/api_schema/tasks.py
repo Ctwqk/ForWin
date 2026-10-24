@@ -38,7 +38,6 @@ class GenerationControlInfo(BaseModel):
     pause_requested: bool = False
     review_interval_chapters: int = 0
     chapters_until_review: int = 0
-    chapters_until_replan_eligible: int = 0
     blocking_reason: BlockingReasonInfo = Field(default_factory=BlockingReasonInfo)
     latest_band_checkpoint: BandCheckpointDetail | None = None
     next_gate: str = ""

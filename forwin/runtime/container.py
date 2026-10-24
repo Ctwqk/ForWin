@@ -18,11 +18,6 @@ from forwin.observability.service import ObservabilityService
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.planning.arc_progression import ArcProgressionService
 from forwin.planning.service import PlanningService
-from forwin.planning.stage_analysis import (
-    PacingStrategist,
-    ReplanGovernor,
-    StageAnalyzer,
-)
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.retrieval import RetrievalBroker, create_memory_index
 from forwin.review.draft_service import DraftReviewService
@@ -199,9 +194,6 @@ class RuntimeContainer:
                 artifact_store=core.artifact_store,
                 observability=core.observability,
                 writer=generation.writer,
-                stage_analyzer=generation.stage_analyzer,
-                pacing_strategist=generation.pacing_strategist,
-                replan_governor=generation.replan_governor,
                 comment_analyzer=generation.comment_analyzer,
                 arc_envelope_manager=generation.arc_envelope_manager,
                 draft_review=generation.draft_review,
@@ -399,19 +391,6 @@ class RuntimeContainer:
                 llm_client,
                 core.observability,
             )
-            stage_analyzer = StageAnalyzer()
-            pacing_strategist = PacingStrategist(
-                window_size=3,
-                stale_thread_window=3,
-                min_avg_chars=1600,
-                max_avg_chars=3800,
-                active_thread_limit=infrastructure.phase_active_thread_limit,
-            )
-            replan_governor = ReplanGovernor(
-                cooldown_chapters=3,
-                director=arc_director,
-                subworld_manager=subworld_manager,
-            )
             llm_available = bool(model_profile.api_key) or infrastructure.codex_enabled
             comment_analyzer = CommentAnalyzer(
                 llm_client=llm_client
@@ -452,9 +431,6 @@ class RuntimeContainer:
                 book_genesis=book_genesis,
                 subworld_manager=subworld_manager,
                 retrieval_broker=retrieval_broker,
-                stage_analyzer=stage_analyzer,
-                pacing_strategist=pacing_strategist,
-                replan_governor=replan_governor,
                 comment_analyzer=comment_analyzer,
                 arc_envelope_manager=arc_envelope_manager,
                 draft_review=draft_review,
@@ -543,9 +519,6 @@ class RuntimeContainer:
         if service is None:
             service = PostCanonMaintenanceService(
                 session_factory=core.session_factory,
-                stage_analyzer=generation.stage_analyzer,
-                pacing_strategist=generation.pacing_strategist,
-                replan_governor=generation.replan_governor,
                 arc_envelope_manager=generation.arc_envelope_manager,
                 comment_analyzer=generation.comment_analyzer,
                 artifact_store=core.artifact_store,
@@ -604,19 +577,6 @@ class RuntimeContainer:
                 max_tokens=infrastructure.max_tokens,
             )
             subworld_manager = SubWorldManager(director=arc_director)
-            stage_analyzer = StageAnalyzer()
-            pacing_strategist = PacingStrategist(
-                window_size=3,
-                stale_thread_window=3,
-                min_avg_chars=1600,
-                max_avg_chars=3800,
-                active_thread_limit=infrastructure.phase_active_thread_limit,
-            )
-            replan_governor = ReplanGovernor(
-                cooldown_chapters=3,
-                director=arc_director,
-                subworld_manager=subworld_manager,
-            )
             llm_available = _llm_available(infrastructure, policy)
             comment_analyzer = CommentAnalyzer(
                 llm_client=llm_client
@@ -634,9 +594,6 @@ class RuntimeContainer:
             )
             service = PostCanonMaintenanceService(
                 session_factory=core.session_factory,
-                stage_analyzer=stage_analyzer,
-                pacing_strategist=pacing_strategist,
-                replan_governor=replan_governor,
                 arc_envelope_manager=arc_envelope_manager,
                 comment_analyzer=comment_analyzer,
                 artifact_store=core.artifact_store,

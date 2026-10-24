@@ -34,7 +34,6 @@ class GenerationControlPayloadTests(unittest.TestCase):
                 _plan(2, "needs_review"),
                 _plan(3, "planned"),
             ],
-            latest_replan=SimpleNamespace(cooldown_until_chapter=5),
             review_interval_chapters=2,
         )
 
@@ -45,7 +44,7 @@ class GenerationControlPayloadTests(unittest.TestCase):
         self.assertEqual(control.next_chapter, 3)
         self.assertFalse(control.can_resume)
         self.assertEqual(control.chapters_until_review, 0)
-        self.assertEqual(control.chapters_until_replan_eligible, 3)
+        self.assertNotIn("chapters_until_" + "replan_eligible", control.model_dump())
 
     def test_review_interval_counts_from_accepted_chapters(self) -> None:
         control = build_generation_control(
@@ -55,7 +54,6 @@ class GenerationControlPayloadTests(unittest.TestCase):
                 _plan(3, "planned"),
                 _plan(4, "planned"),
             ],
-            latest_replan=None,
             review_interval_chapters=2,
         )
 
@@ -72,7 +70,6 @@ class GenerationControlPayloadTests(unittest.TestCase):
                 _plan(2, "drafted"),
                 _plan(3, "planned"),
             ],
-            latest_replan=None,
             review_interval_chapters=0,
         )
 
@@ -88,7 +85,6 @@ class GenerationControlPayloadTests(unittest.TestCase):
                 _plan(1, "accepted"),
                 _plan(2, "planned"),
             ],
-            latest_replan=None,
             review_interval_chapters=0,
             latest_band_checkpoint=BandCheckpoint(
                 id="cp-1",
@@ -125,7 +121,6 @@ class GenerationControlPayloadTests(unittest.TestCase):
                 _plan(1, "accepted"),
                 _plan(2, "accepted"),
             ],
-            latest_replan=None,
             review_interval_chapters=0,
             latest_band_checkpoint=BandCheckpoint(
                 id="cp-completed-1",
@@ -151,7 +146,6 @@ class GenerationControlPayloadTests(unittest.TestCase):
                 _plan(1, "failed"),
                 _plan(2, "planned"),
             ],
-            latest_replan=None,
             review_interval_chapters=0,
             decision_events=[
                 DecisionEventInfo(
@@ -184,7 +178,6 @@ class GenerationControlPayloadTests(unittest.TestCase):
                 _plan(1, "failed"),
                 _plan(2, "planned"),
             ],
-            latest_replan=None,
             review_interval_chapters=0,
             decision_events=[
                 SimpleNamespace(
@@ -246,3 +239,61 @@ class GenerationControlPayloadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_latest_task_stage_ignores_deleted_and_other_task_kinds() -> None:
+    from datetime import datetime, timedelta
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from sqlalchemy.schema import CreateTable
+    from forwin.state.query_helpers import load_latest_task_stage_by_project
+
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            # The production active-task partial index is PostgreSQL-specific.
+            connection.execute(CreateTable(GenerationTask.__table__))
+        with Session(engine) as session:
+            now = datetime(2026, 10, 23)
+            session.add_all([
+                GenerationTask(id="old", project_id="p", current_stage="review", updated_at=now),
+                GenerationTask(id="new-a", project_id="p", current_stage="plan", updated_at=now + timedelta(seconds=1)),
+                GenerationTask(id="new-b", project_id="p", current_stage="writer", updated_at=now + timedelta(seconds=1)),
+                GenerationTask(id="deleted", project_id="p", current_stage="deleted", updated_at=now + timedelta(seconds=2), deleted_at=now),
+                GenerationTask(id="upload", project_id="p", task_kind="upload", current_stage="upload", updated_at=now + timedelta(seconds=3)),
+                GenerationTask(id="other", project_id="other", current_stage="queued", updated_at=now),
+            ])
+            session.flush()
+            assert load_latest_task_stage_by_project(session, ["p", "missing"]) == {"p": "writer"}
+            assert load_latest_task_stage_by_project(session, []) == {}
+    finally:
+        engine.dispose()
+
+
+def test_project_read_models_take_stage_from_generation_task() -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from forwin.models import Base, Project
+    from forwin.application.read_models import build_project_detail, build_project_summaries
+    from forwin.runtime.policy_store import ProjectPolicyStore
+
+    engine = create_engine("sqlite:///:memory:")
+    try:
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            project = Project(id="stage-project", title="Title", premise="Premise", genre="Genre")
+            ProjectPolicyStore(session).initialize(project, RuntimePolicy.for_profile("standard"))
+            session.add(project)
+            session.flush()
+            assert build_project_detail(session=session, project=project, display_datetime=str).latest_stage == ""
+            session.add(GenerationTask(id="stage-task", project_id=project.id, current_stage="writer"))
+            session.flush()
+            detail = build_project_detail(session=session, project=project, display_datetime=str)
+            summary = build_project_summaries(session=session, projects=[project], display_datetime=str)[0]
+            assert detail.latest_stage == summary.latest_stage == "writer"
+            removed = {"pacing_verdict", "pacing_summary", "recent_replans", "last_replan_status",
+                       "last_replan_strategy", "last_replan_reason", "current_time_label", "progress_ratio"}
+            assert removed.isdisjoint(detail.model_dump())
+            assert removed.isdisjoint(summary.model_dump())
+    finally:
+        engine.dispose()

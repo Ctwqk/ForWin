@@ -30,8 +30,6 @@ from .phase import (
     ArcStructureDraft,
     BandExperiencePlan,
     ChapterRewriteAttempt,
-    ProjectReplanEvent,
-    ProjectStageAnalysis,
     ProvisionalPromotionRecord,
 )
 from .progression import ProjectProgressionRule
@@ -120,8 +118,6 @@ __all__ = [
     "NarrativeObligationRow",
     "NarrativePlanPatchRow",
     "FuturePlanAuditRunRow",
-    "ProjectStageAnalysis",
-    "ProjectReplanEvent",
     "ArcEnvelope",
     "ArcStructureDraft",
     "ArcEnvelopeAnalysis",

@@ -1289,3 +1289,36 @@ def test_broker_has_no_world_model_pack() -> None:
         route.path for route in create_app().routes
         if "context-" + "pack" in getattr(route, "path", "")
     ]
+
+
+def test_replanner_and_macro_progression_are_gone() -> None:
+    from forwin.models import Base
+
+    modules = (
+        "forwin/planning/stage_" + "analysis.py",
+        "forwin/planning/macro_" + "progression.py",
+        "forwin/planning/future_plan_audit/macro_" + "progression.py",
+        "forwin/book_state/macro_" + "status.py",
+    )
+    tables = ("project_stage_analyses", "project_replan_events")
+    column = "macro_" + "progression_json"
+    assert not [path for path in modules if (ROOT / path).exists()]
+    assert set(tables).isdisjoint(Base.metadata.tables)
+    assert column not in Base.metadata.tables["arc_plan_versions"].c
+    production = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "forwin").rglob("*")
+        if path.suffix in {".py", ".js"} and "migrations" not in path.parts
+    )
+    for token in (
+        "Stage" + "Analyzer", "Pacing" + "Strategist", "Replan" + "Governor",
+        "ProjectStage" + "Analysis", "ProjectReplan" + "Event",
+        "macro_" + "progression", "ProtagonistMacro" + "Status",
+        "chapters_until_" + "replan",
+    ):
+        assert token not in production
+    migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
+    for table in tables:
+        assert f'op.drop_table("{table}")' in inspect.getsource(migration.upgrade)
+        assert f'"{table}"' in inspect.getsource(migration.downgrade)
+    assert f'op.drop_column("arc_plan_versions", "{column}")' in inspect.getsource(migration.upgrade)

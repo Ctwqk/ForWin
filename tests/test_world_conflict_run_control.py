@@ -344,7 +344,6 @@ def test_world_conflict_reason_blocks_next_arc_before_plans_exist():
 
     control = build_generation_control(
         plans=[SimpleNamespace(chapter_number=n, status="accepted") for n in range(1, 5)],
-        latest_replan=None,
         writable_chapters=range(1, 9),
         open_world_conflicts=[WorldConflictBlockInfo(conflict_id="next-arc", blocks_from_chapter=5, summary="Conflict")],
     )

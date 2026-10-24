@@ -12,6 +12,9 @@ def test_home_console_navigation_books_and_config(page, browser_test_base_url: s
     goto_home(page, browser_test_base_url, backend)
 
     expect(page.locator("#book_list")).to_contain_text("雾港潮生录")
+    expect(page.locator("#book_list")).to_contain_text("最近阶段：paused_for_review")
+    expect(page.locator("#book_list")).not_to_contain_text("节奏：")
+    expect(page.locator("#book_list")).not_to_contain_text("undefined")
     expect(page.get_by_role("navigation", name="ForWin primary navigation")).to_contain_text("世界档案")
     expect(page.get_by_role("navigation", name="ForWin primary navigation")).to_contain_text("发布")
     expect(page.get_by_text("V4 世界")).to_have_count(0)

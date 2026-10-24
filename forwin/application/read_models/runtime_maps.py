@@ -14,44 +14,21 @@ from forwin.long_run_policy import normalize_long_run_policy
 from forwin.models.phase import (
     ArcStructureDraft,
     BandExperiencePlan,
-    ProjectReplanEvent,
 )
 from forwin.models.publisher import PublisherUploadJob
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
     load_latest_arc_envelope_analysis_by_project,
-    load_latest_replan_event_by_project,
-    load_latest_stage_analysis_by_project,
+    load_latest_task_stage_by_project,
 )
 from .common import (
     _latest_rows_by_project,
     _normalized_project_ids,
-    _recent_rows_by_project,
 )
 
 
 DisplayDatetime = Callable[[datetime | None], str]
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
-
-
-def load_recent_replan_events_by_project(
-    session: Session,
-    project_ids: list[str],
-    *,
-    limit: int,
-) -> dict[str, list[ProjectReplanEvent]]:
-    return _recent_rows_by_project(
-        session,
-        ProjectReplanEvent,
-        ProjectReplanEvent.project_id,
-        project_ids,
-        order_by=(
-            ProjectReplanEvent.trigger_chapter.desc(),
-            ProjectReplanEvent.created_at.desc(),
-            ProjectReplanEvent.id.desc(),
-        ),
-        limit=limit,
-    )
 
 
 def _load_latest_arc_structure_by_project(
@@ -306,8 +283,6 @@ def load_project_runtime_maps(
     session: Session,
     project_ids: list[str],
 ) -> dict[str, dict[str, Any]]:
-    latest_stage_map = load_latest_stage_analysis_by_project(session, project_ids)
-    last_replan_map = load_latest_replan_event_by_project(session, project_ids)
     latest_arc_envelope_map = load_latest_active_arc_envelope_by_project(
         session, project_ids
     )
@@ -320,22 +295,16 @@ def load_project_runtime_maps(
     latest_band_experience_map = _load_latest_band_experience_by_project(
         session, project_ids
     )
-    recent_replans_map = load_recent_replan_events_by_project(
-        session, project_ids, limit=5
-    )
     return {
-        "latest_stage_map": latest_stage_map,
-        "last_replan_map": last_replan_map,
+        "latest_task_stage_map": load_latest_task_stage_by_project(session, project_ids),
         "latest_arc_envelope_map": latest_arc_envelope_map,
         "latest_arc_analysis_map": latest_arc_analysis_map,
         "latest_arc_structure_map": latest_arc_structure_map,
         "latest_band_experience_map": latest_band_experience_map,
-        "recent_replans_map": recent_replans_map,
     }
 
 
 __all__ = [
-    "load_recent_replan_events_by_project",
     "_load_latest_arc_structure_by_project",
     "_load_latest_band_experience_by_project",
     "normalize_project_automation",

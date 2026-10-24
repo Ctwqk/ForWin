@@ -1266,7 +1266,11 @@ def test_broker_has_no_world_model_pack() -> None:
         "_augment_v46_context",
     ):
         assert not hasattr(RetrievalBroker, method)
-    assert not hasattr(context, "WorldModel" + "RetrievalPack")
+    for pack_name in (
+        "WorldModel" + "RetrievalPack", "PlanningPack", "WritingPack", "ReviewPack",
+        "CompilerPack", "ReaderExperiencePack", "CognitionPack", "RevealPack",
+    ):
+        assert not hasattr(context, pack_name)
     removed_fields = {
         "knowledge_system_" + "context", "active_world_lines", "visible_world_lines",
         "hidden_world_lines", "recent_world_deltas", "recent_offscreen_deltas",
@@ -1278,3 +1282,10 @@ def test_broker_has_no_world_model_pack() -> None:
     assert removed_fields.isdisjoint(context.ChapterContextPack.model_fields)
     for path in ("forwin/http/routes.py", "forwin/http/adapters/api_llm_kb_routes.py"):
         assert "context-" + "pack" not in _read(path)
+
+    from forwin.http import create_app
+
+    assert not [
+        route.path for route in create_app().routes
+        if "context-" + "pack" in getattr(route, "path", "")
+    ]

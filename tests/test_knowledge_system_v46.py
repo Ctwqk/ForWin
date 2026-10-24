@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -1717,5 +1718,38 @@ def test_llm_kb_rebuild_ignores_retired_role_pack_files(tmp_path: Path) -> None:
         assert all(not payload["file_key"].startswith("packs/") for payload in payloads)
         assert "retired-secret-truth" not in str(payloads)
         assert "retired-personality" not in str(payloads)
+
+        points = client.collections["llm_kb_vectors"]["points"]
+        template = next(iter(points.values()))
+        retired_keys: dict[str, set[str]] = {}
+        for role in ("reviewer", "planner", "compiler"):
+            retired_keys[role] = set()
+            # The mixed scopes ensure both filters independently protect writer searches.
+            for variant, role_scope, visibility_scope in (
+                ("context", role, f"{role}_only"),
+                ("role_only", role, "writer_safe"),
+                ("visibility_only", "writer", f"{role}_only"),
+            ):
+                point = deepcopy(template)
+                point.id = f"retired-{role}-{variant}"
+                file_key = f"packs/{role}/{variant}.json"
+                point.payload.update(
+                    file_key=file_key,
+                    role_scope=role_scope,
+                    visibility_scope=visibility_scope,
+                )
+                points[point.id] = point
+                retired_keys[role].add(file_key)
+
+        for role in ("writer", "reviewer", "planner", "compiler"):
+            results = index.search("project-1", "Public memory", role=role, limit=100)
+            assert any(item.file_key == "CURRENT_STATE.md" for item in results)
+            assert {
+                item.file_key for item in results if item.file_key.startswith("packs/")
+            } == retired_keys.get(role, set())
+
+        result = index.rebuild_project("project-1", source_digest="digest", as_of_chapter=1)
+        assert result["deleted_section_count"] == 9
+        assert all(not point.payload["file_key"].startswith("packs/") for point in points.values())
     finally:
         index.close()

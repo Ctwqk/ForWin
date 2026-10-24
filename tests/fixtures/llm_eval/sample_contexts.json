@@ -59,12 +59,6 @@
     "allowed_entities": [
       "林夜",
       "周澜"
-    ],
-    "active_world_lines": [
-      "潮雾会遮蔽旧术痕迹。"
-    ],
-    "must_not_reveal": [
-      "罗盘真正来源不能在本章揭示。"
     ]
   },
   {
@@ -127,12 +121,6 @@
     "allowed_entities": [
       "沈烬",
       "许青鸢"
-    ],
-    "active_world_lines": [
-      "潮雾会遮蔽旧术痕迹。"
-    ],
-    "must_not_reveal": [
-      "罗盘真正来源不能在本章揭示。"
     ]
   },
   {
@@ -195,12 +183,6 @@
     "allowed_entities": [
       "陆沉",
       "白芷"
-    ],
-    "active_world_lines": [
-      "潮雾会遮蔽旧术痕迹。"
-    ],
-    "must_not_reveal": [
-      "罗盘真正来源不能在本章揭示。"
     ]
   }
 ]

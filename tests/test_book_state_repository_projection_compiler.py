@@ -579,7 +579,6 @@ def test_context_assembly_prefers_book_state_runtime_overlay() -> None:
         context = assemble_context(StateRepository(session), project_id, chapter)
 
     assert context.world_view is not None
-    assert {"active_world_lines", "active_knowledge_gaps"}.isdisjoint(context.model_dump())
     active_location = next(item for item in context.map_context["active_locations"] if item["entity_id"] == "char_mc")
     assert active_location["location_id"] == "loc_city"
     assert active_location["source"] == "book_state"

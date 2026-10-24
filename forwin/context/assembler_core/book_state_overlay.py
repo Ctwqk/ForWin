@@ -119,8 +119,6 @@ def _book_state_context_overlay(
             )
     return {
         "as_of_chapter": as_of_chapter,
-        "active_world_lines": runtime.narrative.active_world_line_ids(),
-        "active_knowledge_gaps": runtime.narrative.open_gap_ids(),
         "active_locations": active_locations,
         "personality_characters": personality_characters,
         "character_nodes": character_nodes,

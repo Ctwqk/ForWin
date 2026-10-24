@@ -390,8 +390,6 @@ class RuntimeContainer:
                 max_entities=infrastructure.retrieval_max_entities,
                 max_threads=infrastructure.retrieval_max_threads,
                 max_summaries=infrastructure.retrieval_max_summaries,
-                llm_kb_qdrant_url=infrastructure.qdrant_url,
-                llm_kb_qdrant_collection=infrastructure.llm_kb_qdrant_collection,
                 memory_index_provider=lambda: self._build_memory_index(infrastructure),
             )
 

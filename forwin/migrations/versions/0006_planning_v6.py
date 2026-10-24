@@ -5,6 +5,8 @@ Revises: 0005_world_plan_conflicts
 Create Date: 2026-10-22 00:00:00.000000
 
 Adds versioned arc beat sheets and band plans, and chapter planning fields.
+Drops arc_world_contracts, band_world_contracts, and chapter_world_delta_intents;
+downgrade recreates these tables empty without restoring their rows.
 New NOT NULL chapter columns carry server defaults for existing rows.
 The maintenance step rename and deletion are irreversible; downgrade only
 reverts the schema; removed policy keys and maintenance history are not restored.

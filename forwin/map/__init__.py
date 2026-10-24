@@ -6,7 +6,7 @@ from typing import Any
 
 # forwin.models imports forwin.map.models, which imports forwin.models.base: load the model package
 # first so a bare import of the map models never meets it half-initialised.
-import forwin.models  # noqa: F401,E402
+import forwin.models  # noqa: F401
 
 from .protocol import (
     BookMapRuntime,

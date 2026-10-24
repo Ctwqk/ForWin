@@ -25,23 +25,11 @@ class BookStateContextProvider:
             runtime=runtime,
         )
         map_context = _merge_book_state_map_overlay(draft.data.get("map_context", {}), overlay)
-        book_state_world_lines = [
-            str(item)
-            for item in overlay.get("active_world_lines", [])
-            if str(item).strip()
-        ]
-        book_state_knowledge_gaps = [
-            str(item)
-            for item in overlay.get("active_knowledge_gaps", [])
-            if str(item).strip()
-        ]
         draft.data.update(
             {
                 "book_state_overlay": overlay,
                 # Later providers read the same BookState instead of loading it again.
                 "book_state_runtime": runtime,
                 "map_context": map_context,
-                "book_state_world_lines": book_state_world_lines,
-                "book_state_knowledge_gaps": book_state_knowledge_gaps,
             }
         )

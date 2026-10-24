@@ -124,11 +124,11 @@ def test_unsupported_symbol_run_still_fails_as_garbage() -> None:
     assert "no_garbage" in result.fail_reasons
 
 
-def test_missing_event_fails_and_reveals_are_left_to_the_review_gate() -> None:
+def test_missing_event_fails_and_floor_performs_no_reveal_scan() -> None:
     body = "角色A终于发现旧案的真相，众人沉默片刻后继续行动。"
     result = run_hard_floor(
         writer_output=_writer(body, chapter_delta=chapter_delta(body)),
-        context_pack=_context(must_not_reveal=["旧案的真相"]),
+        context_pack=_context(),
         repo=None,
         project_id="project-1",
         chapter_number=1,

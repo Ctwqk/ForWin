@@ -4,11 +4,8 @@ import json
 import logging
 import threading
 from collections.abc import Callable, Iterable
-from pathlib import Path
 
 from forwin.context import assemble_context
-from forwin.llm_kb.retriever import LLMKnowledgeBaseRetriever
-from forwin.llm_kb.store import LLMKnowledgeBaseStore
 from forwin.protocol.context import (
     ChapterContextPack,
     EntitySnapshot,
@@ -18,10 +15,6 @@ from forwin.protocol.context import (
 from forwin.protocol.world_model import WorldContextPack
 from forwin.retrieval.memory_index import ChapterMemoryIndex
 from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
-from .helpers import (
-    _extract_source_digest,
-    _truncate,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -43,14 +36,8 @@ class RetrievalBroker:
         max_memories: int = 3,
         max_world_pages: int = 6,
         memory_index: ChapterMemoryIndex | None = None,
-        llm_kb_root: Path | None = None,
-        llm_kb_qdrant_url: str | None = None,
-        llm_kb_qdrant_collection: str | None = None,
-        llm_kb_qdrant_client: object | None = None,
-        llm_kb_qdrant_models: object | None = None,
         retrieval_budget: RetrievalBudget | None = None,
         memory_index_provider: Callable[[], ChapterMemoryIndex] | None = None,
-        llm_kb_retriever_provider: Callable[[], LLMKnowledgeBaseRetriever] | None = None,
     ) -> None:
         if memory_index is not None and memory_index_provider is not None:
             raise ValueError("Pass memory_index or memory_index_provider, not both.")
@@ -62,20 +49,9 @@ class RetrievalBroker:
         self.max_world_pages = max_world_pages
         self.memory_index = memory_index
         self._owns_memory_index = memory_index_provider is not None
-        self.llm_kb_root = llm_kb_root
-        self.llm_kb_qdrant_url = llm_kb_qdrant_url
-        self.llm_kb_qdrant_collection = llm_kb_qdrant_collection
-        self.llm_kb_qdrant_client = llm_kb_qdrant_client
-        self.llm_kb_qdrant_models = llm_kb_qdrant_models
         self._memory_index_provider = memory_index_provider
-        self._llm_kb_retriever_provider = (
-            llm_kb_retriever_provider or self._build_configured_llm_kb_retriever
-        )
-        self._llm_kb_retriever: LLMKnowledgeBaseRetriever | None = None
-        self._owns_llm_kb_retriever = True
         self._closed = False
         self._memory_index_lock = threading.Lock()
-        self._llm_kb_retriever_lock = threading.Lock()
         self.retrieval_budget = retrieval_budget or RetrievalBudget()
         self.last_observability_summary: dict[str, object] = {}
 
@@ -242,58 +218,6 @@ class RetrievalBroker:
         removed = memories[remove_index]
         return memories[:remove_index] + memories[remove_index + 1 :], removed
 
-
-    def _load_llm_kb_context(
-        self, project_id: str, *, pack_kind: str, query: str = ""
-    ) -> dict[str, object]:
-        store = LLMKnowledgeBaseStore(root=self.llm_kb_root)
-        files = store.list_files(project_id)
-        if not files:
-            return {}
-        safe_file_keys = [
-            "CURRENT_STATE.md",
-            "NEXT_CHAPTER_CONTEXT.md",
-            "ACTIVE_THREADS.md",
-            "CHARACTER_MEMORY.md",
-            "MAP_CONTEXT.md",
-            "READER_PROMISES.md",
-            "KNOWLEDGE_GAPS.md",
-            "MUST_NOT_REVEAL.md",
-            "RECENT_CHANGES.md",
-        ]
-        excerpts: dict[str, str] = {}
-        source_digest = ""
-        for key in safe_file_keys:
-            try:
-                content = store.read_file(project_id, key)
-            except (FileNotFoundError, ValueError):
-                continue
-            excerpts[key] = _truncate(content, limit=1200)
-            if not source_digest:
-                source_digest = _extract_source_digest(content)
-        search_results: list[dict[str, object]] = []
-        if str(query or "").strip():
-            role = {
-                "writing": "writer",
-                "review": "reviewer",
-                "planning": "planner",
-                "compiler": "compiler",
-            }.get(pack_kind, "writer")
-            search_results = self._ensure_llm_kb_retriever().search(
-                project_id,
-                query,
-                role=role,
-                limit=5,
-            )
-        return {
-            "root_policy": "writer_safe",
-            "pack_kind": pack_kind,
-            "files": [item["file_key"] for item in files],
-            "source_digest": source_digest,
-            "excerpts": excerpts,
-            "search_results": search_results,
-        }
-
     def _ensure_memory_index(self, _repo=None) -> None:  # noqa: ANN001
         if self._closed:
             raise RuntimeError("RetrievalBroker is closed")
@@ -319,61 +243,19 @@ class RetrievalBroker:
             raise RuntimeError("memory index initialization did not complete")
         return self.memory_index
 
-    def _ensure_llm_kb_retriever(self) -> LLMKnowledgeBaseRetriever:
-        if self._closed:
-            raise RuntimeError("RetrievalBroker is closed")
-        if self._llm_kb_retriever is not None:
-            return self._llm_kb_retriever
-        with self._llm_kb_retriever_lock:
-            if self._closed:
-                raise RuntimeError("RetrievalBroker is closed")
-            if self._llm_kb_retriever is not None:
-                return self._llm_kb_retriever
-            retriever = self._llm_kb_retriever_provider()
-            if retriever is None:
-                raise RuntimeError(
-                    "llm_kb_retriever_provider returned no retriever"
-                )
-            self._llm_kb_retriever = retriever
-            return retriever
-
     def close(self) -> None:
-        with self._memory_index_lock, self._llm_kb_retriever_lock:
+        with self._memory_index_lock:
             if self._closed:
                 return
             self._closed = True
             memory_index = self.memory_index if self._owns_memory_index else None
-            retriever = (
-                self._llm_kb_retriever if self._owns_llm_kb_retriever else None
-            )
             self.memory_index = None
-            self._llm_kb_retriever = None
-        for resource in (memory_index, retriever):
-            close = getattr(resource, "close", None)
-            if not callable(close):
-                continue
+        close = getattr(memory_index, "close", None)
+        if callable(close):
             try:
                 close()
             except Exception:  # noqa: BLE001
                 logger.debug("Retrieval resource close failed.", exc_info=True)
-
-    def _build_configured_llm_kb_retriever(self) -> LLMKnowledgeBaseRetriever:
-        if self.llm_kb_qdrant_client is None and not self.llm_kb_qdrant_url:
-            raise RuntimeError(
-                "llm_kb_retriever_provider or explicit llm_kb_qdrant_url is required"
-            )
-        if not self.llm_kb_qdrant_collection:
-            raise RuntimeError(
-                "llm_kb_retriever_provider or explicit llm_kb_qdrant_collection is required"
-            )
-        return LLMKnowledgeBaseRetriever(
-            root=self.llm_kb_root,
-            qdrant_url=self.llm_kb_qdrant_url,
-            qdrant_collection=self.llm_kb_qdrant_collection,
-            qdrant_client=self.llm_kb_qdrant_client,
-            qdrant_models=self.llm_kb_qdrant_models,
-        )
-
 
     def _pick_summaries(self, summaries: list[str]) -> list[str]:
         return summaries[-self.max_summaries :]

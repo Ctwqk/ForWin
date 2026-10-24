@@ -242,53 +242,23 @@ def test_llm_kb_create_race_dimension_mismatch_fails_closed(
         index.search("project-1", "query")
 
 
-def test_broker_resolves_each_injected_provider_once(tmp_path: Path) -> None:
-    project_root = tmp_path / "project-1"
-    project_root.mkdir()
-    (project_root / "CURRENT_STATE.md").write_text("# Current State\n", encoding="utf-8")
+def test_broker_resolves_injected_memory_provider_once() -> None:
     memory_index = SimpleNamespace(search=lambda **_kwargs: [])
-    retriever = SimpleNamespace(
-        search=lambda *_args, **_kwargs: [{"file_key": "CURRENT_STATE.md"}]
-    )
     memory_provider_calls = 0
-    retriever_provider_calls = 0
 
     def memory_provider():
         nonlocal memory_provider_calls
         memory_provider_calls += 1
         return memory_index
 
-    def retriever_provider():
-        nonlocal retriever_provider_calls
-        retriever_provider_calls += 1
-        return retriever
-
-    broker = RetrievalBroker(
-        llm_kb_root=tmp_path,
-        memory_index_provider=memory_provider,
-        llm_kb_retriever_provider=retriever_provider,
-    )
+    broker = RetrievalBroker(memory_index_provider=memory_provider)
 
     assert memory_provider_calls == 0
-    assert retriever_provider_calls == 0
     broker._ensure_memory_index()
     broker._ensure_memory_index()
-    first = broker._load_llm_kb_context(
-        "project-1",
-        pack_kind="writing",
-        query="first",
-    )
-    second = broker._load_llm_kb_context(
-        "project-1",
-        pack_kind="writing",
-        query="second",
-    )
 
     assert broker.memory_index is memory_index
-    assert first["search_results"] == [{"file_key": "CURRENT_STATE.md"}]
-    assert second["search_results"] == [{"file_key": "CURRENT_STATE.md"}]
     assert memory_provider_calls == 1
-    assert retriever_provider_calls == 1
 
 
 def test_broker_provider_failure_is_not_cached() -> None:
@@ -312,13 +282,11 @@ def test_broker_provider_failure_is_not_cached() -> None:
     assert calls == 2
 
 
-def test_owned_lazy_indexes_close_without_resolving_unused_providers() -> None:
+def test_owned_lazy_memory_index_closes_without_resolving_unused_provider() -> None:
     calls: list[str] = []
     memory_index = SimpleNamespace(close=lambda: calls.append("memory.close"))
-    retriever = SimpleNamespace(close=lambda: calls.append("retriever.close"))
     broker = RetrievalBroker(
         memory_index_provider=lambda: memory_index,
-        llm_kb_retriever_provider=lambda: retriever,
     )
 
     broker.close()
@@ -326,13 +294,11 @@ def test_owned_lazy_indexes_close_without_resolving_unused_providers() -> None:
 
     broker = RetrievalBroker(
         memory_index_provider=lambda: memory_index,
-        llm_kb_retriever_provider=lambda: retriever,
     )
     broker._ensure_memory_index()
-    broker._ensure_llm_kb_retriever()
     broker.close()
 
-    assert calls == ["memory.close", "retriever.close"]
+    assert calls == ["memory.close"]
     with pytest.raises(RuntimeError, match="closed"):
         broker._ensure_memory_index()
 

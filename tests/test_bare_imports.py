@@ -22,6 +22,19 @@ ROOT = Path(__file__).resolve().parents[1]
     "forwin.book_state.reveal_schedule",
     "forwin.canon.admission",
     "forwin.world_engine.tick",
+    "forwin.llm_kb.compiler",
+    "forwin.llm_kb.vector_index",
+    "forwin.llm_kb.retriever",
+    "forwin.knowledge_system.canon_projection",
+    "forwin.knowledge_system.projection_jobs",
+    "forwin.outbox.handlers",
+    "forwin.retrieval",
+    "forwin.retrieval.broker_core.broker",
+    "forwin.map.models",
+    "forwin.map",
+    "forwin.models",
+    "forwin.models.base",
+    "forwin.world_studio.search_service",
 ])
 def test_module_imports_in_a_fresh_interpreter(module: str) -> None:
     result = subprocess.run(

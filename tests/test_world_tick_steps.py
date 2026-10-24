@@ -49,6 +49,7 @@ from tests.test_world_gate_v6 import (
     _World,
 )
 from tests.test_world_tick_delta import _built, _candidate, _chapter_one, _commit_tick, _context
+from tests.test_world_constraints import ONSTAGE_PHYSICAL_CHANGES
 
 
 PROJECT = "project-steps"
@@ -269,6 +270,156 @@ def test_tick_checks_stage_an_onstage_touch_without_retrying_the_physical_change
     ]
     assert staged.effects.movements == []
     assert tick.dropped == ["candidate"]
+
+
+def _physical_test_tick(monkeypatch, runtime, onstage):
+    from types import SimpleNamespace
+    from forwin.book_state.book_frame_repository import StoryCalendarRepository
+    from forwin.runtime.policy import RuntimePolicy
+    from forwin.world_engine.tick import _Tick
+    from forwin.world_engine.types import TickContext
+    from tests.test_world_constraints import CALENDAR, LEXICON
+
+    tick = object.__new__(_Tick)
+    tick.runtime = runtime
+    tick.context = TickContext(project_id="p", chapter_number=3, now=1000, window_start=800, seed=1)
+    tick.calendar, tick.lexicon, tick.policy = CALENDAR, LEXICON, RuntimePolicy.for_profile("standard")
+    tick.onstage_refs, tick.chapter, tick.tick_id, tick.dropped = frozenset({onstage}), None, "tick", []
+    events = []
+    tick.session = SimpleNamespace(add=events.append)
+    tick.conflicts = SimpleNamespace(resolutions=[])
+    # Substitute repository reads only; retain the public builder, gate and admission paths.
+    monkeypatch.setattr(BookStateProjection, "load_runtime_as_of", lambda self, *args, **kwargs: runtime)
+    monkeypatch.setattr(BookLexiconRepository, "get", lambda self, project: LEXICON)
+    monkeypatch.setattr(StoryCalendarRepository, "get", lambda self, project: CALENDAR)
+    return tick, events
+
+
+@pytest.mark.parametrize("ref, field, value, onstage", ONSTAGE_PHYSICAL_CHANGES)
+@pytest.mark.parametrize("precheck", [False, True], ids=["admission", "check-and-admission"])
+@pytest.mark.parametrize("has_flag", [False, True], ids=["absent-flag", "existing-flag"])
+@pytest.mark.parametrize("status", ["planned", "due"])
+def test_tick_stages_inventory_held_items_and_effective_location_changes(
+    monkeypatch, ref, field, value, onstage, precheck, has_flag, status,
+):
+    from copy import deepcopy
+    from forwin.book_state.runtime import resolve_world_node_location_id
+    from forwin.world_engine.running_state import _applied
+    from tests.test_world_constraints import _onstage_physical_runtime, _candidate, _change
+
+    runtime = _onstage_physical_runtime()
+    runtime.world.states_by_node_id["intent"]["status"] = status
+    if has_flag:
+        runtime.world.get_node("intent").profile["requires_onstage"] = False
+    before = deepcopy(runtime.world.states_by_node_id)
+    profile = deepcopy(runtime.world.get_node("intent").profile)
+    tick, events = _physical_test_tick(monkeypatch, runtime, onstage)
+    candidate = _candidate(_change(ref, field, value), intent_id="intent",
+                           intent_status_changes={"intent": "resolved"})
+    # The original effects really build and pass the public gate absent onstage exclusion.
+    tick.onstage_refs = frozenset()
+    assert tick._issues(candidate) == []
+    tick.onstage_refs = frozenset({onstage})
+    [staged] = tick._admitted(tick._check([candidate]) if precheck else [candidate])
+    check = tick._running_check()
+    assert check.admit(staged) == []
+    after = check.runtime
+    assert staged.origin == "onstage"
+    assert tick.dropped == ["candidate"]
+    assert [event.reason for event in events] == ["touches_onstage_entity"]
+    assert [event.event_type for event in events] == ["world_tick_candidate_dropped"]
+    assert after.world.get_state("intent")["status"] == "due"
+    assert after.world.get_node("intent").profile == {**profile, "requires_onstage": True}
+    assert [node.id for node in due_onstage_intents(after)] == ["intent"]
+    assert select_due_intents(after, now=1000).offstage == []
+    for node_id, state in before.items():
+        if node_id != "intent":
+            assert after.world.get_state(node_id) == state
+    assert resolve_world_node_location_id(after.world, onstage) == "l1"
+    assert runtime.world.states_by_node_id == before
+    delta = check._checked[1]
+    assert len(delta.node_patches) == 2
+    status_patch, profile_patch = delta.node_patches
+    assert (status_patch.field_path, status_patch.old_value, status_patch.new_value) == (
+        "state.status", status, "due",
+    )
+    assert all("old_value" in patch.model_fields_set for patch in delta.node_patches)
+    assert profile_patch.old_value == (False if has_flag else profile)
+    # Reversing the actual patches restores both the status and the original profile.
+    reverse = delta.model_copy(update={"node_patches": [
+        patch.model_copy(update={"op": "set", "old_value": patch.new_value, "new_value": patch.old_value})
+        for patch in reversed(delta.node_patches)
+    ]})
+    restored = _applied(after, reverse)
+    assert restored.world.get_state("intent") == before["intent"]
+    assert restored.world.get_node("intent").profile == profile
+
+
+@pytest.mark.parametrize("ref, field, value, onstage", ONSTAGE_PHYSICAL_CHANGES)
+def test_tick_allows_unchanged_onstage_inventory_and_effective_location(monkeypatch, ref, field, value, onstage):
+    from tests.test_world_constraints import _onstage_physical_runtime, _candidate, _change
+
+    runtime = _onstage_physical_runtime()
+    value = runtime.world.get_state(ref)[field]
+    tick, events = _physical_test_tick(monkeypatch, runtime, onstage)
+    candidate = _candidate(_change(ref, field, value), intent_id="intent",
+                           intent_status_changes={"intent": "resolved"})
+    assert tick._admitted(tick._check([candidate])) == [candidate]
+    check = tick._running_check()
+    assert check.admit(candidate) == []
+    assert check.runtime.world.get_state(ref)[field] == value
+    assert check.runtime.world.get_state("intent")["status"] == "resolved"
+    assert events == []
+
+
+@pytest.mark.parametrize("ref, field, onstage", [
+    ("f", "headquarters_location_id", "f"), ("activity", "current_location_id", "a"),
+])
+def test_tick_allows_fallback_changes_when_explicit_location_takes_precedence(monkeypatch, ref, field, onstage):
+    from forwin.book_state.runtime import resolve_world_node_location_id
+    from tests.test_world_constraints import _onstage_physical_runtime, _candidate, _change
+
+    runtime = _onstage_physical_runtime()
+    runtime.world.states_by_node_id[onstage]["location_id"] = "l3"
+    tick, events = _physical_test_tick(monkeypatch, runtime, onstage)
+    candidate = _candidate(_change(ref, field, "l2"), intent_id="intent",
+                           intent_status_changes={"intent": "resolved"})
+    assert tick._admitted(tick._check([candidate])) == [candidate]
+    check = tick._running_check()
+    assert check.admit(candidate) == []
+    assert check.runtime.world.get_state(ref)[field] == "l2"
+    assert resolve_world_node_location_id(check.runtime.world, onstage) == "l3"
+    assert check.runtime.world.get_state("intent")["status"] == "resolved"
+    assert events == []
+
+
+@pytest.mark.parametrize("effects", [
+    {"knowledge": [{"observer_ref": "a", "fact_ref": "fact:public", "state": "knows", "channel": "witnessed"}]},
+    {"relation_changes": [{"source_ref": "a", "target_ref": "b", "edge_type": "ally_of", "change": "create"}]},
+    {"entity_changes": [{"ref": "item", "field": "known_effect_refs", "new_value": ["fact:public"]}]},
+], ids=["knowledge", "relation", "held-item-knowledge"])
+def test_tick_admits_onstage_knowledge_and_relations(monkeypatch, effects):
+    from tests.test_world_constraints import _onstage_physical_runtime, _candidate
+
+    runtime = _onstage_physical_runtime()
+    tick, events = _physical_test_tick(monkeypatch, runtime, "a")
+    candidate = _candidate(effects, intent_id="intent", intent_status_changes={"intent": "resolved"})
+    assert tick._admitted(tick._check([candidate])) == [candidate]
+    check = tick._running_check()
+    assert check.admit(candidate) == []
+    assert check.runtime.world.get_state("intent")["status"] == "resolved"
+    delta = check._checked[1]
+    if "knowledge" in effects:
+        [patch] = delta.cognition_patches
+        assert (patch.observer_id, patch.field_path, patch.new_value) == (
+            "a", "knowledge_by_ref", {"fact:public": "knows"},
+        )
+    elif "relation_changes" in effects:
+        assert any(edge.source_id == "a" and edge.target_id == "b" and edge.edge_type == "ally_of"
+                   for edge in check.runtime.world.edges_by_id.values())
+    else:
+        assert check.runtime.world.get_state("item")["known_effect_refs"] == ["fact:public"]
+    assert events == []
 
 
 def test_running_tick_tracks_chapter_and_accepted_arrivals_and_restores_them(monkeypatch):

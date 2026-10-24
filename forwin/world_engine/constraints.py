@@ -11,7 +11,7 @@ from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.narrative import RELEASED_PROTECTION_STATUS
 from forwin.book_state.path_patch import apply_path_patch
-from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
+from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph, resolve_world_node_location_id
 from forwin.book_state.schema import ACTOR_TIERS, IMPACT_LEVELS, WORLD_NODE_FIELDS
 from forwin.protocol.book_state import NarrativeNode
 from forwin.book_state.story_clock import StoryCalendar, StoryClockError, duration_to_minutes
@@ -28,6 +28,17 @@ _ENDING_TYPES = frozenset({"faction", "organization", "group", "site_state"})
 _MAJOR_STATE_FIELDS = frozenset({"leader_id", "controller_faction_id"})
 # The knowledge states in which an observer holds a fact as known.
 _KNOWN_STATES = frozenset({"knows", "believes"})
+# Physical state of held objects; knowledge references and descriptive bookkeeping stay allowed.
+_HELD_PHYSICAL_FIELDS = {
+    "item": frozenset({
+        "status", "owner_id", "holder_id", "equipped_by_id", "location_id", "durability",
+        "seal_status", "awakened_level", "charge_level", "current_form", "lock_status", "contamination_state",
+    }),
+    "resource": frozenset({
+        "quantity", "owner_id", "holder_id", "location_id", "controlled_by_id", "flow_rate",
+        "quality_level", "reserved_amount", "consumed_amount", "scarcity_level",
+    }),
+}
 
 
 @dataclass(frozen=True)
@@ -109,6 +120,33 @@ def _transitions(runtime: BookStateRuntime, changes: Iterable[tuple[str, str, An
         if isinstance(after.get("state", {}), dict):
             payloads[ref] = after
         yield ref, path, before, after
+
+
+def _onstage_location_changes(
+    runtime: BookStateRuntime,
+    transitions: Sequence[tuple[str, str, dict[str, Any], dict[str, Any]]],
+    onstage_refs: frozenset[str],
+) -> Iterator[str]:
+    if not onstage_refs or not transitions:
+        return
+    # The resolver also reads dependent activity state and site profiles. Keep its semantics
+    # on a separate world while applying transitions in builder order, leaving canon untouched.
+    world = ObjectiveWorldGraph(
+        nodes=list(runtime.world.nodes_by_id.values()), states_by_node_id=runtime.world.states_by_node_id,
+    )
+    locations = {ref: resolve_world_node_location_id(world, ref) for ref in onstage_refs}
+    touched = set()
+    for ref, _path, _before, after in transitions:
+        world.states_by_node_id[ref] = after.get("state", {})
+        node = world.get_node(ref)
+        if node is not None:
+            world.nodes_by_id[ref] = node.model_copy(update={"profile": after.get("profile", {})})
+        for onstage in onstage_refs:
+            location = resolve_world_node_location_id(world, onstage)
+            if location != locations[onstage]:
+                touched.add(onstage)
+            locations[onstage] = location
+    yield from sorted(touched)
 
 
 def _refs(value: Any, *, references: bool = False) -> Iterator[str]:
@@ -288,13 +326,19 @@ def check_hard_rules(
             continue
         transitions.append(transition)
     movers = {move.entity_ref for move in candidate.effects.movements}
+    for ref in _onstage_location_changes(runtime, transitions, onstage_refs):
+        issue("touches_onstage_entity", ref, f"Candidate changes onstage entity location {ref}")
     for ref, path, before, after in transitions:
         old, new = before.get("state", {}), after.get("state", {})
         if ref in onstage_refs and any(
-            old.get(field) != new.get(field) for field in ("location_id", "alive_status", "restraint")
+            old.get(field) != new.get(field)
+            for field in ("alive_status", "restraint", "item_ids", "equipped_item_ids")
         ):
             issue("touches_onstage_entity", ref, f"Candidate changes onstage entity {ref}")
-        if old.get("holder_id") != new.get("holder_id"):
+        held_fields = _HELD_PHYSICAL_FIELDS.get(before.get("node_type"), ())
+        if old.get("holder_id") != new.get("holder_id") or any(
+            old.get(field) != new.get(field) for field in held_fields
+        ):
             for holder in sorted(onstage_refs.intersection(
                 value for value in (old.get("holder_id"), new.get("holder_id")) if isinstance(value, str)
             )):

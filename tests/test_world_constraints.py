@@ -135,6 +135,43 @@ def test_onstage_exclusion_allows_knowledge_relations_and_unchanged_state(checks
     ) == []
 
 
+ONSTAGE_PHYSICAL_CHANGES = [
+    pytest.param("a", "item_ids", [], "a", id="inventory"),
+    pytest.param("a", "equipped_item_ids", [], "a", id="equipment"),
+    pytest.param("item", "status", "destroyed", "a", id="held-item"),
+    pytest.param("resource", "quantity", 0, "a", id="held-resource"),
+    pytest.param("f", "headquarters_location_id", "l2", "f", id="headquarters"),
+    pytest.param("activity", "current_location_id", "l2", "a", id="activity"),
+]
+
+
+def _onstage_physical_runtime():
+    return _runtime(
+        _node("a", alive_status="alive", current_activity_id="activity",
+              item_ids=["item"], equipped_item_ids=["item"]),
+        _node("item", "item", holder_id="a", status="intact"),
+        _node("resource", "resource", holder_id="a", quantity=5),
+        _node("f", "faction", headquarters_location_id="l1"),
+        _node("activity", "activity", current_location_id="l1"),
+    )
+
+
+@pytest.mark.parametrize("ref, field, value, onstage", ONSTAGE_PHYSICAL_CHANGES)
+def test_onstage_physical_changes_use_supported_builder_fields(checks, ref, field, value, onstage):
+    from copy import deepcopy
+
+    runtime = _onstage_physical_runtime()
+    before = deepcopy(runtime.world.states_by_node_id)
+    candidate = _candidate(_change(ref, field, value))
+    assert _build_alone(runtime, candidate).issues == []
+    issues = checks.check_hard_rules(
+        runtime, LEXICON, candidate, now=NOW, calendar=CALENDAR, window_start=800,
+        onstage_refs=frozenset({onstage}),
+    )
+    assert [(issue.code, issue.ref) for issue in issues] == [("touches_onstage_entity", onstage)]
+    assert runtime.world.states_by_node_id == before
+
+
 @pytest.mark.parametrize("depart, expected", [(949, ["movement_overlap"]), (950, [])])
 def test_movement_overlap_uses_last_arrival_and_allows_adjacent_moves(checks, depart, expected):
     issues = checks.check_hard_rules(

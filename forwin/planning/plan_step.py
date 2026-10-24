@@ -105,6 +105,11 @@ class PlanStepService:
                             result["replanned_band_ids"].append(response.band_plan_id)
                         if response.conflict_id:
                             result["conflict_ids"].append(response.conflict_id)
+                        if response.deferred_reason:
+                            result["band_planning_deferred"].append({
+                                "band": [band.chapter_start, band.chapter_end],
+                                "reason": response.deferred_reason, "issue_codes": [],
+                            })
                     else:
                         conflict = open_plan_feasibility_conflict(
                             session, project_id=project_id, band=band, issues=issues, policy=policy,
@@ -112,39 +117,60 @@ class PlanStepService:
                         result["conflict_ids"].append(conflict.id)
         session.commit()
 
-        next_arc, next_sheet, next_band = arc, sheet_row, None
+        next_arc, next_sheet, next_band = arc, sheets.active_for_arc(arc.id), None
         if following is not None:
             next_arc = following
             next_sheet = sheets.active_for_arc(following.id)
             if next_sheet is not None:
                 next_band = min(sheets.load(next_sheet).band_breakdown,
                                 key=lambda item: item.chapter_start, default=None)
-        elif band is not None and number == band.chapter_end and sheet is not None:
-            next_band = min((item for item in sheet.band_breakdown if item.chapter_start > number),
+        elif band is not None and number == band.chapter_end and next_sheet is not None:
+            next_band = min((item for item in sheets.load(next_sheet).band_breakdown if item.chapter_start > number),
                             key=lambda item: item.chapter_start, default=None)
         if next_band is not None:
-            # Run control or a previous lease may already have planned this band. plan_band itself
-            # rewrites planned rows, so do not call it again when every chapter already has a plan.
+            # Reuse only the current sheet's complete band, with every rewritable row attached to it.
             existing = session.scalar(select(BandPlanRow).where(
                 BandPlanRow.project_id == project_id, BandPlanRow.arc_plan_id == next_arc.id,
                 BandPlanRow.band_index == next_band.band_index, BandPlanRow.status == "active",
-                BandPlanRow.chapter_start == next_band.chapter_start, BandPlanRow.chapter_end == next_band.chapter_end,
             ).order_by(BandPlanRow.version.desc()).limit(1))
-            planned = set(session.scalars(select(ChapterPlan.chapter_number).where(
+            plans = list(session.scalars(select(ChapterPlan).where(
                 ChapterPlan.project_id == project_id, ChapterPlan.arc_plan_id == next_arc.id,
                 ChapterPlan.chapter_number.between(next_band.chapter_start, next_band.chapter_end),
-                ChapterPlan.status != "failed", ChapterPlan.band_plan_id.is_not(None),
             )))
-            if existing is not None and planned == set(range(next_band.chapter_start, next_band.chapter_end + 1)):
+            complete = ({plan.chapter_number for plan in plans}
+                        == set(range(next_band.chapter_start, next_band.chapter_end + 1)))
+            reusable = (existing is not None and next_sheet is not None
+                        and existing.beat_sheet_id == next_sheet.id and complete
+                        and existing.chapter_start == next_band.chapter_start
+                        and existing.chapter_end == next_band.chapter_end
+                        and all(plan.status != "failed" and (plan.status not in REWRITABLE_PLAN_STATUSES
+                                or plan.band_plan_id == existing.id) for plan in plans))
+            if reusable:
                 outcome = BandPlanOutcome(band_plan_id=existing.id)
             else:
                 try:
+                    if existing is not None:
+                        try:
+                            issues = self.feasibility.audit_plans(
+                                session, project_id=project_id,
+                                plans=[plan for plan in plans if plan.status in REWRITABLE_PLAN_STATUSES],
+                                beat_sheet=sheets.load(next_sheet), policy=policy,
+                            )
+                        except Exception as exc:
+                            raise BandPlanningAuditError(str(exc), [PlanIssue(
+                                code="audit_error", severity="error", message=str(exc),
+                            )]) from exc
+                        result["feasibility_issue_count"] += len(issues)
                     outcome = self.band_planner.plan_band(
                         session, project_id=project_id, arc_plan=next_arc, beat_sheet_row=next_sheet,
                         band=next_band, policy=policy,
+                        expected_band_plan_id=existing.id if existing is not None else None,
                     )
                 except BandPlanningAuditError as exc:
                     outcome = BandPlanOutcome(band_plan_id=None, issues=exc.issues, failure_reason="audit_error")
+                if existing is not None and outcome.band_plan_id == existing.id:
+                    # All remaining rows may be protected, leaving the stale band impossible to refresh.
+                    outcome = BandPlanOutcome(band_plan_id=None, failure_reason="band_not_current")
             result["planned_band_id"] = outcome.band_plan_id
             if outcome.band_plan_id is None:
                 codes = list(dict.fromkeys(issue.code for issue in outcome.issues))

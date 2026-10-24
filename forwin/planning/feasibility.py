@@ -428,7 +428,7 @@ def _band_world_issues(
 class _Replanner(Protocol):
     def replan_remaining(
         self, session: Session, *, project_id: str, band_plan_id: str, from_chapter: int, policy: RuntimePolicy,
-        notes: Sequence[str],
+        notes: Sequence[str], expected_band_plan_id: str | None = None,
     ) -> BandPlanOutcome: ...
 
 
@@ -438,6 +438,7 @@ class InfeasibleBandResponse:
     band_plan_id: str
     replanned: bool = False
     conflict_id: str | None = None
+    deferred_reason: str = ""
 
 
 def respond_to_infeasible_band(
@@ -466,10 +467,24 @@ def respond_to_infeasible_band(
         outcome = band_planner.replan_remaining(
             session, project_id=project_id, band_plan_id=row.id, from_chapter=from_chapter, policy=policy,
             notes=[_feedback(issue) for issue in errors],
+            expected_band_plan_id=row.id,
         )
+        if outcome.failure_reason in {"superseded_by_concurrent_plan", "superseded_beat_sheet"}:
+            return InfeasibleBandResponse(band_plan_id=outcome.band_plan_id or row.id,
+                                          deferred_reason=outcome.failure_reason)
         if outcome.band_plan_id is not None and outcome.band_plan_id != row.id:
             return InfeasibleBandResponse(band_plan_id=outcome.band_plan_id, replanned=True)
         issues = outcome.issues or issues
+    # Audit failures and cap decisions also belong to the audited version. Serialize the final
+    # check with publication before opening a conflict, without taking a lock across the model.
+    session.execute(select(Project.id).where(Project.id == project_id).with_for_update(key_share=True))
+    active = session.scalar(select(BandPlanRow.id).where(
+        BandPlanRow.project_id == project_id, BandPlanRow.arc_plan_id == row.arc_plan_id,
+        BandPlanRow.band_index == row.band_index, BandPlanRow.status == "active",
+    ).order_by(BandPlanRow.version.desc()).limit(1))
+    if active != row.id:
+        return InfeasibleBandResponse(band_plan_id=active or row.id,
+                                      deferred_reason="superseded_by_concurrent_plan")
     conflict = open_plan_feasibility_conflict(
         session, project_id=project_id, band=BandSpan(band_index=row.band_index, chapter_start=row.chapter_start,
                                                       chapter_end=row.chapter_end),

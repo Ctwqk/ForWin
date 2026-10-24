@@ -52,6 +52,15 @@ BAND_PLANNING_SOURCE = "band_planning"
 _TASK_FAMILY = "planning"
 _PARSER_NAME = "BandPlan JSON parser"
 _OUTPUT_SCHEMA = BandPlanOutput.model_json_schema()
+
+
+class _Unset:
+    pass
+
+
+_UNSET = _Unset()
+
+
 _ALLOWED = {
     "world_binding_kinds": list(WORLD_BINDING_KINDS),
     "reveal_target_states": list(KNOWLEDGE_STATES),
@@ -101,8 +110,13 @@ class BandPlanner:
     def plan_band(
         self, session: Session, *, project_id: str, arc_plan: ArcPlanVersion, beat_sheet_row: ArcBeatSheetRow,
         band: BandSpan, policy: RuntimePolicy, extra_notes: Sequence[str] = (),
+        expected_band_plan_id: str | None | _Unset = _UNSET,
     ) -> BandPlanOutcome:
-        """Plan the band's chapters that are still to write; a failure only returns its issues."""
+        """Plan the band's chapters that are still to write; a failure only returns its issues.
+
+        An explicit expected id (including None for a missing band) fences publication to the caller's
+        observation. Omitted expectations retain the planner's own snapshot and the human cap override.
+        """
         rows = _band_rows(session, project_id, band)
         numbers = _rewritable(session, band, rows, from_chapter=band.chapter_start)
         if not numbers:
@@ -110,6 +124,7 @@ class BandPlanner:
         return self._plan(
             session, project_id=project_id, arc_plan=arc_plan, beat_sheet_row=beat_sheet_row, band=band,
             chapter_numbers=numbers, rows=rows, policy=policy, notes=extra_notes, reason="plan_band",
+            expected_band_plan_id=expected_band_plan_id,
         ).outcome
 
     def ensure_plan_for_chapter(
@@ -167,9 +182,10 @@ class BandPlanner:
     def replan_remaining(
         self, session: Session, *, project_id: str, band_plan_id: str, from_chapter: int, policy: RuntimePolicy,
         notes: Sequence[str],
+        expected_band_plan_id: str | None | _Unset = _UNSET,
     ) -> BandPlanOutcome:
         """Plan again the band's chapters from ``from_chapter`` on that are still to write, from the arc's active
-        beat sheet; the band plan's later versions stand in for a stale ``band_plan_id``."""
+        beat sheet. Only unguarded callers follow later versions of a stale ``band_plan_id``."""
         named = session.get(BandPlanRow, band_plan_id)
         if named is None or named.project_id != project_id:
             raise LookupError(f"band plan {band_plan_id} is not a band plan of project {project_id}")
@@ -179,6 +195,8 @@ class BandPlanner:
                    BandPlanRow.band_index == named.band_index, BandPlanRow.status == "active")
             .order_by(BandPlanRow.version.desc()).limit(1)
         ) or named
+        if expected_band_plan_id is not _UNSET:
+            active = named
         arc_plan = session.get(ArcPlanVersion, active.arc_plan_id)
         beat_sheet_row = ArcBeatSheetRepository(session).active_for_arc(active.arc_plan_id)
         if arc_plan is None or beat_sheet_row is None:
@@ -191,12 +209,14 @@ class BandPlanner:
         return self._plan(
             session, project_id=project_id, arc_plan=arc_plan, beat_sheet_row=beat_sheet_row, band=band,
             chapter_numbers=numbers, rows=rows, policy=policy, notes=notes, reason="replan",
+            expected_band_plan_id=expected_band_plan_id,
         ).outcome
 
     def _plan(
         self, session: Session, *, project_id: str, arc_plan: ArcPlanVersion, beat_sheet_row: ArcBeatSheetRow,
         band: BandSpan, chapter_numbers: list[int], rows: Mapping[int, ChapterPlan], policy: RuntimePolicy,
         notes: Sequence[str], reason: str,
+        expected_band_plan_id: str | None | _Unset = _UNSET,
     ) -> _PlanResult:
         # The refs are checked against the latest canon: chapter 0 at handoff.
         as_of = BookStateRepository(session).latest_canon_chapter(project_id) or 0
@@ -211,7 +231,8 @@ class BandPlanner:
             return _PlanResult(outcome=outcome, failed=True, as_of=as_of)
         beat_sheet = ArcBeatSheetRepository(session).load(beat_sheet_row)
         runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=as_of)
-        expected_active = _active_band_plan_id(session, project_id, arc_plan.id, band)
+        expected_active = (_active_band_plan_id(session, project_id, arc_plan.id, band)
+                           if expected_band_plan_id is _UNSET else expected_band_plan_id)
         inputs = build_band_inputs(
             session, project_id=project_id, arc_plan=arc_plan, beat_sheet=beat_sheet, band=band,
             chapter_numbers=chapter_numbers, rows=rows, as_of=as_of, runtime=runtime, policy=policy, notes=notes,
@@ -238,11 +259,26 @@ class BandPlanner:
         still_pending = {row.id for row in conflicts.pending_plot_responses(project_id)}
         active = _active_band_plan_id(session, project_id, arc_plan.id, band)
         if active != expected_active:
-            # Another planner wrote this band during the model call: its plan stands.
+            # Another planner won since the caller's observation (or the unguarded planner's snapshot).
             lock_scope.rollback()
-            outcome = BandPlanOutcome(band_plan_id=active)
+            outcome = BandPlanOutcome(band_plan_id=active, failure_reason="superseded_by_concurrent_plan")
             self.save_trace(session, self._prompt_trace(call, trace, outcome, superseded=True))
             return _PlanResult(outcome=outcome, failed=False, as_of=as_of)
+        current_sheet = ArcBeatSheetRepository(session).active_for_arc(arc_plan.id)
+        if current_sheet is None or current_sheet.id != beat_sheet_row.id:
+            lock_scope.rollback()
+            call.failure_reason = "superseded_beat_sheet"
+            outcome = BandPlanOutcome(band_plan_id=None, failure_reason=call.failure_reason)
+            self.save_trace(session, self._prompt_trace(call, trace, outcome))
+            return _PlanResult(outcome=outcome, failed=True, as_of=as_of)
+        if expected_band_plan_id is not _UNSET and active is not None:
+            count = session.scalar(select(BandPlanRow.replan_count).where(BandPlanRow.id == active))
+            if count >= policy.planning.max_replans_per_band:
+                lock_scope.rollback()
+                call.failure_reason = "replan_cap_reached"
+                outcome = BandPlanOutcome(band_plan_id=None, failure_reason=call.failure_reason)
+                self.save_trace(session, self._prompt_trace(call, trace, outcome))
+                return _PlanResult(outcome=outcome, failed=True, as_of=as_of)
         # Locked, so a status change by a writer that does not take the project lock waits for this plan.
         fresh = _band_rows(session, project_id, band, refresh=True, lock=True)
         writable = [chapter for chapter in call.draft.chapters

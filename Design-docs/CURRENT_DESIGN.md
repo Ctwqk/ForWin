@@ -1,6 +1,6 @@
 # ForWin 当前设计
 
-更新：2026-09-04；2026-10-22 更新世界引擎大修 P3 的现状（见第 13 节）。范围：当前源码实际实现及本轮已验证的收口修改。
+更新：2026-09-04；2026-10-22 更新世界引擎大修 P4a 的现状（见第 13 节）。范围：当前源码实际实现及本轮已验证的收口修改。
 
 当前设计以已集成的 `master@0a06cfa` 为基础，包含随后按外部评审落实的修复验证、trace补传和同日调度修复。分支整合与前轮消融见[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)，本轮边界见[运行自主性修复设计](../docs/superpowers/specs/2026-09-04-v5-autonomy-fixes-design.md)，本地证据见[修复验证记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)。
 
@@ -78,8 +78,7 @@ RuntimePolicy v2 是冻结的类型模型，拒绝未知字段。用户维度只
 | BookState layers（固定启用，非策略开关） | world/map/cognition/narrative | world/map/cognition/narrative |
 | Canon quality policy | strict | pulp_fatal |
 | 默认 band checkpoint | pause_on_warn | continue |
-| future constraints / plan health / LLM simulation | 开启 | 关闭 |
-| planning recency window | 0 | 50 |
+| future constraints / plan health | 开启 | 关闭 |
 | manual checkpoints | 开启 | 关闭 |
 
 这些是 `RuntimePolicy.for_profile()` 的默认值，不等于每本书的有效 snapshot。未交付的计划目标（`plan_goal_missing`）与 `world_consistency` 错误都是 blocking 问题：pulp 在转人工前有一次 blocking 重写，standard 沿用常规预算。抽取失败或抽取到的事实全部丢失正文证据时，hard floor 记 `chapter_delta_unavailable` 警告而不判章节失败，由 draft review 的 `chapter_delta_missing` / `chapter_delta_unverified` 走重写，预算用尽后转 needs_review。人工接受（review approve 路由，UI 与 MCP 都走它；生产调度的 review 配额不算）时，若 review 的错误全部是这两种（及其导致的 `repair_unfixed`），canon 会重新抽取，再由 translator、gate v6 与义务检查判定，accept 事件记录 `accepted_past_extraction_errors`；仍抽取失败则阻断。其余错误照旧拒绝。这样接受的章节不会重跑计划目标、future-constraint 检查或 hard floor 的 `at_least_one_event`，这些由接受的人负责。`pulp` 不是无门禁模式，实体准入、结构化 Canon、严重事实矛盾等仍有硬边界。
@@ -88,9 +87,9 @@ RuntimePolicy v2 是冻结的类型模型，拒绝未知字段。用户维度只
 
 Genesis 六阶段按 `brief → world → map → story_engine → book_blueprint → world_seed` 运行，旧 `bootstrap` / `execution_bootstrap` 已删除。用户可以在写前生成、修订、锁定；handoff 后它变成原始蓝图档案，后续写作以运行计划为准。创建项目必须显式给出 genre，没有默认题材。模型生成或修订失败时的 Genesis fallback 只返回结构壳，并把 `stage_states[stage].degraded` 置位；后续模型生成、修订或 patch 会清除该标记。`world_seed` 由 LLM 生成，经 `forwin/genesis/world_seed.py` 归一化与确定性校验，有 validation error 时拒绝锁定；交接时再次校验。其 fallback 按 story_engine id 为每个 core_cast / opposition / faction 建 actor 空壳，不编造内容。
 
-story_engine 的实体有 id，缺省生成 `cast-n` / `opp-n` / `faction-n`；`relationship_axes` 与 `long_arcs` 为结构化数据，core_cast 的秘密使用 `secrets` 列表。开写交接顺序为 arcs → map bootstrap → `WorldSeedCommitter` → arc-1 ChapterPlan。`arc_plan_versions` 持久化 `title` / `goal` / `stakes` / `payoff_direction`；章节规划仍调用 `launch_arc_N`，留到 P4 替换。种子先通过 `BookStateReviewGate`，再经 `CanonAdmissionService.commit_world_seed` 以 `source_type="genesis_seed"` 的第 0 章 GraphDelta 写入 BookState；该入口用 `FOR NO KEY UPDATE` 锁定项目。第 0 章 subworld 角色生成路径已删除。地图 / 种子交接失败分别抛出 `HandoffStageError` 子类 `GenesisMapBootstrapError` / `WorldSeedCommitError`，并记录 `MAP_GENERATION_FAILED` / `WORLD_SEED_COMMIT_FAILED`。
+story_engine 的实体有 id，缺省生成 `cast-n` / `opp-n` / `faction-n`；`relationship_axes` 与 `long_arcs` 为结构化数据，core_cast 的秘密使用 `secrets` 列表。开写交接顺序为 arcs → map bootstrap → `WorldSeedCommitter` → arc-1 节拍表 / protection，不创建 ChapterPlan。`arc_plan_versions` 持久化 `title` / `goal` / `stakes` / `payoff_direction`；章节计划由 `BandPlanner` 即时生成，旧 `launch_arc_N` 已删除。种子先通过 `BookStateReviewGate`，再经 `CanonAdmissionService.commit_world_seed` 以 `source_type="genesis_seed"` 的第 0 章 GraphDelta 写入 BookState；该入口用 `FOR NO KEY UPDATE` 锁定项目。第 0 章 subworld 角色生成路径已删除。地图 / 种子交接失败分别抛出 `HandoffStageError` 子类 `GenesisMapBootstrapError` / `WorldSeedCommitError`，并记录 `MAP_GENERATION_FAILED` / `WORLD_SEED_COMMIT_FAILED`。
 
-续写（extend-generation）追加一个 planned `ArcPlanVersion`，由现有 arc activation 为其规划章节；Genesis blueprint 中没有该卷时，materializer 用 `ArcPlanVersion` 合成 payload。读模型把有计划卷但尚无章节计划的卷报告为可恢复。未命名的 planned 槽位不会被激活，也不再被赋予编造的名字。
+续写（extend-generation）追加一个 planned `ArcPlanVersion`，由 `ArcProgressionService` 生成节拍表，再即时规划 band；Genesis blueprint 中没有该卷时，materializer 用 `ArcPlanVersion` 合成 payload。读模型把有计划卷但尚无章节计划的卷报告为可恢复。未命名的 planned 槽位不会被激活，也不再被赋予编造的名字。
 
 PlanningService 组织 Arc/Band/Chapter 的创建、激活和修订。PlanningQuery 是读侧；PlanHealthService 的实际职责是把 future-plan audit 转成 typed health 结果，供生成控制决定是否阻断。Patch validation 由现有计划修订流程执行，没有经过一个统一健康聚合器。FuturePlanAuditor 可以对未来计划提出并应用合法修正，不能改已接纳章节来抹平历史。
 
@@ -137,9 +136,9 @@ FinalResidualPolicy 只判资格，不提交 Canon。fail/error 或不可接纳 
 
 ## 8. Canon 后的维护、投影和恢复
 
-post-Canon maintenance 按 world → planning → arc → feedback 顺序执行。world 只运行世界 tick，feedback 在聚合前分析新读者评论；后续规划、下一章 Arc resolution 和反馈读取推进后的世界。这些结果被下一章的 planning/personality/context 消费。四步全部成功后，还需完成 order controls，包括 obligation 验证、future-plan audit、generation-audit report 和 band checkpoint。第2章及以后提交 Canon 都强制检查前章这一屏障；未解除的 future-contract、checkpoint 或人工阻断会使提交等待恢复。pulp 的 continue 只放过 checkpoint warn，fail 仍阻断。
+post-Canon maintenance 按 world → plan → feedback 顺序执行。world 只运行世界 tick，feedback 在聚合前分析新读者评论；后续规划、下一章 Arc resolution 和反馈读取推进后的世界。这些结果被下一章的 planning/personality/context 消费。三步全部成功后，还需完成 order controls，包括 obligation 验证、future-plan audit、generation-audit report 和 band checkpoint。第2章及以后提交 Canon 都强制检查前章这一屏障；未解除的 future-contract、checkpoint 或人工阻断会使提交等待恢复。pulp 的 continue 只放过 checkpoint warn，fail 仍阻断。
 
-四步维护及order_controls的trace已与对象存储上传分开：业务结果、成功状态和冻结脱敏trace的OutboxEvent同事务提交，上传在事务后由现有worker处理。存储失败重试上传，不重跑已成功的维护模型。对象key含内容SHA，旧trace延迟补传不会覆盖后来重跑order_controls的trace；上传状态归outbox，维护结果保留引用，但 world 步骤只返回 tick 的 `step_result()`，不附加 `trace` 引用；其 trace 仍照常入队。原始payload保留在outbox中，尚未增加自动清理策略。
+维护及 order_controls 的冻结脱敏 trace 经 OutboxEvent 交给现有 worker 异步上传。world / feedback 及 order_controls 的结果、完成状态与 trace outbox 在各自事务内提交；plan 使用普通 session，卷激活与节拍表分别提交，剩余计划的审计 / 重规划及下一 band 准备也分别提交，最后才在 completion fence 下同事务提交 step 成功状态与 trace outbox。因此 plan 未完成或失败时，先前规划结果仍可能已持久化；重试保留这些结果，并按已有状态复用卷 / 节拍表及符合条件的完整 band，不保证整步回滚。LLM raw-artifact 在相应工作单元内同步写入，存储失败可使当前单元 / step 失败并重试；已提交的规划单元仍保留。事务后 outbox 上传失败只补传，不重跑已成功的维护模型。对象 key 含内容 SHA，旧 trace 延迟补传不会覆盖后来重跑 order_controls 的 trace；上传状态归 outbox，维护结果可保留引用，但 world / plan 不附加 `trace` 引用，其 trace 仍照常入队。原始 payload 保留在 outbox 中，尚未增加自动清理策略。
 
 Generation Audit 已 report-only；FuturePlanAudit 和 band checkpoint 仍可阻断，不能混称为同一个审计。
 
@@ -192,30 +191,30 @@ S4-S8 的读者留存、多样性、认知/张力及完整体验度量仍是未�
 | 无调用PlanHealth聚合接口 | 是否只有测试在制造存在理由？ | 已删除 from_patch_validation / combine 和专用测试，净删47行；from_future_audit 的真实阻断调用保留 |
 | RepairVerifier头尾摘要与总体布尔判断 | 是否遗漏正文中段和未覆盖语义合同？ | 改为完整正文、逐合同证据及三态覆盖；无证据/超时不伪称通过 |
 | Generation Audit摘要 | 是否提供S1/任务查询没有的运营信息？ | 目前低成本report-only；删除会损失cadence摘要，先做对照，不恢复成门 |
-| post-Canon四步barrier | 哪些步骤确实必须阻塞下一章？ | 25种内存输入对照确认当前硬依赖；保留业务四步，trace改为持久outbox补传，故障不重跑已成功业务 |
+| post-Canon三步barrier | 哪些步骤确实必须阻塞下一章？ | 25种内存输入对照确认当前硬依赖；P4a 合并为 world / plan / feedback 三步，trace改为持久outbox补传，故障不重跑已成功业务 |
 | release harness验真层 | 哪些规则防真实错误，哪些只是反复证明脚本自身？ | 保留来源/镜像/状态/回执真实性；停止新增外部签名等前置门，后续按实验裁剪 |
 
 本轮不运行几十或几百章真实测试。消融结果与本地全量测试用于决定本轮可推送的代码；历史全新L200、恢复演练和正式部署门仍在发布设计中，但不伪称已经完成，也不作为本任务继续长跑的理由。
 
-## 13. 世界引擎大修 P3 之后（2026-10-22）
+## 13. 世界引擎大修 P4a 之后（2026-10-22）
 
-设计见[世界引擎大修](../docs/designs/2026-10-20-world-engine-overhaul.md)。P0–P3 已落地；Canon 写入统一经过 `CanonAdmissionService`。
+设计见[世界引擎大修](../docs/designs/2026-10-20-world-engine-overhaul.md)。P0–P3 与 P4a 已落地；Canon 写入统一经过 `CanonAdmissionService`。
 
-- **单次抽取与翻译**：每个候选正文由 `ChapterDeltaExtractor` 在 `chapter_delta_extraction` stage 完成一次统一抽取（校验失败可重试；引用了输入表之外的 ref 时，按 translator 的规则逐条指出并重试一次）；`ensure_chapter_delta` 按 `body_sha256` 复用结果，正文改变才重抽。输入包括 BookState as-of N−1 的最小实体表、地点表、计划目标 / 义务 / reward targets、intents、secrets、calendar units、time aliases 和 travel modes，不是 ChapterWorldView。`ChapterDeltaTranslator` 将 `WriterOutput.chapter_delta` 翻译为 `source_type="chapter_extraction"` 的 GraphDelta，再经 `BookStateReviewGate` v6；draft review 和 canon preparation 共用这份抽取，最终仍由 `CanonAdmissionService.commit_plan` 原子提交。canon preparation 遇到缺失或过期的抽取时，先核验实体准入，再由 BookState preparation 重抽，之后才跑 canon quality gate，到期义务按新抽取判定。抽取到的事实全部丢失正文证据时，canon 以 `chapter-delta-unverified-blocked` 阻断；没有事实被丢弃的空抽取（包括只丢弃了实体提及或计划履行条目的）仍提交无 patch 的 delta。
+- **单次抽取与翻译**：每个候选正文由 `ChapterDeltaExtractor` 在 `chapter_delta_extraction` stage 完成一次统一抽取（校验失败可重试；引用了输入表之外的 ref 时，按 translator 的规则逐条指出并重试一次）；`ensure_chapter_delta` 只在 `body_sha256` 与 `plan_fingerprint` 同时匹配时复用，任一变化都重抽。输入包括 BookState as-of N−1 的最小实体表、地点表、计划目标 / 义务 / reward targets、intents、secrets、calendar units、time aliases 和 travel modes，不是 ChapterWorldView。`ChapterDeltaTranslator` 将 `WriterOutput.chapter_delta` 翻译为 `source_type="chapter_extraction"` 的 GraphDelta，再经 `BookStateReviewGate` v6；draft review 和 canon preparation 共用这份抽取，最终仍由 `CanonAdmissionService.commit_plan` 原子提交。canon preparation 遇到缺失或过期的抽取时，先核验实体准入，再由 BookState preparation 重抽，之后才跑 canon quality gate，到期义务按新抽取判定。抽取到的事实全部丢失正文证据时，canon 以 `chapter-delta-unverified-blocked` 阻断；没有事实被丢弃的空抽取（包括只丢弃了实体提及或计划履行条目的）仍提交无 patch 的 delta。
 - **世界审查**：`WorldConsistencyReviewer` 的 `world_consistency` draft-review 信号运行相同 translator 与 gate，把错误送进 repair；它替代已删除的 `MapMovementReviewer` / `forwin/review/map_movement.py`。v6 检查时间跨度、移动偏移、已知路径可达性、`review.travel_tolerance` 下的速度、受限角色移动、章前已死亡实体行动、物品持有者、告知来源和读者揭示时间表。地图边 `travel_time` 为小时，乘 60 换成整数分钟；本书时间单位统一经 `duration_to_minutes` 换算。
 - **结构合同**：移动存于 delta `metadata["movements"]`；物品只认 item 的 `state.holder_id`。条目级 `flashback: bool` 加 `time.evidence` 表示闪回；闪回只产生事实与知识事件，不改变当前 state。非 create 结构补丁带 `old_value` 与 `field_path`。计划 goals 与 narrative obligations 由有正文证据的结构化 `plan_fulfillment` 判定，已删除关键词子串检查。
 - **删除与 schema**：`WriterContractDeltaBuilder`、`BookStateGraphDeltaExtractor`、`pulp_light` 正则兜底、旧分阶段 extraction、倒计时/羁押 future-plan audits 和 canon_quality 的 countdown / character-state ledgers 已删除。P2 的 `0004_drop_parallel_ledgers`（父为 `0003_book_state_v6`）删除 `countdown_ledgers` / `character_state_transitions`。chapter review form 继续作为 LLM 信号，其行来自 BookState，回答只产出 quality signals，不再写任何平行账本。
-- **Genesis 与原子开写**：Genesis map 提供结构化 submaps / regions / nodes / edges；`forwin.map.genesis_adapter` 将其转换为 BookMap。handoff 依次物化 arcs → map → chapter-0 world_seed → arc-1 ChapterPlan，service / seed commit 只 flush，由调用方提交；`HandoffStageError` 回滚交接写入后只保留失败事件。成功时才锁定 Genesis revision 并设为 writing。
-- **护栏收口**：`tests/overfit_allowlist.toml` 的 `meta.completed_phase = "P3"`，`pending_removal` 只能指向未来阶段；canary 的时间单位 ignore 及过时注释已删除。
+- **Genesis 与原子开写**：Genesis map 提供结构化 submaps / regions / nodes / edges；`forwin.map.genesis_adapter` 将其转换为 BookMap。handoff 依次物化 arcs → map → chapter-0 world_seed → arc-1 节拍表 / protection，不创建 ChapterPlan，service / seed commit 只 flush，由调用方提交；`HandoffStageError` 回滚交接写入后只保留失败事件。成功时才锁定 Genesis revision 并设为 writing。
+- **护栏收口**：`tests/overfit_allowlist.toml` 的 `meta.completed_phase = "P4"`，`pending_removal` 为空；canary 的时间单位 ignore 及过时注释已删除。
 
-- **当前揭示约定**：world_seed 的 `location_ref` 在提交时换成数据库地图节点 id；`reveal_candidates` 保留在冻结 Genesis pack，P2 的 `reveal_schedule.earliest_reveal_chapters` 取对应卷的 `chapter_start`；无时间表时向读者推进记 warning。`reveal_directives` 留到 P4。
+- **当前揭示约定**：world_seed 的 `location_ref` 在提交时换成数据库地图节点 id；active 节拍表的 reader `reveal_targets.range` 起点优先；未覆盖的事实回退冻结 Genesis `reveal_candidates`，映射到当前 `ArcPlanVersion.chapter_start`（包括续写卷）。本章 `reveal_directives` 豁免 `premature_reveal`；无时间表时向读者推进仍记 warning。
 
 ### P3 世界推进与冲突闭环
 
 `POST_CANON_STEP_NAMES = ("world", "plan", "feedback")`；world 只运行 tick。`WorldTickService.run` 的结果以 `tick_id`、`graph_delta_ids`、`conflict_ids`、`dropped_candidate_ids`、`postponed_candidate_ids`、`warnings`、`skipped_reason` 写入 step `result_json`，与 tick 的 `step_result()` 完全一致。
 
 1. 用 `tick-<commit id>`、本章 `story_time_start..story_time_end` 整数分钟窗口与确定性 seed 建上下文。world disabled、非最新章、同 tick 已提交或该章已有 tick 都跳过；最新章重写也不重复推进世界。`target_total_chapters > 0` 且本章达到或超过目标时，以 `skipped_reason="book_complete"` 跳过。
-2. 从本章 intent interactions、clock 到期、due intents、onstage bookkeeping 与 actor turns 收集候选。`WorldAdjudicator` 每 tick 先尝试一批最多 20 个 due offstage intents；超 prompt guard 后逐 intent 调用，单个仍超限则 DROPPED `prompt_too_large`，后续 due intent 补位；超 cap 未询问者以 `adjudication:<intent>` 进入 `postponed_candidate_ids`。`ActorTurnRunner` 按 actor 视图行动。已 due 的 onstage intent 若未出现在本章 interactions，顺延至当前时间并增加 slip_count，超过 `world.max_onstage_slips` 产生 `onstage_slip` 冲突；这是 P3 临时规则，由 P4 band 规划器替换。
+2. 从本章 intent interactions、clock 到期、due intents、onstage bookkeeping 与 actor turns 收集候选。`WorldAdjudicator` 每 tick 先尝试一批最多 20 个 due offstage intents；超 prompt guard 后逐 intent 调用，单个仍超限则 DROPPED `prompt_too_large`，后续 due intent 补位；超 cap 未询问者以 `adjudication:<intent>` 进入 `postponed_candidate_ids`。`ActorTurnRunner` 按 actor 视图行动。onstage intent 按本章绑定及 band 规划机会决定是否顺延；首次在 band 最后 tick 到期者交下一 band。超过 `world.max_onstage_slips` 产生 `onstage_slip` 冲突。
 3. hard rules 和逐候选 `BookStateReviewGate` 拒绝非法变化；LLM 候选最多再请求一次，actor feedback 只含自身视图可知引用，仍失败则丢弃并记 `WORLD_TICK_CANDIDATE_DROPPED`。impact 分级与预算决定保留 / 顺延，narrative boundaries 或 major 及以上变化进入冲突审查。本章 interactions 仅镜像已接纳正文，不再被扣留待审。
 4. 对可提交事件和在途消息做一轮新闻传播，`WorldTickDeltaBuilder` 生成 `source_type="world_engine"` delta，`metadata["news_in_transit"]` 保存未到消息。tick 不产生 reader 认知；gate 的 `world_engine_reader_knowledge` 禁止这一写入。LLM 故障跳过节点，确定性部分继续。
 5. 提交前 `RunningStateCheck`（`world_engine/running_state.py`）依次检查每个 base candidate，再按组检查 in-tick resolutions；hard rules 读取前序已接受变化留下的 runtime，world gate 检查累计 delta。base candidate 失效以 `constraint_violation` 丢弃；resolution 失效撤回该组，以 `failure_reason="conflict_stale"` 升级人工并保持冲突 open。无补丁且无 resolution 的 quiet tick 不取项目锁；其他 tick 在 commit SAVEPOINT 前取 `FOR NO KEY UPDATE` 项目锁并复核 world snapshot（P27），canon 已变则抛 stale、回滚 step 后重试。`CanonAdmissionService.commit_world_tick` 再校验最新章与 source / tick identity，以 tick_id 幂等提交。
@@ -224,22 +223,22 @@ S4-S8 的读者留存、多样性、认知/张力及完整体验度量仍是未�
 
 actor 视图按 priority 降序、id 升序保留最多 `MAX_ACTOR_AGENDAS = 8` 条 active agendas。一次回合超过 `MAX_AGENDA_CHANGES_PER_TURN = 3` 项 agenda_changes，以 `too_many_agenda_changes` 反馈重试；prompt 带 `max_agenda_changes_per_actor`。每个实际回合 actor 的最新五条 `veto_world` resolutions 在 SQL 中限量读取，不加载整本已解决冲突。
 
-major 影响包括 faction / organization / group / site_state 的 `state.status` 从未结束进入 `destroyed` / `dissolved` / `disbanded` / `inactive`，faction / group 的 `leader_id` 或 site_state 的 `controller_faction_id` 变化，以及 `knows` / `believes` 将 hidden / secret / must_not_reveal 事实给予此前没有该认知的 observer；新隐藏事实的 `known_by` 不算再次暴露。`must_exist` protection 也以进入上述 ended status 判定。解除 protection 时缺省 `until_chapter` 写 `old_value = 0`（open）；compiler 的 CAS 对缺省 `review_constraint.payload.until_chapter` 同样读作 0。
+major 影响包括 faction / organization / group / site_state 的 `state.status` 从未结束进入 `destroyed` / `dissolved` / `disbanded` / `inactive`，faction / group 的 `leader_id` 或 site_state 的 `controller_faction_id` 变化，以及 `knows` / `believes` 将 hidden / secret / must_not_reveal 事实给予此前没有该认知的 observer；新隐藏事实的 `known_by` 不算再次暴露。`must_exist` protection 也以进入上述 ended status 判定。解除 protection 设置 `payload.status = "released"`，保留 old_value / field_path；until_chapter=0 表示 open。
 
 历史重写按 CAS 重放登记的 world_engine deltas（tick 或直接 `conflict-<id>` resolve）：失败者退役并产生 `replay_cas` 冲突；依赖它创建引用的 tick 级联丢弃，非 tick 依赖则拒绝整次重写。同一事务内 supersede 被丢弃 delta 承载的 resolutions，原冲突保持 `resolved`；其未结义务经 `NarrativeObligationRepository.cancel_obligation` 置为终态 `cancelled`，记录 `metadata.cancel_reason`，退出 open 列表、预算和 gate。目标为 `planned` / `failed` 的 ChapterPlan 补丁经 `FuturePlanPatchMixin.revert_plan_patch` 回撤，追加 `plan_patch_revert` 记录；accepted 等其他状态计划不改。
 
 回撤移除义务补丁的 goals、`obligations_to_resolve`、`progress_markers` / `rule_anchors`，或 form instruction 的 goals / progress markers；五项上限曾挤出的旧条目无法恢复。P34 要求保留同计划其他有效 resolution 补丁仍贡献的目标或标记：该补丁已应用、未被 revert，所属冲突仍为 resolved、未被本次 supersede 且 result_refs 包含它。`replay_cas.proposed_change` 总含 `superseded_conflict_ids`、`cancelled_obligation_ids`、`reverted_plan_patch_ids`；有 supersede 时摘要给出三项数量，检测事件携带相同 proposed_change。
 
-当前迁移头为 `0005_world_plan_conflicts`（父为 `0004_drop_parallel_ledgers`）。`world_plan_conflicts` 是世界–计划冲突事实源，记录来源、被违反边界、影响、待提交变化、可选项、决定者、阻塞起章与决定 / 结果引用。P3 来源只有 `world_tick` / `historical_rewrite`；`impact_review` 表示未破坏边界但达到需审查的影响，`replay_cas` 表示重放失败。
+当前迁移头为 `0006_planning_v6`（父为 `0005_world_plan_conflicts`，再前为 `0004_drop_parallel_ledgers`）。`world_plan_conflicts` 是世界–计划冲突事实源，记录来源、被违反边界、影响、待提交变化、可选项、决定者、阻塞起章与决定 / 结果引用。世界冲突来源为 `world_tick` / `historical_rewrite`，P4a 新增 `plan_feasibility` / `band_planning`；`impact_review` 表示未破坏边界但达到需审查的影响，`replay_cas` 表示重放失败。
 
 historical_rewrite 或 critical 交人工；minor 自动 veto；moderate / major 在 `world.conflict_delegate="codex"` 时交 `WorldConflictDelegate`，否则交人工。Codex 按 `models.role_preferences["review.world_conflict"]` 默认使用 `gpt-6-astra`，模型目录由 `FORWIN_CODEX_MODELS` 声明；它与 Spark 门共用 `run_codex_structured_call`，PromptTrace / 决策审计独立事务落盘。任何失败或选择 `amend_plan` 都升级人工，delegate 自身不写世界或计划。
 
 | 选项 | 当前执行语义 |
 | --- | --- |
 | `veto_world` | 不提交被扣留的变化；将未结 intent 标为 vetoed，把 veto 注入下一次 actor turn，并在 `[latest - world.max_rerolls, latest]`（两端均含）检测到的冲突中，统计该 actor 的 `veto_world` 决定次数；次数小于 `world.max_rerolls` 时安排重新行动。历史重写冲突只提供此选项。 |
-| `accept_with_obligation` | 提交变化，经 `DeferAcceptanceTransaction` 写 `world_change_response` 义务，deadline 为 `min(latest+6, target)`（`latest` 为最新 canon 章，`target` 为 `project.target_total_chapters`），绑定下一个未接受计划。只在非叙事边界的 minor / moderate 冲突提供。 |
-| `plot_responds` | 提交变化，为下一个未接受 ChapterPlan 追加回应目标。 |
-| `amend_plan` | 仅人工选择；提交变化并解除被破坏的 protections。P3 计划由用户手动调整，Codex 的该选择只升级人工。 |
+| `accept_with_obligation` | 提交变化，经 `DeferAcceptanceTransaction` 写 `world_change_response` 义务，deadline 为 `min(latest+6, target)`（`latest` 为最新 canon 章，`target` 为 `project.target_total_chapters`），有下一个未接受计划时绑定，否则保留未结义务。只在非叙事边界的 minor / moderate 冲突提供。 |
+| `plot_responds` | 提交变化，有下一计划时加回应目标，否则登记待回应供下一 band 消费。 |
+| `amend_plan` | 仅人工选择；提交变化并解除被破坏的 protections。随后由 PlanAmender 重规划剩余 band，Codex 的该选择只升级人工。 |
 
 protection / milestone / reveal_schedule 边界冲突只提供 `veto_world` / `amend_plan`；其他非历史冲突提供 veto / plot_responds / amend，轻等级再增加义务选项。直接 resolve 紧随冲突行锁取得 `FOR NO KEY UPDATE` 项目锁，在锁内读取 canon 和 news queue，再用同一 running-state 检查复核选项变化；hard-rule / gate error 抛 `ConflictStale`（HTTP/MCP 409）并保持 open，veto 不受 held change 失效影响。Canon 拒绝写入同样返回 409。context 与 delta 的 `story_time_start` 使用最新章 extraction 起点至当前故事分钟的窗口。变化经 `commit_world_tick(tick_id="conflict-<id>")` 写入，与义务 / 计划副作用、关闭冲突同在一个 SAVEPOINT；失败整体回滚。
 
@@ -249,23 +248,35 @@ open human conflict 从 `blocks_from_chapter` 起阻止下一章运行；progres
 
 P3 的确定性地图物化使用 `sha256(f"{project_id}|{subworld_id}")`，Genesis 地图边按声明端点、方向及 hidden 属性生成，已有 subworld 不自动重建。clock producers 处理到期 clocks、触发事件或提前 intent；form 只保护时间为正的最近六个 running clocks，逾期项可裁剪，secret clock 的信号与后续 writer 约束不泄露 label / node id。移动时间共用 `estimate_travel`，消费本书 travel modes 和已知路线。
 
-### 与设计的取舍 / 明确推迟到 P4
+### P4a：节拍表、即时 band 规划与 POV 视图
 
-- **protection 生产者与 critical / 里程碑**：P3 读取 narrative `review_constraint` 的 `{ref, kind, until_chapter, source, observer_ref?, fact_ref?, field?, value?}`，遵守已有 protection；节拍表 / band 规划器尚不生产它们，正常项目通常为空。影响分级接收 `milestone_refs`，当前 tick 使用空集合，尚无里程碑驱动的 critical 生产者。`amend_plan` 已可由用户选择。
-- **冲突来源与改章**：P3 生产 `world_tick` / `historical_rewrite` 冲突；`chapter_extraction` / `plan_feasibility` / `band_planning` 冲突生产者及 `rewrite_chapter` 推迟到 P4，P3 从不提供该选项。tick 不写 reader 认知，因此不触发 reveal_schedule 冲突；读者揭示仍由正文抽取推进。
-- **世界变量与规则谓词**：`world.drift` 无 institution / resource_economy 世界变量节点；rule 的 `checkable` 尚无 Genesis 谓词 kind，当前不求值，也不因此报错。
-- **重写后的补 tick**：最新章重写后若已有 tick，跳过第二次 tick，避免世界重复推进；代价是重写正文自己的事件没有本次 tick 的新闻传播。delta-only re-tick 及对保留 tick 的 open conflicts 重新推理一并推迟到 P4。
-- **历史引用与冲突卡片**：M7（P10 扩展）留待 P4：保留 tick 对被替换章节所创建 refs 的引用尚无 CAS 检查。M10 留待 P4：控制台冲突卡片尚不展示 held change，需经 `world_conflict_get` 查看 `proposed_change`。
-- **性能与消息重排**：`WorldTickDeltaBuilder` 的 `runtime=` 复用尚未实现，仍有 BookState 重载成本；`_unprotected` 当前丢弃 protection 禁止的投递，改为重新排队留到 P4。
-- **writer 世界视图与规划**：writer prompt 不携带 clock / restraint state；替代物是设计 §5.1 的 `ChapterWorldView`。writer 的 `<<FORWIN_LOCATION>>` 标记与 `reveal_directives` 留到 P4 调整；`task_contract_json`、ArcDirector / band 规划、`launch_arc_N`、`finalization._seed_state`、`RunControlStage.run`、`SubWorldManager.apply_initial_arc_plan`、`sub_world_roster_items` / `plan_band_activation` 留待 band `onstage_refs` 与新规划器替换。最终 post-Canon `("world", "plan", "feedback")` 顺序也在 P4 随规划器重写落地。
-- **其余未闭环能力**：`director_setup_without_delivery` / `form_invariant_drift` 仍无 producer；`ledger_state_drift_pre_write` patches 持久化但未应用；独立的地图 access rules、team speed、edge multipliers 检查尚未接入；认知图的 `false_edges` 已参与路径查询。意图引出新行动者也留到 P4，P3 tick 只引用已有行动者。
+- **节拍表与 protection**：`arc_beat_sheets` 按卷版本化，`plan.arc_beats` 生成 phase、hard/soft milestones、`band_breakdown`、`exit_state`、`reveal_targets`、`protagonist_ref`、`reader_promise` 与 `arc_payoff_map`。protection 仅来自节拍表（`source="beat_sheet"`），到期章取里程碑范围终点；`CanonAdmissionService.commit_plan_constraints` 以节拍表 id 幂等写最新 canon 章的 `source_type="plan_constraint"` delta。替换节拍表时同一 delta 解除旧 protection：设置 `payload.status = "released"`，不把 `until_chapter` 改成 0（0 表示 open；R14）。历史重写对 plan_constraint 的 release 将 old_value 重置为当前 status，跳过缺失或已 released 的目标；create 保留意图，但引用的节点 / fact 缺失时以 `HistoricalRewriteInvalid` 拒绝整次重写（R20）。world_engine delta 则走 CAS，失败或依赖已丢弃 tick 的创建引用时退役，产生 `replay_cas` 人工冲突并 supersede 其 resolutions。
+- **取舍 2 / 3**：Genesis 蓝图的卷 `chapter_start/chapter_end` 与总章数固定；节拍表只切 band，`planned_soft_min/max` 留给 P5。`protagonist_ref` 必须指向种子 character，缺省从 story_engine `core_cast` 首项取；体验层保留 `ReaderPromise` / `ArcPayoffMap`，改读 phase purpose 与 milestone description。
+- **开写与即时规划**：handoff 在同一调用方事务内物化 arcs → map → chapter-0 seed → arc-1 节拍表 / protection，不创建 ChapterPlan。`ArcProgressionService` 只向前激活卷；run control 写前由 `BandPlanner.ensure_plan_for_chapter` 准备当前 band。`plan.band` 生成版本化 `band_plans`；`band_id="band:{start}:{end}"` 与确定性 `band_experience_plans` 排期保留。
+- **重规划边界**：旧 band 版本标 superseded，可重写的 `planned` / `failed` ChapterPlan 原地更新，行 id 不变，再幂等应用仍有效的 `NarrativePlanPatch`；`accepted` / `drafted` / `needs_review` 不改。legacy 行（band_plan_id 为空）有草稿 / candidate 历史时保留原计划；从未起草的 legacy planned/failed 行在写前补规划。`ensure_plan_for_chapter` 写前直接复用已有 band-owned 行，但 band-owned planned/failed 行即使有草稿历史，仍可被后续显式或自动重规划改写。run control 对 active arc 之前的已有行直接返回，即使是从未起草的 legacy 行也不自动现代化；completed arc 不重新激活。空或退化卷范围不产出可写章节，并记录 `empty arc chapter range`（R27/R31/R34）。
+- **失败与并发**：节拍表失败回退均分 band 的结构壳，`source="fallback"`，无 milestone / protection；band 调用失败或两次校验 / 审计不通过不写 ChapterPlan。post-Canon 失败记入 `result_json`，写前同步重试仍失败才开 human `band_planning` 冲突。发布在锁内校验调用方所见的 `expected_band_plan_id` 与 active 节拍表；旧调用不覆盖新版本，返回胜出版本并记 `superseded_by_concurrent_plan`，过期审计延期，发布时再次检查重规划上限（R33）。
+- **可行性审计**：检查 onstage 角色死亡 / 受限、地点存在及已知路线 / 预计时间可达、揭示过早、protection、writer 文本泄密与 hard milestone 覆盖；`exit_state_unaddressed`、未回应的 public clock（`clock_unanswered`）、未绑定的到期 onstage intent（`due_onstage_unbound`）为 warning。在 band 输出校验、post-Canon 本 band 剩余计划与写前当前章执行。自动重规划受 `planning.max_replans_per_band` 限制；仍有 error 开 `plan_feasibility` 冲突，写前错误也持久化冲突并暂停。`FuturePlanAuditor` 仍负责通用义务、invariant、signal；宏观进度已删除。
+- **冲突修订**：`plan_feasibility` / `band_planning` 仅 human、仅 `("amend_plan",)`。`PlanAmender` 对 milestone / exit_state 问题先修订节拍表再重规划，其余携用户 rationale 强制重规划、豁免一次上限。world tick 的人工 amend 先提交变化、解除破坏的 protection，再重规划下一章所在 band 的剩余章节；重规划失败不回撤世界决定，而记录失败并开后续 plan_feasibility 冲突。
+- **里程碑与顺延**：tick 将尚未过期的 hard milestone `required_refs` 及 exit_state 引用交给 impact 分级。只有实际改变世界状态的引用才触发 critical / `violated="milestone"`，actor 身份或排期键不算（R28）。本章绑定的 intent 未交互才顺延；band 结束时曾有规划机会却始终未绑定的到期 onstage intent 也顺延。首次在 band 最后一次 tick 到期的 intent 交下一 band，不当场顺延（R29）。
+- **待回应的世界变化**：没有下一张未接受计划时，`plot_responds` 只提交变化并记为待回应；`accept_with_obligation` 只记义务。band 输入读取 status=resolved、decision.option=plot_responds、`decision_json.pending_plan_response is True` 且 `result_refs` 无 `plan_patch:` 前缀引用的冲突和未结义务（R2）；保存计划后补回应 patch，并把 `plan_patch:<id>` 引用追加回冲突，保留历史回卷能力。历史重写 supersede 尚未绑定计划的 resolution 时清除 pending 标记；原冲突仍为 resolved 且无 plan_patch 引用，但后续 band 不再回应已离开 canon 的变化。writer 回应文本仍只取 public event summary 或通用模板。
+- **writer 文本纪律**：title、one_line、goals、hook、hint_text、phase purpose、milestone description、reader_promise 与 payoff map 都是 writer 可见文本；校验以去空白的秘密命题检测 `writer_text_states_secret` 等泄密错误，payoff map 按本章已开始的 chapter_window 投影（R21/R24/R36）。WorldDigest / band 规划用作者视角；`world_bindings` 的 how / ref 不渲染给 writer，绑定须由同章 goals 承载；绑定修复只给位置与 kind，作者数据留在 original_result（R26）。命题检测不覆盖所有改写表达，仍依赖 prompt 与揭示 gate。
+- **取舍 14 / POV 视图**：`ChapterWorldView` 从章前 BookState、POV 认知及本章指令组装 onstage 状态 / restraint、持有物、已知事实、地点 / 路线、时间、可见 clocks、允许揭示、hint 与禁止话题。reader_known 只用已记录 reader 认知；地图只用 `is_writer_visible_map_edge`，不回退客观图；禁止话题仅用 related_refs 的实体名，不含真相。预算 standard 6000 / pulp 4000 字符，保留 POV 位置、允许揭示、hints 与禁止话题；性格段只取 onstage 角色，可命名角色来自视图实体表。`<<FORWIN_LOCATION>>` 输出视图地点 id 或 `new:<名称>`，抽取接收非证据 `scene_location_hints`；hard_floor 的旧 must_not_reveal 子串检查已删，揭示保护交给 gate。
+- **抽取新鲜度**：`ensure_chapter_delta` 只有在正文 `body_sha256` 与 `plan_fingerprint` 同时匹配时才复用；有计划时旧空指纹为 stale（R25）。P4a 不收窄抽取的实体 / 地点 / secrets 输入，避免 ref_check 把全集外 fact 当未知；留待 P4b。
+- **步骤与 trace**：`POST_CANON_STEP_NAMES = ("world", "plan", "feedback")`；plan 合并卷推进、可行性审计 / 重规划与下一 band 准备，其后 order controls。`CommentAnalyzer` 在 feedback 聚合前运行，是 `comment_signal_candidates` 唯一写方；评论词表登记为 language_lexicon。`plan.arc_beats` / `plan.band` 保存 PromptTrace 与 LLM DecisionEvents；plan 分单元提交规划工作，最后提交 step 完成状态与 trace outbox。raw-artifact 同步写失败可使当前单元 / step 失败，重试保留并按条件复用已提交工作；事务后 outbox 上传重试不重跑已成功业务。
+- **取舍 18**：独立 access rules、team speed、edge multipliers 已由出行方式取代；共享 `estimate_travel` 消费本书 lexicon `travel_modes`。本期不另实现这些机制。
 
-P3 生产部署 runbook 见 [docs/superpowers/plans/2026-10-22-world-engine-p3.md Task 20](../docs/superpowers/plans/2026-10-22-world-engine-p3.md)；本文只记录代码现状与后续设计，不宣称生产验收完成。
+删除模块与表的逐项清单见 [CURRENT_ARCHITECTURE.md 的 P4a 删除清单](CURRENT_ARCHITECTURE.md#p4a-删除清单)，以 consolidated boundary test 为准。
+
+### P4b 范围（尚未实现）
+
+以[批准的 P4b 计划](../docs/superpowers/plans/2026-10-22-world-engine-p4b.md)为准：任务 0–2 补冲突前置字段、保护消息重排 / veto / 快照新鲜度等 P3 小修及 runtime 复用、快照排序、义务与路径成本；任务 3–6 做正文叙事边界检测、残留 `chapter_extraction` 冲突、章内暂停 / `rewrite_chapter` 恢复、最新章 tick 退役重跑、历史消失 ref 检查与控制台 held-change 卡片；任务 7 删除 `task_contract_json`；任务 8–10 实现 `checkable` 谓词、组织 / 地点状态枚举、`world_variable` / `world.drift` 与幕后新行动者；任务 11 清理 P2 死信号 / ledger drift、生产 `director_setup_without_delivery` 并按 ChapterWorldView 收窄抽取；任务 12–13 做多题材端到端验证与文档收尾。任务 14 单独负责生产 runbook，本文不提供部署步骤，也不宣称生产验收完成。
+
+兼容标记仅记录旧边界：P3 当时的“writer prompt 不携带 clock / restraint state；替代物是设计 §5.1 的 `ChapterWorldView`”已在 P4a 落地。当前最新章重写仍跳过已有 tick；retained tick 引用、消息重排、世界变量、规则谓词和新行动者按上述 P4b 范围处理。
 
 ## 14. 文档入口
 
 - 本文：现有设计的完整叙述。
-- [世界引擎大修设计](../docs/designs/2026-10-20-world-engine-overhaul.md)：P0–P3 已落地，P4 为后续设计；推迟事项以第 13 节为准。
+- [世界引擎大修设计](../docs/designs/2026-10-20-world-engine-overhaul.md)：P0–P3 与 P4a 已落地，P4b 尚未实现；推迟事项以第 13 节为准。
 - [CURRENT_ARCHITECTURE](CURRENT_ARCHITECTURE.md)：精简的架构与代码边界。
 - [DESIGN_STATUS](DESIGN_STATUS.md)：旧文档权威性与当前状态。
 - [前轮收口修订](../docs/superpowers/specs/2026-09-04-v5-closure-design.md)：架构收口与发布验收顺序。

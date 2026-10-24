@@ -38,33 +38,28 @@ stateDiagram-v2
 
 终态集合：`completed`、`partial_failed`、`failed`、`needs_review`、`cancelled`、`paused`。
 
-### 2. Orchestrator 主流程
+### 2. ChapterPipeline 主流程
 
 ```mermaid
 stateDiagram-v2
-    [*] --> creating_project: POST /api/projects/{id}/start-writing\nGenesis-ready project
-    creating_project --> resolving_arc_envelope: seed project state
-    resolving_arc_envelope --> provisional_gate: ensure active arc resolution
-    provisional_gate --> provisional_failed: new failed provisional execution
-    provisional_gate --> chapter_loop: no blocking provisional failure
-
-    [*] --> continue_project: existing plans
-    continue_project --> blocked_review: real needs_review draft exists
-    continue_project --> resolving_arc_envelope: planned/failed chapters remain
-    continue_project --> completed: no remaining planned/failed chapters
-
-    chapter_loop --> world_conflict_review: open human conflict blocks next chapter
-    world_conflict_review --> needs_review: paused_for_review / world_conflict_pending
-    chapter_loop --> completed: all selected chapters accepted
-    chapter_loop --> needs_review: manual checkpoint/review failure/frozen canon/review interval
-    chapter_loop --> partial_failed: accepted chapters + failed chapters
-    chapter_loop --> failed: only failed chapters
-    chapter_loop --> paused: pause requested at safe checkpoint
-    chapter_loop --> cancelled: cancel requested at checkpoint
-
-    provisional_failed --> failed
-    blocked_review --> needs_review
+    [*] --> genesis_handoff: start-writing
+    genesis_handoff --> chapter_loop: arcs / map / seed / arc-1 beat sheet
+    [*] --> continue_project: continue-generation
+    continue_project --> needs_review: real needs_review draft or blocking conflict
+    continue_project --> chapter_loop: unaccepted workset
+    chapter_loop --> ensure_plan: next writable chapter
+    ensure_plan --> needs_review: band_planning / plan_feasibility
+    ensure_plan --> write_review_canon: plan available and feasible
+    write_review_canon --> chapter_loop: Canon and maintenance complete
+    write_review_canon --> needs_review: review / Canon / manual gate
+    chapter_loop --> completed: selected work complete
+    chapter_loop --> paused: safe pause
+    chapter_loop --> cancelled: cancel checkpoint
+    write_review_canon --> partial_failed: accepted chapters and failures
+    write_review_canon --> failed: failures without accepted chapters
 ```
+
+handoff 只写 arc-1 节拍表和 protection，不生成 ChapterPlan；run control 写前即时规划当前 band。completed arc 的历史重写使用原计划，不重新激活该卷；空 / 退化卷范围没有可写章节并记录 warning。继续操作创建新 durable task，不把旧终态任务改回 queued。
 
 ### 3. 单章流水线
 
@@ -72,49 +67,41 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> check_cancel_pause
     check_cancel_pause --> check_world_conflict
-    check_world_conflict --> paused_for_review: open human conflict at blocks_from_chapter
-    check_world_conflict --> assembling_context
-    check_cancel_pause --> paused: pause_requested
-    check_cancel_pause --> cancelled: cancel_requested
-
-    assembling_context --> writing_chapter
-    assembling_context --> paused: safe pause
-    assembling_context --> cancelled: cancel
-
-    writing_chapter --> continuity_review: writer output produced
-    writing_chapter --> failed: writer failed after retry/fallback
-    writing_chapter --> paused: safe pause after output
-
-    continuity_review --> world_consistency: world_consistency_review_enabled and session available
-    world_consistency --> drafted: no hard world issue
-    world_consistency --> paused_for_review: world consistency issue
-    continuity_review --> drafted: world_consistency disabled or session unavailable
-    drafted --> paused_for_review: operation_mode=checkpoint
-    drafted --> paused_for_review: copilot verdict != pass
-    drafted --> paused_for_review: blackbox fail without force accept
-    drafted --> paused_for_review: verdict not canon-applicable
-    drafted --> paused_for_review: review_interval hit
-    drafted --> CanonPreparation: eligible candidate
-
-    CanonPreparation --> GateDelegation: delegation policy enabled
-    CanonPreparation --> CanonAdmission: no delegation required
-    CanonPreparation --> paused_for_review: eligibility/quality/BookState gate blocked
-    GateDelegation --> CanonAdmission: delegated gate approved
-    GateDelegation --> paused_for_review: delegated gate blocked/error
-    CanonAdmission --> running_post_acceptance: atomic Canon commit succeeded
-    CanonAdmission --> paused_for_review: stale/system/Canon commit block
-
-    running_post_acceptance --> world_tick: post-Canon world step
-    world_tick --> planning: world result_json persisted
-    planning --> arc
-    arc --> feedback
-    feedback --> order_controls
-    order_controls --> accepted: run complete
-    running_post_acceptance --> paused: safe pause
-    accepted --> [*]
-    failed --> [*]
+    check_cancel_pause --> paused: pause requested
+    check_cancel_pause --> cancelled: cancel requested
+    check_world_conflict --> paused_for_review: blocking human conflict
+    check_world_conflict --> ensure_plan
+    ensure_plan --> audit_current_plan: band plan available
+    ensure_plan --> paused_for_review: band_planning conflict
+    audit_current_plan --> paused_for_review: plan_feasibility conflict
+    audit_current_plan --> assembling_context: feasible
+    assembling_context --> writing_chapter: ChapterWorldView
+    writing_chapter --> chapter_delta_extraction: final stitched body
+    writing_chapter --> failed: retry and preview fallback exhausted
+    chapter_delta_extraction --> draft_review: shared extraction
+    draft_review --> repair: blocking issues and budget remains
+    repair --> chapter_delta_extraction: new candidate
+    draft_review --> paused_for_review: residual / manual gate
+    draft_review --> CanonPreparation: eligible candidate
+    CanonPreparation --> GateDelegation: delegation required
+    CanonPreparation --> CanonAdmission: no delegation
+    CanonPreparation --> paused_for_review: preparation blocked
+    GateDelegation --> CanonAdmission: approved
+    GateDelegation --> paused_for_review: blocked or error
+    CanonAdmission --> accepted_canon: atomic commit succeeded
+    CanonAdmission --> paused_for_review: stale or rejected
+    accepted_canon --> world_tick
+    world_tick --> plan: tick result persisted
+    plan --> feedback: arc progression / audit / replan / next band
+    feedback --> order_controls: comment analysis then aggregation
+    order_controls --> [*]: maintenance complete
     paused_for_review --> [*]
+    paused --> [*]
+    cancelled --> [*]
+    failed --> [*]
 ```
+
+`POST_CANON_STEP_NAMES = ("world", "plan", "feedback")`。Canon 接纳先于维护；下一章须等前章三步及 order controls 完成，维护失败不撤销已接纳正文。
 
 ### 4. LLM request retry/fallback
 
@@ -157,7 +144,7 @@ worker 已 claim lease 并开始推进。`GenerationApplicationService` 根据 p
 
 `needs_review`
 
-人工 review checkpoint。触发来源包括 checkpoint 模式、copilot 模式非 pass、blackbox fail 且未 force accept、canon 写入冻结、周期性 `review_interval_chapters`。存在 `needs_review` 章节时，continue API 会拒绝继续，要求先 approve review。P3 还会在 open human world conflict 的 `blocks_from_chapter` 起、写下一章前发出 `paused_for_review`，任务进入 `needs_review`；派生阻断为 `world_conflict_pending`，不要求把已接受章节改成 needs_review。continue / review-approve（`continue_generation=true`）在该阻断仍有效时返回 409；解决冲突后仍需显式继续。
+人工 review checkpoint。草稿 review / repair 预算、Canon 冻结或手动 checkpoint 可要求人工处理。open human world conflict 从 `blocks_from_chapter` 起，在写下一章前发出 `paused_for_review`，任务进入 `needs_review`；派生阻断为 `world_conflict_pending`，不要求把已接受章节改成 needs_review。P4a 的 `band_planning` / `plan_feasibility` 也走该路径。continue / review-approve（`continue_generation=true`）在冲突阻断有效时返回 409；解决后仍需显式继续。Generation Audit 是 report-only，不暂停任务。
 
 `cancelled`
 
@@ -165,7 +152,7 @@ worker 已 claim lease 并开始推进。`GenerationApplicationService` 根据 p
 
 `failed`
 
-没有任何 accepted 章节，且出现 failed 章节或 provisional gate 失败。
+没有任何 accepted 章节，且出现 failed 章节。
 
 `partial_failed`
 
@@ -175,38 +162,26 @@ worker 已 claim lease 并开始推进。`GenerationApplicationService` 根据 p
 
 本次选择的章节全部接受并完成后置处理。
 
-### 主流程
+### 主流程与单章流程
 
-1. 新项目必须先完成并锁定 Genesis；`start-writing` 从 Genesis blueprint 物化项目与当前 active arc 的 `ChapterPlan`，然后创建 durable generation task。
-2. generation worker claim 任务后，由 `GenerationApplicationService.execute_claimed` 构造不可变 execution context，并进入 project-backed continuation。
-3. `resolving_arc_envelope` 保证 active arc resolution 存在；provisional/scenario 检查产生显式阻断状态。
-4. chapter loop 只处理当前 workset 的 `planned` 和 `failed` 章节，不重写 accepted 章节。
-5. 真实 `needs_review` 章节会阻塞 continue；处理 review 后可显式创建下一条 continuation task。
-6. 当前 arc 无 pending work 时，planning service 可物化下一条已批准 arc，再由新的 durable task 继续。
+1. `start-writing` 在调用方事务内物化 arcs、map、chapter-0 seed 与 arc-1 `arc_beat_sheets` / protection；成功才锁定 Genesis 并入队，失败整体回滚。
+2. worker claim 后通过 `GenerationApplicationService.execute_claimed` 进入 continuation；workset 按顺序列出未接受章节，跳过 accepted，受总章数、有效卷范围和请求上限约束。
+3. 每章先检查 pause/cancel、人工冲突与当前卷；`ArcProgressionService` 只向前推进，completed arc 不重新激活。run control 对 active arc 之前的已有行直接复用，包括从未起草的 legacy 行。其余写前由 `BandPlanner.ensure_plan_for_chapter` 准备当前 band 的 `band_plans` / ChapterPlan：accepted/drafted/needs_review 不改；legacy 行（band_plan_id 为空）有草稿 / candidate 历史时保留，从未起草的 legacy planned/failed 行补规划；已有 band-owned 行直接复用，但其中 planned/failed 行即使有草稿历史仍可被后续显式或自动重规划改写。
+4. 写前可行性审计检查角色可用性、地点与出行时间、揭示 / protection、writer 文本泄密和 milestone 覆盖；错误持久化为 `plan_feasibility` 冲突并暂停。`band_planning` / `plan_feasibility` 仅向 human 提供 `amend_plan`；PlanAmender 按问题修订节拍表或强制重规划。
+5. context 使用 `ChapterWorldView`；writer 分 scene 生成并 stitch。失败仍可调用普通 preview fallback。`<<FORWIN_LOCATION>>` 为视图地点 id 或 `new:<名称>`，抽取仅将其作为 `scene_location_hints`，不作事实证据。
+6. `ChapterDeltaExtractor` 从最终 body 抽取，只有 body hash 与 plan fingerprint 同时匹配才复用；draft review / repair 和 CanonPreparation 共享它。`world_consistency` 经 translator / gate 检查时间、移动、角色、物品与揭示，`plan_fulfillment` 提供计划 / 义务履行证据。
+7. review、有限 repair、residual eligibility 与配置的 human/spark delegation 决定候选资格；CanonPreparation 冻结计划，`CanonAdmissionService.commit_plan` 在事务内重验并原子写入 BookState、实体身份、accepted 状态、审计和 outbox。
+8. 依次运行 world → plan → feedback，然后 order controls。plan 审计本 band 剩余计划，按上限重规划，必要时开冲突；band / arc 边界准备下一 band。accepted/drafted/needs_review 计划不改；并发发布只覆盖调用方所见的 band 版本，过期审计延期。
+9. feedback 由 `CommentAnalyzer` 先分析评论再聚合。`plan.arc_beats` / `plan.band` 均保存 PromptTrace / LLM DecisionEvents。plan 分别提交卷激活、节拍表、审计 / 重规划及下一 band 工作，最后提交 step 完成状态与 trace outbox；同步 raw-artifact 写失败可使当前单元 / step 失败，重试保留并按条件复用已提交规划工作。事务后 trace outbox 上传失败只重试上传。
+10. 下一章重新检查冲突与维护屏障。没有下一计划的 `plot_responds` 保留待回应世界变化，`accept_with_obligation` 保留义务，由后续 band 规划消费并补 `plan_patch:` 引用。
 
-### 单章流程
-
-1. 每章开始先检查 cancel 和 pause。
-2. `assembling_context` 组装章节上下文。
-3. `writing_chapter` 调 writer。writer 内部会按单模型 retry，必要时由 LLMClient 做跨 profile fallback。
-4. writer 失败后尝试 preview fallback；仍失败则章节标为 failed。
-5. `continuity_review` 调 `DraftReviewService`/`ContinuityChecker`，保存 draft 和 review；`world_consistency` 信号复用候选的 chapter delta，经 `ChapterDeltaTranslator` 与 `BookStateReviewGate` v6 检查时间、已知路径、移动速度、角色状态、物品与揭示。旧 `MapMovementReviewer` 已删除；移动时间现共用 `estimate_travel` 与本书 travel modes；独立的 access rules、team speed、edge multipliers 检查明确推迟到 P4；认知图的 `false_edges` 已参与路径查询。
-6. 根据 operation mode 和 verdict 判断：
-   - `checkpoint`：总是 `needs_review`。
-   - `copilot`：`pass` 才继续，`warn/fail` 进入 `needs_review`。
-   - `blackbox`：`fail` 且没有 force accept 时进入 `needs_review`；`pass/warn/force_accept` 可进入 canon。
-7. 如果 `review_interval_chapters > 0` 且当前章节命中周期，并且不是本次最后一章，在 canon 前把当前章标为 `needs_review`。
-8. `CanonPreparationService` 在事务外冻结 eligibility、quality、EntityAdmissionPlan 与经 `BookStateReviewGate` 批准的 GraphDelta。
-9. 配置 gate delegation 时，`GateDelegationService` 产生独立批准/阻断事件；没有 delegation 时明确记录为未委托，而不是伪造通过。
-10. `CanonAdmissionService.commit_plan` 在单事务内重验 candidate、提交 BookState/GraphDelta/snapshot、实体身份、审计和 outbox；只有事务成功才将章节标记为 `accepted`。
-11. `running_post_acceptance` 触发可重试维护 / outbox。`POST_CANON_STEP_NAMES = ("world", "planning", "arc", "feedback")`；world 只运行 `WorldTickService.run`，feedback 在聚合前分析新评论，四步之后执行 order controls。Knowledge Projection、memory index 与发布侧投影仍从 Canon 派生，失败不回滚已提交 Canon。
-12. accepted 章节加入 `completed_chapters`；下一章运行前读取 open human conflicts。`blocks_from_chapter <= next_chapter` 时停止 chapter loop、发出 `paused_for_review`，不开始该章正文生成。
+代码 schema head 为 `0006_planning_v6`（父 `0005_world_plan_conflicts`）。卷长按 Genesis 固定，节拍表只切 band；独立 access rules / team speed / edge multipliers 已由出行方式取代（lexicon travel_modes 与 estimate_travel）。完整字段、POV 预算、删除清单与 P4b 范围见 [当前架构](CURRENT_ARCHITECTURE.md)。
 
 world tick 使用 `tick-<commit id>` 与本章故事时间窗口，经过候选收集、逐候选 gate / 一次重试、影响 / 预算、冲突审查、新闻传播与 `WorldTickDeltaBuilder`。提交前按 base candidates → in-tick resolutions 的顺序，在前序已接受变化留下的 runtime / 累计 delta 上复核 hard rules / gate；base 失效以 `constraint_violation` 丢弃，resolution 失效以 `failure_reason="conflict_stale"` 升级人工并保持 open。无补丁且无 resolution 的 quiet tick 不取项目锁；其余在 commit SAVEPOINT 前取项目锁、复核 snapshot，再经 `CanonAdmissionService.commit_world_tick` 写入。LLM 不可用跳过节点；非最新章或已 tick 章跳过；`target_total_chapters > 0` 且本章达到或超过目标时以 `skipped_reason="book_complete"` 跳过。step `result_json` 保存 tick 身份、提交 / 冲突 / 丢弃 / 顺延 ids、warnings、skipped_reason。
 
-历史重写 CAS 重放 world_engine deltas（含直接 `conflict-<id>` resolve），失败产生 `replay_cas` 人工冲突并 supersede 该 delta 承载的 resolutions。原冲突仍为 `resolved`，其未结义务变为终态 `cancelled`（`metadata.cancel_reason`），退出 open 列表、预算和 gate；`planned` / `failed` 计划的关联补丁回撤并记 `plan_patch_revert`，accepted 等其他状态计划不变。同计划其他有效 resolution 仍贡献的目标 / 标记保留，五项上限挤出的旧条目无法恢复。replay_cas 的 `proposed_change` 总含 `superseded_conflict_ids`、`cancelled_obligation_ids`、`reverted_plan_patch_ids`，有 supersede 时摘要给出三项数量。
+历史重写对 plan_constraint 重放 release 时，将 old_value 重置为当前 status，跳过缺失或已 released 的目标；create 保留意图，引用的节点 / fact 缺失则抛 `HistoricalRewriteInvalid` 拒绝整次重写（R20）。world_engine deltas（含直接 `conflict-<id>` resolve）单独走 CAS；失败或依赖已丢弃 tick 的创建引用时退役，产生 `replay_cas` 人工冲突并 supersede 该 delta 承载的 resolutions。原冲突仍为 `resolved`，其未结义务变为终态 `cancelled`（`metadata.cancel_reason`），退出 open 列表、预算和 gate；`planned` / `failed` 计划的关联补丁回撤并记 `plan_patch_revert`，accepted 等其他状态计划不变。同计划其他有效 resolution 仍贡献的目标 / 标记保留，五项上限挤出的旧条目无法恢复。replay_cas 的 `proposed_change` 总含 `superseded_conflict_ids`、`cancelled_obligation_ids`、`reverted_plan_patch_ids`，有 supersede 时摘要给出三项数量。
 
-P4 延后项沿用[当前架构的清单](CURRENT_ARCHITECTURE.md)：最新章重写后的 delta-only re-tick 与保留 tick 的 open conflicts 重新推理；M7（P10 扩展）的保留 tick 对被替换章节创建 refs 的引用检查；M10 的控制台冲突卡片展示 held change。
+P4b 延后项沿用[当前架构的清单](CURRENT_ARCHITECTURE.md)：最新章重写后的旧 tick 退役 / 重跑与过期 open conflicts 处理；M7（P10 扩展）的保留 tick 对被替换章节创建 refs 的引用检查；M10 的控制台冲突卡片展示 held change。
 
 ### Pause / Continue
 
@@ -221,7 +196,7 @@ Continue 的规则：
 
 1. `POST /api/projects/{project_id}/continue-generation` 从已有 project 继续。
 2. 如果派生阻断为 `world_conflict_pending` 或存在真实 `needs_review`，返回 409，要求先处理。冲突读取 `world_plan_conflicts`，任务 / 章节不新增 reason 列。
-3. 只运行 `planned` 和 `failed` 章节。
+3. workset 按顺序选未接受章节，包含尚无 ChapterPlan 的章位；planned/failed 可重试，drafted/needs_review 阻塞，写前即时准备 band 计划。
 4. 已 `accepted` 章节不会重写。
 5. 入队前确认无 active generation task；入队时冻结 RuntimePolicy snapshot，worker claim 后构造 execution context，运行中修改项目策略不影响已启动任务。
 6. 冲突恢复使用 `world_conflict_list` / `world_conflict_get` 读状态，经 `world_conflict_resolve` 按提供的选项解决；HTTP 为 `/api/projects/{id}/world-conflicts[/{cid}[/resolve]]`，控制台 task drawer 同样接入。重读项目并确认无阻断 / active task 后显式 continue，resolve 本身不启动任务。直接 resolve 在冲突行锁后取得项目锁，锁内读取 canon / news queue 并重查选项；变化不再成立返回 `ConflictStale`（HTTP/MCP 409），Canon 拒绝写入也返回 409，事务不关闭冲突。veto 不受 held change 失效影响；其他选项失败后应重读冲突与当前 canon 再决定。旧 CanonQualitySignal 使用 `world_model_signal_list`。

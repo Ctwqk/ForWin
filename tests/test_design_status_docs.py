@@ -177,6 +177,25 @@ def test_p3_docs_describe_world_conflict_contracts() -> None:
         text = _read(DOC_ROOT / name)
         for marker in (
             "0005_world_plan_conflicts", "world_conflict_pending", "commit_world_tick",
-            '("world", "plan", "feedback")', "world_model_signal_list",
+            "world_model_signal_list",
         ):
             assert marker in text, (name, marker)
+
+
+def test_p4a_docs_describe_planning_world_view_and_maintenance() -> None:
+    for name in (
+        "Design-docs/CURRENT_ARCHITECTURE.md",
+        "Design-docs/CURRENT_DESIGN.md",
+        "Design-docs/DESIGN_STATUS.md",
+        "Design-docs/writing_flow_state_machine.md",
+        "forwin/book_state/README.md",
+        "docs/codex-forwin-mcp.md",
+        "plugins/forwin-operator/skills/forwin-operator/SKILL.md",
+    ):
+        text = _read(ROOT / name)
+        for marker in (
+            "arc_beat_sheets", "band_plans", "plan.arc_beats", "plan.band",
+            '("world", "plan", "feedback")', "ChapterWorldView", "0006_planning_v6",
+        ):
+            assert marker in text, (name, marker)
+        assert '("world", "planning", "arc", "feedback")' not in text, name

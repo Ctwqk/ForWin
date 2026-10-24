@@ -91,21 +91,31 @@ Use only the options returned by the existing inspection tools:
 | Option | Effect |
 | --- | --- |
 | `veto_world` | Rejects the held change, marks an unsettled intent vetoed, and lets the actor reroll only while the actor's `veto_world` resolution count on conflicts detected in the inclusive chapter window `[latest - world.max_rerolls, latest]` is below `world.max_rerolls`. Historical rewrite offers only this option. |
-| `accept_with_obligation` | Commits the change and a `world_change_response` obligation due by `min(latest+6, target)` (`latest` is the latest canon chapter; `target` is `project.target_total_chapters`), bound to the next unaccepted plan. Available only at minor/moderate and outside narrative-boundary conflicts. |
-| `plot_responds` | Commits the change and adds a response goal to the next unaccepted chapter plan. |
-| `amend_plan` | Human only: commits the change and releases broken protections. The user adjusts the plan manually in P3. |
+| `accept_with_obligation` | Commits the change and a `world_change_response` obligation due by `min(latest+6, target)` (`latest` is the latest canon chapter; `target` is `project.target_total_chapters`), bound when a next unaccepted plan exists; otherwise retained as an open obligation. Available only at minor/moderate and outside narrative-boundary conflicts. |
+| `plot_responds` | Commits the change; adds a response goal when a next unaccepted plan exists, otherwise records a pending response for band planning. |
+| `amend_plan` | Human only: plan conflicts invoke PlanAmender; world changes commit and release broken protections before replanning the remaining band. Milestone/exit-state problems revise the beat sheet first; other plan problems force replanning with the user rationale. |
 
 For `plot_responds` and `accept_with_obligation`, writer-facing response goals, markers, obligation summaries/payoff tests and plan-patch injections use only the held change's public event summaries. Changes with no public event use `PLOT_RESPONSE_GENERIC_GOAL`; onstage_slip uses `ONSTAGE_SLIP_RESPONSE_GOAL`. The conflict summary is not copied into those writer texts.
 
-`accept_with_obligation` and `plot_responds` fail as unavailable without a next unaccepted plan; `accept_with_obligation` also fails if the book has no chapter after `latest`.
+Missing future plans do not make `accept_with_obligation` or `plot_responds` unavailable. The next band planner consumes open obligations and pending plot responses: status=resolved, decision.option=plot_responds, `decision_json.pending_plan_response is True` and no result ref prefixed `plan_patch:` (R2). After saving plans, it attaches response patches and appends `plan_patch:<id>` result refs. Historical supersession clears the pending marker on an unbound resolution, leaving the conflict resolved and patchless so later bands do not respond to a world change that left canon. `accept_with_obligation` still requires a chapter after `latest`.
 
 Protection, milestone and reveal-schedule boundary conflicts offer only veto/amend; other non-historical conflicts offer veto/plot_responds/amend, with the lighter-level obligation option above. Resolution commits world changes through `commit_world_tick(tick_id="conflict-<id>")`; changes, obligations/plan effects and closure share one SAVEPOINT. Direct resolve locks the project immediately after the conflict and reads canon and queued news under that lock; other canon writers wait. Its option changes are rechecked against current canon using the latest chapter's extraction-start-to-current-minute window. A hard-rule or gate error raises `ConflictStale` (HTTP 409, surfaced through MCP) and leaves the conflict open. Canon refusal also returns 409 with `canon refused the change`; the resolution rolls back without closing the conflict. Veto passes the stale-change check. After either 409, reread the conflict and current project state before choosing an offered option again. After a successful resolution, reread the conflict and project, check for any remaining blocks, and follow Resume Writing's active-task check before explicitly continuing. Resolving a conflict does not enqueue generation.
 
-The code schema head is `0005_world_plan_conflicts` (parent `0004_drop_parallel_ledgers`); this is not evidence that a running server has deployed it. Explicit P4 deferrals are protection producers, critical/milestone producers, `rewrite_chapter` (never offered in P3), `world.drift`, and `checkable` evaluation. P3 also defers a delta-only re-tick and re-reasoning retained ticks' open conflicts after a latest-chapter rewrite, builder `runtime=` reuse and re-queuing forbidden news deliveries; an already-ticked rewrite receives no new tick news for its own events. M7 (P10 extension) defers CAS checks for retained ticks' references to refs created by a replaced chapter. M10 defers showing the held change on console conflict cards; inspect `proposed_change` with `world_conflict_get` before deciding. See [current architecture](../Design-docs/CURRENT_ARCHITECTURE.md) for the full P4 list.
+### P4a Planning And Writer Context
+
+The code schema head is `0006_planning_v6` (parent `0005_world_plan_conflicts`); this does not prove the running server has it. Handoff writes the seed and arc-1 `arc_beat_sheets`/protections, then run control prepares `band_plans` just in time. Stages `plan.arc_beats` and `plan.band` record PromptTrace/LLM decisions. Arc ranges stay fixed. A fallback beat sheet contains structural bands only; band failure publishes no chapter plans.
+
+The plan step handles arc progression, feasibility/replanning and the next band. Feasibility checks onstage availability, location/travel time, reveal/protection limits, writer secret leakage and hard milestones; exit-state, unanswered-clock and unbound-intent coverage can warn. `plan_feasibility` and `band_planning` require a human and offer only `amend_plan`; inspect the returned issues and supply the user's rationale. Failed post-world amendment leaves the world decision resolved and opens a follow-up plan conflict. Do not treat that resolution alone as readiness to resume.
+
+Replanning preserves accepted/drafted/needs_review rows and legacy rows (null band_plan_id) with draft/candidate history. Never-drafted legacy planned/failed rows are planned in place before writing. Pre-write `ensure_plan_for_chapter` reuses existing band-owned rows, but band-owned planned/failed rows remain eligible for later explicit or automatic replanning even with draft history. Run control directly reuses existing rows before the active arc, including never-drafted legacy rows; completed arcs never reactivate. Empty/degenerate arc ranges have no writable work and log `empty arc chapter range`. Concurrent band publication checks the caller's observed version; stale results do not overwrite the winning plan.
+
+`ChapterWorldView` supplies POV-safe facts, recorded reader knowledge, visible routes, onstage restraints/items, clocks and reveal/hint instructions (standard 6000/pulp 4000 chars). Forbidden topics omit truth. Bindings/how/ref stay author-only; writer goals carry the action, and payoff layers are projected by chapter. Secret propositions in writer-facing plans are rejected by `writer_text_states_secret`; extraction is reused only when both body hash and plan fingerprint match. Protection release sets `payload.status = "released"`; zero until_chapter means open. Independent access rules/team speed/edge multipliers have been replaced by per-book travel modes.
+
+P4b still owns residual chapter_extraction conflicts/rewrite_chapter, latest-chapter tick retirement/re-run and vanished-reference checks, world.drift/world_variable, checkable predicates, new offstage actors, task_contract_json deletion, world/news/cost fixes, narrowed extraction, dead-signal cleanup, held-change cards, multi-genre checks and closing docs. Its production runbook is separate; no deployment is authorized here. See [current architecture](../Design-docs/CURRENT_ARCHITECTURE.md) for the exact deletion inventory and remaining scope.
 
 ### Post-Canon Comment Analysis
 
-Reader-comment analysis runs before post-Canon feedback aggregation. `FORWIN_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS` retains its existing name and defaults to 20 seconds; a failed or timed-out optional model call falls back to comment-language cues. Pulp uses keyword analysis only; standard uses the LLM when available.
+`CommentAnalyzer` in `forwin.audience.comment_analysis` is the sole writer of comment_signal_candidates and runs before post-Canon feedback aggregation. `FORWIN_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS` retains its existing name and defaults to 20 seconds; a failed or timed-out optional model call falls back to comment-language cues. Pulp uses keyword analysis only; standard uses the LLM when available.
 
 ### Safe Stop
 
@@ -147,7 +157,6 @@ Run the focused operator and Codex integration tests from the repository virtual
   tests/test_mcp_server.py \
   tests/test_codex_bridge.py \
   tests/test_llm_router.py \
-  tests/test_codex_governed_actions.py \
   tests/test_codex_operator_ready.py \
   -q
 ```

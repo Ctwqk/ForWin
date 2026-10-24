@@ -239,3 +239,40 @@ def test_beat_sheet_actor_payload_marks_concealed_actors(visibility_source):
     actors = {item["id"]: item for item in _actors(_concealed_runtime(visibility_source=visibility_source))}
     assert actors["society"]["concealed"] is True
     assert actors["hero"]["concealed"] is False
+
+
+def test_setting_brief_validates_like_other_writer_text():
+    """FU-R51: the brief reaches the writer verbatim, so it is checked like reader_promise, from the arc start."""
+    def issues(brief, *, protect=True, runtime=None, reveal_chapters=None, **changes):
+        payload = deepcopy(_VALID)
+        if protect:
+            payload.update(_READER_PROTECTED)
+        payload.update(changes, setting_brief=brief)
+        return _sheet_issues(payload, runtime=runtime, reveal_chapters=reveal_chapters)
+
+    def as_promise(text, **kwargs):
+        found = issues("", reader_promise={"genre_promise": text}, **kwargs)
+        return [issue.replace("reader_promise.genre_promise", "setting_brief", 1) for issue in found]
+
+    stated, named = "a valley where the secret- \nvalue sleeps", "a valley ruled by HiddenSociety"
+    # The shared normalizer finds the proposition through inserted whitespace.
+    assert issues(stated)[0].startswith("setting_brief states the proposition of fact:secret")
+    assert issues(named, protect=False)[0].startswith("setting_brief names concealed entity society")
+    for text in (stated, named):
+        assert issues(text) == as_promise(text) != []
+
+    too_long = issues("x" * 201)
+    assert len(too_long) == 1 and too_long[0].startswith("setting_brief_too_long")
+    # The limit counts the stripped text.
+    assert issues(" \n" + "x" * 200 + "\n ") == issues("") == []
+
+    # The reveal exception: a reader reveal starting at the arc start, scheduled or the sheet's own,
+    # or recorded reader knowledge, permits both the proposition and the name.
+    reveal_at_start = deepcopy(_VALID["reveal_targets"])
+    reveal_at_start[0]["range"] = [1, 6]
+    for text in (stated, named, stated + " " + named):
+        assert issues(text, reveal_targets=reveal_at_start) == []
+        assert issues(text, reveal_targets=[], reveal_chapters={"secret": 1}) == []
+        assert issues(text, runtime=_concealed_runtime(reader_knows=True)) == []
+        # A later reveal does not.
+        assert issues(text, reveal_targets=[], reveal_chapters={"secret": 2}) != []

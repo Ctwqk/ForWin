@@ -90,7 +90,7 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
     summaries = [arc["summary"] for arc in world["story_engine"]["long_arcs"]]
     markers = {source: f"AUTHOR_ONLY_{genre}_{source}_7f3c91" for source in (
         "long_arc", "world", "map", "fact", "beat_sheet", "beat_sheet_open", "band_plan", "premise", "setting",
-        "phase", "milestone", "ambiguity", "title", "one_line", "goals", "hook", "hint_text",
+        "phase", "milestone", "ambiguity", "setting_brief", "title", "one_line", "goals", "hook", "hint_text",
         *(f"promise_{field}" for field in PROMISE_FIELDS),
     )}
     for arc in world["story_engine"]["long_arcs"]:
@@ -111,6 +111,7 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
         value = f"PERMITTED_{field}"
         promise[field] = [value] if field == "core_pleasures" else value
     fixture["beat_sheet"]["arc_payoff_map"]["ambiguity_constraints"] = ["PERMITTED_AMBIGUITY"]
+    fixture["beat_sheet"]["setting_brief"] = "PERMITTED_SETTING_BRIEF"
     fixture["beat_sheet"]["arc_payoff_map"]["revelation_layers"] = [{
         "layer_id": "future-canary", "summary": markers["beat_sheet"], "chapter_window": "3",
     }, {
@@ -126,10 +127,11 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
     actors = [node.id for node in runtime.world.nodes_by_id.values() if node.node_type == "character"]
     poisoned = sheet.model_dump(mode="json")
     paths = {"phase": "phases[0].purpose", "milestone": "milestones[0].description",
-             "ambiguity": "arc_payoff_map.ambiguity_constraints[0]"}
+             "ambiguity": "arc_payoff_map.ambiguity_constraints[0]", "setting_brief": "setting_brief"}
     poisoned["phases"][0]["purpose"] += " " + markers["phase"]
     poisoned["milestones"][0]["description"] += " " + markers["milestone"]
     poisoned["arc_payoff_map"]["ambiguity_constraints"][0] += " " + markers["ambiguity"]
+    poisoned["setting_brief"] += " " + markers["setting_brief"]
     for field in PROMISE_FIELDS:
         source = f"promise_{field}"
         paths[source] = f"reader_promise.{field}" + ("[0]" if field == "core_pleasures" else "")
@@ -227,6 +229,7 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
         get_active_genesis_revision=lambda _: revision,
         get_arc_payoff_map=lambda *_, **__: sheet.arc_payoff_map,
         get_reader_promise=lambda *_, **__: sheet.reader_promise,
+        get_arc_setting_brief=lambda *_, **__: sheet.setting_brief,
         get_band_experience_plan_for_chapter=lambda *_: schedule,
         get_chapter_experience_plan=lambda *_: chapter_experience,
     )
@@ -247,6 +250,7 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
     assert markers["premise"] in context.premise
     assert markers["setting"] in context.setting_summary
     assert context.reader_promise == sheet.reader_promise
+    assert context.arc_setting_brief == sheet.setting_brief == "PERMITTED_SETTING_BRIEF"
     assert context.band_delight_schedule == schedule
     assert context.chapter_experience_plan == chapter_experience
     assert context.arc_phase_purpose == sheet.phases[0].purpose
@@ -274,7 +278,7 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
 @pytest.mark.parametrize("genre", GENRES)
 def test_unvalidated_author_text_reaches_no_writer_builder(monkeypatch, genre, builder, setting_source):
     """Validated fields are writer-facing by design: phase purpose, milestone descriptions,
-    reader promise, ambiguity constraints, and band title/one_line/goals/hook/hints.
+    setting brief, reader promise, ambiguity constraints, and band title/one_line/goals/hook/hints.
     """
     context, markers, summaries = _author_context(monkeypatch, genre, setting_source)
     markers["gate"] = f"AUTHOR_ONLY_{genre}_gate_7f3c91"
@@ -310,6 +314,7 @@ def test_unvalidated_author_text_reaches_no_writer_builder(monkeypatch, genre, b
         for field in PROMISE_FIELDS:
             assert f"PERMITTED_{field}" in text
         assert "PERMITTED_AMBIGUITY" in text
+        assert "设定简介：PERMITTED_SETTING_BRIEF" in text
         assert not any(heading in text for heading in ("Genesis 世界总览", "Genesis 地图总览", "Genesis 长线引擎"))
         if path == "repair":
             assert "repair must fix:" in text

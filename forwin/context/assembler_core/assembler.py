@@ -108,6 +108,7 @@ class ChapterContextAssembler:
             chapter_goals=data.get("goals", []),
             chapter_plan_hook=str(getattr(chapter_plan, "hook", "") or ""),
             arc_phase_purpose=data.get("arc_phase_purpose", ""),
+            arc_setting_brief=data.get("arc_setting_brief", ""),
             world_view=data.get("world_view"),
             previous_chapter_summaries=data.get("summaries", []),
             active_entities=data.get("entities", []),

@@ -173,6 +173,8 @@ class ChapterContextPack(BaseModel):
     chapter_plan_hook: str = ""
     # The purpose of the arc beat sheet's phase that covers the chapter.
     arc_phase_purpose: str = ""
+    # The validated setting brief of the active beat sheet of the chapter's own arc.
+    arc_setting_brief: str = ""
     # What the chapter's POV perceives and knows; it has its own budget, outside the broker's.
     world_view: ChapterWorldView | None = None
 

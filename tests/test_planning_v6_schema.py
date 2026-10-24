@@ -24,7 +24,7 @@ BEAT_SHEET_COLUMNS = {
     "id", "project_id", "arc_plan_id", "version", "status", "source",
     "protagonist_ref", "phases_json", "milestones_json", "protections_json",
     "reveal_targets_json", "exit_state_json", "band_breakdown_json",
-    "reader_promise_json", "arc_payoff_map_json", "revision_reason", "created_at",
+    "reader_promise_json", "arc_payoff_map_json", "setting_brief", "revision_reason", "created_at",
 }
 BAND_PLAN_COLUMNS = {
     "id", "project_id", "arc_plan_id", "beat_sheet_id", "band_index",

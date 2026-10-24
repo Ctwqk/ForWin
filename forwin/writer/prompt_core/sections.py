@@ -64,6 +64,10 @@ def _story_basics_section(context: ChapterContextPack) -> str:
         "【故事基本信息】",
         f"类型：{context.genre}",
     ]
+    # The arc beat sheet's brief, validated like the other writer-facing planner text (FU-R51).
+    setting_brief = str(getattr(context, "arc_setting_brief", "") or "").strip()
+    if setting_brief:
+        lines.append(f"设定简介：{setting_brief}")
     protagonist_name = _extract_protagonist_name(context)
     if protagonist_name:
         lines.extend(

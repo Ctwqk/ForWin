@@ -146,6 +146,7 @@ def _sheet(world: _World, *, bands=((1, 6), (7, 12)), required_refs=None) -> dic
         ],
         "reader_promise": {"genre_promise": "promise-value"},
         "arc_payoff_map": {"awe_kit": ["awe-value"]},
+        "setting_brief": "brief-value",
     }
 
 
@@ -188,7 +189,9 @@ def test_beat_sheet_from_stub_llm_validates_and_persists(Session, digest_calls) 
             project_id=world.project_id, origin_chapter_number=0, obligation_type="world_change_response",
             status="active", summary="obligation-summary", deadline_chapter=5, payoff_test="payoff-test",
         ))
-    client = StubLLM(_sheet(world))
+    sheet = _sheet(world)
+    sheet["setting_brief"] = "  brief-value\n"
+    client = StubLLM(sheet)
     row_id = _ensure(Session, _service(client), world, arc_id)
 
     assert len(client.calls) == 1
@@ -227,6 +230,8 @@ def test_beat_sheet_from_stub_llm_validates_and_persists(Session, digest_calls) 
         assert data.reveal_targets[0].observer == "reader"
         assert data.reader_promise.genre_promise == "promise-value"
         assert data.arc_payoff_map.awe_kit == ["awe-value"]
+        # The brief is stored stripped: the writer reads it verbatim.
+        assert data.setting_brief == row.setting_brief == "brief-value"
         (trace,) = _traces(session, world.project_id)
         assert json.loads(trace.output_summary_json)["source"] == "llm"
         assert _trace_event_types(session, trace.id) == [DecisionEventType.LLM_REQUEST_SUCCEEDED]
@@ -370,6 +375,7 @@ def test_revise_creates_new_version_and_supersedes_old(Session) -> None:
     world, arc_id = _book(Session)
     revised = _sheet(world, bands=((1, 5), (6, 12)))
     revised["milestones"][0]["description"] = "revised-milestone"
+    revised["setting_brief"] = "revised-brief"
     client = StubLLM(_sheet(world), revised)
     service = _service(client)
     first_id = _ensure(Session, service, world, arc_id)
@@ -381,6 +387,8 @@ def test_revise_creates_new_version_and_supersedes_old(Session) -> None:
 
     prompt = client.user_prompt(1)
     assert "conflict-summary-value" in prompt and "milestone-description" in prompt
+    # The current brief goes back with the sheet, so a revision keeps or rewrites it like any other field.
+    assert client.payload(1)["current_beat_sheet"]["setting_brief"] == "brief-value"
     with Session() as session:
         repo = ArcBeatSheetRepository(session)
         first, second = session.get(ArcBeatSheetRow, first_id), session.get(ArcBeatSheetRow, second_id)
@@ -389,12 +397,64 @@ def test_revise_creates_new_version_and_supersedes_old(Session) -> None:
         assert repo.active_for_arc(arc_id).id == second_id
         assert [row.id for row in repo.active_for_project(world.project_id)] == [second_id]
         assert repo.load(second).milestones[0].description == "revised-milestone"
+        assert (repo.load(first).setting_brief, repo.load(second).setting_brief) == ("brief-value", "revised-brief")
         assert len(_traces(session, world.project_id)) == 2
     with Session.begin() as session:
         session.get(ArcPlanVersion, arc_id).status = "superseded"
     with Session() as session:
         # A sheet of a superseded arc plan is no longer one of the project's active sheets.
         assert ArcBeatSheetRepository(session).active_for_project(world.project_id) == []
+
+
+def test_stored_sheet_without_setting_brief_loads(Session) -> None:
+    """A row inserted with the column list from before FU-R51 loads with an empty brief."""
+    from sqlalchemy import text
+
+    from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+    from forwin.planning.beat_sheet.types import ArcBeatSheetData
+    from forwin.state.repo import StateRepository
+
+    world, arc_id = _book(Session)
+    payload = _sheet(world)
+    del payload["setting_brief"]
+    assert ArcBeatSheetData.model_validate(payload).setting_brief == ""
+    columns = {
+        "id": "sheet-before-brief", "project_id": world.project_id, "arc_plan_id": arc_id, "version": 1,
+        "status": "active", "source": "llm", "protagonist_ref": world.hero, "revision_reason": "activation",
+        **{f"{name}_json": json.dumps(payload[name]) for name in (
+            "phases", "milestones", "protections", "reveal_targets", "exit_state", "band_breakdown",
+            "reader_promise", "arc_payoff_map",
+        )},
+    }
+    with Session.begin() as session:
+        session.execute(text(
+            f"INSERT INTO arc_beat_sheets ({', '.join(columns)}, created_at) "
+            f"VALUES ({', '.join(f':{name}' for name in columns)}, now())"
+        ), columns)
+    with Session() as session:
+        data = ArcBeatSheetRepository(session).load(session.get(ArcBeatSheetRow, "sheet-before-brief"))
+        assert data.setting_brief == ""
+        assert data.phases[0].purpose == "purpose-a"
+        assert StateRepository(session).get_arc_setting_brief(world.project_id, arc_plan_id=arc_id) == ""
+
+
+def test_fallback_sheet_has_no_setting_brief(Session) -> None:
+    """The fallback writes no unvalidated text: a rejected answer's brief never survives into it."""
+    from forwin.planning.beat_sheet.fallback import build_fallback_beat_sheet
+    from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+
+    world, arc_id = _book(Session)
+    rejected = _sheet(world, required_refs=["ghost-node"])
+    rejected["setting_brief"] = "rejected-brief"
+    client = StubLLM(rejected, rejected)
+    row_id = _ensure(Session, _service(client), world, arc_id)
+
+    with Session() as session:
+        row = session.get(ArcBeatSheetRow, row_id)
+        assert (row.source, row.setting_brief) == ("fallback", "")
+        assert ArcBeatSheetRepository(session).load(row).setting_brief == ""
+        arc = session.get(ArcPlanVersion, arc_id)
+        assert build_fallback_beat_sheet(arc, protagonist_ref=world.hero, band_size=6).setting_brief == ""
 
 
 def test_ensure_is_idempotent(Session) -> None:

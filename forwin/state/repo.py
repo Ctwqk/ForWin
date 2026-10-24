@@ -201,6 +201,10 @@ class StateRepository:
         row = self.get_active_beat_sheet(project_id, arc_plan_id=arc_plan_id)
         return ArcPayoffMap.model_validate_json(row.arc_payoff_map_json) if row else None
 
+    def get_arc_setting_brief(self, project_id: str, *, arc_plan_id: str | None = None) -> str:
+        row = self.get_active_beat_sheet(project_id, arc_plan_id=arc_plan_id)
+        return row.setting_brief if row else ""
+
     # ------------------------------------------------------------------
     # Chapter Plan
     # ------------------------------------------------------------------

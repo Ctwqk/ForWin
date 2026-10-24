@@ -30,7 +30,8 @@ from forwin.observability.llm_trace import (
 from forwin.planning.beat_sheet.fallback import arc_bounds, build_fallback_beat_sheet, fallback_protagonist_ref
 from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
 from forwin.planning.beat_sheet.types import (
-    MAX_BAND_CHAPTERS, MIN_BAND_CHAPTERS, PROTECTION_KINDS, READER_OBSERVER, ArcBeatSheetData, BandSpan,
+    MAX_BAND_CHAPTERS, MIN_BAND_CHAPTERS, PROTECTION_KINDS, READER_OBSERVER, SETTING_BRIEF_MAX_CHARS, ArcBeatSheetData,
+    BandSpan,
 )
 from forwin.planning.fact_text import stated_facts
 from forwin.planning.world_digest import build_world_digest
@@ -409,6 +410,9 @@ def beat_sheet_issues(
             issues.append(f"{path}.field is required")
         else:
             state_field(node, item.field, f"{path}.field")
+    if (length := len(data.setting_brief.strip())) > SETTING_BRIEF_MAX_CHARS:
+        issues.append(f"setting_brief_too_long: setting_brief has {length} characters; it reaches the writer "
+                      f"verbatim, so keep it to one to three sentences of at most {SETTING_BRIEF_MAX_CHARS}")
     issues.extend(_writer_text_issues(data, runtime, reveal_chapters or {}, chapter_start=chapter_start))
     return issues
 
@@ -420,8 +424,9 @@ def _writer_text_issues(
     """Writer-facing text cannot state concealed facts before their reader reveal (P4a-R21/R36).
 
     Purposes and milestones feed band-wide key beats, so all these texts are checked from the arc's start
-    (P4a-R38). Revelation-layer names use their window start (P4a-R39); their chapter projection is unchanged.
-    Recorded reader knowledge is allowed.
+    (P4a-R38). The setting brief reaches every chapter of the arc, so it is checked from the arc's start as well,
+    names included (FU-R51). Revelation-layer names use their window start (P4a-R39); their chapter projection is
+    unchanged. Recorded reader knowledge is allowed.
     """
     # Imported here: the feasibility audit imports the band planner's modules, which import this package.
     from forwin.planning.band_planner.inputs import _concealed_names
@@ -452,6 +457,7 @@ def _writer_text_issues(
                          for index, text in enumerate(value))
         else:
             texts.append((f"reader_promise.{field}", value, chapter_start))
+    texts.append(("setting_brief", data.setting_brief, chapter_start))
     texts.extend((f"arc_payoff_map.ambiguity_constraints[{index}]", text, chapter_start)
                  for index, text in enumerate(data.arc_payoff_map.ambiguity_constraints))
     concealed_names = _concealed_names(runtime)
@@ -537,11 +543,12 @@ def _coverage_issues(label: str, ranges: Sequence[tuple[int, int]], start: int, 
 
 
 def _normalized(data: ArcBeatSheetData) -> ArcBeatSheetData:
-    """Phases and bands in chapter order, the bands numbered from 0 in that order."""
+    """Phases and bands in chapter order, the bands numbered from 0 in that order, and the brief stripped."""
     bands = sorted(data.band_breakdown, key=lambda band: band.chapter_start)
     return data.model_copy(update={
         "phases": sorted(data.phases, key=lambda phase: phase.chapter_range),
         "band_breakdown": [band.model_copy(update={"band_index": index}) for index, band in enumerate(bands)],
+        "setting_brief": data.setting_brief.strip(),
     })
 
 

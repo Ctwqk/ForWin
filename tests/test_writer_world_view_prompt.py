@@ -280,8 +280,8 @@ def test_planner_prompts_mark_the_fields_that_reach_the_writer():
 
     arguments = {"payload": {}, "digest_text": "digest", "output_schema": {}, "allowed": {}}
     # Milestone descriptions become the experience plan's curiosity-beat questions.
-    arc = writer_facing(ARC_BEATS_INSTRUCTIONS, "purpose", "milestones 的 description", "reader_promise",
-                        "arc_payoff_map", "ambiguity_constraints")
+    arc = writer_facing(ARC_BEATS_INSTRUCTIONS, "purpose", "milestones 的 description", "setting_brief",
+                        "reader_promise", "arc_payoff_map", "ambiguity_constraints")
     assert "revelation_layers.summary 仅是作者侧规划笔记，永不交给写作者" in arc
     assert "chapter_window 用章号或起止章号范围，仅用于规划揭示节奏" in arc
     assert "规划者保留完整 arc_payoff_map" in arc
@@ -289,6 +289,11 @@ def test_planner_prompts_mark_the_fields_that_reach_the_writer():
     assert "purpose 与 milestones 的 description 按卷起始章的读者知情权限填写" in arc
     assert "band 的每一章" in arc
     assert "本阶段起始章或更早的 reveal_targets" in arc
+    assert "setting_brief 与 ambiguity_constraints 同样按卷起始章填写" in arc
+    # FU-R51: the brief describes the world's look and texture and the story's tone.
+    brief = next(item for item in ARC_BEATS_INSTRUCTIONS if "setting_brief 用一到三句话" in item)
+    for clause in ("世界的样貌与质感", "故事的基调", "不超过 200 字", "原样交给写作者", "不得写入秘密", "隐藏行动者的名字"):
+        assert clause in brief
     band = writer_facing(BAND_PLAN_INSTRUCTIONS, "title", "one_line", "goals", "hook", "hint_text")
     assert "本章 reveal_directives" in band
     for instruction in (arc, band):
@@ -303,6 +308,62 @@ def test_planner_prompts_mark_the_fields_that_reach_the_writer():
                                   (build_band_plan_messages(**arguments), band)):
         system = next(message["content"] for message in messages if message["role"] == "system")
         assert instruction in system
+
+
+@pytest.mark.parametrize("builder", BUILDERS)
+def test_setting_brief_reaches_every_writer_builder(builder):
+    """FU-R51: story basics render the brief of the chapter's own arc (the M5 read path); empty renders nothing."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from forwin.context.assembler_core import ChapterContextAssembler
+    from forwin.context.providers.experience_provider import ExperienceContextProvider
+    from forwin.context.request import ContextDraft, ContextRequest
+    from forwin.models import Base
+    from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+    from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+    from forwin.planning.beat_sheet.types import ArcBeatSheetData
+    from forwin.runtime.policy import RuntimePolicy
+    from forwin.runtime.policy_store import ProjectPolicyStore
+    from forwin.state.repo import StateRepository
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(engine)
+    with Session.begin() as session:
+        ProjectPolicyStore(session).initialize(
+            Project(id="p", title="title", premise="premise", genre="genre"), RuntimePolicy.for_profile("standard"),
+        )
+        for arc_id, start, status in (("arc-1", 1, "completed"), ("arc-2", 9, "active")):
+            session.add(ArcPlanVersion(id=arc_id, project_id="p", version=start, chapter_start=start,
+                                       chapter_end=start + 7, arc_synopsis="synopsis", status=status))
+            session.flush()
+            ArcBeatSheetRepository(session).create("p", arc_id, ArcBeatSheetData.model_validate({
+                "protagonist_ref": "hero",
+                "phases": [{"name": "phase", "chapter_range": [start, start + 7], "purpose": "purpose"}],
+                "band_breakdown": [{"band_index": 0, "chapter_start": start, "chapter_end": start + 7}],
+                "setting_brief": f"brief-of-{arc_id}",
+            }), source="llm", reason="test")
+            session.add(ChapterPlan(project_id="p", arc_plan_id=arc_id, chapter_number=start,
+                                    title="title", one_line="one-line", goals_json='["goal"]'))
+    try:
+        with Session() as session:
+            repo = StateRepository(session)
+            for chapter, brief in ((1, "brief-of-arc-1"), (9, "brief-of-arc-2")):
+                plan = repo.get_chapter_plan("p", chapter)
+                draft = ContextDraft(data={"project": session.get(Project, "p")})
+                ExperienceContextProvider().contribute(
+                    ContextRequest(project_id="p", chapter_plan=plan, repo=repo), draft,
+                )
+                context = ChapterContextAssembler()._build_pack(project_id="p", chapter_plan=plan, draft=draft)
+                # A rewrite in a completed arc reads its own arc's sheet, never the active arc's.
+                assert context.arc_setting_brief == brief
+                text = _prompt(builder, context)
+                assert f"【故事基本信息】\n类型：genre\n设定简介：{brief}\n" in text
+                assert text.count("设定简介") == 1
+                assert "设定简介" not in _prompt(builder, context.model_copy(update={"arc_setting_brief": " "}))
+    finally:
+        engine.dispose()
 
 
 def test_personality_section_only_onstage(monkeypatch):

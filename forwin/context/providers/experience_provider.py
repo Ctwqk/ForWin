@@ -21,6 +21,7 @@ class ExperienceContextProvider:
         project_id = request.project_id
         reader_promise_getter = getattr(repo, "get_reader_promise", None)
         arc_payoff_map_getter = getattr(repo, "get_arc_payoff_map", None)
+        setting_brief_getter = getattr(repo, "get_arc_setting_brief", None)
         band_schedule_getter = getattr(
             repo, "get_band_experience_plan_for_chapter", None
         )
@@ -83,6 +84,9 @@ class ExperienceContextProvider:
                 )
                 if callable(arc_payoff_map_getter)
                 else None,
+                "arc_setting_brief": setting_brief_getter(project_id, arc_plan_id=arc_plan_id)
+                if callable(setting_brief_getter)
+                else "",
                 "band_schedule": (
                     band_schedule_getter(project_id, chapter_plan.chapter_number)
                     if callable(band_schedule_getter)

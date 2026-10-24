@@ -387,6 +387,12 @@ def test_writer_prompt_uses_world_view_and_hides_unpermitted_secrets(pipeline, g
     text = _prompt(builder, context)
     assert '【POV 世界视图】' in text
     assert context.world_view.pov_name in text
+    # FU-R51: the arc's validated setting brief reaches chapter 1; a sheet without one renders nothing.
+    brief = planned.fixture['beat_sheet'].get('setting_brief', '')
+    assert context.arc_setting_brief == brief
+    assert (f'设定简介：{brief}' in text) if brief else ('设定简介' not in text)
+    # The interstellar fixture carries a brief, so the rendered path is always exercised.
+    assert genre != 'interstellar' or brief
     for forbidden in [*secrets, *concealed]:
         assert forbidden not in text, (genre, builder, forbidden)
 

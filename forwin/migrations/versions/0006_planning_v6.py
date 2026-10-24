@@ -50,6 +50,7 @@ def upgrade() -> None:
         sa.Column("band_breakdown_json", sa.Text(), nullable=False),
         sa.Column("reader_promise_json", sa.Text(), nullable=False),
         sa.Column("arc_payoff_map_json", sa.Text(), nullable=False),
+        sa.Column("setting_brief", sa.Text(), server_default="", nullable=False),
         sa.Column("revision_reason", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["project_id"], ["projects.id"]),

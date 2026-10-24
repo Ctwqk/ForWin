@@ -67,6 +67,7 @@ class ArcBeatSheetRepository:
             band_breakdown_json=_dump(data.band_breakdown),
             reader_promise_json=_dump(data.reader_promise),
             arc_payoff_map_json=_dump(data.arc_payoff_map),
+            setting_brief=data.setting_brief,
             revision_reason=reason,
         )
         self.session.add(row)
@@ -84,6 +85,7 @@ class ArcBeatSheetRepository:
             "band_breakdown": json.loads(row.band_breakdown_json),
             "reader_promise": json.loads(row.reader_promise_json),
             "arc_payoff_map": json.loads(row.arc_payoff_map_json),
+            "setting_brief": row.setting_brief,
         })
 
 

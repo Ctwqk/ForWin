@@ -24,7 +24,7 @@ ARC_BEATS_INSTRUCTIONS = (
     "卷的章节范围固定为 arc.chapter_start 到 arc.chapter_end，不得改动。phases 与 band_breakdown 都按章节顺序"
     "恰好覆盖这个范围，不留空章、不重叠；每个 band 的章数在 band_limits 之内，以 band_size 为准，"
     "卷长不足下限时只给一个 band；band_index 从 0 起按顺序编号。",
-    "phases 把本卷分成若干阶段，purpose 写该阶段要完成的叙事任务；purpose、milestones 的 description、reader_promise 的所有字段以及 arc_payoff_map 的 ambiguity_constraints 都会原样交给写作者，不得写入写作者当前无权知道的秘密真相。purpose 与 milestones 的 description 按卷起始章的读者知情权限填写，不得陈述卷起始章尚未揭示的事实，因为它们会进入所在 band 的每一章；reader_promise 与 ambiguity_constraints 同样按卷起始章填写。actors 中标记为 \"concealed\": true 的行动者，其名字不得出现在所有面向写作者的文本中；只有本阶段起始章或更早的 reveal_targets 向读者揭示其相关事实时，才可在该阶段文本中点名，卷级文本则以卷起始章为准。revelation_layers.summary 仅是作者侧规划笔记，永不交给写作者；chapter_window 用章号或起止章号范围，仅用于规划揭示节奏，其中的隐藏名字仍须在窗口起始章或此前向读者揭示。规划者保留完整 arc_payoff_map；本章揭示只通过世界视图中的本章 reveal_directives 交给写作者。milestones 是本卷必须达成的节点："
+    "phases 把本卷分成若干阶段，purpose 写该阶段要完成的叙事任务；purpose、milestones 的 description、setting_brief、reader_promise 的所有字段以及 arc_payoff_map 的 ambiguity_constraints 都会原样交给写作者，不得写入写作者当前无权知道的秘密真相。purpose 与 milestones 的 description 按卷起始章的读者知情权限填写，不得陈述卷起始章尚未揭示的事实，因为它们会进入所在 band 的每一章；reader_promise、setting_brief 与 ambiguity_constraints 同样按卷起始章填写。actors 中标记为 \"concealed\": true 的行动者，其名字不得出现在所有面向写作者的文本中；只有本阶段起始章或更早的 reveal_targets 向读者揭示其相关事实时，才可在该阶段文本中点名，卷级文本则以卷起始章为准。revelation_layers.summary 仅是作者侧规划笔记，永不交给写作者；chapter_window 用章号或起止章号范围，仅用于规划揭示节奏，其中的隐藏名字仍须在窗口起始章或此前向读者揭示。规划者保留完整 arc_payoff_map；本章揭示只通过世界视图中的本章 reveal_directives 交给写作者。milestones 是本卷必须达成的节点："
     "id 在本表内唯一，target_range 在卷内，required_refs 列出达成它时必须仍然存在的行动者 id；hard 为 true 表示不可放弃。",
     "protections 保护里程碑依赖的世界状态：kind 只能取允许值；ref 是被保护的行动者 id；must_be_alive 只用于 kind 为 character "
     "的行动者；must_not_know 时 ref 与 observer_ref 都是不得知情的观察者（行动者 id，或允许值中的读者标记），并给出 fact_ref；"
@@ -34,7 +34,8 @@ ARC_BEATS_INSTRUCTIONS = (
     "exit_state 列出本卷结束时必须成立的状态：ref 为行动者 id，field 与 value 是它的状态字段与取值，note 说明理由。"
     "must_hold_state 与 exit_state 的 field 只能取允许值 actor_fields 中该行动者 kind 的字段，可写字段名或加 state. / profile. 前缀。",
     "protagonist_ref 从 actors 中选一个 kind 为 character 且 seeded 为 true 的行动者作为本卷主角。reader_promise 与 arc_payoff_map "
-    "写本卷对读者的承诺与回报安排。",
+    "写本卷对读者的承诺与回报安排。setting_brief 用一到三句话写世界的样貌与质感以及故事的基调，不超过 200 字；"
+    "它会原样交给写作者，不得写入秘密，也不得出现隐藏行动者的名字。",
     "引用只能使用 actors 的 id 与 facts 的 ref，不得编造人物、地点或事实。世界摘要、上一卷收尾状态与未了义务是作者视角，"
     "可以含有秘密，只用于规划。给出 revision 时，在 current_beat_sheet 的基础上修订，消除 conflict_summary 所述的冲突。"
     "重试反馈列出上一次输出的问题，必须全部修正；所有空列表返回 []。完整输出结构如下，允许值列表补充其中的枚举。",

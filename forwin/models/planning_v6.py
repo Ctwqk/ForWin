@@ -31,6 +31,7 @@ class ArcBeatSheetRow(Base):
     band_breakdown_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     reader_promise_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     arc_payoff_map_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    setting_brief: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     revision_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 

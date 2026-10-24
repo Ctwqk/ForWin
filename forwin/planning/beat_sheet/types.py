@@ -17,6 +17,8 @@ READER_OBSERVER = "reader"
 MIN_BAND_CHAPTERS = 4
 MAX_BAND_CHAPTERS = 12
 BEAT_SHEET_SOURCES = ("llm", "fallback")
+# The setting brief's length limit, counted after stripping; the writer reads the brief verbatim.
+SETTING_BRIEF_MAX_CHARS = 200
 
 
 class _Frozen(BaseModel):
@@ -81,6 +83,9 @@ class ArcBeatSheetData(_Frozen):
     band_breakdown: list[BandSpan]
     reader_promise: ReaderPromise = Field(default_factory=ReaderPromise)
     arc_payoff_map: ArcPayoffMap = Field(default_factory=ArcPayoffMap)
+    # One to three sentences on the world's look and texture and the story's tone, for the writer (FU-R51).
+    # Empty on sheets stored before it existed and on the fallback.
+    setting_brief: str = ""
 
 
 __all__ = [
@@ -89,6 +94,7 @@ __all__ = [
     "MIN_BAND_CHAPTERS",
     "PROTECTION_KINDS",
     "READER_OBSERVER",
+    "SETTING_BRIEF_MAX_CHARS",
     "ArcBeatSheetData",
     "BandSpan",
     "BeatPhase",

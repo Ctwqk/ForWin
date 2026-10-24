@@ -74,7 +74,10 @@ def fallback_protagonist_ref(project_id: str, pack: Mapping[str, Any], runtime: 
 def build_fallback_beat_sheet(
     arc_plan: ArcPlanVersion, *, protagonist_ref: str, band_size: int,
 ) -> ArcBeatSheetData:
-    """Even bands and one phase pursuing the arc goal; no milestone, protection or reveal target."""
+    """Even bands and one phase pursuing the arc goal; no milestone, protection or reveal target.
+
+    The setting brief stays empty: no model wrote one, so there is no validated brief for the writer.
+    """
     start, end = arc_bounds(arc_plan)
     return ArcBeatSheetData(
         protagonist_ref=protagonist_ref,

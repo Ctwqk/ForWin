@@ -19,7 +19,7 @@ from forwin.models.project import ArcPlanVersion
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.protocol.book_state import (
-    ApprovedGraphDeltaSet, FactNode, FactPatch, GraphDelta, MapNode, NodePatch, WorldNode,
+    ApprovedGraphDeltaSet, CognitionPatch, FactNode, FactPatch, GraphDelta, MapNode, NodePatch, WorldNode,
 )
 from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
 from forwin.runtime.policy import RuntimePolicy
@@ -672,6 +672,92 @@ def test_generation_checks_writer_text_against_the_reveal_schedule(Session, monk
     assert len(client.calls) == 2
     feedback = client.user_prompt(1).split("Retry validation feedback", 1)[1]
     assert f"phases[0].purpose states the proposition of {world.fact('fact-1')}" in feedback
+
+
+def _reader_learns_in_chapter(Session, world: _World, chapter: int) -> tuple[str, str]:
+    """Chapter ``chapter`` creates a secret society and a hidden fact about it, and the reader comes to know the
+    fact there. Neither is scheduled for a reveal. Returns the fact's proposition and the society's name."""
+    society, fact = f"society-{world.project_id}", "fact-learned"
+    with Session.begin() as session:
+        result = BookStateCompiler(session).compile(ApprovedGraphDeltaSet(
+            project_id=world.project_id, chapter_number=chapter, graph_deltas=[GraphDelta(
+                id=f"chapter-{chapter}-{world.project_id}", project_id=world.project_id, chapter_number=chapter,
+                story_time_start=OPENING, story_time_end=OPENING + 90,
+                node_patches=[NodePatch(node_id=society, node_type="organization", op="create", new_value={
+                    "id": society, "project_id": world.project_id, "node_type": "organization",
+                    "name": "HiddenSociety", "profile": {"visibility_level": "secret"},
+                })],
+                fact_patches=[FactPatch(fact_id=fact, op="create", proposition="the vault opens at dusk",
+                                        new_value={"project_id": world.project_id, "sensitivity_level": "secret",
+                                                   "related_node_refs": [society]})],
+                cognition_patches=[CognitionPatch(
+                    observer_type="reader", observer_id="reader", op="merge", field_path="knowledge_by_ref",
+                    new_value={f"fact:{fact}": "knows"}, evidence_refs=["knowledge:told:-:-"],
+                )],
+            )],
+        ))
+        assert result.committed, result.blocked_reasons
+    return "the vault opens at dusk", "HiddenSociety"
+
+
+def _arc_two_sheet(world: _World) -> dict:
+    """A sheet for an arc of chapters 13-18 with nothing scheduled or protected."""
+    return {
+        "protagonist_ref": world.hero,
+        "phases": [{"name": "phase-c", "chapter_range": [13, 18], "purpose": "purpose-c"}],
+        "band_breakdown": [{"band_index": 0, "chapter_start": 13, "chapter_end": 18}],
+    }
+
+
+@pytest.mark.parametrize("what", ["proposition", "name"])
+@pytest.mark.parametrize("field", ["setting_brief", "reader_promise"])
+def test_mid_arc_revise_checks_reader_knowledge_from_arc_start(Session, field, what) -> None:
+    """FU-R52: what the reader learns inside the arc is no excuse for arc-wide text, which a rewrite of an earlier
+    chapter of the same arc renders too. The next arc, which starts after that chapter, may use it."""
+    world, arc_id = _book(Session)
+
+    def with_text(sheet: dict, text: str) -> dict:
+        if field == "setting_brief":
+            return {**sheet, "setting_brief": text}
+        return {**sheet, "reader_promise": {"genre_promise": text}}
+
+    _ensure(Session, _service(StubLLM(_sheet(world))), world, arc_id)
+    proposition, name = _reader_learns_in_chapter(Session, world, 2)
+    text = f"a valley where {proposition}" if what == "proposition" else f"a valley ruled by {name}"
+    path = "setting_brief" if field == "setting_brief" else "reader_promise.genre_promise"
+    issue = (f"{path} states the proposition of fact:fact-learned" if what == "proposition"
+             else f"{path} names concealed entity society-{world.project_id}")
+
+    client = StubLLM(with_text(_sheet(world), text), with_text(_sheet(world), "a quiet valley"))
+    with Session.begin() as session:
+        revised_id = _service(client).revise(
+            session, project_id=world.project_id, arc_plan=session.get(ArcPlanVersion, arc_id), policy=POLICY,
+            reason="conflict:conflict-1", conflict_summary="conflict-summary-value",
+        ).id
+    assert len(client.calls) == 2
+    feedback = client.user_prompt(1).split("Retry validation feedback", 1)[1]
+    assert issue in feedback
+    with Session() as session:
+        assert session.get(ArcBeatSheetRow, revised_id).source == "llm"
+
+    # The next arc starts after chapter 2: the reader knows the fact by then.
+    with Session.begin() as session:
+        arc_two = ArcPlanVersion(
+            project_id=world.project_id, arc_number=2, chapter_start=13, chapter_end=18,
+            title="arc-two", goal="goal-two", stakes="stakes-two", payoff_direction="payoff-two",
+            arc_synopsis="synopsis-two",
+        )
+        session.add(arc_two)
+        session.flush()
+        arc_two_id = arc_two.id
+    next_client = StubLLM(with_text(_arc_two_sheet(world), text))
+    row_id = _ensure(Session, _service(next_client), world, arc_two_id)
+    assert len(next_client.calls) == 1
+    with Session() as session:
+        row = session.get(ArcBeatSheetRow, row_id)
+        assert row.source == "llm"
+        promise = json.loads(row.reader_promise_json)["genre_promise"]
+        assert (row.setting_brief if field == "setting_brief" else promise) == text
 
 
 def test_an_arc_shorter_than_four_chapters_is_one_band() -> None:

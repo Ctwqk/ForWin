@@ -118,6 +118,9 @@ class ArcBeatSheetService:
         expected_sheet_id: str | None = None,
         current: ArcBeatSheetData | None = None, revision: Mapping[str, str] | None = None,
     ) -> ArcBeatSheetRow:
+        # Imported here: the feasibility audit imports the band planner's modules, which import this package.
+        from forwin.planning.feasibility import reader_known_facts
+
         start, end = arc_bounds(arc_plan)
         # The refs are checked against the latest canon: chapter 0 at handoff.
         as_of = BookStateRepository(session).latest_canon_chapter(project_id) or 0
@@ -160,9 +163,15 @@ class ArcBeatSheetService:
         if revision is not None:
             payload["current_beat_sheet"] = current.model_dump(mode="json") if current is not None else None
             payload["revision"] = dict(revision)
+        # Beat-sheet text reaches the writer verbatim, in every chapter of the arc. After a mid-arc revise the latest
+        # canon is past the arc's start, so what the reader knows there is not what they knew in the arc's first
+        # chapters, which a later historical rewrite renders it for (FU-R52).
+        reader_runtime = (BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=start - 1)
+                          if start - 1 < as_of else runtime)
         call = self._call(
             payload, digest.text, start=start, end=end, runtime=runtime, actor_ids={actor["id"] for actor in actors},
             reveal_chapters=earliest_reveal_chapters(session, project_id),
+            reader_known=reader_known_facts(reader_runtime),
         )
         data, source = call.data, "llm"
         if data is None:
@@ -189,7 +198,7 @@ class ArcBeatSheetService:
 
     def _call(
         self, payload: Mapping[str, Any], digest_text: str, *, start: int, end: int, runtime: BookStateRuntime,
-        actor_ids: Collection[str], reveal_chapters: Mapping[str, int],
+        actor_ids: Collection[str], reveal_chapters: Mapping[str, int], reader_known: frozenset[str] | None = None,
     ) -> _BeatSheetCall:
         """Up to ``max_attempts`` calls. A malformed or invalid answer goes back to the model as feedback;
         a provider failure resends the same messages."""
@@ -227,7 +236,7 @@ class ArcBeatSheetService:
             else:
                 call.issues = beat_sheet_issues(
                     parsed, chapter_start=start, chapter_end=end, runtime=runtime, actor_ids=actor_ids,
-                    reveal_chapters=reveal_chapters,
+                    reveal_chapters=reveal_chapters, reader_known=reader_known,
                 )
             mark_latest_attempt_workflow(self.llm_client, attempt_no=attempt_no, stage_key=STAGE_KEY)
             call.attempts.extend(self._drained_attempts(
@@ -327,13 +336,16 @@ class _BeatSheetCall:
 def beat_sheet_issues(
     data: ArcBeatSheetData, *, chapter_start: int, chapter_end: int, runtime: BookStateRuntime,
     actor_ids: Collection[str], reveal_chapters: Mapping[str, int] | None = None,
+    reader_known: frozenset[str] | None = None,
 ) -> list[str]:
     """Every deterministic problem with the sheet.
 
     The protagonist, milestone requirements and protection and exit-state refs must be actors the prompt offered
     (``actor_ids``); observers must be the reader or active nodes; fact refs must name the runtime's facts.
     ``reveal_chapters`` (fact node id -> earliest reader reveal chapter) schedules the facts the sheet's own
-    reader targets do not.
+    reader targets do not. ``reader_known`` is the fact node ids the reader knows before ``chapter_start``; leave
+    it out when ``runtime`` is as of ``chapter_start - 1`` or earlier, and the runtime's recorded reader knowledge
+    stands for it.
     """
     world = runtime.world
     issues = _coverage_issues("phases", [phase.chapter_range for phase in data.phases], chapter_start, chapter_end)
@@ -413,26 +425,29 @@ def beat_sheet_issues(
     if (length := len(data.setting_brief.strip())) > SETTING_BRIEF_MAX_CHARS:
         issues.append(f"setting_brief_too_long: setting_brief has {length} characters; it reaches the writer "
                       f"verbatim, so keep it to one to three sentences of at most {SETTING_BRIEF_MAX_CHARS}")
-    issues.extend(_writer_text_issues(data, runtime, reveal_chapters or {}, chapter_start=chapter_start))
+    issues.extend(_writer_text_issues(
+        data, runtime, reveal_chapters or {}, chapter_start=chapter_start, reader_known=reader_known,
+    ))
     return issues
 
 
 def _writer_text_issues(
     data: ArcBeatSheetData, runtime: BookStateRuntime, reveal_chapters: Mapping[str, int],
-    *, chapter_start: int,
+    *, chapter_start: int, reader_known: frozenset[str] | None = None,
 ) -> list[str]:
     """Writer-facing text cannot state concealed facts before their reader reveal (P4a-R21/R36).
 
     Purposes and milestones feed band-wide key beats, so all these texts are checked from the arc's start
     (P4a-R38). The setting brief reaches every chapter of the arc, so it is checked from the arc's start as well,
     names included (FU-R51). Revelation-layer names use their window start (P4a-R39); their chapter projection is
-    unchanged. Recorded reader knowledge is allowed.
+    unchanged. Only reader knowledge from before the arc is allowed: a fact the reader learns inside the arc is
+    not known in the chapters before it, and a rewrite of one of those renders this text (FU-R52).
     """
     # Imported here: the feasibility audit imports the band planner's modules, which import this package.
     from forwin.planning.band_planner.inputs import _concealed_names
     from forwin.planning.feasibility import reader_known_facts
 
-    known = reader_known_facts(runtime)
+    known = reader_known if reader_known is not None else reader_known_facts(runtime)
     reveal = dict(reveal_chapters)
     own: dict[str, int] = {}
     for target in data.reveal_targets:

@@ -276,3 +276,49 @@ def test_setting_brief_validates_like_other_writer_text():
         assert issues(text, runtime=_concealed_runtime(reader_knows=True)) == []
         # A later reveal does not.
         assert issues(text, reveal_targets=[], reveal_chapters={"secret": 2}) != []
+
+
+def test_reader_known_replaces_the_recorded_knowledge_of_the_runtime():
+    """FU-R52: the caller says what the reader knew before the arc; the runtime's own record is the default."""
+    stated, named = "a valley where the secret-value sleeps", "a valley ruled by HiddenSociety"
+
+    def issues(text, *, reader_known, reader_knows):
+        payload = deepcopy(_VALID)
+        payload.update(_READER_PROTECTED)
+        payload["setting_brief"] = text
+        return beat_sheet_issues(
+            ArcBeatSheetData.model_validate(payload), chapter_start=1, chapter_end=6,
+            runtime=_concealed_runtime(reader_knows=reader_knows), actor_ids=_OFFERED | {"society"},
+            reader_known=reader_known,
+        )
+
+    for text, issue in ((stated, "setting_brief states the proposition of fact:secret"),
+                        (named, "setting_brief names concealed entity society")):
+        # None reads the runtime: the fact is recorded as known there.
+        assert issues(text, reader_known=None, reader_knows=True) == []
+        assert issues(text, reader_known=frozenset({"secret"}), reader_knows=True) == []
+        # The runtime has it, but the reader did not know it before the arc.
+        found = issues(text, reader_known=frozenset(), reader_knows=True)
+        assert len(found) == 1 and found[0].startswith(issue)
+        # Nor does the runtime's record add to the caller's: this reader knew it before the arc.
+        assert issues(text, reader_known=frozenset({"secret"}), reader_knows=False) == []
+        assert issues(text, reader_known=None, reader_knows=False) != []
+
+
+def test_a_reveal_at_a_later_phase_start_allows_the_name_there_but_not_in_the_setting_brief():
+    """FU-R51 follow-up: the brief is checked from the arc's start, a phase purpose from its own start."""
+    payload = deepcopy(_VALID)
+    payload["phases"] = [
+        {"name": "opening", "chapter_range": [1, 3], "purpose": "a clue"},
+        {"name": "turn", "chapter_range": [4, 6], "purpose": "investigate HiddenSociety"},
+    ]
+    payload["reveal_targets"][0]["range"] = [4, 6]
+    assert _sheet_issues(payload) == []
+
+    payload["setting_brief"] = "a valley ruled by HiddenSociety"
+    issues = _sheet_issues(payload)
+    assert len(issues) == 1
+    assert issues[0].startswith("setting_brief names concealed entity society")
+    # The same reveal starting with the arc allows both.
+    payload["reveal_targets"][0]["range"] = [1, 6]
+    assert _sheet_issues(payload) == []

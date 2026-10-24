@@ -72,6 +72,10 @@ def _assert_planning_schema(engine: sa.Engine) -> None:
     assert {"project_stage_analyses", "project_replan_events"}.isdisjoint(inspector.get_table_names())
     assert "macro_" + "progression_json" not in {c["name"] for c in inspector.get_columns("arc_plan_versions")}
     assert {c["name"] for c in inspector.get_columns("arc_beat_sheets")} == BEAT_SHEET_COLUMNS
+    brief = next(c for c in inspector.get_columns("arc_beat_sheets") if c["name"] == "setting_brief")
+    # A sheet stored before the column existed reads as an empty brief (PostgreSQL reflects ``''::text``).
+    assert brief["nullable"] is False
+    assert str(brief["default"]).split("::")[0] == "''"
     assert {c["name"] for c in inspector.get_columns("band_plans")} == BAND_PLAN_COLUMNS
     assert PLANNING_COLUMNS <= {c["name"] for c in inspector.get_columns("chapter_plans")}
     assert ("arc_plan_id", "version") in {

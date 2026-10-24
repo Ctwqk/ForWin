@@ -298,6 +298,7 @@ def _fact_parts(
                 and (hinted or topic_refs.intersection(fact.related_node_refs))):
             names = _subject_names(runtime, fact)
             if names or hinted:
+                # Preserve every fact ref; render_world_view deduplicates the topic text.
                 forbidden.append(ForbiddenTopic(fact_ref=ref, topic=forbidden_topic_text(names)))
     return knowledge, reader_known, forbidden, secret_refs
 

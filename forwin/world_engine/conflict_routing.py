@@ -31,6 +31,7 @@ def live_intent(runtime: BookStateRuntime, intent_ref: str) -> bool:
 
 def available_options(
     draft: ConflictDraft, *, live_intent: bool = False, plot_responded: bool = False,
+    reachable_chapter: bool = True,
 ) -> tuple[ConflictOption, ...]:
     """A rewrite can only undo what the world did, an infeasible plan can only be amended, a broken
     boundary is vetoed or amended around, and lighter conflicts may also leave an obligation."""
@@ -40,7 +41,8 @@ def available_options(
         return _PLAN_CONFLICT_OPTIONS
     if draft.violated in _BOUNDARY_VIOLATIONS:
         return _BOUNDARY_OPTIONS
-    options = _PLAN_OPTIONS if draft.intent_ref and live_intent and not plot_responded else _BOUNDARY_OPTIONS
+    options = (_PLAN_OPTIONS if draft.intent_ref and live_intent and not plot_responded and reachable_chapter
+               else _BOUNDARY_OPTIONS)
     if draft.impact_level in _OBLIGATION_IMPACTS:
         return (*options, "accept_with_obligation")
     return options

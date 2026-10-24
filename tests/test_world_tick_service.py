@@ -1573,6 +1573,36 @@ def test_an_in_tick_resolution_that_no_longer_holds_goes_to_a_human(monkeypatch)
     engine.dispose()
 
 
+def test_cancelled_onstage_resolution_keeps_intent_only_in_open_conflict(monkeypatch):
+    from forwin.world_engine.tick import _Tick
+    from forwin.world_engine import tick_conflicts
+
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    _plan(Session, world, 2)
+    chapter = _chapter(Session, world, 1)
+    original_options = tick_conflicts.available_options
+    monkeypatch.setattr(tick_conflicts, "available_options", lambda draft, **kwargs:
+                        (*original_options(draft, **kwargs), "accept_with_obligation"))
+    original_admitted = _Tick._admitted
+
+    def admit_with_onstage_target(tick, base):
+        # The resolution was offered before the final running-state screen.
+        tick.onstage_refs = frozenset({world.rival})
+        return original_admitted(tick, base)
+
+    monkeypatch.setattr(_Tick, "_admitted", admit_with_onstage_target)
+    result = _tick(Session, _ambushing(world, chapter, "accept_with_obligation"), chapter)
+    [conflict] = _conflicts(Session, world)
+    assert (conflict.status, conflict.required_decider) == ("open", "human")
+    assert f"adjudication:{_later(world)}" in result.dropped_candidate_ids
+    runtime = _runtime(Session, world)
+    assert runtime.world.get_state(_later(world))["status"] == "planned"
+    assert runtime.world.get_node(_later(world)).profile["requires_onstage"] is False
+    assert runtime.world.get_state(world.rival)["alive_status"] == "alive"
+    engine.dispose()
+
+
 def test_resolving_a_held_change_that_canon_has_since_ruled_out_is_stale(monkeypatch) -> None:
     from forwin.world_engine.conflict_resolution import ConflictResolutionService, ConflictStale
     from forwin.world_engine.conflict_types import ConflictDecision

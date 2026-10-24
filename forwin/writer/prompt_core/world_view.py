@@ -74,7 +74,7 @@ def render_world_view(view: ChapterWorldView) -> str:
     _extend(lines, "本章暗示（只埋线索，不要点破）", [hint.hint_text for hint in view.hints])
     _extend(
         lines, "禁止定论的话题（不要给出确定答案，也不要编造真相）",
-        [topic.topic for topic in view.forbidden_topics],
+        list(dict.fromkeys(topic.topic for topic in view.forbidden_topics)),
     )
     _extend(lines, LOCATION_TABLE_HEADING, [_location_row(row, view.pov_location) for row in view_location_rows(view)])
     _extend(lines, "POV 知道的时限", [_clock_row(clock) for clock in view.pov_clocks])

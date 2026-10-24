@@ -397,7 +397,12 @@ def _record_plot_response(session: Session, conflict: WorldPlanConflictRow, *, l
     project = session.get(Project, conflict.project_id)
     total = int(project.target_total_chapters or 0) if project is not None else 0
     if total <= latest_chapter:
-        raise ConflictOptionUnavailable(f"No chapter follows chapter {latest_chapter} within the book's {total}")
+        remaining = [option for option in json.loads(conflict.options_json or "[]")
+                     if option not in {"plot_responds", "accept_with_obligation"}]
+        raise ConflictOptionUnavailable(
+            f"No chapter follows chapter {latest_chapter} within the book's {total}. "
+            f"Remaining options: {', '.join(remaining)}"
+        )
     plans = reachable_response_plans(session, conflict.project_id, latest_chapter=latest_chapter)
     plan = plans[0] if plans else None
     return record_plot_response_patch(session, conflict, plan) if plan is not None else ""
@@ -703,11 +708,19 @@ class ConflictResolutionService:
         The held change was checked against the canon of its tick; earlier resolutions or a rewrite may
         have changed it since. A veto changes nothing that can fail.
         """
+        from .tick import _chapter_onstage_refs
+
+        deltas = BookStateRepository(self.session).list_graph_deltas(
+            conflict.project_id, after_chapter=context.chapter_number - 1, through_chapter=context.chapter_number,
+        )
+        chapter = next((delta for delta in reversed(deltas) if delta.source_type == CHAPTER_EXTRACTION_SOURCE_TYPE), None)
         check = RunningStateCheck(
             self.session, context=context, runtime=runtime,
             lexicon=BookLexiconRepository(self.session).get(conflict.project_id),
             calendar=StoryCalendarRepository(self.session).get(conflict.project_id),
             tick_id=tick_id, travel_tolerance=self.policy.review.travel_tolerance,
+            onstage_refs=_chapter_onstage_refs(self.session, conflict.project_id, context.chapter_number, chapter),
+            chapter_delta=chapter,
         )
         for candidate in candidates:
             issues = check.admit(candidate)

@@ -1038,6 +1038,42 @@ def test_a_held_movement_within_the_chapter_still_resolves(monkeypatch) -> None:
     engine.dispose()
 
 
+@pytest.mark.parametrize("onstage_source", ["plan", "pov", "event", "movement"])
+def test_http_accept_refuses_a_change_touching_latest_chapter_onstage(monkeypatch, onstage_source):
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    hero = book.world.hero
+    with Session.begin() as session:
+        plan = session.get(ChapterPlan, book.plans[1])
+        if onstage_source == "plan":
+            plan.onstage_refs_json = json.dumps([hero])
+        elif onstage_source == "pov":
+            plan.pov_ref = hero
+    if onstage_source in {"event", "movement"}:
+        # Exercise the committed chapter channels through the canonical delta fixture.
+        from tests.test_world_gate_v6 import _event, _move
+        fields = _time(1, "日")
+        if onstage_source == "event":
+            fields["events"] = [_event([hero])]
+        else:
+            fields["movements"] = [_move(hero, book.world.loc(1), book.world.loc(2))]
+        chapter = _delta(Session, book.world, 2, fields)
+        _commit(Session, book.world, chapter)
+    held = _held(book).model_copy(update={"effects": WorldEffects(entity_changes=[
+        EffectEntityChange(ref=hero, field="alive_status", new_value="dead"),
+    ])})
+    conflict_id = _conflict(Session, book, proposed_change=held.model_dump(mode="json"))
+    with pytest.raises(ConflictStale, match="touches_onstage_entity"):
+        _resolve(Session, book, conflict_id, "accept_with_obligation")
+    with Session() as session:
+        assert WorldConflictRepository(session).get(book.project_id, conflict_id).status == "open"
+        latest = BookStateRepository(session).latest_canon_chapter(book.project_id)
+        runtime = BookStateProjection(session).load_runtime_as_of(book.project_id, as_of_chapter=latest)
+        assert runtime.world.get_state(hero)["alive_status"] == "alive"
+        assert runtime.world.get_state(book.later)["status"] == "planned"
+    engine.dispose()
+
+
 def test_veto_reroll_window_starts_exactly_max_rerolls_chapters_back(monkeypatch) -> None:
     engine, Session = _session_factory()
     book = _book(Session, monkeypatch)

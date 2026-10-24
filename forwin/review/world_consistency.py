@@ -19,7 +19,7 @@ from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.writer.prompt_core.world_repair import world_repair_fix
-from forwin.writer.prompt_core.world_view import forbidden_topic_text
+from forwin.writer.prompt_core.world_view import UNNAMED_ACTOR_LABEL, forbidden_topic_text
 
 ISSUE_TYPE = "world_consistency"
 # Gate and translator messages separate refs with spaces, commas, semicolons, parens and quotes.
@@ -73,6 +73,7 @@ class WorldConsistencyReviewer:
         ]
         names: Mapping[str, str] = {}
         fact_topics: Mapping[str, Sequence[str]] = {}
+        concealed_names: Mapping[str, str] = {}
         extraction = writer_output.chapter_delta
         if extraction is None:
             findings.append(_Finding(
@@ -103,6 +104,7 @@ class WorldConsistencyReviewer:
             )
             names = world.names
             fact_topics = world.translation.fact_topics
+            concealed_names = world.translation.concealed_names
             findings.extend(
                 _Finding(issue.severity, issue.code, issue.message, _path_ref(issue.path), "ChapterDeltaTranslator")
                 for issue in world.translation.issues
@@ -112,10 +114,11 @@ class WorldConsistencyReviewer:
                     _Finding(issue.severity, issue.code, issue.message, issue.target_ref, "BookStateReviewGate")
                     for issue in world.gate.issues
                 )
-        return _verdict([self._issue(finding, names, fact_topics) for finding in findings])
+        return _verdict([self._issue(finding, names, fact_topics, concealed_names) for finding in findings])
 
     def _issue(
         self, finding: _Finding, names: Mapping[str, str], fact_topics: Mapping[str, Sequence[str]],
+        concealed_names: Mapping[str, str] | None = None,
     ) -> ContinuityIssue:
         error = finding.severity == "error"
         description, entity_names = _named(finding.message or finding.code, names, fact_topics)
@@ -145,6 +148,9 @@ class WorldConsistencyReviewer:
                 "fact_propositions": {
                     ref: names[ref] for ref in sorted(audit_refs) if ref.startswith(FACT_REF_PREFIX) and ref in names
                 },
+                "concealed_entity_names": {
+                    ref: name for ref, name in (concealed_names or {}).items() if ref in audit_refs
+                },
             },
         )
 
@@ -164,7 +170,8 @@ def _named(
         name = names.get(ref)
         if not name:
             return token
-        entity_names.append(name)
+        if name != UNNAMED_ACTOR_LABEL:
+            entity_names.append(name)
         return f"{name}{suffix}"
 
     return _REF_TOKEN.sub(name_of, text), list(dict.fromkeys(entity_names))

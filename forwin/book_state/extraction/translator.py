@@ -39,6 +39,7 @@ from forwin.protocol.book_state import (
     WorldEdge,
     WorldNode,
 )
+from forwin.writer.prompt_core.world_view import UNNAMED_ACTOR_LABEL
 
 from .chapter_delta_extractor import elapsed_minutes
 from .chapter_delta_schema import (
@@ -87,6 +88,8 @@ class TranslationResult:
     names: Mapping[str, str] = field(default_factory=dict)
     # Writer-safe subject names, separate from the propositions retained for audit.
     fact_topics: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    # Author-only identities retained by the reviewer in original_result.
+    concealed_names: Mapping[str, str] = field(default_factory=dict)
 
 
 class ChapterDeltaTranslator:
@@ -202,7 +205,7 @@ class _DeltaBuilder:
             self._intent_interaction(interaction, f"intent_interactions[{index}]")
         issues = tuple(self.issues)
         if any(issue.severity == "error" for issue in issues):
-            return TranslationResult(None, issues, self._display_names(), self._fact_topics())
+            return TranslationResult(None, issues, self._display_names(), self._fact_topics(), self._concealed_names())
         delta = GraphDelta(
             id=f"chapter-delta:{self.project_id}:{self.chapter}:{extraction.body_sha256[:16]}",
             project_id=self.project_id,
@@ -237,10 +240,18 @@ class _DeltaBuilder:
                 "time_elapsed_minutes": elapsed,
             },
         )
-        return TranslationResult(delta, issues, self._display_names(), self._fact_topics())
+        return TranslationResult(delta, issues, self._display_names(), self._fact_topics(), self._concealed_names())
+
+    def _concealed_names(self) -> dict[str, str]:
+        world = ObjectiveWorldGraph(
+            nodes=list(self.world.nodes_by_id.values()), states_by_node_id=self.world.states_by_node_id,
+        )
+        for patch in self.created_nodes.values():
+            world.apply_node_patch(patch)
+        return {ref: node.name for ref, node in world.nodes_by_id.items() if is_concealed(world, node)}
 
     def _display_names(self) -> dict[str, str]:
-        """Names of the world nodes, map nodes and facts before the chapter plus the ones it creates."""
+        """Display names plus audit fact text; concealed identities use the writer's neutral label."""
         names = {node_id: node.name for node_id, node in self.world.nodes_by_id.items()}
         names.update((node_id, node.name) for node_id, node in self.map.nodes_by_id.items())
         names.update((node.id, node.name) for node in self.new_sites.values())
@@ -257,6 +268,7 @@ class _DeltaBuilder:
             for patch in self.fact_patches
             if str(patch.op) == "create"
         )
+        names.update((ref, UNNAMED_ACTOR_LABEL) for ref in self._concealed_names())
         return {ref: text for ref, name in names.items() if (text := str(name or "").strip())}
 
     def _fact_topics(self) -> dict[str, tuple[str, ...]]:

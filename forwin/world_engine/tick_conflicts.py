@@ -20,6 +20,7 @@ from forwin.book_state.runtime import BookStateRuntime
 from forwin.book_state.schema import IMPACT_LEVELS
 from forwin.generation.gate_delegation import GateAuditWriter
 from forwin.models.audit import DecisionEvent
+from forwin.models.project import Project
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.runtime.policy import RuntimePolicy
 
@@ -156,9 +157,11 @@ class TickConflicts:
         if draft.intent_ref and key in self._open:
             return self._open[key]
         decider = route_conflict(draft, policy=self.policy)
+        project = self.session.get(Project, self.context.project_id)
         row = self.repo.create(draft, required_decider=decider, options=available_options(
             draft, live_intent=live_intent(self.runtime, draft.intent_ref),
             plot_responded=self._plot_responded(draft.intent_ref),
+            reachable_chapter=project is not None and int(project.target_total_chapters or 0) > self.context.chapter_number,
         ))
         if draft.intent_ref:
             self._open[key] = row.id

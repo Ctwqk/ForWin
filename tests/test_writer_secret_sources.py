@@ -272,7 +272,10 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
 @pytest.mark.parametrize("setting_source", ("handoff", "populated"))
 @pytest.mark.parametrize("builder", BUILDERS)
 @pytest.mark.parametrize("genre", GENRES)
-def test_no_author_side_text_reaches_any_writer_builder(monkeypatch, genre, builder, setting_source):
+def test_unvalidated_author_text_reaches_no_writer_builder(monkeypatch, genre, builder, setting_source):
+    """Validated fields are writer-facing by design: phase purpose, milestone descriptions,
+    reader promise, ambiguity constraints, and band title/one_line/goals/hook/hints.
+    """
     context, markers, summaries = _author_context(monkeypatch, genre, setting_source)
     markers["gate"] = f"AUTHOR_ONLY_{genre}_gate_7f3c91"
     # R44's reviewer boundary: the issue names a topic; the raw gate message stays in audit data.

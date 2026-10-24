@@ -495,13 +495,18 @@ class _Tick:
                 if not issues:
                     continue
                 check.reset(mark)
-                staged = self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
+                # The open conflict holds the intent; do not also stage it for the planner.
+                self._drop(
+                    candidate.candidate_id, origin=candidate.origin, actor_id=candidate.actor_id,
+                    intent_id=candidate.intent_id,
+                    reason=("touches_onstage_entity" if any(issue.code == "touches_onstage_entity" for issue in issues)
+                            else CONSTRAINT_VIOLATION),
+                    issues=issues, conflict_id=resolution.conflict_id,
+                )
                 self.conflicts.cancel(
                     resolution.conflict_id, failure_reason=CONFLICT_STALE,
                     detail="; ".join(f"{issue.code}: {issue.message}" for issue in issues),
                 )
-                if staged is not None and not check.admit(staged):
-                    admitted.append(staged)
                 break
         return admitted
 

@@ -922,6 +922,761 @@
           }
         ]
       }
+    },
+    "planning": {
+      "adjudicate": {
+        "outcomes": [
+          {
+            "intent_id": "@node:清扫曙光轨道站里与云梯号相关的航行日志",
+            "result": "disrupted",
+            "summary": "行动者暂时未能完成这项行动。",
+            "effects": {}
+          },
+          {
+            "intent_id": "@node:让曙光轨道站重播云梯号全员殉职的通告",
+            "result": "disrupted",
+            "summary": "行动者暂时未能完成这项行动。",
+            "effects": {}
+          }
+        ]
+      },
+      "actor_turn": {
+        "turns": [
+          {
+            "actor_id": "@node:应潮生",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "标准日"
+            }
+          },
+          {
+            "actor_id": "@node:应怀远",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "标准日"
+            }
+          },
+          {
+            "actor_id": "@node:钟离曜",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "标准日"
+            }
+          },
+          {
+            "actor_id": "@node:第七舰队",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "标准日"
+            }
+          },
+          {
+            "actor_id": "@node:灰烬矿盟",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "标准日"
+            }
+          }
+        ]
+      },
+      "conflict_review": {
+        "option": "veto_world",
+        "rationale": "保留当前线索。",
+        "risk_level": "low",
+        "evidence": []
+      }
+    },
+    "planning_relocation": {
+      "adjudicate": {
+        "outcomes": [
+          {
+            "intent_id": "@node:清扫曙光轨道站里与云梯号相关的航行日志",
+            "result": "disrupted",
+            "summary": "行动者暂时未能完成这项行动。",
+            "effects": {}
+          },
+          {
+            "intent_id": "@node:让曙光轨道站重播云梯号全员殉职的通告",
+            "result": "resolved",
+            "summary": "应潮生为核对线索赶到了北冕前哨。",
+            "effects": {
+              "movements": [
+                {
+                  "entity_ref": "@node:应潮生",
+                  "to_location_id": "@site:北冕前哨",
+                  "travel_mode_id": "mode-shuttle",
+                  "depart_at": {
+                    "before_now": {
+                      "amount": 2,
+                      "unit": "标准日"
+                    }
+                  },
+                  "arrive_at": {
+                    "before_now": {
+                      "amount": 0,
+                      "unit": "标准日"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "actor_turn": {
+        "turns": [
+          {
+            "actor_id": "@node:应潮生",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "标准日"
+            }
+          },
+          {
+            "actor_id": "@node:应怀远",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "标准日"
+            }
+          },
+          {
+            "actor_id": "@node:钟离曜",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "标准日"
+            }
+          },
+          {
+            "actor_id": "@node:第七舰队",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "标准日"
+            }
+          },
+          {
+            "actor_id": "@node:灰烬矿盟",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "标准日"
+            }
+          }
+        ]
+      },
+      "conflict_review": {
+        "option": "veto_world",
+        "rationale": "保留当前线索。",
+        "risk_level": "low",
+        "evidence": []
+      }
+    }
+  },
+  "beat_sheet": {
+    "protagonist_ref": "@node:应潮生",
+    "phases": [
+      {
+        "name": "opening",
+        "chapter_range": [
+          1,
+          3
+        ],
+        "purpose": "取得第一条线索，再核对其中的疑点。"
+      }
+    ],
+    "milestones": [
+      {
+        "id": "first-lead",
+        "description": "整理第一条线索，留下需要核对的问题。",
+        "target_range": [
+          1,
+          3
+        ],
+        "required_refs": [
+          "@node:应潮生"
+        ],
+        "hard": false
+      }
+    ],
+    "protections": [
+      {
+        "ref": "@node:应潮生",
+        "kind": "must_be_alive",
+        "until_chapter": 3
+      },
+      {
+        "ref": "reader",
+        "kind": "must_not_know",
+        "observer_ref": "reader",
+        "fact_ref": "@fact:fact-sabotage",
+        "until_chapter": 3
+      }
+    ],
+    "reveal_targets": [
+      {
+        "fact_ref": "@fact:fact-sabotage",
+        "observer": "reader",
+        "target_state": "knows",
+        "range": [
+          3,
+          3
+        ]
+      }
+    ],
+    "exit_state": [],
+    "band_breakdown": [
+      {
+        "band_index": 0,
+        "chapter_start": 1,
+        "chapter_end": 3
+      }
+    ],
+    "reader_promise": {},
+    "arc_payoff_map": {}
+  },
+  "band_plan": {
+    "chapters": [
+      {
+        "chapter_number": 1,
+        "title": "听证席",
+        "one_line": "应潮生搭穿梭舱赶到舰队军事法庭，见到监察官钟离曜。",
+        "goals": [
+          "应潮生在听证会前见到监察官钟离曜"
+        ],
+        "pov_ref": "@node:应潮生",
+        "onstage_refs": [
+          "@node:应潮生",
+          "@node:钟离曜"
+        ],
+        "location_refs": [
+          "@site:舰队军事法庭"
+        ],
+        "expected_span": {
+          "amount": 2,
+          "unit": "标准日"
+        },
+        "world_bindings": [
+          {
+            "kind": "secret",
+            "ref": "@fact:fact-sabotage",
+            "how": "保留疑问，不下定论。"
+          }
+        ],
+        "reveal_directives": [
+          {
+            "id": "opening-belief",
+            "fact_ref": "@fact:fact-wreck-official",
+            "observer": "@node:应潮生",
+            "target_state": "believes"
+          }
+        ],
+        "hint_directives": [
+          {
+            "id": "clue-1",
+            "fact_ref": "@fact:fact-sabotage",
+            "hint_text": "已有线索中仍有一个解释不通的细节。"
+          }
+        ],
+        "intended_changes": [
+          {
+            "ref": "@node:应潮生",
+            "field": "alive_status",
+            "value": "alive"
+          }
+        ],
+        "milestone_ids": [],
+        "reward_slot": "",
+        "trope_ids": [],
+        "hook": "下一步该先核对哪一处？"
+      },
+      {
+        "chapter_number": 2,
+        "title": "线索2",
+        "one_line": "应潮生留在舰队军事法庭整理已经得到的线索。",
+        "goals": [
+          "核对已有线索"
+        ],
+        "pov_ref": "@node:应潮生",
+        "onstage_refs": [
+          "@node:应潮生"
+        ],
+        "location_refs": [
+          "@site:舰队军事法庭"
+        ],
+        "expected_span": {
+          "amount": 0.01,
+          "unit": "标准时"
+        },
+        "world_bindings": [
+          {
+            "kind": "secret",
+            "ref": "@fact:fact-sabotage",
+            "how": "保留疑问，不下定论。"
+          }
+        ],
+        "reveal_directives": [],
+        "hint_directives": [
+          {
+            "id": "clue-2",
+            "fact_ref": "@fact:fact-sabotage",
+            "hint_text": "已有线索中仍有一个解释不通的细节。"
+          }
+        ],
+        "intended_changes": [],
+        "milestone_ids": [],
+        "reward_slot": "",
+        "trope_ids": [],
+        "hook": "下一步该先核对哪一处？"
+      },
+      {
+        "chapter_number": 3,
+        "title": "线索3",
+        "one_line": "应潮生留在舰队军事法庭整理已经得到的线索。",
+        "goals": [
+          "记下下一步要核对的问题"
+        ],
+        "pov_ref": "@node:应潮生",
+        "onstage_refs": [
+          "@node:应潮生"
+        ],
+        "location_refs": [
+          "@site:舰队军事法庭"
+        ],
+        "expected_span": {
+          "amount": 0.01,
+          "unit": "标准时"
+        },
+        "world_bindings": [
+          {
+            "kind": "secret",
+            "ref": "@fact:fact-sabotage",
+            "how": "保留疑问，不下定论。"
+          }
+        ],
+        "reveal_directives": [],
+        "hint_directives": [
+          {
+            "id": "clue-3",
+            "fact_ref": "@fact:fact-sabotage",
+            "hint_text": "已有线索中仍有一个解释不通的细节。"
+          }
+        ],
+        "intended_changes": [],
+        "milestone_ids": [
+          "first-lead"
+        ],
+        "reward_slot": "",
+        "trope_ids": [],
+        "hook": "下一步该先核对哪一处？"
+      }
+    ]
+  },
+  "planning_continuation": {
+    "chapters": {
+      "2": {
+        "body": "应潮生留在舰队军事法庭，核对已有线索。过了0.01标准时，他仍没有急着下定论，只把疑问留在纸上。\n\n他把领航员徽章翻到背面，对着候审区的灯看那道焦黑的灼痕。广播里的事故结论讲得完整，手里的旧物却不能解释航行日志为什么封存。徽章能证明他曾在那里任职，不能证明是谁下了命令。他把这两件事分开写在终端上，删除了刚输入的一句指控，免得猜测混进证据。",
+        "summary": "应潮生核对已有线索。",
+        "chapter_delta_extraction": {
+          "time": {
+            "elapsed": {
+              "amount": 0.01,
+              "unit": "标准时"
+            },
+            "evidence": "过了0.01标准时"
+          },
+          "events": [
+            {
+              "summary": "应潮生核对已有线索",
+              "participant_refs": [
+                "@node:应潮生"
+              ],
+              "location_ref": "@site:舰队军事法庭",
+              "significance": "minor",
+              "visibility": "public",
+              "evidence": "应潮生留在舰队军事法庭，核对已有线索"
+            }
+          ],
+          "plan_fulfillment": [
+            {
+              "target_id": "goal:1",
+              "status": "done",
+              "evidence": "核对已有线索"
+            },
+            {
+              "target_id": "bind:0",
+              "status": "done",
+              "evidence": "核对已有线索"
+            }
+          ]
+        }
+      },
+      "3": {
+        "body": "应潮生留在舰队军事法庭，记下下一步要核对的问题。过了0.01标准时，他仍没有急着下定论，只把疑问留在纸上。\n\n他在终端上列出下一次申请要核对的项目：日志封存的日期、登记手续以及旧物交还时留下的记录。每项后面都留了一栏空白，用来写能够核验的出处。那枚徽章被他放回衣袋，金属已经被掌心捂热。他知道自己仍缺少关键的一环，但至少下一步不必再重复同一个笼统的问题。",
+        "summary": "应潮生记下下一步要核对的问题。",
+        "chapter_delta_extraction": {
+          "time": {
+            "elapsed": {
+              "amount": 0.01,
+              "unit": "标准时"
+            },
+            "evidence": "过了0.01标准时"
+          },
+          "events": [
+            {
+              "summary": "应潮生记下下一步要核对的问题",
+              "participant_refs": [
+                "@node:应潮生"
+              ],
+              "location_ref": "@site:舰队军事法庭",
+              "significance": "minor",
+              "visibility": "public",
+              "evidence": "应潮生留在舰队军事法庭，记下下一步要核对的问题"
+            }
+          ],
+          "plan_fulfillment": [
+            {
+              "target_id": "goal:1",
+              "status": "done",
+              "evidence": "记下下一步要核对的问题"
+            },
+            {
+              "target_id": "bind:0",
+              "status": "done",
+              "evidence": "记下下一步要核对的问题"
+            }
+          ]
+        }
+      },
+      "1": {
+        "plan": {
+          "title": "听证席",
+          "one_line": "应潮生搭穿梭舱赶到舰队军事法庭，见到监察官钟离曜。",
+          "goals": [
+            "应潮生在听证会前见到监察官钟离曜"
+          ]
+        },
+        "body": "曙光轨道站的广播又一次念起云梯号全员殉职的通告。应潮生把那张借来的半价航票塞回口袋，搭上了开往舰队军事法庭的穿梭舱。\n\n穿梭舱在站内隧道里走走停停。到了法庭，他在候审区的长椅上熬了两个标准日，才等到监察官钟离曜的接见。\n\n钟离曜没有看他递上去的申请，只把一枚旧领航员徽章推过桌面：“你的东西，开除那天落在舰桥上。”应潮生接过徽章，金属边缘还留着舰桥上的灼痕。\n\n“云梯号的航行日志已经全部封存，”钟离曜合上终端，“听证会上不会再有人提它。”\n\n应潮生攥紧徽章走出法庭。他已经认定，这个监察官在隐瞒什么。",
+        "summary": "应潮生在舰队军事法庭见到钟离曜，拿回旧领航员徽章，得知云梯号的航行日志已被封存。",
+        "chapter_delta_extraction": {
+          "time": {
+            "elapsed": {
+              "amount": 2,
+              "unit": "标准日"
+            },
+            "evidence": "熬了两个标准日"
+          },
+          "movements": [
+            {
+              "entity_ref": "@node:应潮生",
+              "from_ref": "@site:曙光轨道站",
+              "to_ref": "@site:舰队军事法庭",
+              "travel_mode_id": "mode-shuttle",
+              "evidence": "搭上了开往舰队军事法庭的穿梭舱"
+            }
+          ],
+          "relation_changes": [
+            {
+              "source_ref": "@node:应潮生",
+              "target_ref": "@node:钟离曜",
+              "edge_type": "distrusts",
+              "op": "create",
+              "evidence": "这个监察官在隐瞒什么"
+            }
+          ],
+          "knowledge_events": [
+            {
+              "observer_ref": "@node:应潮生",
+              "new_fact": {
+                "proposition": "云梯号的航行日志已被舰队全部封存",
+                "truth_value": true,
+                "sensitivity": "public"
+              },
+              "state": "knows",
+              "channel": "told",
+              "source_ref": "@node:钟离曜",
+              "evidence": "云梯号的航行日志已经全部封存"
+            },
+            {
+              "observer_ref": "reader",
+              "new_fact": {
+                "proposition": "云梯号的航行日志已被舰队全部封存",
+                "truth_value": true,
+                "sensitivity": "public"
+              },
+              "state": "knows",
+              "channel": "witnessed",
+              "evidence": "云梯号的航行日志已经全部封存"
+            }
+          ],
+          "item_transfers": [
+            {
+              "new_item": {
+                "name": "旧领航员徽章",
+                "kind": "item"
+              },
+              "from_ref": "@node:钟离曜",
+              "to_ref": "@node:应潮生",
+              "evidence": "应潮生接过徽章"
+            }
+          ],
+          "events": [
+            {
+              "summary": "钟离曜把旧领航员徽章还给应潮生",
+              "participant_refs": [
+                "@node:钟离曜",
+                "@node:应潮生"
+              ],
+              "location_ref": "@site:舰队军事法庭",
+              "significance": "minor",
+              "visibility": "public",
+              "evidence": "只把一枚旧领航员徽章推过桌面"
+            }
+          ],
+          "plan_fulfillment": [
+            {
+              "target_id": "goal:1",
+              "status": "done",
+              "evidence": "才等到监察官钟离曜的接见"
+            },
+            {
+              "target_id": "bind:0",
+              "status": "done",
+              "evidence": "才等到监察官钟离曜的接见"
+            }
+          ]
+        }
+      }
+    },
+    "beat_sheet": {
+      "protagonist_ref": "@node:应潮生",
+      "phases": [
+        {
+          "name": "follow-up",
+          "chapter_range": [
+            4,
+            6
+          ],
+          "purpose": "沿已获得的线索继续核对。"
+        }
+      ],
+      "milestones": [],
+      "protections": [],
+      "reveal_targets": [],
+      "exit_state": [],
+      "band_breakdown": [
+        {
+          "band_index": 0,
+          "chapter_start": 4,
+          "chapter_end": 6
+        }
+      ],
+      "reader_promise": {},
+      "arc_payoff_map": {}
+    },
+    "band_plan": {
+      "chapters": [
+        {
+          "chapter_number": 4,
+          "title": "后续线索4",
+          "one_line": "应潮生留在舰队军事法庭整理已经得到的线索。",
+          "goals": [
+            "核对已有线索"
+          ],
+          "pov_ref": "@node:应潮生",
+          "onstage_refs": [
+            "@node:应潮生"
+          ],
+          "location_refs": [
+            "@site:舰队军事法庭"
+          ],
+          "expected_span": {
+            "amount": 0.01,
+            "unit": "标准时"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-sabotage",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [],
+          "intended_changes": [],
+          "milestone_ids": [],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        },
+        {
+          "chapter_number": 5,
+          "title": "后续线索5",
+          "one_line": "应潮生留在舰队军事法庭整理已经得到的线索。",
+          "goals": [
+            "核对已有线索"
+          ],
+          "pov_ref": "@node:应潮生",
+          "onstage_refs": [
+            "@node:应潮生"
+          ],
+          "location_refs": [
+            "@site:舰队军事法庭"
+          ],
+          "expected_span": {
+            "amount": 0.01,
+            "unit": "标准时"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-sabotage",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [],
+          "intended_changes": [],
+          "milestone_ids": [],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        },
+        {
+          "chapter_number": 6,
+          "title": "后续线索6",
+          "one_line": "应潮生留在舰队军事法庭整理已经得到的线索。",
+          "goals": [
+            "核对已有线索"
+          ],
+          "pov_ref": "@node:应潮生",
+          "onstage_refs": [
+            "@node:应潮生"
+          ],
+          "location_refs": [
+            "@site:舰队军事法庭"
+          ],
+          "expected_span": {
+            "amount": 0.01,
+            "unit": "标准时"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-sabotage",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [],
+          "intended_changes": [],
+          "milestone_ids": [],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        }
+      ]
+    },
+    "replan": {
+      "chapters": [
+        {
+          "chapter_number": 2,
+          "title": "线索2",
+          "one_line": "应潮生在北冕前哨重新整理已经得到的线索。",
+          "goals": [
+            "核对已有线索"
+          ],
+          "pov_ref": "@node:应潮生",
+          "onstage_refs": [
+            "@node:应潮生"
+          ],
+          "location_refs": [
+            "@site:北冕前哨"
+          ],
+          "expected_span": {
+            "amount": 0.01,
+            "unit": "标准时"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-sabotage",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [
+            {
+              "id": "clue-2",
+              "fact_ref": "@fact:fact-sabotage",
+              "hint_text": "已有线索中仍有一个解释不通的细节。"
+            }
+          ],
+          "intended_changes": [],
+          "milestone_ids": [],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        },
+        {
+          "chapter_number": 3,
+          "title": "线索3",
+          "one_line": "应潮生在北冕前哨重新整理已经得到的线索。",
+          "goals": [
+            "记下下一步要核对的问题"
+          ],
+          "pov_ref": "@node:应潮生",
+          "onstage_refs": [
+            "@node:应潮生"
+          ],
+          "location_refs": [
+            "@site:北冕前哨"
+          ],
+          "expected_span": {
+            "amount": 0.01,
+            "unit": "标准时"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-sabotage",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [
+            {
+              "id": "clue-3",
+              "fact_ref": "@fact:fact-sabotage",
+              "hint_text": "已有线索中仍有一个解释不通的细节。"
+            }
+          ],
+          "intended_changes": [],
+          "milestone_ids": [
+            "first-lead"
+          ],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        }
+      ]
     }
   }
 }

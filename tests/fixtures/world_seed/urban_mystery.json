@@ -968,6 +968,790 @@
           }
         ]
       }
+    },
+    "planning": {
+      "adjudicate": {
+        "outcomes": [
+          {
+            "intent_id": "@node:赶末班地铁到旧港站见线人",
+            "result": "disrupted",
+            "summary": "行动者暂时未能完成这项行动。",
+            "effects": {}
+          },
+          {
+            "intent_id": "@node:约谈诊所院长核对当年的口供",
+            "result": "disrupted",
+            "summary": "行动者暂时未能完成这项行动。",
+            "effects": {}
+          },
+          {
+            "intent_id": "@node:趁夜把病历搬出诊所并粉碎",
+            "result": "disrupted",
+            "summary": "行动者暂时未能完成这项行动。",
+            "effects": {}
+          }
+        ]
+      },
+      "actor_turn": {
+        "turns": [
+          {
+            "actor_id": "@node:蒲念安",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "天"
+            }
+          },
+          {
+            "actor_id": "@node:蒲念平",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "天"
+            }
+          },
+          {
+            "actor_id": "@node:韦清和",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "天"
+            }
+          },
+          {
+            "actor_id": "@node:殷鹤年",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "天"
+            }
+          },
+          {
+            "actor_id": "@node:三分局",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "天"
+            }
+          },
+          {
+            "actor_id": "@node:回春医疗集团",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "天"
+            }
+          }
+        ]
+      },
+      "conflict_review": {
+        "option": "veto_world",
+        "rationale": "保留当前线索。",
+        "risk_level": "low",
+        "evidence": []
+      }
+    },
+    "planning_relocation": {
+      "adjudicate": {
+        "outcomes": [
+          {
+            "intent_id": "@node:赶末班地铁到旧港站见线人",
+            "result": "resolved",
+            "summary": "蒲念安为核对线索赶到了市立档案馆。",
+            "effects": {
+              "movements": [
+                {
+                  "entity_ref": "@node:蒲念安",
+                  "to_location_id": "@site:市立档案馆",
+                  "travel_mode_id": "mode-walk",
+                  "depart_at": {
+                    "before_now": {
+                      "amount": 2,
+                      "unit": "天"
+                    }
+                  },
+                  "arrive_at": {
+                    "before_now": {
+                      "amount": 0,
+                      "unit": "天"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "intent_id": "@node:约谈诊所院长核对当年的口供",
+            "result": "disrupted",
+            "summary": "行动者暂时未能完成这项行动。",
+            "effects": {}
+          },
+          {
+            "intent_id": "@node:趁夜把病历搬出诊所并粉碎",
+            "result": "disrupted",
+            "summary": "行动者暂时未能完成这项行动。",
+            "effects": {}
+          }
+        ]
+      },
+      "actor_turn": {
+        "turns": [
+          {
+            "actor_id": "@node:蒲念安",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "天"
+            }
+          },
+          {
+            "actor_id": "@node:蒲念平",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "天"
+            }
+          },
+          {
+            "actor_id": "@node:韦清和",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "天"
+            }
+          },
+          {
+            "actor_id": "@node:殷鹤年",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "天"
+            }
+          },
+          {
+            "actor_id": "@node:三分局",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "天"
+            }
+          },
+          {
+            "actor_id": "@node:回春医疗集团",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "天"
+            }
+          }
+        ]
+      },
+      "conflict_review": {
+        "option": "veto_world",
+        "rationale": "保留当前线索。",
+        "risk_level": "low",
+        "evidence": []
+      }
+    }
+  },
+  "beat_sheet": {
+    "protagonist_ref": "@node:蒲念安",
+    "phases": [
+      {
+        "name": "opening",
+        "chapter_range": [
+          1,
+          3
+        ],
+        "purpose": "取得第一条线索，再核对其中的疑点。"
+      }
+    ],
+    "milestones": [
+      {
+        "id": "first-lead",
+        "description": "整理第一条线索，留下需要核对的问题。",
+        "target_range": [
+          1,
+          3
+        ],
+        "required_refs": [
+          "@node:蒲念安"
+        ],
+        "hard": false
+      }
+    ],
+    "protections": [
+      {
+        "ref": "@node:蒲念安",
+        "kind": "must_be_alive",
+        "until_chapter": 3
+      },
+      {
+        "ref": "reader",
+        "kind": "must_not_know",
+        "observer_ref": "reader",
+        "fact_ref": "@fact:fact-ledger",
+        "until_chapter": 3
+      }
+    ],
+    "reveal_targets": [
+      {
+        "fact_ref": "@fact:fact-ledger",
+        "observer": "reader",
+        "target_state": "knows",
+        "range": [
+          3,
+          3
+        ]
+      }
+    ],
+    "exit_state": [],
+    "band_breakdown": [
+      {
+        "band_index": 0,
+        "chapter_start": 1,
+        "chapter_end": 3
+      }
+    ],
+    "reader_promise": {},
+    "arc_payoff_map": {}
+  },
+  "band_plan": {
+    "chapters": [
+      {
+        "chapter_number": 1,
+        "title": "缺页",
+        "one_line": "蒲念安带着缺页的复印件步行去第三分局，找刑侦队长韦清和。",
+        "goals": [
+          "向韦清和出示缺页的复印件"
+        ],
+        "pov_ref": "@node:蒲念安",
+        "onstage_refs": [
+          "@node:蒲念安",
+          "@node:韦清和"
+        ],
+        "location_refs": [
+          "@site:第三分局"
+        ],
+        "expected_span": {
+          "amount": 2,
+          "unit": "天"
+        },
+        "world_bindings": [
+          {
+            "kind": "secret",
+            "ref": "@fact:fact-ledger",
+            "how": "保留疑问，不下定论。"
+          }
+        ],
+        "reveal_directives": [
+          {
+            "id": "opening-belief",
+            "fact_ref": "@fact:fact-alibi",
+            "observer": "@node:蒲念安",
+            "target_state": "disbelieves"
+          }
+        ],
+        "hint_directives": [
+          {
+            "id": "clue-1",
+            "fact_ref": "@fact:fact-ledger",
+            "hint_text": "已有线索中仍有一个解释不通的细节。"
+          }
+        ],
+        "intended_changes": [
+          {
+            "ref": "@node:蒲念安",
+            "field": "alive_status",
+            "value": "alive"
+          }
+        ],
+        "milestone_ids": [],
+        "reward_slot": "",
+        "trope_ids": [],
+        "hook": "下一步该先核对哪一处？"
+      },
+      {
+        "chapter_number": 2,
+        "title": "线索2",
+        "one_line": "蒲念安留在第三分局整理已经得到的线索。",
+        "goals": [
+          "核对已有线索"
+        ],
+        "pov_ref": "@node:蒲念安",
+        "onstage_refs": [
+          "@node:蒲念安"
+        ],
+        "location_refs": [
+          "@site:第三分局"
+        ],
+        "expected_span": {
+          "amount": 0.01,
+          "unit": "小时"
+        },
+        "world_bindings": [
+          {
+            "kind": "secret",
+            "ref": "@fact:fact-ledger",
+            "how": "保留疑问，不下定论。"
+          }
+        ],
+        "reveal_directives": [],
+        "hint_directives": [
+          {
+            "id": "clue-2",
+            "fact_ref": "@fact:fact-ledger",
+            "hint_text": "已有线索中仍有一个解释不通的细节。"
+          }
+        ],
+        "intended_changes": [],
+        "milestone_ids": [],
+        "reward_slot": "",
+        "trope_ids": [],
+        "hook": "下一步该先核对哪一处？"
+      },
+      {
+        "chapter_number": 3,
+        "title": "线索3",
+        "one_line": "蒲念安留在第三分局整理已经得到的线索。",
+        "goals": [
+          "记下下一步要核对的问题"
+        ],
+        "pov_ref": "@node:蒲念安",
+        "onstage_refs": [
+          "@node:蒲念安"
+        ],
+        "location_refs": [
+          "@site:第三分局"
+        ],
+        "expected_span": {
+          "amount": 0.01,
+          "unit": "小时"
+        },
+        "world_bindings": [
+          {
+            "kind": "secret",
+            "ref": "@fact:fact-ledger",
+            "how": "保留疑问，不下定论。"
+          }
+        ],
+        "reveal_directives": [],
+        "hint_directives": [
+          {
+            "id": "clue-3",
+            "fact_ref": "@fact:fact-ledger",
+            "hint_text": "已有线索中仍有一个解释不通的细节。"
+          }
+        ],
+        "intended_changes": [],
+        "milestone_ids": [
+          "first-lead"
+        ],
+        "reward_slot": "",
+        "trope_ids": [],
+        "hook": "下一步该先核对哪一处？"
+      }
+    ]
+  },
+  "planning_continuation": {
+    "chapters": {
+      "2": {
+        "body": "蒲念安留在第三分局，核对已有线索。过了0.01小时，她仍没有急着下定论，只把疑问留在纸上。\n\n她把缺页的复印件与卷宗副本并排摊开，先看页码，再看每一处装订孔。签字是明确的，缺页也是明确的，但两件事之间究竟有什么关系，还不能只凭愤怒判断。她在空白处划了一条线，左边记已经核对的内容，右边记暂时无法核对的疑点，写到末尾才发现自己的手已经不再发抖。",
+        "summary": "蒲念安核对已有线索。",
+        "chapter_delta_extraction": {
+          "time": {
+            "elapsed": {
+              "amount": 0.01,
+              "unit": "小时"
+            },
+            "evidence": "过了0.01小时"
+          },
+          "events": [
+            {
+              "summary": "蒲念安核对已有线索",
+              "participant_refs": [
+                "@node:蒲念安"
+              ],
+              "location_ref": "@site:第三分局",
+              "significance": "minor",
+              "visibility": "public",
+              "evidence": "蒲念安留在第三分局，核对已有线索"
+            }
+          ],
+          "plan_fulfillment": [
+            {
+              "target_id": "goal:1",
+              "status": "done",
+              "evidence": "核对已有线索"
+            },
+            {
+              "target_id": "bind:0",
+              "status": "done",
+              "evidence": "核对已有线索"
+            }
+          ]
+        }
+      },
+      "3": {
+        "body": "蒲念安留在第三分局，记下下一步要核对的问题。过了0.01小时，她仍没有急着下定论，只把疑问留在纸上。\n\n她把下一次需要调阅的登记项目逐项写下，准备先核对归档日期，再查缺页前后是否留下借阅记录。纸上的名字不能替任何人作证，模糊的记忆也不能。她将副本重新装进包里，把最上面的纸角抚平。那些问题还没有答案，却已经有了可以逐条核对的次序，她不必再站在原地反复猜测。",
+        "summary": "蒲念安记下下一步要核对的问题。",
+        "chapter_delta_extraction": {
+          "time": {
+            "elapsed": {
+              "amount": 0.01,
+              "unit": "小时"
+            },
+            "evidence": "过了0.01小时"
+          },
+          "events": [
+            {
+              "summary": "蒲念安记下下一步要核对的问题",
+              "participant_refs": [
+                "@node:蒲念安"
+              ],
+              "location_ref": "@site:第三分局",
+              "significance": "minor",
+              "visibility": "public",
+              "evidence": "蒲念安留在第三分局，记下下一步要核对的问题"
+            }
+          ],
+          "plan_fulfillment": [
+            {
+              "target_id": "goal:1",
+              "status": "done",
+              "evidence": "记下下一步要核对的问题"
+            },
+            {
+              "target_id": "bind:0",
+              "status": "done",
+              "evidence": "记下下一步要核对的问题"
+            }
+          ]
+        }
+      },
+      "1": {
+        "plan": {
+          "title": "缺页",
+          "one_line": "蒲念安带着缺页的复印件步行去第三分局，找刑侦队长韦清和。",
+          "goals": [
+            "向韦清和出示缺页的复印件"
+          ]
+        },
+        "body": "夜班交接后，蒲念安把旧港区失踪案卷里那页被撕掉的目录复印下来，揣着复印件走出市立档案馆，沿着河堤步行去第三分局。\n\n分局的接待员说韦队长在开评审会。她在走廊的塑料椅上等了整整两天，韦清和才抽身出来见她。\n\n韦清和翻了翻复印件，从抽屉里取出一份旧案卷宗副本递给她：“这是当年的结案报告，你自己看。”蒲念安把卷宗副本收进包里。\n\n报告最后一页写着，三年前的失踪名单是由韦清和亲自签字归档的。她看着那个签名，指节一点点发白。\n\n走出分局时，她已经不再把韦清和当成可以求助的人。",
+        "summary": "蒲念安在第三分局见到韦清和，拿到旧案卷宗副本，发现失踪名单是他签字归档的。",
+        "chapter_delta_extraction": {
+          "time": {
+            "elapsed": {
+              "amount": 2,
+              "unit": "天"
+            },
+            "evidence": "等了整整两天"
+          },
+          "movements": [
+            {
+              "entity_ref": "@node:蒲念安",
+              "from_ref": "@site:市立档案馆",
+              "to_ref": "@site:第三分局",
+              "travel_mode_id": "mode-walk",
+              "evidence": "沿着河堤步行去第三分局"
+            }
+          ],
+          "relation_changes": [
+            {
+              "source_ref": "@node:蒲念安",
+              "target_ref": "@node:韦清和",
+              "edge_type": "distrusts",
+              "op": "create",
+              "evidence": "她已经不再把韦清和当成可以求助的人"
+            }
+          ],
+          "knowledge_events": [
+            {
+              "observer_ref": "@node:蒲念安",
+              "new_fact": {
+                "proposition": "三年前的失踪名单由韦清和签字归档",
+                "truth_value": true,
+                "sensitivity": "public"
+              },
+              "state": "knows",
+              "channel": "document",
+              "evidence": "三年前的失踪名单是由韦清和亲自签字归档的"
+            },
+            {
+              "observer_ref": "reader",
+              "new_fact": {
+                "proposition": "三年前的失踪名单由韦清和签字归档",
+                "truth_value": true,
+                "sensitivity": "public"
+              },
+              "state": "knows",
+              "channel": "document",
+              "evidence": "三年前的失踪名单是由韦清和亲自签字归档的"
+            }
+          ],
+          "item_transfers": [
+            {
+              "new_item": {
+                "name": "旧案卷宗副本",
+                "kind": "item"
+              },
+              "from_ref": "@node:韦清和",
+              "to_ref": "@node:蒲念安",
+              "evidence": "蒲念安把卷宗副本收进包里"
+            }
+          ],
+          "events": [
+            {
+              "summary": "韦清和在第三分局把旧案卷宗副本交给蒲念安",
+              "participant_refs": [
+                "@node:韦清和",
+                "@node:蒲念安"
+              ],
+              "location_ref": "@site:第三分局",
+              "significance": "moderate",
+              "visibility": "public",
+              "evidence": "从抽屉里取出一份旧案卷宗副本递给她"
+            }
+          ],
+          "plan_fulfillment": [
+            {
+              "target_id": "goal:1",
+              "status": "done",
+              "evidence": "韦清和翻了翻复印件"
+            },
+            {
+              "target_id": "bind:0",
+              "status": "done",
+              "evidence": "韦清和翻了翻复印件"
+            }
+          ]
+        }
+      }
+    },
+    "beat_sheet": {
+      "protagonist_ref": "@node:蒲念安",
+      "phases": [
+        {
+          "name": "follow-up",
+          "chapter_range": [
+            4,
+            6
+          ],
+          "purpose": "沿已获得的线索继续核对。"
+        }
+      ],
+      "milestones": [],
+      "protections": [],
+      "reveal_targets": [],
+      "exit_state": [],
+      "band_breakdown": [
+        {
+          "band_index": 0,
+          "chapter_start": 4,
+          "chapter_end": 6
+        }
+      ],
+      "reader_promise": {},
+      "arc_payoff_map": {}
+    },
+    "band_plan": {
+      "chapters": [
+        {
+          "chapter_number": 4,
+          "title": "后续线索4",
+          "one_line": "蒲念安留在第三分局整理已经得到的线索。",
+          "goals": [
+            "核对已有线索"
+          ],
+          "pov_ref": "@node:蒲念安",
+          "onstage_refs": [
+            "@node:蒲念安"
+          ],
+          "location_refs": [
+            "@site:第三分局"
+          ],
+          "expected_span": {
+            "amount": 0.01,
+            "unit": "小时"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-ledger",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [],
+          "intended_changes": [],
+          "milestone_ids": [],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        },
+        {
+          "chapter_number": 5,
+          "title": "后续线索5",
+          "one_line": "蒲念安留在第三分局整理已经得到的线索。",
+          "goals": [
+            "核对已有线索"
+          ],
+          "pov_ref": "@node:蒲念安",
+          "onstage_refs": [
+            "@node:蒲念安"
+          ],
+          "location_refs": [
+            "@site:第三分局"
+          ],
+          "expected_span": {
+            "amount": 0.01,
+            "unit": "小时"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-ledger",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [],
+          "intended_changes": [],
+          "milestone_ids": [],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        },
+        {
+          "chapter_number": 6,
+          "title": "后续线索6",
+          "one_line": "蒲念安留在第三分局整理已经得到的线索。",
+          "goals": [
+            "核对已有线索"
+          ],
+          "pov_ref": "@node:蒲念安",
+          "onstage_refs": [
+            "@node:蒲念安"
+          ],
+          "location_refs": [
+            "@site:第三分局"
+          ],
+          "expected_span": {
+            "amount": 0.01,
+            "unit": "小时"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-ledger",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [],
+          "intended_changes": [],
+          "milestone_ids": [],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        }
+      ]
+    },
+    "replan": {
+      "chapters": [
+        {
+          "chapter_number": 2,
+          "title": "线索2",
+          "one_line": "蒲念安在市立档案馆重新整理已经得到的线索。",
+          "goals": [
+            "核对已有线索"
+          ],
+          "pov_ref": "@node:蒲念安",
+          "onstage_refs": [
+            "@node:蒲念安"
+          ],
+          "location_refs": [
+            "@site:市立档案馆"
+          ],
+          "expected_span": {
+            "amount": 0.01,
+            "unit": "小时"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-ledger",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [
+            {
+              "id": "clue-2",
+              "fact_ref": "@fact:fact-ledger",
+              "hint_text": "已有线索中仍有一个解释不通的细节。"
+            }
+          ],
+          "intended_changes": [],
+          "milestone_ids": [],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        },
+        {
+          "chapter_number": 3,
+          "title": "线索3",
+          "one_line": "蒲念安在市立档案馆重新整理已经得到的线索。",
+          "goals": [
+            "记下下一步要核对的问题"
+          ],
+          "pov_ref": "@node:蒲念安",
+          "onstage_refs": [
+            "@node:蒲念安"
+          ],
+          "location_refs": [
+            "@site:市立档案馆"
+          ],
+          "expected_span": {
+            "amount": 0.01,
+            "unit": "小时"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-ledger",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [
+            {
+              "id": "clue-3",
+              "fact_ref": "@fact:fact-ledger",
+              "hint_text": "已有线索中仍有一个解释不通的细节。"
+            }
+          ],
+          "intended_changes": [],
+          "milestone_ids": [
+            "first-lead"
+          ],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        }
+      ]
     }
   }
 }

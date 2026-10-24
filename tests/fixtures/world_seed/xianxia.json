@@ -965,6 +965,758 @@
           }
         ]
       }
+    },
+    "planning": {
+      "adjudicate": {
+        "outcomes": [
+          {
+            "intent_id": "@node:赶往半山坊市打听母亲的旧事",
+            "result": "disrupted",
+            "summary": "行动者暂时未能完成这项行动。",
+            "effects": {}
+          },
+          {
+            "intent_id": "@node:召集三位长老加固封印",
+            "result": "disrupted",
+            "summary": "行动者暂时未能完成这项行动。",
+            "effects": {}
+          }
+        ]
+      },
+      "actor_turn": {
+        "turns": [
+          {
+            "actor_id": "@node:祁长烬",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "日"
+            }
+          },
+          {
+            "actor_id": "@node:景沧澜",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "日"
+            }
+          },
+          {
+            "actor_id": "@node:薛应棠",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "日"
+            }
+          },
+          {
+            "actor_id": "@node:栖云剑阁",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "日"
+            }
+          },
+          {
+            "actor_id": "@node:九曜盟",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "日"
+            }
+          }
+        ]
+      },
+      "conflict_review": {
+        "option": "veto_world",
+        "rationale": "保留当前线索。",
+        "risk_level": "low",
+        "evidence": []
+      }
+    },
+    "planning_relocation": {
+      "adjudicate": {
+        "outcomes": [
+          {
+            "intent_id": "@node:赶往半山坊市打听母亲的旧事",
+            "result": "resolved",
+            "summary": "祁长烬为核对线索赶到了镇脉石殿。",
+            "effects": {
+              "movements": [
+                {
+                  "entity_ref": "@node:祁长烬",
+                  "to_location_id": "@site:镇脉石殿",
+                  "travel_mode_id": "mode-foot",
+                  "depart_at": {
+                    "before_now": {
+                      "amount": 2,
+                      "unit": "日"
+                    }
+                  },
+                  "arrive_at": {
+                    "before_now": {
+                      "amount": 0,
+                      "unit": "日"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "intent_id": "@node:召集三位长老加固封印",
+            "result": "disrupted",
+            "summary": "行动者暂时未能完成这项行动。",
+            "effects": {}
+          }
+        ]
+      },
+      "actor_turn": {
+        "turns": [
+          {
+            "actor_id": "@node:祁长烬",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "日"
+            }
+          },
+          {
+            "actor_id": "@node:景沧澜",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "日"
+            }
+          },
+          {
+            "actor_id": "@node:薛应棠",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "日"
+            }
+          },
+          {
+            "actor_id": "@node:栖云剑阁",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "日"
+            }
+          },
+          {
+            "actor_id": "@node:九曜盟",
+            "new_intents": [],
+            "agenda_changes": [],
+            "next_turn_in": {
+              "amount": 1,
+              "unit": "日"
+            }
+          }
+        ]
+      },
+      "conflict_review": {
+        "option": "veto_world",
+        "rationale": "保留当前线索。",
+        "risk_level": "low",
+        "evidence": []
+      }
+    }
+  },
+  "beat_sheet": {
+    "protagonist_ref": "@node:祁长烬",
+    "phases": [
+      {
+        "name": "opening",
+        "chapter_range": [
+          1,
+          3
+        ],
+        "purpose": "取得第一条线索，再核对其中的疑点。"
+      }
+    ],
+    "milestones": [
+      {
+        "id": "first-lead",
+        "description": "整理第一条线索，留下需要核对的问题。",
+        "target_range": [
+          1,
+          3
+        ],
+        "required_refs": [
+          "@node:祁长烬"
+        ],
+        "hard": false
+      }
+    ],
+    "protections": [
+      {
+        "ref": "@node:祁长烬",
+        "kind": "must_be_alive",
+        "until_chapter": 3
+      },
+      {
+        "ref": "reader",
+        "kind": "must_not_know",
+        "observer_ref": "reader",
+        "fact_ref": "@fact:fact-mother-truth",
+        "until_chapter": 3
+      }
+    ],
+    "reveal_targets": [
+      {
+        "fact_ref": "@fact:fact-mother-truth",
+        "observer": "reader",
+        "target_state": "knows",
+        "range": [
+          3,
+          3
+        ]
+      }
+    ],
+    "exit_state": [],
+    "band_breakdown": [
+      {
+        "band_index": 0,
+        "chapter_start": 1,
+        "chapter_end": 3
+      }
+    ],
+    "reader_promise": {},
+    "arc_payoff_map": {}
+  },
+  "band_plan": {
+    "chapters": [
+      {
+        "chapter_number": 1,
+        "title": "断剑崖",
+        "one_line": "祁长烬徒步登上断剑崖，在残碑上找到母亲留下的痕迹。",
+        "goals": [
+          "祁长烬在断剑崖找到母亲留下的线索"
+        ],
+        "pov_ref": "@node:祁长烬",
+        "onstage_refs": [
+          "@node:祁长烬"
+        ],
+        "location_refs": [
+          "@site:断剑崖"
+        ],
+        "expected_span": {
+          "amount": 2,
+          "unit": "日"
+        },
+        "world_bindings": [
+          {
+            "kind": "secret",
+            "ref": "@fact:fact-mother-truth",
+            "how": "保留疑问，不下定论。"
+          }
+        ],
+        "reveal_directives": [
+          {
+            "id": "opening-belief",
+            "fact_ref": "@fact:fact-mother-rumor",
+            "observer": "@node:祁长烬",
+            "target_state": "believes"
+          }
+        ],
+        "hint_directives": [
+          {
+            "id": "clue-1",
+            "fact_ref": "@fact:fact-mother-truth",
+            "hint_text": "已有线索中仍有一个解释不通的细节。"
+          }
+        ],
+        "intended_changes": [
+          {
+            "ref": "@node:祁长烬",
+            "field": "alive_status",
+            "value": "alive"
+          }
+        ],
+        "milestone_ids": [],
+        "reward_slot": "",
+        "trope_ids": [],
+        "hook": "下一步该先核对哪一处？"
+      },
+      {
+        "chapter_number": 2,
+        "title": "线索2",
+        "one_line": "祁长烬留在断剑崖整理已经得到的线索。",
+        "goals": [
+          "核对已有线索"
+        ],
+        "pov_ref": "@node:祁长烬",
+        "onstage_refs": [
+          "@node:祁长烬"
+        ],
+        "location_refs": [
+          "@site:断剑崖"
+        ],
+        "expected_span": {
+          "amount": 0.1,
+          "unit": "刻"
+        },
+        "world_bindings": [
+          {
+            "kind": "secret",
+            "ref": "@fact:fact-mother-truth",
+            "how": "保留疑问，不下定论。"
+          }
+        ],
+        "reveal_directives": [],
+        "hint_directives": [
+          {
+            "id": "clue-2",
+            "fact_ref": "@fact:fact-mother-truth",
+            "hint_text": "已有线索中仍有一个解释不通的细节。"
+          }
+        ],
+        "intended_changes": [],
+        "milestone_ids": [],
+        "reward_slot": "",
+        "trope_ids": [],
+        "hook": "下一步该先核对哪一处？"
+      },
+      {
+        "chapter_number": 3,
+        "title": "线索3",
+        "one_line": "祁长烬留在断剑崖整理已经得到的线索。",
+        "goals": [
+          "记下下一步要核对的问题"
+        ],
+        "pov_ref": "@node:祁长烬",
+        "onstage_refs": [
+          "@node:祁长烬"
+        ],
+        "location_refs": [
+          "@site:断剑崖"
+        ],
+        "expected_span": {
+          "amount": 0.1,
+          "unit": "刻"
+        },
+        "world_bindings": [
+          {
+            "kind": "secret",
+            "ref": "@fact:fact-mother-truth",
+            "how": "保留疑问，不下定论。"
+          }
+        ],
+        "reveal_directives": [],
+        "hint_directives": [
+          {
+            "id": "clue-3",
+            "fact_ref": "@fact:fact-mother-truth",
+            "hint_text": "已有线索中仍有一个解释不通的细节。"
+          }
+        ],
+        "intended_changes": [],
+        "milestone_ids": [
+          "first-lead"
+        ],
+        "reward_slot": "",
+        "trope_ids": [],
+        "hook": "下一步该先核对哪一处？"
+      }
+    ]
+  },
+  "planning_continuation": {
+    "chapters": {
+      "2": {
+        "body": "祁长烬留在断剑崖，核对已有线索。过了0.1刻，他仍没有急着下定论，只把疑问留在纸上。\n\n他把褪色剑穗放在膝上，逐根理开缠住的红绳。残碑的字迹还记在心里，母亲的名字确实在那里，刻痕深浅也并无新凿的痕迹。可守墓三年与后来传下来的死因之间，仍隔着一段没人肯说的往事。他不愿凭一块碑就给任何人定罪，只把自己看见的和听来的说法分开记下。",
+        "summary": "祁长烬核对已有线索。",
+        "chapter_delta_extraction": {
+          "time": {
+            "elapsed": {
+              "amount": 0.1,
+              "unit": "刻"
+            },
+            "evidence": "过了0.1刻"
+          },
+          "events": [
+            {
+              "summary": "祁长烬核对已有线索",
+              "participant_refs": [
+                "@node:祁长烬"
+              ],
+              "location_ref": "@site:断剑崖",
+              "significance": "minor",
+              "visibility": "public",
+              "evidence": "祁长烬留在断剑崖，核对已有线索"
+            }
+          ],
+          "plan_fulfillment": [
+            {
+              "target_id": "goal:1",
+              "status": "done",
+              "evidence": "核对已有线索"
+            },
+            {
+              "target_id": "bind:0",
+              "status": "done",
+              "evidence": "核对已有线索"
+            }
+          ]
+        }
+      },
+      "3": {
+        "body": "祁长烬留在断剑崖，记下下一步要核对的问题。过了0.1刻，他仍没有急着下定论，只把疑问留在纸上。\n\n他重新把剑穗收好，在纸上圈出三处尚无答案的细节：碑文是谁刻的，旧物又为何留在碑后，以及那些红绳是否原本系在一起。每一项都只能算问题，暂时没有哪一项能够充当结论。他决定下次问话时先问年月，不先说出自己的猜测，免得对方顺着猜测编出一套解释。",
+        "summary": "祁长烬记下下一步要核对的问题。",
+        "chapter_delta_extraction": {
+          "time": {
+            "elapsed": {
+              "amount": 0.1,
+              "unit": "刻"
+            },
+            "evidence": "过了0.1刻"
+          },
+          "events": [
+            {
+              "summary": "祁长烬记下下一步要核对的问题",
+              "participant_refs": [
+                "@node:祁长烬"
+              ],
+              "location_ref": "@site:断剑崖",
+              "significance": "minor",
+              "visibility": "public",
+              "evidence": "祁长烬留在断剑崖，记下下一步要核对的问题"
+            }
+          ],
+          "plan_fulfillment": [
+            {
+              "target_id": "goal:1",
+              "status": "done",
+              "evidence": "记下下一步要核对的问题"
+            },
+            {
+              "target_id": "bind:0",
+              "status": "done",
+              "evidence": "记下下一步要核对的问题"
+            }
+          ]
+        }
+      },
+      "1": {
+        "plan": {
+          "title": "断剑崖",
+          "one_line": "祁长烬徒步登上断剑崖，在残碑上找到母亲留下的痕迹。",
+          "goals": [
+            "祁长烬在断剑崖找到母亲留下的线索"
+          ]
+        },
+        "body": "入夜后落了一场冷雨。祁长烬灵脉残缺，御不得剑，只能背起行囊出了栖云山门，沿着湿滑的石阶徒步往断剑崖去。\n\n山路比他记忆里长得多，石阶被雨水泡得发软，他走走停停，夜里就缩在岩缝里打坐。两日后，他才攀上断剑崖。崖顶立着一排历代剑修折剑留下的残碑，碑前插着锈蚀的断剑。\n\n他在最旧的一块残碑背面摸到一行刻字，正是母亲的名字。刻痕下压着一截褪色的剑穗，穗尾还缠着半根红绳。祁长烬把剑穗收进怀里，指尖冻得发麻。\n\n碑文写得分明：母亲当年曾在断剑崖守过三年剑冢。这件事，师门上下从未对他提过一个字。\n\n他想起景沧澜每次提到母亲时闪躲的眼神，想起那句“你母亲死于九曜盟之手”说得太快，第一次对这位师尊生出了疑心。\n\n风把残碑上的积雨吹落。祁长烬在碑前跪了很久，才起身往崖边的石屋走去。",
+        "summary": "祁长烬徒步登上断剑崖，在残碑上找到母亲的名字和一截剑穗，开始怀疑师尊景沧澜。",
+        "chapter_delta_extraction": {
+          "time": {
+            "elapsed": {
+              "amount": 2,
+              "unit": "日"
+            },
+            "evidence": "两日后，他才攀上断剑崖"
+          },
+          "movements": [
+            {
+              "entity_ref": "@node:祁长烬",
+              "from_ref": "@site:栖云山门",
+              "to_ref": "@site:断剑崖",
+              "travel_mode_id": "mode-foot",
+              "evidence": "沿着湿滑的石阶徒步往断剑崖去"
+            }
+          ],
+          "relation_changes": [
+            {
+              "source_ref": "@node:祁长烬",
+              "target_ref": "@node:景沧澜",
+              "edge_type": "distrusts",
+              "op": "create",
+              "evidence": "第一次对这位师尊生出了疑心"
+            }
+          ],
+          "knowledge_events": [
+            {
+              "observer_ref": "@node:祁长烬",
+              "new_fact": {
+                "proposition": "祁长烬的母亲曾在断剑崖守过三年剑冢",
+                "truth_value": true,
+                "sensitivity": "public"
+              },
+              "state": "knows",
+              "channel": "document",
+              "evidence": "碑文写得分明：母亲当年曾在断剑崖守过三年剑冢"
+            },
+            {
+              "observer_ref": "reader",
+              "new_fact": {
+                "proposition": "祁长烬的母亲曾在断剑崖守过三年剑冢",
+                "truth_value": true,
+                "sensitivity": "public"
+              },
+              "state": "knows",
+              "channel": "document",
+              "evidence": "碑文写得分明：母亲当年曾在断剑崖守过三年剑冢"
+            }
+          ],
+          "item_transfers": [
+            {
+              "new_item": {
+                "name": "褪色剑穗",
+                "kind": "item"
+              },
+              "from_ref": "@site:断剑崖",
+              "to_ref": "@node:祁长烬",
+              "evidence": "祁长烬把剑穗收进怀里"
+            }
+          ],
+          "events": [
+            {
+              "summary": "祁长烬在断剑崖的残碑上找到母亲的名字",
+              "participant_refs": [
+                "@node:祁长烬"
+              ],
+              "location_ref": "@site:断剑崖",
+              "significance": "moderate",
+              "visibility": "public",
+              "evidence": "他在最旧的一块残碑背面摸到一行刻字，正是母亲的名字"
+            }
+          ],
+          "plan_fulfillment": [
+            {
+              "target_id": "goal:1",
+              "status": "done",
+              "evidence": "他在最旧的一块残碑背面摸到一行刻字，正是母亲的名字"
+            },
+            {
+              "target_id": "bind:0",
+              "status": "done",
+              "evidence": "他在最旧的一块残碑背面摸到一行刻字，正是母亲的名字"
+            }
+          ]
+        }
+      }
+    },
+    "beat_sheet": {
+      "protagonist_ref": "@node:祁长烬",
+      "phases": [
+        {
+          "name": "follow-up",
+          "chapter_range": [
+            4,
+            6
+          ],
+          "purpose": "沿已获得的线索继续核对。"
+        }
+      ],
+      "milestones": [],
+      "protections": [],
+      "reveal_targets": [],
+      "exit_state": [],
+      "band_breakdown": [
+        {
+          "band_index": 0,
+          "chapter_start": 4,
+          "chapter_end": 6
+        }
+      ],
+      "reader_promise": {},
+      "arc_payoff_map": {}
+    },
+    "band_plan": {
+      "chapters": [
+        {
+          "chapter_number": 4,
+          "title": "后续线索4",
+          "one_line": "祁长烬留在断剑崖整理已经得到的线索。",
+          "goals": [
+            "核对已有线索"
+          ],
+          "pov_ref": "@node:祁长烬",
+          "onstage_refs": [
+            "@node:祁长烬"
+          ],
+          "location_refs": [
+            "@site:断剑崖"
+          ],
+          "expected_span": {
+            "amount": 0.1,
+            "unit": "刻"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-mother-truth",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [],
+          "intended_changes": [],
+          "milestone_ids": [],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        },
+        {
+          "chapter_number": 5,
+          "title": "后续线索5",
+          "one_line": "祁长烬留在断剑崖整理已经得到的线索。",
+          "goals": [
+            "核对已有线索"
+          ],
+          "pov_ref": "@node:祁长烬",
+          "onstage_refs": [
+            "@node:祁长烬"
+          ],
+          "location_refs": [
+            "@site:断剑崖"
+          ],
+          "expected_span": {
+            "amount": 0.1,
+            "unit": "刻"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-mother-truth",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [],
+          "intended_changes": [],
+          "milestone_ids": [],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        },
+        {
+          "chapter_number": 6,
+          "title": "后续线索6",
+          "one_line": "祁长烬留在断剑崖整理已经得到的线索。",
+          "goals": [
+            "核对已有线索"
+          ],
+          "pov_ref": "@node:祁长烬",
+          "onstage_refs": [
+            "@node:祁长烬"
+          ],
+          "location_refs": [
+            "@site:断剑崖"
+          ],
+          "expected_span": {
+            "amount": 0.1,
+            "unit": "刻"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-mother-truth",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [],
+          "intended_changes": [],
+          "milestone_ids": [],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        }
+      ]
+    },
+    "replan": {
+      "chapters": [
+        {
+          "chapter_number": 2,
+          "title": "线索2",
+          "one_line": "祁长烬在镇脉石殿重新整理已经得到的线索。",
+          "goals": [
+            "核对已有线索"
+          ],
+          "pov_ref": "@node:祁长烬",
+          "onstage_refs": [
+            "@node:祁长烬"
+          ],
+          "location_refs": [
+            "@site:镇脉石殿"
+          ],
+          "expected_span": {
+            "amount": 0.1,
+            "unit": "刻"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-mother-truth",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [
+            {
+              "id": "clue-2",
+              "fact_ref": "@fact:fact-mother-truth",
+              "hint_text": "已有线索中仍有一个解释不通的细节。"
+            }
+          ],
+          "intended_changes": [],
+          "milestone_ids": [],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        },
+        {
+          "chapter_number": 3,
+          "title": "线索3",
+          "one_line": "祁长烬在镇脉石殿重新整理已经得到的线索。",
+          "goals": [
+            "记下下一步要核对的问题"
+          ],
+          "pov_ref": "@node:祁长烬",
+          "onstage_refs": [
+            "@node:祁长烬"
+          ],
+          "location_refs": [
+            "@site:镇脉石殿"
+          ],
+          "expected_span": {
+            "amount": 0.1,
+            "unit": "刻"
+          },
+          "world_bindings": [
+            {
+              "kind": "secret",
+              "ref": "@fact:fact-mother-truth",
+              "how": "保留疑问，不下定论。"
+            }
+          ],
+          "reveal_directives": [],
+          "hint_directives": [
+            {
+              "id": "clue-3",
+              "fact_ref": "@fact:fact-mother-truth",
+              "hint_text": "已有线索中仍有一个解释不通的细节。"
+            }
+          ],
+          "intended_changes": [],
+          "milestone_ids": [
+            "first-lead"
+          ],
+          "reward_slot": "",
+          "trope_ids": [],
+          "hook": "下一步该先核对哪一处？"
+        }
+      ]
     }
   }
 }

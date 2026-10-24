@@ -13,6 +13,7 @@ from forwin.generation.pipeline_core.chapter_review_gate import (
 )
 from forwin.generation.pipeline_core import chapter_execution_support
 from forwin.generation.pipeline_core.result import RunResult
+from forwin.generation.pipeline_core.audit_control import PlanFeasibilityBlocked
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import attach_gate_outcome
 from forwin.generation.pipeline_core.common import TransientLLMChapterFailure
@@ -956,6 +957,18 @@ class ChapterExecutionStage:
                         current_chapter=chapter_num,
                     )
 
+            except PlanFeasibilityBlocked as exc:
+                session.rollback()
+                paused_chapters.append(chapter_num)
+                pause_reason = "world_conflict"
+                self._emit_progress(
+                    "stage_changed", stage="paused_for_review", project_id=project_id,
+                    requested_chapters=requested_chapters, current_chapter=chapter_num,
+                    completed_chapters=completed_chapters, failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters, frozen_artifacts=frozen_artifacts,
+                    payload={"reason": pause_reason, "conflict_id": exc.conflict_id},
+                )
+                break
             except Exception as exc:
                 logger.exception("Chapter %d failed.", chapter_num)
                 session.rollback()

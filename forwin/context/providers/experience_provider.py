@@ -17,6 +17,7 @@ class ExperienceContextProvider:
     def contribute(self, request: ContextRequest, draft: ContextDraft) -> None:
         repo = request.repo
         chapter_plan = request.chapter_plan
+        arc_plan_id = getattr(chapter_plan, "arc_plan_id", None)
         project_id = request.project_id
         reader_promise_getter = getattr(repo, "get_reader_promise", None)
         arc_payoff_map_getter = getattr(repo, "get_arc_payoff_map", None)
@@ -74,11 +75,11 @@ class ExperienceContextProvider:
         draft.data.update(
             {
                 "goals": goals,
-                "reader_promise": reader_promise_getter(project_id)
+                "reader_promise": reader_promise_getter(project_id, arc_plan_id=arc_plan_id)
                 if callable(reader_promise_getter)
                 else None,
                 "arc_payoff_map": writer_payoff_map(
-                    arc_payoff_map_getter(project_id), chapter_plan.chapter_number,
+                    arc_payoff_map_getter(project_id, arc_plan_id=arc_plan_id), chapter_plan.chapter_number,
                 )
                 if callable(arc_payoff_map_getter)
                 else None,

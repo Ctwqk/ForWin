@@ -23,13 +23,11 @@ from forwin.writer.llm import LLMClient
 
 
 DEFAULT_STAGES = (
-    "launch_arc_",
-    "arc_plan",
-    "arc_envelope_analysis",
+    "plan.arc_beats",
+    "plan.band",
     "scene_breakdown",
     "scene_generation",
     "scene_stitch",
-    "subworld_delta",
     "chapter_delta_extraction",
 )
 

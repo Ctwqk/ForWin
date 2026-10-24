@@ -624,10 +624,10 @@ class _ChapterExtractionChecks:
         )
 
     @cached_property
-    def _allowed_reader_reveals(self) -> dict[str, int]:
+    def _allowed_reader_reveals(self) -> dict[str, set[str]]:
         from forwin.planning.beat_sheet.types import READER_OBSERVER
 
-        allowed: dict[str, int] = {}
+        allowed: dict[str, set[str]] = {}
         if self.delta.source_type != CHAPTER_EXTRACTION_SOURCE_TYPE:
             return allowed
         directives = chapter_reveal_directives(self.session, self.delta.project_id, self.delta.chapter_number)
@@ -635,7 +635,9 @@ class _ChapterExtractionChecks:
             fact_ref, state = directive.get("fact_ref"), directive.get("target_state")
             if (directive.get("observer") == READER_OBSERVER and isinstance(fact_ref, str)
                     and state in KNOWLEDGE_STATES):
-                allowed[fact_ref] = max(allowed.get(fact_ref, -1), KNOWLEDGE_STATES.index(state))
+                # Only heard -> suspects -> believes -> knows is ordered; the other states are exact grants.
+                states = KNOWLEDGE_STATES[:KNOWLEDGE_STATES.index(state) + 1] if state in KNOWLEDGE_STATES[:4] else (state,)
+                allowed.setdefault(fact_ref, set()).update(states)
         return allowed
 
     def _reveal_issues(self, fact_ref: str, state: str) -> None:
@@ -647,10 +649,9 @@ class _ChapterExtractionChecks:
                 "warning", "unscheduled_reveal", fact_ref,
                 f"the reader advances on {fact_ref}, which has no reveal schedule",
             )
-        elif self.delta.chapter_number < earliest and not (
-            state in KNOWLEDGE_STATES
-            and KNOWLEDGE_STATES.index(state) <= self._allowed_reader_reveals.get(fact_ref, -1)
-        ):
+        elif (self.delta.chapter_number < earliest
+              and state not in self._allowed_reader_reveals.get(fact_ref, set())
+              and not any(issue.code == "premature_reveal" and issue.target_ref == fact_ref for issue in self.issues)):
             self._issue(
                 "error", "premature_reveal", fact_ref,
                 f"the reader advances on {fact_ref} in chapter {self.delta.chapter_number}; "

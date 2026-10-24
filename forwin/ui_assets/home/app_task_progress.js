@@ -149,10 +149,10 @@
           note: formatStageNote(latestHistoryEntry(history, 'planning_arc'), '未记录'),
         },
         {
-          key: 'resolving_arc_envelope',
-          label: 'Arc',
-          state: latestHistoryEntry(history, 'resolving_arc_envelope') ? 'completed' : 'upcoming',
-          note: formatStageNote(latestHistoryEntry(history, 'resolving_arc_envelope'), '未解析'),
+          key: 'planning_band',
+          label: '规划本段章节',
+          state: latestHistoryEntry(history, 'planning_band') ? 'completed' : 'upcoming',
+          note: formatStageNote(latestHistoryEntry(history, 'planning_band'), '未规划'),
         },
         {
           key: 'chapter_loop',

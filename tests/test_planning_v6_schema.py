@@ -222,6 +222,7 @@ def test_0006_strips_removed_planning_key_preserving_other_policy_data(monkeypat
     engine = sa.create_engine("sqlite:///:memory:")
     policies = {
         "legacy": json.dumps({"planning": {"use_llm_simulation": True, "context_recency_" + "window": 73}, "custom": [1]}),
+        "recency_only": json.dumps({"planning": {"context_recency_" + "window": 61, "band_size": 8}, "custom": [2]}),
         "current": '{"planning":{"band_size":8}}',
         "malformed": "not-json",
         "empty": "",
@@ -236,8 +237,9 @@ def test_0006_strips_removed_planning_key_preserving_other_policy_data(monkeypat
             monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
             migration._drop_simulation_from_policies()
             actual = dict(connection.execute(sa.text("SELECT id, runtime_policy_json FROM projects")).all())
-            assert json.loads(actual.pop("legacy")) == {"planning": {"context_recency_" + "window": 73}, "custom": [1]}
-            assert actual == {k: v for k, v in policies.items() if k != "legacy"}
+            assert json.loads(actual.pop("legacy")) == {"planning": {}, "custom": [1]}
+            assert json.loads(actual.pop("recency_only")) == {"planning": {"band_size": 8}, "custom": [2]}
+            assert actual == {k: v for k, v in policies.items() if k not in {"legacy", "recency_only"}}
             first = connection.execute(sa.text("SELECT id, runtime_policy_json FROM projects ORDER BY id")).all()
             migration._drop_simulation_from_policies()
             assert connection.execute(sa.text("SELECT id, runtime_policy_json FROM projects ORDER BY id")).all() == first
@@ -274,6 +276,7 @@ def test_0006_upgrade_strips_stored_policy_key_and_preserves_other_fields(legacy
         )).scalar_one()
     expected = json.loads(json.dumps(legacy))
     del expected["planning"]["use_llm_simulation"]
+    del expected["planning"]["context_recency_" + "window"]
     assert json.loads(stored) == expected
     assert "context_recency_" + "window" not in RuntimePolicy.model_validate_json(stored).planning.model_dump()
     command.downgrade(config, "0005_world_plan_conflicts")

@@ -1,14 +1,13 @@
 ---
 name: genesis.book-blueprint
 version: 1.0.0
-description: Use when generating or refining the Genesis book blueprint and launch arc plan.
+description: Use when generating or refining the Genesis book blueprint for later beat-sheet and band planning.
 forwin_scope: genesis
 stage_keys:
   - book_blueprint
 task_families:
   - generate_stage_payload
   - refine_stage_payload
-  - launch_arc_plan
 mode: instruction_only
 ---
 # Genesis Book Blueprint Skill

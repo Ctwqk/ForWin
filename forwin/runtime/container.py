@@ -62,6 +62,7 @@ class RuntimeContainer:
     _outbox_publisher_jobs: CanonPublisherJobService | None = None
     _outbox_handlers: dict | None = None
     _outbox_resources: list[object] = field(default_factory=list)
+    _project_planning_clients: dict[str, object] = field(default_factory=dict)
     _closed: bool = False
     _lock: threading.RLock = field(
         default_factory=threading.RLock,
@@ -217,15 +218,19 @@ class RuntimeContainer:
         )
         return self.core_services().generation_application
 
-    def build_plan_amender(self):
-        """The amender amend_plan resolutions plan with, from this container's band planner and beat sheet
-        service."""
+    def build_project_plan_amender(self):
+        """Resolve the project's policy at amendment time, after the route has loaded it from its store."""
+        self._require_capability("generation", allowed_roles={"api", "generation_worker"})
+        return _ProjectPlanAmender(self)
+
+    def build_plan_amender(self, *, policy: RuntimePolicy | None = None):
+        """Build an amender on the supplied policy, defaulting to this container's generation policy."""
         from forwin.planning.amend import PlanAmender
 
-        return PlanAmender(self.build_band_planner(), self.build_beat_sheet_service())
+        return PlanAmender(self.build_band_planner(policy=policy), self.build_beat_sheet_service(policy=policy))
 
-    def build_band_planner(self):
-        """A band planner on the generation LLM client, or on none when no model is configured."""
+    def build_band_planner(self, *, policy: RuntimePolicy | None = None):
+        """Use the supplied project policy, or the generation client's policy when omitted."""
         self._require_capability(
             "generation",
             allowed_roles={"api", "generation_worker"},
@@ -234,11 +239,12 @@ class RuntimeContainer:
             self._require_open()
             core = self.core_services()
             return self._band_planner(
-                self._planning_llm_client(core), core.artifact_store, core.policy
+                self._planning_llm_client(core) if policy is None else self._project_planning_llm_client(policy),
+                core.artifact_store, policy if policy is not None else core.policy,
             )
 
-    def build_beat_sheet_service(self):
-        """A beat sheet service on the generation LLM client, or on none when no model is configured."""
+    def build_beat_sheet_service(self, *, policy: RuntimePolicy | None = None):
+        """Use the supplied project policy, or the generation client's policy when omitted."""
         self._require_capability(
             "generation",
             allowed_roles={"api", "generation_worker"},
@@ -247,8 +253,20 @@ class RuntimeContainer:
             self._require_open()
             core = self.core_services()
             return self._beat_sheet_service(
-                self._planning_llm_client(core), core.artifact_store
+                self._planning_llm_client(core) if policy is None else self._project_planning_llm_client(policy),
+                core.artifact_store,
             )
+
+    def _project_planning_llm_client(self, policy: RuntimePolicy):
+        """Planning clients are keyed by policy and owned by this process, including on the outbox worker."""
+        with self._lock:
+            self._require_open()
+            if not _llm_available(self.infrastructure, policy):
+                return None
+            key = policy.model_dump_json()
+            if key not in self._project_planning_clients:
+                self._project_planning_clients[key] = self._build_llm_client(self.infrastructure, policy)
+            return self._project_planning_clients[key]
 
     def _planning_llm_client(self, core: CoreRuntimeServices):
         if not _llm_available(core.infrastructure, core.policy):
@@ -294,6 +312,9 @@ class RuntimeContainer:
                 _close_resource(generation.retrieval_broker, "retrieval")
             for resource in outbox_resources:
                 _close_resource(resource, "outbox")
+            for resource in self._project_planning_clients.values():
+                _close_resource(resource, "project planning LLM")
+            self._project_planning_clients.clear()
             if generation is not None:
                 _close_resource(generation.llm_client, "LLM")
             if core is not None:
@@ -556,9 +577,7 @@ class RuntimeContainer:
                 comment_analyzer=comment_analyzer,
                 artifact_store=core.artifact_store,
                 llm_client=llm_client,
-                plan_step=self._plan_step_service(
-                    llm_client if llm_available else None, core.artifact_store, policy,
-                ),
+                plan_step=_ProjectPlanStep(self),
                 world_tick=build_world_tick_service(
                     llm_client=llm_client,
                     session_factory=core.session_factory,
@@ -737,6 +756,40 @@ class RuntimeContainer:
             embedding_dims=config.embedding_dims,
             embedding_required=config.embedding_required,
         )
+
+
+@dataclass(frozen=True)
+class _ProjectPlanAmender:
+    container: RuntimeContainer
+
+    def amend(self, session, *, conflict, decision, policy: RuntimePolicy):
+        return self.container.build_plan_amender(policy=policy).amend(
+            session, conflict=conflict, decision=decision, policy=policy,
+        )
+
+    def record_world_amendment_failure(self, session, *, conflict, issues, policy: RuntimePolicy):
+        return self.container.build_plan_amender(policy=policy).record_world_amendment_failure(
+            session, conflict=conflict, issues=issues, policy=policy,
+        )
+
+    @staticmethod
+    def error_issue(exc: BaseException):
+        from forwin.planning.amend import PlanAmender
+
+        return PlanAmender.error_issue(exc)
+
+
+@dataclass(frozen=True)
+class _ProjectPlanStep:
+    container: RuntimeContainer
+
+    def run(self, session, commit, *, policy: RuntimePolicy):
+        # PostCanonMaintenanceService loads this project's current policy through ProjectPolicyStore.
+        core = self.container.core_services()
+        step = self.container._plan_step_service(
+            self.container._project_planning_llm_client(policy), core.artifact_store, policy,
+        )
+        return step.run(session, commit, policy=policy)
 
 
 def _validate_runtime_role(role: str) -> RuntimeRole:

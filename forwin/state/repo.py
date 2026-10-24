@@ -173,11 +173,14 @@ class StateRepository:
         )
         return self.session.execute(stmt).scalar_one_or_none()
 
-    def get_active_beat_sheet(self, project_id: str) -> ArcBeatSheetRow | None:
+    def get_active_beat_sheet(self, project_id: str, *, arc_plan_id: str | None = None) -> ArcBeatSheetRow | None:
         from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
 
-        arc = self.get_active_arc_plan(project_id)
-        return ArcBeatSheetRepository(self.session).active_for_arc(arc.id) if arc else None
+        arc = (self.session.get(ArcPlanVersion, arc_plan_id) if arc_plan_id is not None
+               else self.get_active_arc_plan(project_id))
+        if arc is None or arc.project_id != project_id:
+            return None
+        return ArcBeatSheetRepository(self.session).active_for_arc(arc.id)
 
     def get_beat_sheet_experience(self, project_id: str) -> BeatSheetExperienceInput:
         from forwin.experience.types import BeatSheetExperienceInput
@@ -190,12 +193,12 @@ class StateRepository:
             ArcBeatSheetRepository(self.session).load(row)
         )
 
-    def get_reader_promise(self, project_id: str) -> ReaderPromise | None:
-        row = self.get_active_beat_sheet(project_id)
+    def get_reader_promise(self, project_id: str, *, arc_plan_id: str | None = None) -> ReaderPromise | None:
+        row = self.get_active_beat_sheet(project_id, arc_plan_id=arc_plan_id)
         return ReaderPromise.model_validate_json(row.reader_promise_json) if row else None
 
-    def get_arc_payoff_map(self, project_id: str) -> ArcPayoffMap | None:
-        row = self.get_active_beat_sheet(project_id)
+    def get_arc_payoff_map(self, project_id: str, *, arc_plan_id: str | None = None) -> ArcPayoffMap | None:
+        row = self.get_active_beat_sheet(project_id, arc_plan_id=arc_plan_id)
         return ArcPayoffMap.model_validate_json(row.arc_payoff_map_json) if row else None
 
     # ------------------------------------------------------------------

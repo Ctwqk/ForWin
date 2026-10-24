@@ -293,7 +293,7 @@ class RunControlStage:
 
             self._emit_progress(
                 "stage_changed",
-                stage="resolving_arc_envelope",
+                stage="planning_band",
                 project_id=project_id,
                 pending_chapter_count=len(pending_chapter_numbers),
                 resolved_workset_count=workset.requested_chapters,

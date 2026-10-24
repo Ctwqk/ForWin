@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -39,6 +40,9 @@ from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.world_engine.conflict_types import ConflictDraft
 from forwin.world_engine.types import INVALID_OUTPUT, LLM_UNAVAILABLE
 from forwin.writer.prompt_core.planning import build_band_plan_messages
+
+
+logger = logging.getLogger(__name__)
 
 
 STAGE_KEY = "plan.band"
@@ -111,20 +115,22 @@ class BandPlanner:
         self, session: Session, *, project_id: str, arc_plan: ArcPlanVersion, beat_sheet_row: ArcBeatSheetRow,
         band: BandSpan, policy: RuntimePolicy, extra_notes: Sequence[str] = (),
         expected_band_plan_id: str | None | _Unset = _UNSET,
+        amend_chapters: frozenset[int] = frozenset(),
     ) -> BandPlanOutcome:
         """Plan the band's chapters that are still to write; a failure only returns its issues.
 
         An explicit expected id (including None for a missing band) fences publication to the caller's
         observation. Omitted expectations retain the planner's own snapshot and the human cap override.
+        ``amend_chapters`` lets an explicit human amendment rewrite old-planner planned/failed rows with draft history.
         """
         rows = _band_rows(session, project_id, band)
-        numbers = _rewritable(session, band, rows, from_chapter=band.chapter_start)
+        numbers = _rewritable(session, band, rows, from_chapter=band.chapter_start, amend_chapters=amend_chapters)
         if not numbers:
             return BandPlanOutcome(band_plan_id=_active_band_plan_id(session, project_id, arc_plan.id, band))
         return self._plan(
             session, project_id=project_id, arc_plan=arc_plan, beat_sheet_row=beat_sheet_row, band=band,
             chapter_numbers=numbers, rows=rows, policy=policy, notes=extra_notes, reason="plan_band",
-            expected_band_plan_id=expected_band_plan_id,
+            expected_band_plan_id=expected_band_plan_id, amend_chapters=amend_chapters,
         ).outcome
 
     def ensure_plan_for_chapter(
@@ -183,6 +189,7 @@ class BandPlanner:
         self, session: Session, *, project_id: str, band_plan_id: str, from_chapter: int, policy: RuntimePolicy,
         notes: Sequence[str],
         expected_band_plan_id: str | None | _Unset = _UNSET,
+        amend_chapters: frozenset[int] = frozenset(),
     ) -> BandPlanOutcome:
         """Plan again the band's chapters from ``from_chapter`` on that are still to write, from the arc's active
         beat sheet. Only unguarded callers follow later versions of a stale ``band_plan_id``."""
@@ -203,13 +210,13 @@ class BandPlanner:
             raise LookupError(f"band plan {active.id} has no arc plan with an active beat sheet")
         band = BandSpan(band_index=active.band_index, chapter_start=active.chapter_start, chapter_end=active.chapter_end)
         rows = _band_rows(session, project_id, band)
-        numbers = _rewritable(session, band, rows, from_chapter=from_chapter)
+        numbers = _rewritable(session, band, rows, from_chapter=from_chapter, amend_chapters=amend_chapters)
         if not numbers:
             return BandPlanOutcome(band_plan_id=active.id)
         return self._plan(
             session, project_id=project_id, arc_plan=arc_plan, beat_sheet_row=beat_sheet_row, band=band,
             chapter_numbers=numbers, rows=rows, policy=policy, notes=notes, reason="replan",
-            expected_band_plan_id=expected_band_plan_id,
+            expected_band_plan_id=expected_band_plan_id, amend_chapters=amend_chapters,
         ).outcome
 
     def _plan(
@@ -217,6 +224,7 @@ class BandPlanner:
         band: BandSpan, chapter_numbers: list[int], rows: Mapping[int, ChapterPlan], policy: RuntimePolicy,
         notes: Sequence[str], reason: str,
         expected_band_plan_id: str | None | _Unset = _UNSET,
+        amend_chapters: frozenset[int] = frozenset(),
     ) -> _PlanResult:
         # The refs are checked against the latest canon: chapter 0 at handoff.
         as_of = BookStateRepository(session).latest_canon_chapter(project_id) or 0
@@ -242,7 +250,10 @@ class BandPlanner:
                           beat_sheet=beat_sheet, policy=policy)
         if call.error is not None:
             # Saved in the caller's session: a caller that rolls back on the exception discards the trace too.
-            self.save_trace(session, self._prompt_trace(call, trace, BandPlanOutcome(band_plan_id=None)))
+            try:
+                self.save_trace(session, self._prompt_trace(call, trace, BandPlanOutcome(band_plan_id=None)))
+            except Exception:  # noqa: BLE001 - an aborted audit transaction may also prevent saving its trace
+                logger.warning("Project %s: could not save the failed band audit trace", project_id, exc_info=True)
             raise BandPlanningAuditError(str(call.error), call.issues) from call.error
         if call.draft is None:
             outcome = BandPlanOutcome(band_plan_id=None, issues=call.issues, failure_reason=call.failure_reason)
@@ -282,7 +293,7 @@ class BandPlanner:
         # Locked, so a status change by a writer that does not take the project lock waits for this plan.
         fresh = _band_rows(session, project_id, band, refresh=True, lock=True)
         writable = [chapter for chapter in call.draft.chapters
-                    if _can_rewrite(session, fresh.get(chapter.chapter_number))]
+                    if _can_rewrite(session, fresh.get(chapter.chapter_number), amend_chapters=amend_chapters)]
         if not writable:
             # Every chapter was taken up for writing during the model call: nothing is left to plan.
             lock_scope.rollback()
@@ -557,9 +568,11 @@ def _band_planned(session: Session, plan: ChapterPlan | None) -> bool:
     return plan is not None and (plan.band_plan_id is not None or not _can_rewrite(session, plan))
 
 
-def _can_rewrite(session: Session, plan: ChapterPlan | None) -> bool:
+def _can_rewrite(
+    session: Session, plan: ChapterPlan | None, *, amend_chapters: frozenset[int] = frozenset(),
+) -> bool:
     return plan is None or (plan.status in REWRITABLE_PLAN_STATUSES and (
-        plan.band_plan_id is not None or not _has_draft_history(session, plan)
+        plan.band_plan_id is not None or plan.chapter_number in amend_chapters or not _has_draft_history(session, plan)
     ))
 
 
@@ -578,10 +591,13 @@ def _band_rows(
     return {plan.chapter_number: plan for plan in session.scalars(statement)}
 
 
-def _rewritable(session: Session, band: BandSpan, rows: Mapping[int, ChapterPlan], *, from_chapter: int) -> list[int]:
+def _rewritable(
+    session: Session, band: BandSpan, rows: Mapping[int, ChapterPlan], *, from_chapter: int,
+    amend_chapters: frozenset[int] = frozenset(),
+) -> list[int]:
     """The band's chapters from ``from_chapter`` on that have no plan row, or one still to write."""
     return [number for number in range(max(from_chapter, band.chapter_start), band.chapter_end + 1)
-            if _can_rewrite(session, rows.get(number))]
+            if _can_rewrite(session, rows.get(number), amend_chapters=amend_chapters)]
 
 
 def _active_band_plan_id(session: Session, project_id: str, arc_plan_id: str, band: BandSpan) -> str | None:

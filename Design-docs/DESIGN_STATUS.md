@@ -114,7 +114,7 @@ P1 代码收口时的记录；当前 P4a 状态以上节为准。
 
 ## 2026-10 世界引擎大修 P0（历史记录）
 
-设计见 `../docs/designs/2026-10-20-world-engine-overhaul.md`。P0 只做护栏与纯删除；当时 `meta.completed_phase` 推进到 `P0`，当前已推进至 P3（见上节）。`ALLOWED_PRODUCTION_MECHANISM_FILES` 已清空。
+设计见 `../docs/designs/2026-10-20-world-engine-overhaul.md`。P0 只做护栏与纯删除；当时 `meta.completed_phase` 推进到 `P0`，当前已推进至 P4a（见上节）。`ALLOWED_PRODUCTION_MECHANISM_FILES` 已清空。
 
 - 新增防过拟合 AST 护栏：`tests/overfit_guard.py`、`tests/overfit_allowlist.toml`、`tests/test_no_story_content_in_runtime.py`，带按阶段门控的 `pending_removal` 区段。
 - 新增 `scripts/purge_all_projects.py`（默认 dry-run，`--yes-delete-all-projects` 才执行；dry-run 回滚式试删以暴露外键阻塞，任一项目删除失败时不清理外部存储并以退出码 4 结束）；`_delete_project` 现在删除 publisher 子表行与项目 outbox 事件。

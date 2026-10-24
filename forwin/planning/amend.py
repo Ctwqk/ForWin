@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.repository import BookStateRepository
+from forwin.book_state.projection import BookStateProjection
 from forwin.models.audit import DecisionEvent
 from forwin.models.planning_v6 import ArcBeatSheetRow, BandPlanRow
 from forwin.models.project import ArcPlanVersion, ChapterPlan
@@ -20,7 +21,7 @@ from forwin.planning.band_planner.types import REWRITABLE_PLAN_STATUSES, BandPla
 from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
 from forwin.planning.beat_sheet.service import ArcBeatSheetService
 from forwin.planning.beat_sheet.types import BandSpan
-from forwin.planning.feasibility import band_for_chapter, open_plan_feasibility_conflict
+from forwin.planning.feasibility import FeasibilityAuditor, band_for_chapter, open_plan_feasibility_conflict
 from forwin.runtime.policy import RuntimePolicy
 from forwin.world_engine.conflict_repository import WorldConflictRepository, conflict_result_refs
 from forwin.world_engine.conflict_resolution import ConflictOptionUnavailable
@@ -89,6 +90,8 @@ class PlanAmender:
         """
         if conflict.source in PLAN_CONFLICT_SOURCES:
             result = self._amend_plan_conflict(session, conflict, decision, policy)
+            if result.failed:
+                self._record_plan_amendment_failure(session, conflict, result.issues)
         else:
             result = self._replan_after_world_change(session, conflict, policy)
         refs = [
@@ -160,10 +163,15 @@ class PlanAmender:
         start, end = band
         project_id = conflict.project_id
         arc_plan, sheet_row = _arc_with_sheet(session, project_id, start)
-        first = max(start, (BookStateRepository(session).latest_canon_chapter(project_id) or 0) + 1)
+        first = int(conflict.blocks_from_chapter or start)
+        if not start <= first <= end:
+            return AmendResult(band_plan_id=None, issues=(PlanIssue(
+                code=NO_BAND_PLAN, severity="error", chapter_number=first,
+                message="the blocked chapter is outside the conflict's band",
+            ),))
         notes = [text for text in (decision.rationale.strip(),) if text]
         codes = {str(item.get("code") or "") for item in proposed.get("issues") or [] if isinstance(item, dict)}
-        chapters = set(range(first, end + 1)) or {end}
+        chapters = set(range(first, end + 1))
         beat_sheet_id = None
         if conflict.violated in _REVISING_VIOLATIONS or codes & _REVISING_ISSUE_CODES:
             session.refresh(conflict)
@@ -180,12 +188,51 @@ class PlanAmender:
             chapters |= _retire_stale_band_plans(session, arc_plan=arc_plan, sheet_row=sheet_row, first=first)
             session.commit()
         outcome = self._plan_bands(session, arc_plan=arc_plan, sheet_row=sheet_row, chapters=chapters, first=first,
-                                   policy=policy, notes=notes)
+                                   policy=policy, notes=notes, amend_chapters=frozenset({first}))
+        if outcome.band_plan_id is not None:
+            blocked = session.scalar(select(ChapterPlan).where(
+                ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == first,
+            ).execution_options(populate_existing=True))
+            if blocked is None or blocked.id not in outcome.chapter_plan_ids:
+                return AmendResult(band_plan_id=None, beat_sheet_id=beat_sheet_id, issues=(PlanIssue(
+                    code=NO_BAND_PLAN, severity="error", chapter_number=first,
+                    message="the amendment did not plan the blocked chapter",
+                ),))
+            runtime = BookStateProjection(session).load_runtime_as_of(
+                project_id, as_of_chapter=max(0, first - 1),
+                observer_keys=[("reader", "reader"), *([("character", blocked.pov_ref)] if blocked.pov_ref else [])],
+            )
+            issues = FeasibilityAuditor().audit_plans(
+                session, project_id=project_id, plans=[blocked], policy=policy, runtime=runtime,
+                beat_sheet=ArcBeatSheetRepository(session).load(sheet_row),
+            )
+            errors = tuple(issue for issue in issues if issue.severity == "error" and issue.chapter_number == first)
+            if errors:
+                return AmendResult(band_plan_id=None, beat_sheet_id=beat_sheet_id, issues=errors)
         return AmendResult(band_plan_id=outcome.band_plan_id, beat_sheet_id=beat_sheet_id, issues=tuple(outcome.issues))
+
+    @staticmethod
+    def _record_plan_amendment_failure(session: Session, conflict: WorldPlanConflictRow,
+                                       issues: Sequence[PlanIssue]) -> None:
+        repo = WorldConflictRepository(session)
+        row = repo.get(conflict.project_id, conflict.id, for_update=True)
+        event = DecisionEvent(
+            project_id=row.project_id, chapter_number=row.blocks_from_chapter, scope="chapter",
+            event_family="business_event", event_type=DecisionEventType.WORLD_CONFLICT_AMEND_FAILED,
+            actor_type="system", summary=f"Plan conflict {row.id} remains open after amendment failure.",
+            reason="; ".join(f"{issue.code}: {issue.message}" for issue in issues),
+            payload_json=json.dumps({"conflict_id": row.id,
+                                     "issues": [issue.model_dump(mode="json") for issue in issues]}, sort_keys=True),
+            related_object_type="world_conflict", related_object_id=row.id,
+        )
+        session.add(event)
+        session.flush()
+        repo.attach_result_refs(row, [f"{AMEND_FAILED_REF_PREFIX}{event.id}"])
 
     def _plan_bands(
         self, session: Session, *, arc_plan: ArcPlanVersion, sheet_row: ArcBeatSheetRow, chapters: Iterable[int],
         first: int, policy: RuntimePolicy, notes: Sequence[str],
+        amend_chapters: frozenset[int] = frozenset(),
     ) -> BandPlanOutcome:
         """Plan again, band by band of the sheet, the bands holding ``chapters``; the first band's outcome when
         every band came out with a plan, else the failing band's, and no later band is planned.
@@ -208,12 +255,12 @@ class PlanAmender:
             if existing is not None:
                 outcome = self.band_planner.replan_remaining(
                     session, project_id=arc_plan.project_id, band_plan_id=existing.id, from_chapter=first,
-                    policy=policy, notes=notes,
+                    policy=policy, notes=notes, amend_chapters=amend_chapters,
                 )
             else:
                 outcome = self.band_planner.plan_band(
                     session, project_id=arc_plan.project_id, arc_plan=arc_plan, beat_sheet_row=sheet_row, band=band,
-                    policy=policy, extra_notes=notes,
+                    policy=policy, extra_notes=notes, amend_chapters=amend_chapters,
                 )
             session.commit()
             if outcome.band_plan_id is None:

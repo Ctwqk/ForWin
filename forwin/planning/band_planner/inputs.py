@@ -236,6 +236,7 @@ def build_band_inputs(
         "story_now": now,
         "actors": [
             {"id": node.id, "name": node.name, "kind": str(node.node_type),
+             "concealed": is_concealed(world, node),
              "location_ref": resolve_world_node_location_id(world, node.id),
              "alive_status": world.get_state(node.id).get("alive_status"),
              "restraint": world.get_state(node.id).get("restraint"),

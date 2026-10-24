@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY, KNOWLEDGE_STATES
+from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY, KNOWLEDGE_STATES, is_concealed
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
@@ -416,10 +416,11 @@ def _writer_text_issues(
 ) -> list[str]:
     """Writer-facing text cannot state concealed facts before their reader reveal (P4a-R21/R36).
 
-    Promises and ambiguity constraints reach the writer from the arc's start; revelation layers are projected
-    separately by chapter. A fact the reader's recorded cognition already knows may be stated.
+    Purposes and milestones feed band-wide key beats, so all these texts are checked from the arc's start
+    (P4a-R38). Revelation layers are projected separately by chapter. Recorded reader knowledge is allowed.
     """
     # Imported here: the feasibility audit imports the band planner's modules, which import this package.
+    from forwin.planning.band_planner.inputs import _concealed_names
     from forwin.planning.feasibility import reader_known_facts
 
     known = reader_known_facts(runtime)
@@ -449,17 +450,28 @@ def _writer_text_issues(
             texts.append((f"reader_promise.{field}", value, chapter_start))
     texts.extend((f"arc_payoff_map.ambiguity_constraints[{index}]", text, chapter_start)
                  for index, text in enumerate(data.arc_payoff_map.ambiguity_constraints))
+    concealed_names = _concealed_names(runtime)
     issues = []
     for path, text, start in texts:
         for ref in stated_facts([text], concealed):
             chapter = reveal.get(ref.removeprefix(FACT_REF_PREFIX))
-            if chapter is not None and chapter <= start:
+            if chapter is not None and chapter <= chapter_start:
                 continue
             when = f"the reader may learn only from chapter {chapter}" if chapter is not None else (
                 "has no reader reveal scheduled"
             )
             issues.append(f"{path} states the proposition of {ref}, which {when}; it reaches the writer verbatim, "
                           f"so hint at it instead")
+        # R38 preserves naming once a related reader reveal starts, using the text's own range.
+        revealed_nodes = {
+            ref for fact in runtime.world.facts_by_id.values()
+            if fact.id in known or (fact.id in reveal and reveal[fact.id] <= start)
+            for ref in fact.related_node_refs
+        }
+        for ref, name in concealed_names.items():
+            if name in text and ref not in revealed_nodes:
+                issues.append(f"{path} names concealed entity {ref} ({name}); it reaches the writer verbatim "
+                              f"and may name it only once a reader reveal about it has started")
     return issues
 
 
@@ -546,6 +558,7 @@ def _is_node_field(node: WorldNode, field: str) -> bool:
 def _actors(runtime: BookStateRuntime) -> list[dict[str, Any]]:
     return [
         {"id": node.id, "name": node.name, "kind": str(node.node_type),
+         "concealed": is_concealed(runtime.world, node),
          "tier": runtime.world.get_state(node.id).get("actor_tier"),
          "seeded": node.metadata.get("source") == GENESIS_SEED_SOURCE_TYPE}
         for node in sorted(runtime.world.nodes_by_id.values(), key=lambda item: item.id)

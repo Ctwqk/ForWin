@@ -137,12 +137,14 @@ def _chapter_issues(
                 for ref in fact.related_node_refs}
     writer_texts = {"title": [chapter.title], "one_line": [chapter.one_line], "goals": chapter.goals,
                     "hook": [chapter.hook]}
+    writer_texts.update({f"hint_directives[{index}].hint_text": [directive.hint_text]
+                         for index, directive in enumerate(chapter.hint_directives)})
     for ref, name in offered.concealed_names.items():
         named = [field for field, texts in writer_texts.items() if any(name in text for text in texts)]
         if named and ref not in revealed:
             add("writer_text_names_concealed", ref, (
-                f"{', '.join(named)} name concealed entity {ref} ({name}); title, one_line, goals and hook reach the "
-                f"writer verbatim and may name it only in a chapter whose reveal_directives reveal a fact about it"
+                f"{', '.join(named)} name concealed entity {ref} ({name}); title, one_line, goals, hook and hint_text "
+                f"reach the writer verbatim and may name it only in a chapter whose reveal_directives reveal a fact about it"
             ))
     rewards = offered.rewards_by_chapter.get(number, ())
     if chapter.reward_slot and chapter.reward_slot not in {item.category for item in rewards}:

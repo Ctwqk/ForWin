@@ -283,7 +283,16 @@ def test_planner_prompts_mark_the_fields_that_reach_the_writer():
     arc = writer_facing(ARC_BEATS_INSTRUCTIONS, "purpose", "milestones 的 description", "reader_promise",
                         "arc_payoff_map", "revelation_layers", "summary", "ambiguity_constraints")
     assert "chapter_window" in arc
-    band = writer_facing(BAND_PLAN_INSTRUCTIONS, "title", "one_line", "goals", "hook")
+    assert "purpose 与 milestones 的 description 按卷起始章的读者知情权限填写" in arc
+    assert "band 的每一章" in arc
+    assert "本阶段起始章或更早的 reveal_targets" in arc
+    band = writer_facing(BAND_PLAN_INSTRUCTIONS, "title", "one_line", "goals", "hook", "hint_text")
+    assert "本章 reveal_directives" in band
+    for instruction in (arc, band):
+        assert '"concealed": true' in instruction
+        assert "所有面向写作者的文本" in instruction
+    assert len(ARC_BEATS_INSTRUCTIONS) == 8
+    assert len(BAND_PLAN_INSTRUCTIONS) == 9
     binding_instruction = next(item for item in BAND_PLAN_INSTRUCTIONS if "world_bindings 写" in item)
     assert "每项世界绑定必须由本章面向写作者的某条 goals 承接" in binding_instruction
     assert binding_instruction in build_band_plan_messages(**arguments)[0]["content"]

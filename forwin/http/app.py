@@ -292,7 +292,7 @@ def create_app(runtime: HttpRuntime | None = None) -> FastAPI:
 
     def provide_plan_amender():
         container = runtime.container
-        return container.build_plan_amender() if container is not None else None
+        return container.build_project_plan_amender() if container is not None else None
 
     handlers = register_api_routes(
         app,

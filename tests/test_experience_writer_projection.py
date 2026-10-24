@@ -124,3 +124,33 @@ def test_writer_revelation_windows_require_an_unambiguous_start(window, chapter,
     if visible:
         projected.revelation_layers[0].summary = "changed"
         assert original.revelation_layers[0].summary == SECRET
+
+
+@pytest.mark.parametrize("chapter", [1, 8])
+def test_rewrite_in_completed_arc_reads_its_own_promise(experience_book, chapter):
+    Session, _ = experience_book
+    with Session.begin() as session:
+        session.get(ArcPlanVersion, "arc").status = "completed"
+        session.add(ArcPlanVersion(id="next-arc", project_id="p", chapter_start=9, chapter_end=16,
+                                  version=2, arc_synopsis="next synopsis", status="active"))
+        session.flush()
+        ArcBeatSheetRepository(session).create("p", "next-arc", ArcBeatSheetData.model_validate({
+            "protagonist_ref": "hero",
+            "phases": [{"name": "next", "chapter_range": [9, 16], "purpose": "Next task"}],
+            "band_breakdown": [{"band_index": 0, "chapter_start": 9, "chapter_end": 16}],
+            "reader_promise": {"pleasure_promise": "Next arc promise"},
+            "arc_payoff_map": {"ambiguity_constraints": ["Next arc constraint"]},
+        }), source="llm", reason="test")
+    with Session() as session:
+        repo = StateRepository(session)
+        plan = repo.get_chapter_plan("p", chapter)
+        draft = ContextDraft()
+        ExperienceContextProvider().contribute(
+            ContextRequest(project_id="p", chapter_plan=plan, repo=repo), draft,
+        )
+        assert draft.data["reader_promise"].pleasure_promise == SAFE_PROMISE
+        payoff = draft.data["arc_payoff_map"]
+        assert payoff.ambiguity_constraints == ["Every inference needs evidence"]
+        assert [layer.summary for layer in payoff.revelation_layers] == ([SECRET] if chapter == 8 else [])
+        assert repo.get_reader_promise("p").pleasure_promise == "Next arc promise"
+        assert repo.get_arc_payoff_map("p").ambiguity_constraints == ["Next arc constraint"]

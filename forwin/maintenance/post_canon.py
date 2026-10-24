@@ -882,7 +882,8 @@ class PostCanonMaintenanceService:
         if project is None:
             raise ValueError(f"Project not found: {commit.project_id}")
         policy = ProjectPolicyStore(session).load(project).policy
-        if self.plan_step is None:
+        plan_step = self.plan_step
+        if plan_step is None:
             from forwin.planning.arc_progression import ArcProgressionService
             from forwin.planning.band_planner.service import BandPlanner
             from forwin.planning.beat_sheet.service import ArcBeatSheetService
@@ -891,7 +892,7 @@ class PostCanonMaintenanceService:
 
             save_trace = partial(save_world_prompt_trace, artifact_store=self.artifact_store)
             feasibility = FeasibilityAuditor()
-            self.plan_step = PlanStepService(
+            plan_step = PlanStepService(
                 BandPlanner(
                     self.llm_client, feasibility=feasibility, save_trace=save_trace,
                     trope_cost_ceiling=2 if policy.quality_profile == "pulp" else 3,
@@ -899,7 +900,7 @@ class PostCanonMaintenanceService:
                 feasibility,
                 ArcProgressionService(ArcBeatSheetService(self.llm_client, save_trace=save_trace)),
             )
-        return self.plan_step.run(session, commit, policy=policy)
+        return plan_step.run(session, commit, policy=policy)
 
     def _run_world_step(
         self,

@@ -107,7 +107,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
             payload
             for event, payload in progress_events
             if event == "stage_changed"
-            and payload.get("stage") == "resolving_arc_envelope"
+            and payload.get("stage") == "planning_band"
         )
         self.assertNotIn("requested_chapters", resolving_payload)
         self.assertEqual(resolving_payload["pending_chapter_count"], 4)

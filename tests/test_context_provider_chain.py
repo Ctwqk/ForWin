@@ -82,10 +82,10 @@ class _FakeRepo:
         return None
 
 
-    def get_reader_promise(self, project_id: str):
+    def get_reader_promise(self, project_id: str, *, arc_plan_id=None):
         return ReaderPromise(genre_promise="玄幻网文", core_pleasures=["查谜", "升级"])
 
-    def get_arc_payoff_map(self, project_id: str):
+    def get_arc_payoff_map(self, project_id: str, *, arc_plan_id=None):
         return ArcPayoffMap(ambiguity_constraints=["不能提前揭示旧王身份"])
 
     def get_band_experience_plan_for_chapter(self, project_id: str, chapter_number: int):

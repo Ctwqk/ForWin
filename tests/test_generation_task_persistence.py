@@ -432,14 +432,14 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
 
         api_module._update_task(
             "task-progress-contract",
-            current_stage="resolving_arc_envelope",
+            current_stage="planning_band",
             requested_chapters=12,
             current_chapter=1,
         )
 
         loaded = api_module._get_generation_task_or_404("task-progress-contract")
         self.assertEqual(loaded["requested_chapters"], 2)
-        self.assertEqual(loaded["current_stage"], "resolving_arc_envelope")
+        self.assertEqual(loaded["current_stage"], "planning_band")
         with self.session_factory() as session:
             row = session.get(GenerationTask, "task-progress-contract")
             self.assertEqual(row.requested_chapters, 2)

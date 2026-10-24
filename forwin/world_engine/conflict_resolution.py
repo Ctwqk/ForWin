@@ -565,21 +565,31 @@ class ConflictResolutionService:
         resolution stands. A failed or raising replan is recorded by the amender, in a new transaction, with a
         follow-up plan conflict, and reported as a ``replan_failed`` warning."""
         session = self.session
+        conflict_id = row.id
         try:
             amended = self.plan_amender.amend(session, conflict=row, decision=decision, policy=self.policy)
         except Exception as exc:  # noqa: BLE001 - the resolution has committed; a failed replan may not hide it
             session.rollback()
-            logger.warning("World conflict %s: the replan after amend_plan raised", row.id, exc_info=True)
+            logger.warning("World conflict %s: the replan after amend_plan raised", conflict_id, exc_info=True)
             issues = (self.plan_amender.error_issue(exc),)
         else:
             if not amended.failed:
                 return replace(result, band_plan_id=amended.band_plan_id or "",
                                beat_sheet_id=amended.beat_sheet_id or "")
             issues = amended.issues
-        failure = self.plan_amender.record_world_amendment_failure(
-            session, conflict=row, issues=issues, policy=self.policy,
-        )
         details = "; ".join(f"{issue.code}: {issue.message}" for issue in issues)
+        try:
+            failure = self.plan_amender.record_world_amendment_failure(
+                session, conflict=row, issues=issues, policy=self.policy,
+            )
+        except Exception:  # noqa: BLE001 - even a failed failure record cannot undo the durable resolution
+            session.rollback()
+            logger.warning("World conflict %s: recording the failed amendment raised", conflict_id, exc_info=True)
+            warning = {"code": REPLAN_FAILED, "message": (
+                f"the resolution stands, but its chapters could not be planned again ({details}); "
+                "the planning failure could not be recorded"
+            )}
+            return replace(result, warnings=(*result.warnings, warning))
         warning = {"code": REPLAN_FAILED, "message": (
             f"the resolution stands, but its chapters could not be planned again ({details}); amend the plan "
             f"through conflict {failure.followup_conflict_id}"

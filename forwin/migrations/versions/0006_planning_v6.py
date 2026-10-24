@@ -124,9 +124,13 @@ def _drop_simulation_from_policies() -> None:
         except ValueError:
             continue
         planning = policy.get("planning") if isinstance(policy, dict) else None
-        if not isinstance(planning, dict) or "use_llm_simulation" not in planning:
+        if not isinstance(planning, dict):
             continue
-        del planning["use_llm_simulation"]
+        removed_keys = ("use_llm_simulation", "context_recency_window")
+        if not any(key in planning for key in removed_keys):
+            continue
+        for key in removed_keys:
+            planning.pop(key, None)
         bind.execute(
             sa.text("UPDATE projects SET runtime_policy_json = :policy WHERE id = :id"),
             {"policy": json.dumps(policy, ensure_ascii=False, separators=(",", ":")), "id": project_id},

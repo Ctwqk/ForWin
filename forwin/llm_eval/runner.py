@@ -4,6 +4,7 @@ import json
 import os
 import time
 import uuid
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,6 +15,8 @@ from forwin.codex_bridge.runner import CodexExecRequest, CodexExecResult, CodexE
 from forwin.genesis import BookGenesisService
 from forwin.genesis.constants import GENESIS_STAGE_ORDER
 from forwin.genesis.handoff.commands import StartWritingCommand
+from forwin.maintenance.post_canon import save_world_prompt_trace
+from forwin.planning.beat_sheet.service import ArcBeatSheetService
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
@@ -58,7 +61,13 @@ def _seed_mini_real_project(
     pipeline, *, pack: dict[str, Any], premise: str, genre: str, policy: RuntimePolicy,
 ) -> str:
     """Lock the supplied Genesis fixture and perform the normal writing handoff."""
-    genesis = BookGenesisService(llm_client=pipeline.llm_client)
+    genesis = BookGenesisService(
+        llm_client=pipeline.llm_client,
+        beat_sheets=ArcBeatSheetService(
+            pipeline.llm_client,
+            save_trace=partial(save_world_prompt_trace, artifact_store=getattr(pipeline, "artifact_store", None)),
+        ),
+    )
     with pipeline._SessionFactory.begin() as session:
         updater = StateUpdater(session)
         project = updater.create_project(

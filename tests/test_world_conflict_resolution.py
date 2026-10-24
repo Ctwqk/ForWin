@@ -1212,7 +1212,9 @@ def test_failed_amendment_keeps_the_conflict_open_and_its_trace() -> None:
         _amend(Session, world.project_id, conflict_id, _amender(band_client, StubLLM()))
 
     assert len(band_client.calls) == 2
-    assert _conflict_row(Session, world.project_id, conflict_id) == ("open", [])
+    # The failed amendment is recorded on the conflict, which stays open.
+    status, refs = _conflict_row(Session, world.project_id, conflict_id)
+    assert status == "open" and [ref.split(":")[0] for ref in refs] == ["amend_failed"]
     with Session() as session:
         traces = session.scalars(select(PromptTrace).where(
             PromptTrace.project_id == world.project_id, PromptTrace.stage_key == "plan.band",
@@ -1636,9 +1638,9 @@ def test_amendment_succeeds_only_when_every_band_is_planned(failing_band: int) -
 
     # A failing band stops the amendment: no model call plans a later band.
     assert len(band_client.calls) == len(answers)
-    # Only the revision is recorded: the amendment made no plan of the whole range.
+    # The revision and the failure are recorded: the amendment made no plan of the whole range.
     status, refs = _conflict_row(Session, world.project_id, conflict_id)
-    assert status == "open" and [ref.split(":")[0] for ref in refs] == ["beat_sheet"]
+    assert status == "open" and [ref.split(":")[0] for ref in refs] == ["beat_sheet", "amend_failed"]
     engine.dispose()
 
 
@@ -1666,7 +1668,11 @@ def test_retry_after_a_failed_revision_amendment_keeps_the_revised_sheet() -> No
         assert (sheet.version, sheet.id) == (2, result.beat_sheet_id)
     status, refs = _conflict_row(Session, world.project_id, conflict_id)
     assert status == "resolved"
-    assert refs == [f"beat_sheet:{result.beat_sheet_id}", f"band_plan:{result.band_plan_id}"]
+    # The first attempt's failure stays on record before the revision and the plan that resolved it.
+    assert [ref for ref in refs if not ref.startswith("amend_failed:")] == [
+        f"beat_sheet:{result.beat_sheet_id}", f"band_plan:{result.band_plan_id}",
+    ]
+    assert sum(ref.startswith("amend_failed:") for ref in refs) == 1
     engine.dispose()
 
 

@@ -41,7 +41,7 @@ from forwin.generation.gate_delegation import GateAuditWriter
 from forwin.models.audit import DecisionEvent
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.canon import CanonCommitRecord
-from forwin.models.project import Project
+from forwin.models.project import ChapterPlan, Project
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta, WorldNode
 from forwin.runtime.policy import RuntimePolicy
 
@@ -186,6 +186,7 @@ class _Tick:
         self.tick_id = tick_id
         project_id, number = commit.project_id, int(commit.chapter_number)
         self.chapter = _chapter_delta(session, commit)
+        self.onstage_refs = _chapter_onstage_refs(session, project_id, number, self.chapter)
         now, window_start = _window(session, self.chapter, project_id, number)
         self.context = TickContext(
             project_id=project_id, chapter_number=number, now=now, window_start=window_start,
@@ -344,7 +345,10 @@ class _Tick:
 
     def _take_turns(self) -> NodeResults:
         context = self.context
-        actors = rank_actors(self.runtime, now=context.now, limit=self.policy.world.max_actor_turns_per_tick)
+        actors = rank_actors(
+            self.runtime, now=context.now, limit=self.policy.world.max_actor_turns_per_tick,
+            onstage_refs=self.onstage_refs,
+        )
         if not actors:
             return NodeResults()
         if self.service.llm_client is None:
@@ -398,6 +402,10 @@ class _Tick:
             issues = self._issues(candidate)
             if not issues:
                 passed.append(candidate)
+            elif any(issue.code == "touches_onstage_entity" for issue in issues):
+                staged = self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
+                if staged is not None:
+                    passed.append(staged)
             elif candidate.origin == "adjudication":
                 outcome_issues[candidate.intent_id] = issues
             elif candidate.origin == "actor_turn":
@@ -418,7 +426,9 @@ class _Tick:
         for candidate in self._settled(results):
             issues = self._issues(candidate)
             if issues:
-                self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
+                staged = self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
+                if staged is not None:
+                    passed.append(staged)
             else:
                 passed.append(candidate)
         return passed
@@ -431,6 +441,7 @@ class _Tick:
         return RunningStateCheck(
             self.session, context=self.context, runtime=self.runtime, lexicon=self.lexicon, calendar=self.calendar,
             tick_id=self.tick_id, travel_tolerance=self.policy.review.travel_tolerance,
+            onstage_refs=self.onstage_refs, chapter_delta=self.chapter,
         )
 
     def _admitted(self, base: Sequence[TickCandidate]) -> list[TickCandidate]:
@@ -445,7 +456,9 @@ class _Tick:
         for candidate in base:
             issues = check.admit(candidate)
             if issues:
-                self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
+                staged = self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
+                if staged is not None and not check.admit(staged):
+                    admitted.append(staged)
             else:
                 admitted.append(candidate)
         for resolution in list(self.conflicts.resolutions):
@@ -455,11 +468,13 @@ class _Tick:
                 if not issues:
                     continue
                 check.reset(mark)
-                self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
+                staged = self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
                 self.conflicts.cancel(
                     resolution.conflict_id, failure_reason=CONFLICT_STALE,
                     detail="; ".join(f"{issue.code}: {issue.message}" for issue in issues),
                 )
+                if staged is not None and not check.admit(staged):
+                    admitted.append(staged)
                 break
         return admitted
 
@@ -591,10 +606,27 @@ class _Tick:
 
     def _drop_candidate(
         self, candidate: TickCandidate, reason: str, issues: Sequence[ConstraintIssue], *, conflict_id: str = "",
-    ) -> None:
+    ) -> TickCandidate | None:
+        touches_onstage = any(issue.code == "touches_onstage_entity" for issue in issues)
+        if touches_onstage:
+            reason = "touches_onstage_entity"
         self._drop(
             candidate.candidate_id, origin=candidate.origin, actor_id=candidate.actor_id,
             intent_id=candidate.intent_id, reason=reason, issues=issues, conflict_id=conflict_id,
+        )
+        if not touches_onstage:
+            return None
+        intent = self.runtime.world.get_node(candidate.intent_id)
+        if (intent is None or intent.node_type != "intent"
+                or self.runtime.world.get_state(intent.id).get("status") not in {"planned", "due", "held"}):
+            return None
+        # Keep the intent available to the planner; none of the rejected physical effects survive.
+        return TickCandidate(
+            candidate_id=candidate.candidate_id, origin="onstage", intent_id=intent.id,
+            summary=candidate.summary, intent_status_changes={intent.id: "due"},
+            effects=WorldEffects(entity_changes=[
+                {"ref": intent.id, "field": "requires_onstage", "new_value": True},
+            ]),
         )
 
     def _drop(
@@ -619,6 +651,24 @@ class _Tick:
             related_object_type="world_tick",
             related_object_id=self.tick_id,
         ))
+
+
+def _chapter_onstage_refs(
+    session: Session, project_id: str, chapter_number: int, chapter: GraphDelta | None,
+) -> frozenset[str]:
+    """The plan's cast plus every mover and event participant the chapter actually committed."""
+    plan = session.scalar(select(ChapterPlan).where(
+        ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == chapter_number,
+    ))
+    refs = set(json.loads(plan.onstage_refs_json or "[]")) if plan is not None else set()
+    if plan is not None and plan.pov_ref:
+        refs.add(plan.pov_ref)
+    if chapter is not None:
+        refs.update(move.get("entity_id") for move in chapter.metadata.get("movements", []) if isinstance(move, dict))
+        for patch in chapter.node_patches:
+            if str(patch.op) == "create" and patch.node_type == "event" and isinstance(patch.new_value, dict):
+                refs.update((patch.new_value.get("state") or {}).get("participant_ids") or [])
+    return frozenset(ref for ref in refs if isinstance(ref, str) and ref)
 
 
 def _chapter_ticks(session: Session, project_id: str, chapter_number: int) -> list[tuple[str, str]]:

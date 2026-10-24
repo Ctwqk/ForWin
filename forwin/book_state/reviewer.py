@@ -405,10 +405,17 @@ class _ChapterExtractionChecks:
         chapter_minutes = end - start if start is not None and end is not None else None
         # Each mover's shortest travel time per measured movement.
         required: dict[str, list[float]] = defaultdict(list)
+        arrivals: dict[str, int] = {}
         for movement in self.movements:
             mover = str(movement.get("entity_id") or "")
             target = f"node:{mover}"
             depart, arrive = _minute(movement.get("depart_minute")), _minute(movement.get("arrive_minute"))
+            last_arrival = arrivals.get(mover)
+            if depart is not None and last_arrival is not None and depart < last_arrival:
+                self._issue("error", "movement_overlap", target,
+                            f"{mover} departs at {depart} before last arrival {last_arrival}")
+            if arrive is not None:
+                arrivals[mover] = max(arrive, last_arrival if last_arrival is not None else arrive)
             self._time_offset_issues(target, depart, arrive)
             self._restraint_issues(mover)
             from_id, to_id = str(movement.get("from_id") or ""), str(movement.get("to_id") or "")

@@ -813,11 +813,11 @@
         {
           "intent_id": "@node:赶往半山坊市打听母亲的旧事",
           "result": "resolved",
-          "summary": "祁长烬下了断剑崖，赶到半山坊市向掌柜打听母亲当年守剑冢的旧事。",
+          "summary": "薛应棠在半山坊市公开询问线索的来历。",
           "effects": {
             "movements": [
               {
-                "entity_ref": "@node:祁长烬",
+                "entity_ref": "@node:薛应棠",
                 "to_location_id": "@site:半山坊市",
                 "depart_at": {
                   "before_now": {
@@ -830,14 +830,15 @@
                     "amount": 3,
                     "unit": "时辰"
                   }
-                }
+                },
+                "travel_mode_id": ""
               }
             ],
             "events": [
               {
-                "summary": "祁长烬在半山坊市当众打听母亲的旧事",
+                "summary": "薛应棠在半山坊市公开询问线索的来历",
                 "participant_refs": [
-                  "@node:祁长烬"
+                  "@node:薛应棠"
                 ],
                 "location_id": "@site:半山坊市",
                 "visibility": "public",
@@ -1045,13 +1046,13 @@
           {
             "intent_id": "@node:赶往半山坊市打听母亲的旧事",
             "result": "resolved",
-            "summary": "祁长烬为核对线索赶到了镇脉石殿。",
+            "summary": "薛应棠为核对线索赶到了镇脉石殿。",
             "effects": {
               "movements": [
                 {
-                  "entity_ref": "@node:祁长烬",
+                  "entity_ref": "@node:薛应棠",
                   "to_location_id": "@site:镇脉石殿",
-                  "travel_mode_id": "mode-foot",
+                  "travel_mode_id": "",
                   "depart_at": {
                     "before_now": {
                       "amount": 2,
@@ -1130,6 +1131,16 @@
         "rationale": "保留当前线索。",
         "risk_level": "low",
         "evidence": []
+      },
+      "plan_overrides": {
+        "pov_ref": "@node:薛应棠",
+        "onstage_refs": [
+          "@node:薛应棠"
+        ],
+        "location_refs": [
+          "@site:九曜别院"
+        ],
+        "one_line": "薛应棠留在九曜别院核对手中的记录。"
       }
     }
   },
@@ -1639,13 +1650,13 @@
         {
           "chapter_number": 2,
           "title": "线索2",
-          "one_line": "祁长烬在镇脉石殿重新整理已经得到的线索。",
+          "one_line": "薛应棠在镇脉石殿重新核对手中的记录。",
           "goals": [
             "核对已有线索"
           ],
-          "pov_ref": "@node:祁长烬",
+          "pov_ref": "@node:薛应棠",
           "onstage_refs": [
-            "@node:祁长烬"
+            "@node:薛应棠"
           ],
           "location_refs": [
             "@site:镇脉石殿"
@@ -1678,13 +1689,13 @@
         {
           "chapter_number": 3,
           "title": "线索3",
-          "one_line": "祁长烬在镇脉石殿重新整理已经得到的线索。",
+          "one_line": "薛应棠在镇脉石殿重新核对手中的记录。",
           "goals": [
             "记下下一步要核对的问题"
           ],
-          "pov_ref": "@node:祁长烬",
+          "pov_ref": "@node:薛应棠",
           "onstage_refs": [
-            "@node:祁长烬"
+            "@node:薛应棠"
           ],
           "location_refs": [
             "@site:镇脉石殿"

@@ -8,6 +8,7 @@ DEFAULT_WORLD_REPAIR_FIX = "改写相关情节，使人物行动、移动与时�
 WORLD_REPAIR_FIXES: dict[str, str] = {
     "movement_too_fast": "让这段行程花更多时间（拉长本章时间推进或写出途中耗时），或改为更近的目的地、更快的已知路线。",
     "movement_total_too_fast": "同一角色本章几段行程的总耗时超出本章时间跨度：拉长时间推进，删减或合并行程，或改为更近的地点。",
+    "movement_overlap": "同一角色的行程在时间上重叠：先写完上一段行程再出发，或调整出发时间。",
     "movement_unreachable": "改为地图上能走通的路线或地点，或先写出打通道路的过程。",
     "movement_unknown_map_node": "改为地图上已有的地点。",
     "movement_route_unknown_to_mover": "先写出角色发现或得知这条路线的过程，或改走角色已知的路线。",

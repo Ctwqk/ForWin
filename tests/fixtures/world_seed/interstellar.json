@@ -837,24 +837,7 @@
         },
         {
           "actor_id": "@node:应潮生",
-          "new_intents": [
-            {
-              "agenda_ref": "@node:弄清云梯号沉没的真相",
-              "action_type": "investigate",
-              "summary": "回曙光轨道站调取云梯号最后一次出港的记录",
-              "target_refs": [
-                "@node:钟离曜"
-              ],
-              "location_id": "@site:曙光轨道站",
-              "scheduled_in": {
-                "amount": 2,
-                "unit": "标准日"
-              },
-              "requires_onstage": false,
-              "impact_level": "minor",
-              "expected_effects": {}
-            }
-          ],
+          "new_intents": [],
           "agenda_changes": [],
           "next_turn_in": {
             "amount": 2,
@@ -881,10 +864,25 @@
         },
         {
           "actor_id": "@node:灰烬矿盟",
-          "new_intents": [],
+          "new_intents": [
+            {
+              "agenda_ref": "",
+              "action_type": "investigate",
+              "summary": "在矿盟泊位港核查可供调查使用的跃迁艇",
+              "target_refs": [],
+              "location_id": "@site:矿盟泊位港",
+              "scheduled_in": {
+                "amount": 2,
+                "unit": "标准日"
+              },
+              "requires_onstage": false,
+              "impact_level": "minor",
+              "expected_effects": {}
+            }
+          ],
           "agenda_changes": [],
           "next_turn_in": {
-            "amount": 1,
+            "amount": 2,
             "unit": "标准日"
           }
         }
@@ -1008,13 +1006,13 @@
           {
             "intent_id": "@node:让曙光轨道站重播云梯号全员殉职的通告",
             "result": "resolved",
-            "summary": "应潮生为核对线索赶到了北冕前哨。",
+            "summary": "应怀远为核对线索赶到了北冕前哨。",
             "effects": {
               "movements": [
                 {
-                  "entity_ref": "@node:应潮生",
+                  "entity_ref": "@node:应怀远",
                   "to_location_id": "@site:北冕前哨",
-                  "travel_mode_id": "mode-shuttle",
+                  "travel_mode_id": "",
                   "depart_at": {
                     "before_now": {
                       "amount": 2,
@@ -1087,6 +1085,16 @@
         "rationale": "保留当前线索。",
         "risk_level": "low",
         "evidence": []
+      },
+      "plan_overrides": {
+        "pov_ref": "@node:应怀远",
+        "onstage_refs": [
+          "@node:应怀远"
+        ],
+        "location_refs": [
+          "@site:沉船墓场"
+        ],
+        "one_line": "应怀远留在沉船墓场核对手中的记录。"
       }
     }
   },
@@ -1599,13 +1607,13 @@
         {
           "chapter_number": 2,
           "title": "线索2",
-          "one_line": "应潮生在北冕前哨重新整理已经得到的线索。",
+          "one_line": "应怀远在北冕前哨重新核对手中的记录。",
           "goals": [
             "核对已有线索"
           ],
-          "pov_ref": "@node:应潮生",
+          "pov_ref": "@node:应怀远",
           "onstage_refs": [
-            "@node:应潮生"
+            "@node:应怀远"
           ],
           "location_refs": [
             "@site:北冕前哨"
@@ -1638,13 +1646,13 @@
         {
           "chapter_number": 3,
           "title": "线索3",
-          "one_line": "应潮生在北冕前哨重新整理已经得到的线索。",
+          "one_line": "应怀远在北冕前哨重新核对手中的记录。",
           "goals": [
             "记下下一步要核对的问题"
           ],
-          "pov_ref": "@node:应潮生",
+          "pov_ref": "@node:应怀远",
           "onstage_refs": [
-            "@node:应潮生"
+            "@node:应怀远"
           ],
           "location_refs": [
             "@site:北冕前哨"

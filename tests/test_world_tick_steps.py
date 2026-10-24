@@ -159,6 +159,153 @@ def _witnessed(observer: str, fact_ref: str) -> EffectKnowledge:
 # clocks
 
 
+def test_onstage_actor_gets_no_actor_turn():
+    from forwin.world_engine.actor_turns import rank_actors
+
+    runtime = _runtime(_actor("onstage", tier="major", next_turn_at=0), _actor("offstage", next_turn_at=0))
+    assert [actor.id for actor in rank_actors(
+        runtime, now=NOW, limit=1, onstage_refs=frozenset({"onstage"}),
+    )] == ["offstage"]
+
+
+@pytest.mark.parametrize("status", ["planned", "due"])
+@pytest.mark.parametrize("has_flag", [False, True])
+def test_offstage_intent_touching_an_onstage_entity_becomes_an_onstage_intent(status, has_flag):
+    from types import SimpleNamespace
+    from forwin.world_engine.constraints import ConstraintIssue
+    from forwin.world_engine.running_state import _applied
+    from forwin.world_engine.tick import _Tick
+    from forwin.world_engine.types import TickContext
+    from tests.test_world_constraints import _runtime as runtime_fixture, _candidate, _change, _build_alone
+
+    runtime = runtime_fixture()
+    runtime.world.states_by_node_id["intent"]["status"] = status
+    if has_flag:
+        runtime.world.get_node("intent").profile["requires_onstage"] = False
+    events = []
+    tick = object.__new__(_Tick)
+    tick.runtime = runtime
+    tick.session = SimpleNamespace(add=events.append)
+    tick.context = TickContext(project_id="p", chapter_number=3, now=1000, window_start=800, seed=1)
+    tick.tick_id, tick.dropped = "tick", []
+    candidate = _candidate(_change("a", "alive_status", "dead"), intent_id="intent",
+                           intent_status_changes={"intent": "resolved"})
+    staged = tick._drop_candidate(candidate, "constraint_violation", [
+        ConstraintIssue("touches_onstage_entity", "onstage", "a"),
+    ])
+    assert staged is not None
+    built = _build_alone(runtime, staged)
+    assert built.issues == []
+    status_patch, profile_patch = built.delta.node_patches
+    assert (status_patch.node_id, status_patch.field_path, status_patch.old_value, status_patch.new_value) == (
+        "intent", "state.status", status, "due",
+    )
+    assert profile_patch.node_id == "intent"
+    assert "old_value" in profile_patch.model_fields_set
+    if has_flag:
+        assert (profile_patch.field_path, profile_patch.old_value, profile_patch.new_value) == (
+            "profile.requires_onstage", False, True,
+        )
+    else:
+        assert (profile_patch.op, profile_patch.field_path, profile_patch.old_value, profile_patch.new_value) == (
+            "merge", "profile", {"owner_ref": "a", "agenda_ref": "agenda"}, {"requires_onstage": True},
+        )
+    after = _applied(runtime, built.delta)
+    assert after.world.get_state("a")["alive_status"] == "alive"
+    assert [node.id for node in due_onstage_intents(after)] == ["intent"]
+    assert after.world.get_node("intent").profile["requires_onstage"] is True
+    assert after.world.get_node("intent").profile["owner_ref"] == "a"
+    assert runtime.world.get_node("intent").profile.get("requires_onstage") is not True
+    assert select_due_intents(after, now=1000).offstage == []
+    assert events[0].reason == "touches_onstage_entity"
+
+
+def test_chapter_onstage_set_unions_plan_pov_movers_and_event_participants():
+    from types import SimpleNamespace
+    from forwin.protocol.book_state import GraphDelta, NodePatch
+    from forwin.world_engine.tick import _chapter_onstage_refs
+
+    plan = SimpleNamespace(onstage_refs_json='["planned"]', pov_ref="pov")
+    session = SimpleNamespace(scalar=lambda statement: plan)
+    chapter = GraphDelta(id="chapter", project_id="p", chapter_number=1, source_type="chapter_extraction",
+        metadata={"movements": [{"entity_id": "mover", "arrive_minute": 900}]}, node_patches=[
+            NodePatch(node_id="event", node_type="event", op="create", new_value={
+                "state": {"participant_ids": ["participant", "planned"]},
+            }),
+        ])
+    assert _chapter_onstage_refs(session, "p", 1, chapter) == frozenset({"planned", "pov", "mover", "participant"})
+    assert _chapter_onstage_refs(SimpleNamespace(scalar=lambda statement: None), "p", 1, chapter) == frozenset({
+        "mover", "participant", "planned",
+    })
+
+
+def test_tick_checks_stage_an_onstage_touch_without_retrying_the_physical_change(monkeypatch):
+    from types import SimpleNamespace
+    from forwin.world_engine.delta_builder import _TickBuilder
+    from forwin.world_engine.tick import _Tick
+    from forwin.world_engine.types import TickContext
+    from forwin.runtime.policy import RuntimePolicy
+    from tests.test_world_constraints import CALENDAR, LEXICON, _runtime as runtime_fixture, _candidate, _change
+
+    tick = object.__new__(_Tick)
+    tick.runtime = runtime_fixture()
+    tick.context = TickContext(project_id="p", chapter_number=3, now=1000, window_start=800, seed=1)
+    tick.calendar, tick.lexicon, tick.policy = CALENDAR, LEXICON, RuntimePolicy.for_profile("standard")
+    tick.onstage_refs, tick.chapter, tick.tick_id, tick.dropped = frozenset({"a"}), None, "tick", []
+    tick.session = SimpleNamespace(add=lambda event: None)
+    tick.conflicts = SimpleNamespace(resolutions=[])
+    monkeypatch.setattr("forwin.world_engine.running_state.WorldTickDeltaBuilder.build",
+        lambda self, **kwargs: _TickBuilder(context=tick.context, tick_id="tick", runtime=tick.runtime,
+            calendar=CALENDAR, lexicon=LEXICON).build(kwargs["candidates"], []))
+    monkeypatch.setattr(BookStateProjection, "load_runtime_as_of", lambda self, *args, **kwargs: tick.runtime)
+    monkeypatch.setattr(BookLexiconRepository, "get", lambda self, project: LEXICON)
+    candidate = _candidate(_change("a", "location_id", "l2"), intent_id="intent",
+                           intent_status_changes={"intent": "resolved"})
+    [staged] = tick._admitted(tick._check([candidate]))
+    assert staged.origin == "onstage"
+    assert staged.intent_status_changes == {"intent": "due"}
+    assert [(change.ref, change.field, change.new_value) for change in staged.effects.entity_changes] == [
+        ("intent", "requires_onstage", True),
+    ]
+    assert staged.effects.movements == []
+    assert tick.dropped == ["candidate"]
+
+
+def test_running_tick_tracks_chapter_and_accepted_arrivals_and_restores_them(monkeypatch):
+    from types import SimpleNamespace
+    from forwin.protocol.book_state import GraphDelta
+    from forwin.world_engine import running_state
+    from forwin.world_engine.delta_builder import _TickBuilder
+    from forwin.world_engine.types import TickContext
+    from tests.test_world_constraints import CALENDAR, LEXICON, _runtime as runtime_fixture, _candidate, _movement
+
+    runtime = runtime_fixture()
+    context = TickContext(project_id="p", chapter_number=3, now=1000, window_start=600, seed=1)
+    # Replace database reads; retain the real delta builder and running runtime application.
+    monkeypatch.setattr(running_state.WorldTickDeltaBuilder, "build", lambda self, **kwargs: _TickBuilder(
+        context=context, tick_id="tick", runtime=runtime, calendar=CALENDAR, lexicon=LEXICON,
+    ).build(kwargs["candidates"], []))
+    monkeypatch.setattr(running_state.BookStateReviewGate, "review", lambda self, *args, **kwargs: SimpleNamespace(issues=[]))
+    chapter = GraphDelta(id="chapter", project_id="p", chapter_number=3, metadata={"movements": [
+        {"entity_id": "a", "arrive_minute": 800}, {"entity_id": "b", "arrive_minute": 950},
+    ]})
+    check = running_state.RunningStateCheck(None, context=context, runtime=runtime, lexicon=LEXICON,
+        calendar=CALENDAR, tick_id="tick", travel_tolerance=0.2, chapter_delta=chapter)
+
+    def move(depart, arrive):
+        return _candidate({"movements": [_movement(depart_at=depart, arrive_at=arrive)]},
+                          candidate_id=f"move-{depart}-{arrive}")
+
+    assert [issue.code for issue in check.admit(move(799, 900))] == ["movement_overlap"]
+    mark = check.mark()
+    assert check.admit(move(800, 900)) == []
+    assert [issue.code for issue in check.admit(move(899, 1000))] == ["movement_overlap"]
+    assert check.admit(move(900, 1000)) == []
+    check.reset(mark)
+    assert [issue.code for issue in check.admit(move(799, 900))] == ["movement_overlap"]
+    assert check.admit(move(800, 850)) == []
+
+
 def test_running_clock_past_due_expires_and_schedules_named_intent() -> None:
     runtime = _runtime(
         _actor("actor-1", location=_site(2)),

@@ -42,6 +42,8 @@ class RunningStateCheck:
         calendar: StoryCalendar | None,
         tick_id: str,
         travel_tolerance: float,
+        onstage_refs: frozenset[str] = frozenset(),
+        chapter_delta: GraphDelta | None = None,
     ) -> None:
         self.session = session
         self.context = context
@@ -52,6 +54,14 @@ class RunningStateCheck:
         self.calendar = calendar if calendar is not None else StoryCalendar("", 0, ())
         self.tick_id = tick_id
         self.travel_tolerance = travel_tolerance
+        self.onstage_refs = onstage_refs
+        self.last_arrival_by_mover: dict[str, int] = {}
+        for move in chapter_delta.metadata.get("movements", []) if chapter_delta is not None else []:
+            if not isinstance(move, dict):
+                continue
+            mover, arrive = move.get("entity_id"), move.get("arrive_minute")
+            if isinstance(mover, str) and type(arrive) is int:
+                self.last_arrival_by_mover[mover] = max(arrive, self.last_arrival_by_mover.get(mover, arrive))
         self.builder = WorldTickDeltaBuilder(session)
         self.accepted: list[TickCandidate] = []
         # The last candidate checked and the delta of the accepted ones plus it, for ``admit``.
@@ -66,6 +76,7 @@ class RunningStateCheck:
             issues.extend(check_hard_rules(
                 self.runtime, self.lexicon, candidate, now=context.now, calendar=self.calendar,
                 window_start=context.window_start,
+                onstage_refs=self.onstage_refs, last_arrival_by_mover=self.last_arrival_by_mover,
             ))
         # Bookkeeping alone gives the gate nothing to check; ``admit`` still builds it.
         if candidate.effects != WorldEffects() or candidate.new_intents or candidate.agenda_changes:
@@ -97,15 +108,21 @@ class RunningStateCheck:
             return built
         self.accepted.append(candidate)
         self.runtime = _applied(self.base, built)
+        for move in candidate.effects.movements:
+            self.last_arrival_by_mover[move.entity_ref] = max(
+                move.arrive_at, self.last_arrival_by_mover.get(move.entity_ref, move.arrive_at),
+            )
         return []
 
-    def mark(self) -> tuple[int, BookStateRuntime]:
-        return len(self.accepted), self.runtime
+    def mark(self) -> tuple[int, BookStateRuntime, dict[str, int]]:
+        return len(self.accepted), self.runtime, dict(self.last_arrival_by_mover)
 
-    def reset(self, mark: tuple[int, BookStateRuntime]) -> None:
-        count, runtime = mark
+    def reset(self, mark: tuple[int, BookStateRuntime, dict[str, int]]) -> None:
+        count, runtime, arrivals = mark
         del self.accepted[count:]
         self.runtime = runtime
+        self.last_arrival_by_mover = dict(arrivals)
+        self._checked = None
 
     def _build(self, candidate: TickCandidate) -> GraphDelta | list[ConstraintIssue]:
         """The delta of the accepted candidates plus ``candidate``, or the candidate's build errors."""

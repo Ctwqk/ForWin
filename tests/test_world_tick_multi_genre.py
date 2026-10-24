@@ -169,6 +169,7 @@ class _Ticked:
     before: BookStateRuntime
     # The chapter's last story minute: the tick's now.
     now: int
+    onstage_refs: frozenset[str]
 
     def outcome(self, *, kills: bool) -> dict[str, Any]:
         """The adjudicated outcome that kills a named character, or the one whose public event spreads."""
@@ -274,15 +275,28 @@ def _world_step(pipeline, book: _Book, number: int, client: _WorldClient) -> dic
         return json.loads(run.result_json)
 
 
-def _ticked(pipeline, genre: str) -> _Ticked:
+def _ticked(pipeline, genre: str, *, touches_onstage: bool = False) -> _Ticked:
     book = _chapter_one(pipeline, genre)
     with pipeline._SessionFactory() as session:  # noqa: SLF001
         before = BookStateProjection(session).load_runtime_as_of(book.project_id, as_of_chapter=1)
         now = BookStateQuery(session).current_story_minute(book.project_id, as_of_chapter=1)
+        plan = StateRepository(session).get_chapter_plan(book.project_id, 1)
+        extraction = book.extraction()
+        onstage_refs = frozenset({
+            plan.pov_ref, *json.loads(plan.onstage_refs_json or "[]"),
+            *(move["entity_ref"] for move in extraction["movements"]),
+            *(ref for event in extraction["events"] for ref in event["participant_refs"]),
+        } - {"", None})
     world_tick = load_fixture(genre)["world_tick"]
+    if touches_onstage:
+        outcome = next(item for item in world_tick["adjudicate"]["outcomes"] if item["effects"].get("events"))
+        outcome["effects"]["entity_changes"] = [{
+            "ref": book.chapter["chapter_delta_extraction"]["movements"][0]["entity_ref"],
+            "field": "alive_status", "new_value": "dead",
+        }]
     client = _WorldClient(world_tick, book.refs)
     step = _world_step(pipeline, book, 1, client)
-    return _Ticked(book, world_tick, client, step, before, now)
+    return _Ticked(book, world_tick, client, step, before, now, onstage_refs)
 
 
 def _tick_delta(session, project_id: str, number: int) -> GraphDelta:
@@ -341,32 +355,69 @@ def _news_by_map(
 
 
 @pytest.mark.parametrize("genre", GENRES)
-def test_tick_after_chapter_one_commits_world_delta_and_keeps_reader_unchanged(pipeline, genre: str) -> None:
-    ticked = _ticked(pipeline, genre)
+@pytest.mark.parametrize("touches_onstage", [False, True], ids=["offstage", "onstage"])
+def test_tick_after_chapter_one_commits_world_delta_and_keeps_reader_unchanged(
+    pipeline, genre: str, touches_onstage: bool,
+) -> None:
+    ticked = _ticked(pipeline, genre, touches_onstage=touches_onstage)
     project_id, tick_id, now = ticked.book.project_id, ticked.step["tick_id"], ticked.now
+    outcome = ticked.outcome(kills=False)
+    candidate_id = adjudication_candidate_id(outcome["intent_id"])
 
     assert ticked.step["graph_delta_ids"] == [f"world-tick:{project_id}:{tick_id}"]
     assert len(ticked.step["conflict_ids"]) == 1
-    assert (ticked.step["dropped_candidate_ids"], ticked.step["postponed_candidate_ids"]) == ([], [])
+    assert (ticked.step["dropped_candidate_ids"], ticked.step["postponed_candidate_ids"]) == (
+        [candidate_id] if touches_onstage else [], [],
+    )
     assert ticked.step["skipped_reason"] == ""
     with pipeline._SessionFactory() as session:  # noqa: SLF001
         delta = _tick_delta(session, project_id, 1)
         after = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=1)
         calendar = StoryCalendarRepository(session).get(project_id)
         lexicon = BookLexiconRepository(session).get(project_id)
+        dropped = list(session.scalars(select(DecisionEvent).where(
+            DecisionEvent.project_id == project_id,
+            DecisionEvent.event_type == DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED,
+        )))
     assert delta.id == ticked.step["graph_delta_ids"][0]
 
+    # The reader learns nothing from the tick; only chapter text advances the reader.
+    assert not [patch for patch in delta.cognition_patches if str(patch.observer_type) == READER[0]]
+    assert after.cognition_by_observer[READER].overlay == ticked.before.cognition_by_observer[READER].overlay
+    fact_ref = tick_event_fact_ref(project_id, tick_id, candidate_id, 0)
+    if touches_onstage:
+        assert ticked.before.world.get_node(outcome["intent_id"]).profile["requires_onstage"] is False
+        assert after.world.get_node(outcome["intent_id"]).profile["requires_onstage"] is True
+        assert after.world.get_state(outcome["intent_id"])["status"] == "due"
+        (event,) = dropped
+        payload = json.loads(event.payload_json)
+        assert (payload["candidate_id"], payload["intent_id"], payload["reason"]) == (
+            candidate_id, outcome["intent_id"], "touches_onstage_entity",
+        )
+        assert any(p.node_id == outcome["intent_id"] and p.field_path == "profile.requires_onstage"
+                   and p.old_value is False and p.new_value is True for p in delta.node_patches)
+        target = outcome["effects"]["entity_changes"][0]["ref"]
+        assert target in ticked.onstage_refs
+        assert after.world.get_state(target) == ticked.before.world.get_state(target)
+        assert fact_ref.removeprefix("fact:") not in after.world.facts_by_id
+        for move in outcome["effects"].get("movements", []):
+            assert resolve_world_node_location_id(after.world, move["entity_ref"]) == (
+                resolve_world_node_location_id(ticked.before.world, move["entity_ref"])
+            )
+        return
+    assert dropped == []
+
     # A due offstage intent was adjudicated into a public event at its place.
-    outcome = ticked.outcome(kills=False)
     (event_answer,) = outcome["effects"]["events"]
+    assert set(event_answer["participant_refs"]).isdisjoint(ticked.onstage_refs)
     assert after.world.get_state(outcome["intent_id"])["status"] == outcome["result"]
-    fact_ref = tick_event_fact_ref(project_id, tick_id, adjudication_candidate_id(outcome["intent_id"]), 0)
     event = _event_of(after, fact_ref)
     event_state = after.world.get_state(event.id)
     assert (event.summary, event.profile["location_id"], event_state["visibility_level"]) == (
         event_answer["summary"], event_answer["location_id"], "public",
     )
     for movement in outcome["effects"].get("movements", []):
+        assert movement["entity_ref"] not in ticked.onstage_refs
         assert after.world.get_state(movement["entity_ref"])["location_id"] == movement["to_location_id"]
 
     # Its news travels the book map: witnesses know at once, the near hear it by now, the far are queued.
@@ -402,10 +453,6 @@ def test_tick_after_chapter_one_commits_world_delta_and_keeps_reader_unchanged(p
         to_location_id=proposed["location_id"],
     )
     assert travel.route_known and travel.minutes <= wait
-
-    # The reader learns nothing from the tick; only chapter text advances the reader.
-    assert not [patch for patch in delta.cognition_patches if str(patch.observer_type) == READER[0]]
-    assert after.cognition_by_observer[READER].overlay == ticked.before.cognition_by_observer[READER].overlay
 
 
 @pytest.mark.parametrize("genre", GENRES)
@@ -473,6 +520,8 @@ def test_news_queue_is_delivered_after_chapter_two(pipeline, genre: str) -> None
     waiting = [item for item in queue if item.arrive_at > now]
     # Chapter one's public event is among the news that arrived during chapter two.
     outcome = ticked.outcome(kills=False)
+    assert all(set(event["participant_refs"]).isdisjoint(ticked.onstage_refs)
+               for event in outcome["effects"]["events"])
     event_fact = tick_event_fact_ref(
         project_id, ticked.step["tick_id"], adjudication_candidate_id(outcome["intent_id"]), 0,
     )

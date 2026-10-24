@@ -104,6 +104,61 @@ def _protection(kind, ref="a", **kwargs):
     })
 
 
+@pytest.mark.parametrize("effects", [
+    _change("a", "location_id", "l2"),
+    _change("a", "alive_status", "dead"),
+    _change("a", "restraint.state", "restrained"),
+    _change("a", "state", {"alive_status": "dead"}),
+    {"movements": [_movement()]},
+    {"item_transfers": [{"item_ref": "item", "from_ref": "a", "to_ref": "b"}]},
+    _change("item", "state", {"holder_id": "b"}),
+    _change("resource", "holder_id", "b"),
+])
+def test_tick_never_moves_or_harms_the_chapters_onstage_entities(checks, effects):
+    issues = checks.check_hard_rules(
+        _runtime(), LEXICON, _candidate(effects), now=NOW, calendar=CALENDAR, window_start=800,
+        onstage_refs=frozenset({"a"}),
+    )
+    assert "touches_onstage_entity" in [issue.code for issue in issues]
+
+
+@pytest.mark.parametrize("effects", [
+    {"knowledge": [_knowledge(observer_ref="a")]},
+    {"relation_changes": [{"source_ref": "a", "target_ref": "b", "edge_type": "ally_of", "change": "create"}]},
+    _change("b", "location_id", "l2"),
+    _change("a", "location_id", "l1"),
+])
+def test_onstage_exclusion_allows_knowledge_relations_and_unchanged_state(checks, effects):
+    assert checks.check_hard_rules(
+        _runtime(), LEXICON, _candidate(effects), now=NOW, calendar=CALENDAR, window_start=800,
+        onstage_refs=frozenset({"a"}),
+    ) == []
+
+
+@pytest.mark.parametrize("depart, expected", [(949, ["movement_overlap"]), (950, [])])
+def test_movement_overlap_uses_last_arrival_and_allows_adjacent_moves(checks, depart, expected):
+    issues = checks.check_hard_rules(
+        _runtime(), LEXICON, _candidate({"movements": [_movement(depart_at=depart, arrive_at=1000)]}),
+        now=NOW, calendar=CALENDAR, window_start=800, last_arrival_by_mover={"a": 950},
+    )
+    assert [issue.code for issue in issues] == expected
+
+
+def test_movement_overlap_within_one_candidate(checks):
+    issues = checks.check_hard_rules(
+        _runtime(), LEXICON, _candidate({"movements": [
+            _movement(arrive_at=900), _movement(depart_at=899),
+        ]}), now=NOW, calendar=CALENDAR, window_start=800,
+    )
+    assert [issue.code for issue in issues] == ["movement_overlap"]
+
+
+def test_staging_excluded_intent_is_bookkeeping_even_for_milestone_ref(checks):
+    candidate = _candidate(_change("intent", "requires_onstage", True), origin="onstage", intent_id="intent",
+                           intent_status_changes={"intent": "due"})
+    assert checks.classify_impact(_runtime(), candidate, milestone_refs=frozenset({"intent"})) == "minor"
+
+
 @pytest.mark.parametrize(("effects", "expected"), [
     (_change("a", "alive_status", "dead"), "major"),
     (_change("b", "state.alive_status", "dead"), "major"),

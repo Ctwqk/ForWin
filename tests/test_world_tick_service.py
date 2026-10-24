@@ -337,6 +337,71 @@ def _ambushing(world: _World, chapter: GraphDelta, option: str) -> _WorldLLM:
 # the brief's tests
 
 
+@pytest.mark.parametrize("source", ["plan", "pov", "event", "movement"])
+def test_tick_preserves_onstage_entities_and_stages_the_rejected_intent(monkeypatch, source):
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    fields = _time(4, "日")
+    if source in {"plan", "pov"}:
+        _plan(Session, world, 1)
+        with Session.begin() as session:
+            plan = session.scalar(select(ChapterPlan).where(ChapterPlan.project_id == world.project_id))
+            if source == "plan":
+                plan.onstage_refs_json = json.dumps([world.rival])
+            else:
+                plan.pov_ref = world.rival
+    elif source == "event":
+        fields["events"] = [_event([world.rival])]
+    else:
+        fields["movements"] = [{"entity_ref": world.rival, "from_ref": world.loc(2),
+                                "to_ref": world.loc(1), "evidence": "e"}]
+    chapter = _delta(Session, world, 1, fields)
+    _commit(Session, world, chapter)
+    llm = _ambushing(world, chapter, "accept_with_obligation")
+    result = _tick(Session, llm, chapter)
+    runtime = _runtime(Session, world)
+    assert runtime.world.get_state(world.rival)["alive_status"] == "alive"
+    assert runtime.world.get_state(_later(world))["status"] == "due"
+    assert runtime.world.get_node(_later(world)).profile["requires_onstage"] is True
+    assert f"adjudication:{_later(world)}" in result.dropped_candidate_ids
+    [dropped] = [event for event in _events(Session, world, DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED)
+                 if _payload(event)["intent_id"] == _later(world)]
+    assert _payload(dropped)["reason"] == "touches_onstage_entity"
+    asked = [actor["actor_id"] for stage, prompt in llm.calls if stage == "world.actor_turn"
+             for actor in json.JSONDecoder().raw_decode(prompt)[0]["actors"]]
+    assert world.rival not in asked
+    assert not _conflicts(Session, world)
+    with Session() as session:
+        from forwin.book_state.repository import BookStateRepository
+        [delta] = [delta for delta in BookStateRepository(session).list_graph_deltas(world.project_id, through_chapter=1)
+                   if delta.source_type == WORLD_ENGINE_SOURCE_TYPE]
+        assert any(p.node_id == _later(world) and p.field_path == "profile.requires_onstage"
+                   and p.old_value is False and p.new_value is True for p in delta.node_patches)
+    engine.dispose()
+
+
+def test_tick_move_overlapping_the_chapter_move_is_rejected(monkeypatch):
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _delta(Session, world, 1, {**_time(4, "日"), "movements": [{
+        "entity_ref": world.rival, "from_ref": world.loc(2), "to_ref": world.loc(1), "evidence": "e",
+        "depart_offset": {"amount": 0, "unit": "时"}, "arrive_offset": {"amount": 2, "unit": "时"},
+    }]})
+    _commit(Session, world, chapter)
+    llm = _WorldLLM(adjudicate=_outcomes({
+        "intent_id": _later(world), "result": "resolved", "summary": "overlap",
+        "effects": {"movements": [{"entity_ref": world.rival, "to_location_id": world.loc(2),
+                                    "depart_at": OPENING + 119, "arrive_at": OPENING + 300}]},
+    }), actor_turn=_quiet_turns)
+    result = _tick(Session, llm, chapter)
+    assert f"adjudication:{_later(world)}" in result.dropped_candidate_ids
+    [dropped] = [event for event in _events(Session, world, DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED)
+                 if _payload(event)["intent_id"] == _later(world)]
+    assert "movement_overlap" in [issue["code"] for issue in _payload(dropped)["issues"]]
+    assert _runtime(Session, world).world.get_state(world.rival)["location_id"] == world.loc(1)
+    engine.dispose()
+
+
 def test_quiet_tick_commits_nothing_and_succeeds() -> None:
     engine, Session = _session_factory()
     world = _seed_world(Session)

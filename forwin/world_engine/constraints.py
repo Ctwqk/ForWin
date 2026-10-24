@@ -131,7 +131,10 @@ def _refs(value: Any, *, references: bool = False) -> Iterator[str]:
 def milestone_change_references(candidate: TickCandidate) -> frozenset[str]:
     """Refs whose world state changes, excluding authorship, proposals and bookkeeping (R28)."""
     effects = candidate.effects
-    refs = {change.ref for change in effects.entity_changes}
+    refs = {
+        change.ref for change in effects.entity_changes
+        if not (candidate.origin == "onstage" and change.field in {"requires_onstage", "profile.requires_onstage"})
+    }
     refs.update(move.entity_ref for move in effects.movements)
     refs.update(ref for transfer in effects.item_transfers for ref in (transfer.item_ref, transfer.to_ref))
     refs.update(ref for change in effects.relation_changes for ref in (change.source_ref, change.target_ref))
@@ -247,6 +250,8 @@ def check_hard_rules(
     now: int,
     calendar: StoryCalendar,
     window_start: int,
+    onstage_refs: frozenset[str] = frozenset(),
+    last_arrival_by_mover: Mapping[str, int] | None = None,
 ) -> list[ConstraintIssue]:
     """Check against the pre-tick runtime using the caller's calendar and tick window."""
     # The review gate imports world-engine types; defer this import to avoid a cycle.
@@ -285,6 +290,15 @@ def check_hard_rules(
     movers = {move.entity_ref for move in candidate.effects.movements}
     for ref, path, before, after in transitions:
         old, new = before.get("state", {}), after.get("state", {})
+        if ref in onstage_refs and any(
+            old.get(field) != new.get(field) for field in ("location_id", "alive_status", "restraint")
+        ):
+            issue("touches_onstage_entity", ref, f"Candidate changes onstage entity {ref}")
+        if old.get("holder_id") != new.get("holder_id"):
+            for holder in sorted(onstage_refs.intersection(
+                value for value in (old.get("holder_id"), new.get("holder_id")) if isinstance(value, str)
+            )):
+                issue("touches_onstage_entity", holder, f"Candidate changes held item {ref} of {holder}")
         if old.get("location_id") != new.get("location_id"):
             movers.add(ref)
     actors.update(movers)
@@ -337,7 +351,13 @@ def check_hard_rules(
         if (path in {"state", "state.actual_story_time"} and type(actual) is int
                 and not window_start <= actual <= now):
             issue("time_not_monotonic", ref, f"Event time {actual} is outside [{window_start}, {now}]")
+    arrivals = dict(last_arrival_by_mover or {})
     for move in candidate.effects.movements:
+        last_arrival = arrivals.get(move.entity_ref)
+        if last_arrival is not None and move.depart_at < last_arrival:
+            issue("movement_overlap", move.entity_ref,
+                  f"Movement departs at {move.depart_at} before last arrival {last_arrival}")
+        arrivals[move.entity_ref] = max(move.arrive_at, last_arrival if last_arrival is not None else move.arrive_at)
         if not window_start <= move.depart_at <= move.arrive_at <= now:
             issue("time_not_monotonic", move.entity_ref,
                   f"Movement [{move.depart_at}, {move.arrive_at}] is outside [{window_start}, {now}]")

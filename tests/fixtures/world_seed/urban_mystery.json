@@ -800,16 +800,16 @@
         {
           "intent_id": "@node:赶末班地铁到旧港站见线人",
           "result": "resolved",
-          "summary": "蒲念安赶上末班地铁到了旧港站，在站台上拦住了约好的线人。",
+          "summary": "殷鹤年在旧港站公开询问线索的来历。",
           "effects": {
             "movements": [
               {
-                "entity_ref": "@node:蒲念安",
+                "entity_ref": "@node:殷鹤年",
                 "to_location_id": "@site:旧港站",
-                "travel_mode_id": "mode-subway",
+                "travel_mode_id": "mode-walk",
                 "depart_at": {
                   "before_now": {
-                    "amount": 16,
+                    "amount": 20,
                     "unit": "小时"
                   }
                 },
@@ -823,9 +823,9 @@
             ],
             "events": [
               {
-                "summary": "蒲念安在旧港站的站台上当众追问线人姐姐的下落",
+                "summary": "殷鹤年在旧港站公开询问线索的来历",
                 "participant_refs": [
-                  "@node:蒲念安"
+                  "@node:殷鹤年"
                 ],
                 "location_id": "@site:旧港站",
                 "visibility": "public",
@@ -1063,11 +1063,11 @@
           {
             "intent_id": "@node:赶末班地铁到旧港站见线人",
             "result": "resolved",
-            "summary": "蒲念安为核对线索赶到了市立档案馆。",
+            "summary": "殷鹤年为核对线索赶到了市立档案馆。",
             "effects": {
               "movements": [
                 {
-                  "entity_ref": "@node:蒲念安",
+                  "entity_ref": "@node:殷鹤年",
                   "to_location_id": "@site:市立档案馆",
                   "travel_mode_id": "mode-walk",
                   "depart_at": {
@@ -1163,6 +1163,16 @@
         "rationale": "保留当前线索。",
         "risk_level": "low",
         "evidence": []
+      },
+      "plan_overrides": {
+        "pov_ref": "@node:殷鹤年",
+        "onstage_refs": [
+          "@node:殷鹤年"
+        ],
+        "location_refs": [
+          "@site:回春诊所"
+        ],
+        "one_line": "殷鹤年留在回春诊所核对手中的记录。"
       }
     }
   },
@@ -1674,13 +1684,13 @@
         {
           "chapter_number": 2,
           "title": "线索2",
-          "one_line": "蒲念安在市立档案馆重新整理已经得到的线索。",
+          "one_line": "殷鹤年在市立档案馆重新核对手中的记录。",
           "goals": [
             "核对已有线索"
           ],
-          "pov_ref": "@node:蒲念安",
+          "pov_ref": "@node:殷鹤年",
           "onstage_refs": [
-            "@node:蒲念安"
+            "@node:殷鹤年"
           ],
           "location_refs": [
             "@site:市立档案馆"
@@ -1713,13 +1723,13 @@
         {
           "chapter_number": 3,
           "title": "线索3",
-          "one_line": "蒲念安在市立档案馆重新整理已经得到的线索。",
+          "one_line": "殷鹤年在市立档案馆重新核对手中的记录。",
           "goals": [
             "记下下一步要核对的问题"
           ],
-          "pov_ref": "@node:蒲念安",
+          "pov_ref": "@node:殷鹤年",
           "onstage_refs": [
-            "@node:蒲念安"
+            "@node:殷鹤年"
           ],
           "location_refs": [
             "@site:市立档案馆"

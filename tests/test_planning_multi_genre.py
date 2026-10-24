@@ -119,6 +119,13 @@ def _fixture_runtime(fixture: dict, project_id: str) -> BookStateRuntime:
     return runtime
 
 
+def _use_relocation_plan(fixture: dict) -> None:
+    """Only the relocation scenario switches the unwritten chapters to an offstage POV."""
+    overrides = fixture['world_tick']['planning_relocation']['plan_overrides']
+    for chapter in fixture['band_plan']['chapters'][1:]:
+        chapter.update(overrides)
+
+
 @pytest.mark.parametrize('genre', GENRES)
 def test_fixture_planning_outputs_are_valid(genre: str) -> None:
     fixture = load_fixture(genre)
@@ -149,6 +156,9 @@ def test_fixture_planning_outputs_are_valid(genre: str) -> None:
         answers = [(section['band_plan'], list(range(bounds[0], bounds[1] + 1)))]
         if bounds == (1, 3):
             answers.append((fixture['planning_continuation']['replan'], [2, 3]))
+            relocation = load_fixture(genre)
+            _use_relocation_plan(relocation)
+            answers.append((relocation['band_plan'], [1, 2, 3]))
         for answer, numbers in answers:
             output = BandPlanOutput.model_validate(_resolve(answer, refs, runtime.project_id))
             assert band_plan_issues(output, chapter_numbers=numbers, offered=offered, runtime=runtime,
@@ -168,8 +178,18 @@ def test_fixture_planning_outputs_are_valid(genre: str) -> None:
         for outcome in adjudication.outcomes:
             assert effect_reference_issues(outcome.effects, runtime, lexicon) == []
             for move in outcome.effects.movements:
-                initial = BandPlanOutput.model_validate(_resolve(fixture['band_plan'], refs, runtime.project_id))
-                departure = initial.chapters[0].location_refs[-1]
+                relocation = load_fixture(genre)
+                _use_relocation_plan(relocation)
+                initial = BandPlanOutput.model_validate(_resolve(relocation['band_plan'], refs, runtime.project_id))
+                departure = resolve_world_node_location_id(runtime.world, move.entity_ref)
+                assert move.entity_ref == initial.chapters[1].pov_ref
+                assert move.entity_ref in initial.chapters[1].onstage_refs
+                assert move.entity_ref not in initial.chapters[0].onstage_refs
+                assert move.entity_ref != initial.chapters[0].pov_ref
+                chapter = _resolved(fixture['planning_continuation']['chapters']['1']['chapter_delta_extraction'], refs)
+                assert move.entity_ref not in {item['entity_ref'] for item in chapter['movements']}
+                assert move.entity_ref not in {ref for event in chapter['events'] for ref in event['participant_refs']}
+                assert departure == initial.chapters[1].location_refs[0]
                 travel = estimate_travel(runtime, lexicon, mover_id=move.entity_ref,
                                          from_location_id=departure, to_location_id=move.to_location_id)
                 assert travel.reachable and travel.route_known and travel.minutes is not None
@@ -239,8 +259,10 @@ class _PlannedBook:
     band_id: str
 
 
-def _start_planned_book(pipeline, genre: str) -> _PlannedBook:
+def _start_planned_book(pipeline, genre: str, *, relocation: bool = False) -> _PlannedBook:
     fixture = load_fixture(genre)
+    if relocation:
+        _use_relocation_plan(fixture)
     project_id = f'proj-planning-{genre}'
     client = _PlanningClient(fixture, project_id)
     beats = ArcBeatSheetService(client, save_trace=save_world_prompt_trace)
@@ -491,7 +513,7 @@ def test_three_genres_share_planning_pipeline(pipeline, monkeypatch) -> None:
 
 @pytest.mark.parametrize('genre', GENRES)
 def test_world_change_triggers_feasibility_replan(pipeline, monkeypatch, genre: str) -> None:
-    planned = _start_planned_book(pipeline, genre)
+    planned = _start_planned_book(pipeline, genre, relocation=True)
     project_id = planned.book.project_id
     with pipeline._SessionFactory() as session:
         plans = list(session.scalars(select(ChapterPlan).where(ChapterPlan.project_id == project_id)))
@@ -499,6 +521,18 @@ def test_world_change_triggers_feasibility_replan(pipeline, monkeypatch, genre: 
         first_title = next(plan.title for plan in plans if plan.chapter_number == 1)
         old_band = session.get(BandPlanRow, planned.band_id)
         old_version, old_count = old_band.version, old_band.replan_count
+        first_plan = next(plan for plan in plans if plan.chapter_number == 1)
+        second_plan = next(plan for plan in plans if plan.chapter_number == 2)
+        moved_ref = second_plan.pov_ref
+        assert moved_ref in json.loads(second_plan.onstage_refs_json)
+        assert moved_ref not in {first_plan.pov_ref, *json.loads(first_plan.onstage_refs_json)}
+        extraction = _resolved(planned.fixture['planning_continuation']['chapters']['1']['chapter_delta_extraction'],
+                               planned.book.refs)
+        assert moved_ref not in {move['entity_ref'] for move in extraction['movements']}
+        assert moved_ref not in {ref for event in extraction['events'] for ref in event['participant_refs']}
+        runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=0)
+        original_location = resolve_world_node_location_id(runtime.world, moved_ref)
+        assert original_location == json.loads(second_plan.location_refs_json)[0]
     audits = []
     real_audit = FeasibilityAuditor.audit_plans
 
@@ -533,8 +567,10 @@ def test_world_change_triggers_feasibility_replan(pipeline, monkeypatch, genre: 
             assert row.one_line == answer.one_line
         runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=1)
         pov_ref = expected.chapters[0].pov_ref
+        assert pov_ref == moved_ref
         moved_to = resolve_world_node_location_id(runtime.world, pov_ref)
         assert moved_to == expected.chapters[0].location_refs[0]
+        assert moved_to != original_location
         original_destination = _resolve(planned.fixture['band_plan']['chapters'][1]['location_refs'][0],
                                         planned.book.refs, project_id)
         travel = estimate_travel(runtime, BookLexiconRepository(session).get(project_id), mover_id=pov_ref,

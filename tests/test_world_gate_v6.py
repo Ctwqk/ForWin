@@ -120,6 +120,45 @@ def test_time_offset_out_of_range() -> None:
     engine.dispose()
 
 
+@pytest.mark.parametrize("depart, expected", [(899, ["movement_overlap"]), (900, [])])
+@pytest.mark.parametrize("source", ["chapter_extraction", "world_engine"])
+def test_gate_rejects_overlapping_moves_of_one_mover(monkeypatch, depart, expected, source):
+    from tests.test_world_constraints import LEXICON, _runtime
+
+    monkeypatch.setattr("forwin.book_state.reviewer.BookLexiconRepository.get", lambda self, project: LEXICON)
+    delta = GraphDelta(
+        id="overlap", project_id="p", chapter_number=4, source_type=source,
+        story_time_start=600, story_time_end=1200, metadata={"time_elapsed_minutes": 600, "movements": [
+            {"entity_id": "a", "from_id": "l1", "to_id": "l2", "depart_minute": 600, "arrive_minute": 900},
+            {"entity_id": "b", "from_id": "l1", "to_id": "l2", "depart_minute": 600, "arrive_minute": 900},
+            {"entity_id": "a", "from_id": "l2", "to_id": "l1", "depart_minute": depart, "arrive_minute": 1200},
+        ]},
+    )
+    from forwin.book_state.map_graph import MapGraph
+    runtime = _runtime()
+    runtime.map = MapGraph(nodes=list(runtime.map.nodes_by_id.values()), edges=[
+        edge.model_copy(update={"bidirectional": True}) for edge in runtime.map.edges_by_id.values()
+    ])
+    gate = BookStateReviewGate(None)
+    monkeypatch.setattr(gate.projection, "load_runtime_as_of", lambda *args, **kwargs: runtime)
+    verdict = gate.review(ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta]), base_chapter=3)
+    assert [issue.code for issue in verdict.issues if issue.severity == "error"] == expected
+    assert verdict.accepted is (not expected)
+
+
+def test_gate_rejects_overlapping_extracted_moves_postgres():
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    fields = {**_time(6, "时"), "movements": [
+        _move(world.hero, world.loc(1), world.loc(2), depart_offset=_offset(0), arrive_offset=_offset(2)),
+        _move(world.hero, world.loc(2), world.loc(1), depart_offset=_offset(1), arrive_offset=_offset(3)),
+    ]}
+    verdict = _review(Session, world, _delta(Session, world, 1, fields))
+    assert verdict.accepted is False
+    assert ("error", "movement_overlap") in _codes(verdict)
+    engine.dispose()
+
+
 def test_movement_unreachable() -> None:
     engine, Session = _session_factory()
     world = _seed_world(Session)

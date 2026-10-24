@@ -144,7 +144,9 @@ def _living_actors(runtime: BookStateRuntime) -> list[WorldNode]:
     ]
 
 
-def rank_actors(runtime: BookStateRuntime, *, now: int, limit: int) -> list[WorldNode]:
+def rank_actors(
+    runtime: BookStateRuntime, *, now: int, limit: int, onstage_refs: frozenset[str] = frozenset(),
+) -> list[WorldNode]:
     """Living, active actors with ``next_turn_at <= now``, by tier, relevance and id.
 
     Relevance is the actor's active world edges to major characters plus the major characters
@@ -178,7 +180,8 @@ def rank_actors(runtime: BookStateRuntime, *, now: int, limit: int) -> list[Worl
 
     due = [
         node for node in actors
-        if type(turn_at := world.get_state(node.id).get("next_turn_at")) is int and turn_at <= now
+        if node.id not in onstage_refs
+        and type(turn_at := world.get_state(node.id).get("next_turn_at")) is int and turn_at <= now
     ]
     return sorted(due, key=order)[:max(0, limit)]
 

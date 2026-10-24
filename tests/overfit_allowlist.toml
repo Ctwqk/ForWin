@@ -990,7 +990,7 @@ path = "forwin/writer/prompt_core/world_repair.py"
 checks = ["cjk_collection"]
 category = "prompt_text"
 justification = "世界审查门与计划绑定写给 writer 的修复模板；绑定只列位置与 kind，不含作者视角的 how 或 ref，不参与判定"
-max_literals = 18
+max_literals = 19
 
 [[entry]]
 path = "forwin/writer/prompt_core/world_view.py"

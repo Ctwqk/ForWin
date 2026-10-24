@@ -261,8 +261,8 @@ def _fact_parts(
     A secret is a true fact that is hidden or has a reveal target. Only recorded states count,
     for the POV and for the reader alike: an unrecorded public fact is not known by default.
     A forbidden topic needs a chapter-relevant secret: one whose subjects meet ``topic_refs``
-    or that a hint directive names. Only a hinted secret without nameable subjects falls back
-    to its fact id.
+    or that a hint directive names. A hinted secret without nameable subjects uses a neutral
+    topic label, never its fact id.
     """
     key = _observer_key(runtime, pov_ref)
     pov_view = runtime.cognition_by_observer[key] if key is not None else None
@@ -298,7 +298,7 @@ def _fact_parts(
                 and (hinted or topic_refs.intersection(fact.related_node_refs))):
             names = _subject_names(runtime, fact)
             if names or hinted:
-                forbidden.append(ForbiddenTopic(fact_ref=ref, topic=forbidden_topic_text(names or [fact.id])))
+                forbidden.append(ForbiddenTopic(fact_ref=ref, topic=forbidden_topic_text(names)))
     return knowledge, reader_known, forbidden, secret_refs
 
 

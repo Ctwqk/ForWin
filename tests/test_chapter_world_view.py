@@ -355,11 +355,12 @@ def test_forbidden_topic_skips_concealed_subjects(source):
     assert "fact:vial-secret" not in topics
     for text in _texts(view):
         assert all(name not in text for name in ("society-name", "vial-name", "vial-secret", "society-secret-truth"))
-    # A hint keeps it as a topic, named by its fact id.
+    # A hint keeps it as a neutral topic without exposing its fact id.
     hint = {"id": "d-vial", "fact_ref": "fact:vial-secret", "hint_text": "vial-hint"}
     view = _build(source, plan=_plan(hint_directives_json=json.dumps([*HINTS, hint])))
-    assert _topics(view)["fact:vial-secret"] == forbidden_topic_text(["vial-secret"])
+    assert _topics(view)["fact:vial-secret"] == "未揭示真相"
     assert all("vial-name" not in text for text in _texts(view))
+    assert "vial-secret" not in _texts(view)[1]
 
 
 def test_offstage_only_secret_produces_no_topic(source):
@@ -393,8 +394,9 @@ def test_hint_named_secret_keeps_a_topic(source):
     topics = _topics(view)
     # A hinted secret stays a topic however offstage its subjects: hint it, never settle it.
     assert topics["fact:offstage-secret"] == forbidden_topic_text(["villain-name"])
-    # Without a nameable subject a hinted secret falls back to its fact id.
-    assert topics["fact:forbidden-nameless"] == forbidden_topic_text(["forbidden-nameless"])
+    # Without a nameable subject a hinted secret uses the neutral label.
+    assert topics["fact:forbidden-nameless"] == "未揭示真相"
+    assert "forbidden-nameless" not in _texts(view)[1]
     assert [hint.directive_id for hint in view.hints] == ["d-hint", "d-offstage", "d-nameless"]
     for text in _texts(view):
         assert "offstage-secret-truth" not in text and "nameless-truth" not in text

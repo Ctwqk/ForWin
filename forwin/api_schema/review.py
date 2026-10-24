@@ -34,6 +34,7 @@ class ChapterReviewIssueInfo(BaseModel):
     issue_group: str = ""
     evidence_refs: list[str] = Field(default_factory=list)
     suggested_fix: str = ""
+    original_result: dict[str, Any] = Field(default_factory=dict)
 
 
 class LintSignalInfo(BaseModel):

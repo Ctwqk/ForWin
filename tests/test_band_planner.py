@@ -1154,7 +1154,8 @@ def test_band_payload_offers_node_facts_and_keeps_required_facts_under_budget(re
         assert {f"fact:about-{ref}" for ref in ("site-1", "group", "event", "clock", "intent")} <= full.offered.facts.keys()
         assert "fact:global" in full.offered.facts
         assert "fact:unrelated" not in full.offered.facts
-        assert not {"fact:past", "fact:future", "fact:actor-reveal", "fact:expired-protection"} & full.offered.facts.keys()
+        assert not {"fact:past", "fact:future", "fact:expired-protection"} & full.offered.facts.keys()
+        assert "fact:actor-reveal" in full.offered.facts
         assert "fact:required" in full.offered.facts
         policy = POLICY.model_copy(update={"planning": POLICY.planning.model_copy(
             update={"band_payload_budget_chars": 3500},
@@ -1163,11 +1164,12 @@ def test_band_payload_offers_node_facts_and_keeps_required_facts_under_budget(re
         assert len(json.dumps(full.payload, ensure_ascii=False)) > 3500
         assert len(json.dumps(trimmed.payload, ensure_ascii=False)) <= 3500
         assert "fact:required" in trimmed.offered.facts
+        assert "fact:actor-reveal" in trimmed.offered.facts
         assert len(trimmed.offered.facts) < len(full.offered.facts)
         assert trimmed.offered.facts == {item["ref"]: item["proposition"] for item in trimmed.payload["facts"]}
         offered_nodes = {item["id"] for key in ("actors", "locations", "world_nodes", "intents", "events", "clocks")
                          for item in trimmed.payload[key]}
-        assert all(item["ref"] == "fact:required" or not item["related_refs"]
+        assert all(item["ref"] in {"fact:required", "fact:actor-reveal"} or not item["related_refs"]
                    or offered_nodes.intersection(item["related_refs"]) for item in trimmed.payload["facts"])
         assert build_band_inputs(session, **kwargs, policy=policy).payload == trimmed.payload
     engine.dispose()
@@ -1210,3 +1212,209 @@ def test_required_band_payload_over_budget_returns_failure_and_blocks_before_wri
                    for trace in traces)
         assert client.calls == []
     engine.dispose()
+
+
+@pytest.fixture
+def band_input_builder():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session as SASession
+    from forwin.models import Base
+    from forwin.planning.band_planner.inputs import build_band_inputs
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with SASession(engine) as session:
+        def build(runtime, *, cap=60000, sheet=None):
+            band = BandSpan(band_index=0, chapter_start=4, chapter_end=7)
+            return build_band_inputs(
+                session, project_id=runtime.project_id,
+                arc_plan=ArcPlanVersion(id="arc", project_id=runtime.project_id, chapter_start=4, chapter_end=7),
+                beat_sheet=sheet or ArcBeatSheetData(protagonist_ref="hero", phases=[], band_breakdown=[band]),
+                band=band, chapter_numbers=[4, 5, 6, 7], rows={}, as_of=3, runtime=runtime,
+                policy=POLICY.model_copy(update={"planning": POLICY.planning.model_copy(
+                    update={"band_payload_budget_chars": cap})}), notes=[], trope_cost_ceiling=3,
+            )
+        yield build
+    engine.dispose()
+
+
+@pytest.mark.parametrize("observer", ["hero", "remote"])
+def test_band_payload_offers_remote_news_and_facts(band_input_builder, monkeypatch, observer):
+    from forwin.protocol.book_state import FactNode
+    from forwin.world_engine.types import NewsItem
+    from tests.test_world_tick_steps import PROJECT, _runtime, _actor
+    from forwin.planning.band_planner import inputs
+
+    runtime = _runtime(_actor("hero", location="site-1"), _actor("remote", location="remote-site"))
+    runtime.world.facts_by_id.update({
+        "remote-news": FactNode(id="remote-news", project_id=PROJECT, proposition="remote event",
+                                fact_type="event", related_node_refs=["old-event", "remote"], created_at_chapter=0),
+        **{f"new-{i}": FactNode(id=f"new-{i}", project_id=PROJECT, proposition="new event", fact_type="event",
+                               related_node_refs=["remote"], created_at_chapter=3) for i in range(30)},
+    })
+    monkeypatch.setattr(inputs, "latest_news_in_transit", lambda *args: [
+        NewsItem(fact_ref="fact:remote-news", observer_ref=observer, arrive_at=10),
+    ])
+    result = band_input_builder(runtime)
+    assert result.offered.news_fact_refs == {"fact:remote-news"}
+    assert "fact:remote-news" in result.offered.facts
+    assert observer in result.offered.actor_ids
+    assert {item["fact_ref"] for item in result.payload["news"]} == result.offered.news_fact_refs
+    assert {item["ref"] for item in result.payload["facts"]} == set(result.offered.facts)
+
+
+def test_band_payload_small_overflow_keeps_clock_and_recent_event(band_input_builder):
+    from forwin.protocol.book_state import FactNode
+    from tests.test_world_tick_steps import PROJECT, _runtime, _actor
+
+    runtime = _runtime(
+        _actor("hero", location="site-1"),
+        WorldNode(id="clock", project_id=PROJECT, node_type="clock", state={"status": "running", "due_at": 20}),
+        WorldNode(id="recent", project_id=PROJECT, node_type="event", created_at_chapter=3),
+        WorldNode(id="older", project_id=PROJECT, node_type="event", created_at_chapter=1),
+    )
+    runtime.world.facts_by_id.update({
+        f"optional-{i:02}": FactNode(id=f"optional-{i:02}", project_id=PROJECT, proposition="optional " + "x" * 150,
+                                    related_node_refs=["hero"], created_at_chapter=i % 4) for i in range(30)
+    })
+    full = band_input_builder(runtime)
+    cap = len(json.dumps(full.payload, ensure_ascii=False)) - 100
+    trimmed = band_input_builder(runtime, cap=cap)
+    assert len(json.dumps(trimmed.payload, ensure_ascii=False)) <= cap
+    assert trimmed.offered.clock_ids == {"clock"}
+    assert "recent" in trimmed.offered.event_ids
+    removed = set(full.offered.facts) - set(trimmed.offered.facts)
+    assert len(removed) == 1
+    assert runtime.world.facts_by_id[next(iter(removed))[5:]].created_at_chapter == 0
+    assert band_input_builder(runtime, cap=cap).payload == trimmed.payload
+
+
+def test_band_payload_missing_location_concealment_and_overdue_milestone(band_input_builder):
+    from tests.test_world_tick_steps import PROJECT, _runtime, _actor
+
+    runtime = _runtime(_actor("hero"), WorldNode(
+        id="society", project_id=PROJECT, node_type="institution", name="hidden society",
+        state={"visibility_level": "hidden"},
+    ))
+    for node in runtime.map.nodes_by_id.values():
+        node.subworld_id = node.id
+    band = BandSpan(band_index=0, chapter_start=4, chapter_end=7)
+    sheet = ArcBeatSheetData.model_validate({
+        "protagonist_ref": "hero", "phases": [], "band_breakdown": [band],
+        "milestones": [{"id": "overdue", "description": "overdue", "target_range": [-2, -1], "hard": True}],
+    })
+    result = band_input_builder(runtime, sheet=sheet)
+    assert result.offered.location_ids == set(runtime.map.nodes_by_id)
+    assert result.payload["world_nodes"][0]["concealed"] is True
+    assert "overdue" in result.offered.milestone_ids
+
+
+def test_band_payload_round_robin_ranks_categories_and_preserves_news_refs(band_input_builder, monkeypatch, caplog):
+    import logging
+    from types import SimpleNamespace
+    from forwin.protocol.book_state import FactNode, WorldEdge
+    from forwin.world_engine.types import NewsItem
+    from forwin.planning.band_planner import inputs
+    from tests.test_world_tick_steps import PROJECT, _runtime, _actor, _intent
+
+    runtime = _runtime(
+        _actor("hero", location="site-1"), _actor("near", location="site-1"), _actor("far", location="site-2"),
+        *[WorldNode(id=f"event-{i}", project_id=PROJECT, node_type="event", created_at_chapter=i,
+                    profile={"location_id": "site-1"}) for i in range(1, 4)],
+        *[WorldNode(id=f"clock-{i}", project_id=PROJECT, node_type="clock",
+                    state={"status": "running", "due_at": i * 10}) for i in range(1, 4)],
+        *[_intent(f"intent-{i}", "hero", at=i * 10) for i in range(1, 4)],
+    )
+    for i in range(1, 4):
+        runtime.world.facts_by_id[f"optional-{i}"] = FactNode(
+            id=f"optional-{i}", project_id=PROJECT, proposition="optional " + "x" * 200,
+            related_node_refs=["hero"], created_at_chapter=i,
+        )
+        runtime.world.facts_by_id[f"news-{i}"] = FactNode(
+            id=f"news-{i}", project_id=PROJECT, proposition="remote news", related_node_refs=["absent"],
+        )
+    for name, source, target in (("best", "hero", "near"), ("middle", "hero", "far"), ("worst", "near", "far")):
+        edge = WorldEdge(id=name, project_id=PROJECT, source_id=source, target_id=target,
+                         edge_type="ally_of", edge_family="social")
+        runtime.world.edges_by_id[edge.id] = edge
+    monkeypatch.setattr(inputs, "latest_news_in_transit", lambda *args: [
+        NewsItem(fact_ref=f"fact:news-{i}", observer_ref="hero", arrive_at=i * 10) for i in range(1, 4)
+    ])
+    monkeypatch.setattr(inputs, "_stalled_threads", lambda *args, **kwargs: [
+        {"name": f"thread-{i}", "description": "thread", "last_active_chapter": i, "priority": i}
+        for i in range(1, 4)
+    ])
+    monkeypatch.setattr(inputs.WorldConflictRepository, "pending_plot_responses", lambda *args: [
+        SimpleNamespace(id="pending", involved_refs_json='["event-1", "clock-3", "fact:news-3"]',
+                        intent_ref="intent-3", actor_ref="hero", summary="pending summary"),
+    ])
+    monkeypatch.setattr(inputs, "writer_response_text", lambda row: "response goal")
+    full = band_input_builder(runtime)
+    expected = {"facts": "fact:optional-1", "events": "event-1", "clocks": "clock-3",
+                "relations": "worst", "news": "fact:news-3", "stalled_threads": "thread-3"}
+    fields = {"facts": "ref", "news": "fact_ref", "stalled_threads": "name"}
+    removed_size = sum(len(json.dumps(next(item for item in full.payload[key]
+                                           if item[fields.get(key, "id")] == ref), ensure_ascii=False)) + 2
+                       for key, ref in expected.items())
+    # Pending refs to the removed event and clock also disappear.
+    removed_size += len(json.dumps("event-1")) + len(json.dumps("clock-3")) + 4
+    cap = len(json.dumps(full.payload, ensure_ascii=False)) - removed_size
+    with caplog.at_level(logging.INFO, logger=inputs.__name__):
+        trimmed = band_input_builder(runtime, cap=cap)
+    assert len(json.dumps(trimmed.payload, ensure_ascii=False)) == cap
+    for key, ref in expected.items():
+        field = fields.get(key, "id")
+        assert {item[field] for item in full.payload[key]} - {item[field] for item in trimmed.payload[key]} == {ref}
+    assert trimmed.offered.news_fact_refs <= trimmed.offered.facts.keys()
+    assert trimmed.offered.pending[0].refs == frozenset(trimmed.payload["pending_responses"][0]["refs"])
+    assert trimmed.offered.pending[0].refs == {"fact:news-3", "intent-3"}
+    record = next(record for record in caplog.records if record.msg.startswith("Band payload trimmed:"))
+    assert record.args == (len(json.dumps(full.payload, ensure_ascii=False)), cap, cap, dict.fromkeys(expected, 1))
+    # Continue the same round through locations and intents, retaining their nearest/soonest items.
+    expected.update({"locations": "site-5", "intents": "intent-3"})
+    tail_size = sum(len(json.dumps(next(item for item in full.payload[key] if item["id"] == expected[key]),
+                                   ensure_ascii=False)) + 2 for key in ("locations", "intents"))
+    tail_size += len(json.dumps("intent-3")) + 2
+    whole_round = band_input_builder(runtime, cap=cap - tail_size)
+    assert len(json.dumps(whole_round.payload, ensure_ascii=False)) == cap - tail_size
+    for key, ref in expected.items():
+        field = fields.get(key, "id")
+        assert {item[field] for item in full.payload[key]} - {item[field] for item in whole_round.payload[key]} == {ref}
+    # A deeper cut keeps singleton categories while other categories still have a lower-ranked tail.
+    for reduction in (200, 600, 1000):
+        smaller = band_input_builder(runtime, cap=cap - reduction)
+        assert len(json.dumps(smaller.payload, ensure_ascii=False)) <= cap - reduction
+        assert smaller.offered.news_fact_refs <= smaller.offered.facts.keys()
+        assert all(item["observer_ref"] in smaller.offered.actor_ids for item in smaller.payload["news"])
+        assert all(set(item["related_refs"]) <= {
+            item["id"] for key in ("actors", "locations", "world_nodes", "intents", "events", "clocks")
+            for item in smaller.payload[key]
+        } for item in smaller.payload["facts"])
+
+
+def test_band_payload_keeps_remote_observer_and_protected_fact(band_input_builder):
+    from forwin.protocol.book_state import FactNode
+    from tests.test_world_tick_steps import PROJECT, _runtime, _actor
+
+    runtime = _runtime(_actor("hero", location="site-1"), _actor("observer", location="unmapped"))
+    runtime.world.facts_by_id.update({
+        ref: FactNode(id=ref, project_id=PROJECT, proposition=ref, related_node_refs=["absent"])
+        for ref in ("reveal", "protected")
+    })
+    runtime.world.facts_by_id.update({
+        f"optional-{i}": FactNode(id=f"optional-{i}", project_id=PROJECT, proposition="x" * 300,
+                                 related_node_refs=["hero"]) for i in range(20)
+    })
+    band = BandSpan(band_index=0, chapter_start=4, chapter_end=7)
+    sheet = ArcBeatSheetData.model_validate({
+        "protagonist_ref": "hero", "phases": [], "band_breakdown": [band],
+        "reveal_targets": [{"fact_ref": "fact:reveal", "observer": "observer", "target_state": "knows", "range": [4, 7]}],
+        "protections": [{"ref": "observer", "kind": "must_not_know", "observer_ref": "observer",
+                         "fact_ref": "fact:protected", "until_chapter": 7}],
+    })
+    result = band_input_builder(runtime, sheet=sheet, cap=3000)
+    assert len(json.dumps(result.payload, ensure_ascii=False)) <= 3000
+    assert {"fact:reveal", "fact:protected"} <= result.offered.facts.keys()
+    assert "observer" in result.offered.actor_ids
+    assert all(item["location_ref"] in result.offered.location_ids | {""} for item in result.payload["actors"])
+    assert all(set(item["related_refs"]) <= result.offered.actor_ids for item in result.payload["facts"])

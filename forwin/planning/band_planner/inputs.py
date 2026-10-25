@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -51,6 +53,7 @@ _RELATIONS_LIMIT = 40
 _NEWS_LIMIT = 20
 _STALE_THREAD_WINDOW = 3
 _THREAD_LIMIT = 20
+_LOG = logging.getLogger(__name__)
 
 
 class BandPayloadBudgetExceeded(ValueError):
@@ -171,13 +174,12 @@ def build_band_inputs(
     news = _news(session, project_id, window_end=window_end)
     required_facts = {
         item.fact_ref for item in beat_sheet.reveal_targets
-        if item.observer == READER_OBSERVER
-        and item.range[0] <= band.chapter_end and item.range[1] >= band.chapter_start
+        if item.range[0] <= band.chapter_end and item.range[1] >= band.chapter_start
     }
     protections = [item for item in beat_sheet.protections if item.until_chapter >= band.chapter_start]
     required_facts.update(ref for item in protections for ref in (item.ref, item.fact_ref)
                           if ref.startswith(FACT_REF_PREFIX))
-    facts = _facts(runtime, required_refs=required_facts)
+    facts = _facts(runtime, required_refs=required_facts | {item["fact_ref"] for item in news})
     milestones = _nearby_milestones(beat_sheet, band)
     bindable = {*(node.id for node in intents), *(node.id for node in events), *(node.id for node in clocks),
                 *(edge.id for edge in relations), *(item["fact_ref"] for item in news), *(item["ref"] for item in facts)}
@@ -243,6 +245,7 @@ def build_band_inputs(
                       for node in sorted(runtime.map.nodes_by_id.values(), key=lambda item: item.id)],
         "world_nodes": [
             {"id": node.id, "name": node.name, "kind": str(node.node_type),
+             "concealed": is_concealed(world, node),
              "location_ref": resolve_world_node_location_id(world, node.id)}
             for node in sorted(world.nodes_by_id.values(), key=lambda item: item.id)
             if node.is_active and str(node.node_type) not in (*ACTOR_NODE_TYPES, "intent", "event", "clock")
@@ -294,9 +297,14 @@ def _trim_payload(
     payload: dict[str, Any], *, runtime: BookStateRuntime, lexicon: BookLexicon,
     rows: Mapping[int, ChapterPlan], window_minutes: int, budget_chars: int, required_facts: set[str],
 ) -> None:
-    """Keep local context first, then reachable context in travel-time order."""
+    """Narrow locality once, then trim the least relevant optional items round-robin."""
     protagonist = payload["protagonist_ref"]
     origin = resolve_world_node_location_id(runtime.world, protagonist)
+    required_actors = {protagonist} | {
+        item["observer"] for item in payload["reveal_targets"] if item["observer"] != READER_OBSERVER
+    } | {item["observer_ref"] for item in payload["protections"] if item["observer_ref"] != READER_OBSERVER}
+    news_actors = {item["observer_ref"] for item in payload["news"]}
+    news_facts = {item["fact_ref"] for item in payload["news"]}
     band_locations = {ref for row in rows.values() for ref in json.loads(row.location_refs_json or "[]")}
     subworlds = {runtime.map.nodes_by_id[ref].subworld_id for ref in band_locations
                 if ref in runtime.map.nodes_by_id}
@@ -310,7 +318,7 @@ def _trim_payload(
         return (item["subworld_id"] not in subworlds, minutes, item["id"])
 
     payload["locations"] = sorted((item for item in payload["locations"]
-                                    if item["subworld_id"] in subworlds
+                                    if not subworlds or item["subworld_id"] in subworlds
                                     or (travel.get(item["id"]) is not None
                                         and travel[item["id"]].minutes is not None
                                         and travel[item["id"]].minutes <= window_minutes)), key=location_rank)
@@ -319,61 +327,136 @@ def _trim_payload(
     actor_order = {item["id"]: (-1 if item["id"] == protagonist
                                else location_order.get(item["location_ref"], farthest))
                    for item in payload["actors"]}
-    node_order = {**location_order, **actor_order,
-                  **{item["id"]: location_order.get(item["location_ref"], farthest)
-                     for item in payload["world_nodes"]}}
+    node_order = {**location_order, **actor_order}
+    for key in ("world_nodes", "events", "clocks", "intents"):
+        for item in payload[key]:
+            node = runtime.world.nodes_by_id[item["id"]]
+            state = runtime.world.get_state(node.id)
+            refs = [node.profile.get("owner_ref"), *(node.profile.get("involved_node_refs") or []),
+                    *(state.get("participant_ids") or [])]
+            node_order[node.id] = min(
+                [location_order.get(resolve_world_node_location_id(runtime.world, node.id), farthest),
+                 *(actor_order.get(ref, farthest) for ref in refs)],
+            )
+
+    def deadline(value):
+        return max(0, value - payload["story_now"]) if isinstance(value, (int, float)) else float("inf")
 
     def rank(key, item):
         if key == "locations":
-            return location_order[item["id"]]
-        if key == "actors":
-            return actor_order[item["id"]]
-        if key == "world_nodes":
-            return node_order[item["id"]]
-        if key == "intents":
-            return actor_order.get(item["owner_ref"], farthest)
+            return (location_order[item["id"]],)
+        if key in {"actors", "world_nodes"}:
+            return (node_order[item["id"]],)
         if key == "facts":
-            return min((node_order.get(ref, farthest) for ref in item["related_refs"]), default=farthest)
-        return farthest
+            fact = runtime.world.facts_by_id[item["ref"].removeprefix(FACT_REF_PREFIX)]
+            return (min((node_order.get(ref, farthest) for ref in item["related_refs"]), default=farthest),
+                    -fact.created_at_chapter)
+        if key == "events":
+            return (node_order[item["id"]], -item["chapter"])
+        if key == "clocks":
+            return (deadline(item["due_at"]), node_order[item["id"]])
+        if key == "intents":
+            return (actor_order.get(item["owner_ref"], farthest), deadline(item["scheduled_at"]))
+        if key == "relations":
+            return tuple(sorted(actor_order.get(item[ref], farthest) for ref in ("source", "target")))
+        if key == "news":
+            return (actor_order.get(item["observer_ref"], farthest), deadline(item["arrive_at"]))
+        return (item["priority"], item["last_active_chapter"])
 
-    def narrow():
-        locations = {item["id"] for item in payload["locations"]}
-        payload["actors"] = [item for item in payload["actors"] if item["id"] == protagonist
-                             or not item["location_ref"] or item["location_ref"] in locations]
-        actors = {item["id"] for item in payload["actors"]}
-        payload["world_nodes"] = [item for item in payload["world_nodes"]
-                                  if not item["location_ref"] or item["location_ref"] in locations]
-        payload["intents"] = [item for item in payload["intents"] if item["owner_ref"] in actors]
+    locations = set(location_order)
+    payload["actors"] = [item for item in payload["actors"] if item["id"] in required_actors | news_actors
+                         or not item["location_ref"] or item["location_ref"] in locations]
+    actors = {item["id"] for item in payload["actors"]}
+    payload["world_nodes"] = [item for item in payload["world_nodes"]
+                              if not item["location_ref"] or item["location_ref"] in locations]
+    payload["intents"] = [item for item in payload["intents"] if item["owner_ref"] in actors]
+    intents = {item["id"] for item in payload["intents"]}
+    nodes = actors | locations | intents | {
+        item["id"] for key in ("world_nodes", "events", "clocks") for item in payload[key]
+    }
+    payload["facts"] = [item for item in payload["facts"] if item["ref"] in required_facts | news_facts
+                        or not item["related_refs"] or nodes.intersection(item["related_refs"])]
+    payload["relations"] = [item for item in payload["relations"]
+                            if item["source"] in actors and item["target"] in actors]
+    for key in ("actors", "world_nodes", "intents"):
+        for item in payload[key]:
+            if item["location_ref"] not in locations:
+                item["location_ref"] = ""
+    for item in payload["facts"]:
+        item["related_refs"] = [ref for ref in item["related_refs"] if ref in nodes]
+
+    def sync_context_refs():
         intents = {item["id"] for item in payload["intents"]}
-        nodes = actors | locations | intents | {
-            item["id"] for key in ("world_nodes", "events", "clocks") for item in payload[key]
-        }
-        payload["facts"] = [item for item in payload["facts"] if item["ref"] in required_facts
-                            or not item["related_refs"] or nodes.intersection(item["related_refs"])]
         payload["due_onstage_intent_ids"] = [ref for ref in payload["due_onstage_intent_ids"] if ref in intents]
-        payload["relations"] = [item for item in payload["relations"]
-                                if item["source"] in actors and item["target"] in actors]
-        facts = {item["ref"] for item in payload["facts"]}
-        payload["news"] = [item for item in payload["news"] if item["fact_ref"] in facts]
-        bindable = facts | intents | {item["id"] for key in ("events", "clocks", "relations") for item in payload[key]}
+        bindable = intents | {item["ref"] for item in payload["facts"]} | {
+            item["id"] for key in ("events", "clocks", "relations") for item in payload[key]
+        }
         for item in payload["pending_responses"]:
             item["refs"] = [ref for ref in item["refs"] if ref in bindable]
 
-    narrow()
-    trimmable = ("locations", "actors", "world_nodes", "facts", "intents", "events", "clocks", "relations", "news", "stalled_threads")
-    for key in ("actors", "world_nodes", "facts", "intents"):
-        payload[key].sort(key=lambda item: (rank(key, item), item.get("id", item.get("ref", ""))))
-    while len(json.dumps(payload, ensure_ascii=False)) > budget_chars:
-        candidates = [(rank(key, item), position, index, key)
-                      for position, key in enumerate(trimmable) for index, item in enumerate(payload[key])
-                      if not (key == "actors" and item["id"] == protagonist)
-                      and not (key == "locations" and item["id"] == origin)
-                      and not (key == "facts" and item["ref"] in required_facts)]
-        if not candidates:
-            raise BandPayloadBudgetExceeded("band payload budget cannot fit required planning context")
-        _, _, index, key = max(candidates)
-        payload[key].pop(index)
-        narrow()
+    sync_context_refs()
+    trimmable = ("facts", "events", "clocks", "relations", "news", "stalled_threads",
+                 "locations", "intents", "actors", "world_nodes")
+    optional = {}
+    for key in trimmable:
+        payload[key].sort(key=lambda item: (rank(key, item), item.get("id", item.get("ref", item.get("name", "")))))
+        optional[key] = [item for item in payload[key]
+                         if not (key == "actors" and item["id"] in required_actors)
+                         and not (key == "locations" and item["id"] == origin)
+                         and not (key == "facts" and item["ref"] in required_facts)]
+
+    def dependencies(key, item):
+        if key == "facts":
+            return item["related_refs"]
+        if key == "news":
+            return [item["fact_ref"], item["observer_ref"]]
+        if key == "relations":
+            return [item["source"], item["target"]]
+        if key == "intents":
+            return [item["owner_ref"], item["location_ref"]]
+        if key in {"actors", "world_nodes"}:
+            return [item["location_ref"]]
+        return []
+
+    # A retained item keeps its subjects available. Dropping a location or actor must not
+    # silently remove several other categories, or leave a news item without its fact.
+    referenced = Counter(ref for key in trimmable for item in payload[key] for ref in dependencies(key, item) if ref)
+    def size(value: Any) -> int:
+        return len(json.dumps(value, ensure_ascii=False))
+
+    before = current_size = size(payload)
+    removed: Counter[str] = Counter()
+    while current_size > budget_chars:
+        candidates = {
+            key: next((item for item in reversed(optional[key])
+                       if not referenced[item.get("id", item.get("ref", ""))]), None)
+            for key in trimmable
+        }
+        # Keep each category's best item while any category can still shed a worse one.
+        multiple = any(item is not None and len(optional[key]) > 1 for key, item in candidates.items())
+        progress = False
+        for key, item in candidates.items():
+            if item is None or (multiple and len(optional[key]) == 1):
+                continue
+            current_size -= size(item) + (2 if len(payload[key]) > 1 else 0)
+            payload[key].remove(item)
+            optional[key].remove(item)
+            referenced.subtract(ref for ref in dependencies(key, item) if ref)
+            old_context_size = size(payload["pending_responses"]) + size(payload["due_onstage_intent_ids"])
+            sync_context_refs()
+            current_size += size(payload["pending_responses"]) + size(payload["due_onstage_intent_ids"]) - old_context_size
+            removed[key] += 1
+            progress = True
+            if current_size <= budget_chars:
+                break
+        if not progress:
+            raise BandPayloadBudgetExceeded(
+                f"band payload budget cannot fit required planning context: {current_size} characters "
+                f"remain; planning.band_payload_budget_chars={budget_chars}",
+            )
+    if removed:
+        _LOG.info("Band payload trimmed: before_chars=%s after_chars=%s budget_chars=%s removed=%s",
+                  before, current_size, budget_chars, dict(removed))
 
 
 def _offered_refs(payload: dict[str, Any], *, runtime: BookStateRuntime) -> OfferedRefs:
@@ -455,10 +538,11 @@ def _saved_schedule(session: Session, *, project_id: str, arc_plan_id: str, band
 
 
 def _nearby_milestones(beat_sheet: ArcBeatSheetData, band: BandSpan) -> list[Milestone]:
-    """Milestones whose target range meets the band widened by its own length on each side."""
+    """Nearby milestones, plus overdue hard milestones the feasibility audit still requires."""
     width = band.chapter_end - band.chapter_start + 1
     low, high = band.chapter_start - width, band.chapter_end + width
-    return sorted((item for item in beat_sheet.milestones if item.target_range[0] <= high and item.target_range[1] >= low),
+    return sorted((item for item in beat_sheet.milestones if (item.target_range[0] <= high and item.target_range[1] >= low)
+                   or (item.hard and item.target_range[1] < band.chapter_start)),
                   key=lambda item: (item.target_range, item.id))
 
 

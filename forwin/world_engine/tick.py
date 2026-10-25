@@ -18,9 +18,10 @@ chapter's story minutes from its start (``window_start``) to its end (``now``):
    admission together with the side effects of the conflicts decided in the tick. News an active
    protection forbids waits in the queue for the next tick.
 
-A rewritten chapter's world step first expires the open conflicts the rewrite took the ground from
-(conflict_revalidation): the latest chapter's retired tick's, before it ticks the chapter again, or, for an
-earlier chapter, the ones whose held change no longer stands, before it stops.
+A rewritten chapter's world step expires the open conflicts the rewrite took the ground from
+(conflict_revalidation). For the latest chapter, the tick that replaces the retired one leaves the retired
+tick's conflicts out of its open set and expires them when it commits, so no conflict row stays locked through
+its LLM calls. For an earlier chapter, the step expires the ones whose held change no longer stands, then stops.
 
 An LLM outage never fails the tick: the node is skipped and the deterministic rest still commits. Canon
 that moved under the tick ends it with CanonStaleVersion: before each LLM phase, at the commit, and for
@@ -186,12 +187,9 @@ class WorldTickService:
                 tick_id=tick_id, graph_delta_ids=own, conflict_ids=[], dropped_candidate_ids=[],
                 postponed_candidate_ids=[], skipped_reason="tick_already_committed",
             )
-        # Rewriting the latest chapter retired the tick that ran after it: its open conflicts expire before
-        # this tick reads the open ones, and this tick moves the world on in its place.
-        expire_retired_tick_conflicts(
-            session, project_id=commit.project_id, chapter_number=number, tick_ids=_retired_tick_ids(commit),
-        )
-        tick = _Tick(self, session, commit, policy=policy, tick_id=tick_id)
+        # Rewriting the latest chapter retired the tick that ran after it, and this tick moves the world on in
+        # its place; the retired tick's open conflicts expire when this one commits.
+        tick = _Tick(self, session, commit, policy=policy, tick_id=tick_id, retired_tick_ids=_retired_tick_ids(commit))
         return tick.finish_holds() if book_complete else tick.run()
 
 
@@ -200,12 +198,14 @@ class _Tick:
 
     def __init__(
         self, service: WorldTickService, session: Session, commit: CanonCommitRecord, *, policy: RuntimePolicy,
-        tick_id: str,
+        tick_id: str, retired_tick_ids: Sequence[str] = (),
     ) -> None:
         self.service = service
         self.session = session
         self.policy = policy
         self.tick_id = tick_id
+        # The ticks a rewrite of this chapter retired: this tick replaces them.
+        self.retired_tick_ids = tuple(retired_tick_ids)
         project_id, number = commit.project_id, int(commit.chapter_number)
         self.chapter = _chapter_delta(session, commit)
         self.onstage_refs = _chapter_onstage_refs(session, project_id, number, self.chapter)
@@ -225,6 +225,7 @@ class _Tick:
         self.conflicts = TickConflicts(
             session, context=self.context, runtime=self.runtime, policy=policy, tick_id=tick_id,
             delegate=service.conflict_delegate, audit_writer_factory=service.audit_writer_factory,
+            retired_tick_ids=frozenset(self.retired_tick_ids),
         )
         self.views: dict[str, ActorView] = {}
         self.slip_conflicts: list[ConflictDraft] = []
@@ -633,14 +634,16 @@ class _Tick:
                 delta.narrative_patches,
             ))
             if not changes and not self.conflicts.resolutions and not self.responses:
-                # A quiet tick takes no lock and holds none through the rest of the world step, but the conflicts
-                # it raised still rest on the canon it read (Ruling P27).
+                # A quiet tick takes no project lock and holds none through the rest of the world step, but the
+                # conflicts it raised still rest on the canon it read (Ruling P27).
+                self._expire_retired_conflicts()
                 self._check_snapshot()
                 return [], warnings
             # Lifecycle rows follow the same conflict-before-project lock order as decisions.
             repo = WorldConflictRepository(self.session)
             responses = [repo.get(context.project_id, row.id, for_update=True)
                          for row in sorted(self.responses, key=lambda row: row.id)]
+            self._expire_retired_conflicts()
             self._lock_fresh_canon()
             try:
                 with self.session.begin_nested():
@@ -661,6 +664,17 @@ class _Tick:
                 self.conflicts.cancel(exc.conflict_id, failure_reason=OPTION_UNAVAILABLE, detail=str(exc))
                 continue
             return list(graph_delta_ids), warnings
+
+    def _expire_retired_conflicts(self) -> None:
+        """Expire the retired ticks' open conflicts, locking their rows only now, after the tick's last LLM call.
+
+        A conflict resolved meanwhile is no longer open and stays as it was decided.
+        """
+        if self.retired_tick_ids:
+            expire_retired_tick_conflicts(
+                self.session, project_id=self.context.project_id, chapter_number=self.context.chapter_number,
+                tick_ids=self.retired_tick_ids,
+            )
 
     def _lock_fresh_canon(self) -> None:
         """Take the project lock and check the canon the tick reasoned on still stands (Ruling P27).

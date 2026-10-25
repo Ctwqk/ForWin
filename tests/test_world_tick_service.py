@@ -7,7 +7,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError
 
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.projection import BookStateProjection
@@ -1104,7 +1105,8 @@ def _commit_record(Session, commit_id: str) -> CanonCommitRecord:
         return record
 
 
-def test_rewriting_latest_chapter_retires_its_tick_and_reticks(monkeypatch) -> None:
+@pytest.mark.parametrize("resolved_meanwhile", [False, True], ids=["open", "resolved-meanwhile"])
+def test_rewriting_latest_chapter_retires_its_tick_and_reticks(monkeypatch, resolved_meanwhile) -> None:
     engine, Session = _session_factory()
     world = _seed_tick_world(Session, monkeypatch)
     with Session.begin() as session:
@@ -1119,7 +1121,31 @@ def test_rewriting_latest_chapter_retires_its_tick_and_reticks(monkeypatch) -> N
     first = _accept(Session, world.project_id, 1, version=1, deltas=[original])
     # No slip is allowed and every conflict waits for a human: each tick holds the slip for a human.
     policy = _policy(max_onstage_slips=0, conflict_delegate="human")
-    llm = _WorldLLM(adjudicate=_outcomes(), actor_turn=_quiet_turns)
+    probed: list[str] = []
+    probes: list[str] = []
+
+    def turns(payload: dict[str, Any], content: str) -> dict[str, Any]:
+        # While a model is asked, another connection may lock the retired tick's conflict row at once, and a
+        # user may decide it.
+        for conflict_id in probed:
+            with engine.connect() as connection:
+                try:
+                    probes.append(connection.execute(text(
+                        "SELECT status FROM world_plan_conflicts WHERE id = :id FOR UPDATE NOWAIT"
+                    ), {"id": conflict_id}).scalar_one())
+                except OperationalError:
+                    probes.append("locked")
+                    continue
+                if resolved_meanwhile:
+                    connection.execute(text(
+                        "UPDATE world_plan_conflicts SET status = 'resolved', decision_json = :decision WHERE id = :id"
+                    ), {"id": conflict_id, "decision": json.dumps({"option": "veto_world"})})
+                    connection.commit()
+                else:
+                    connection.rollback()
+        return _quiet_turns(payload, content)
+
+    llm = _WorldLLM(adjudicate=_outcomes(), actor_turn=turns)
 
     def tick(commit_id: str) -> WorldTickResult:
         with Session.begin() as session:
@@ -1129,6 +1155,7 @@ def test_rewriting_latest_chapter_retires_its_tick_and_reticks(monkeypatch) -> N
     _complete_post_canon(Session, world.project_id, 1, first, world_delta_ids=tuple(ticked.graph_delta_ids))
     [held] = _conflicts(Session, world)
     assert (held.violated, held.status, held.origin_key) == ("onstage_slip", "open", f"tick-{first[0]}")
+    probed.append(held.id)
 
     rewritten = _rewrite_chapter_one(Session, world, plan_id, original)
 
@@ -1141,7 +1168,10 @@ def test_rewriting_latest_chapter_retires_its_tick_and_reticks(monkeypatch) -> N
 
     again = tick(rewritten)
 
-    # A full tick ran on the rewritten chapter: the retired tick's conflict expired first, so its slip is held again.
+    # No row lock lasted through the re-tick's model calls.
+    assert probes[0] == "open" and "locked" not in probes
+    # A full tick ran on the rewritten chapter: the retired tick's conflict held nothing for it, so its slip is
+    # held again.
     assert again.skipped_reason == ""
     assert again.graph_delta_ids == [f"world-tick:{world.project_id}:tick-{rewritten}"]
     assert [json.loads(row.metadata_json)["tick_id"] for row in _tick_deltas(Session, world)] == [f"tick-{rewritten}"]
@@ -1149,12 +1179,20 @@ def test_rewriting_latest_chapter_retires_its_tick_and_reticks(monkeypatch) -> N
     [fresh] = [row for conflict_id, row in conflicts.items() if conflict_id != held.id]
     assert again.conflict_ids == [fresh.id]
     assert (fresh.violated, fresh.status, fresh.origin_key) == ("onstage_slip", "open", f"tick-{rewritten}")
-    expired = conflicts[held.id]
-    assert expired.status == "expired"
-    assert json.loads(expired.decision_json) == {"reason": "latest chapter rewritten; the world step re-ticks"}
-    [event] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_EXPIRED)
-    assert (event.related_object_type, event.related_object_id, event.chapter_number) == ("world_conflict", held.id, 1)
-    assert _payload(event)["reason"] == "latest chapter rewritten; the world step re-ticks"
+    retired = conflicts[held.id]
+    if resolved_meanwhile:
+        # The user's decision stands: the tick expires only what is still open when it commits.
+        assert (retired.status, json.loads(retired.decision_json)) == ("resolved", {"option": "veto_world"})
+        assert _events(Session, world, DecisionEventType.WORLD_CONFLICT_EXPIRED) == []
+    else:
+        # The retired tick's conflict expired as the tick committed.
+        assert retired.status == "expired"
+        assert json.loads(retired.decision_json) == {"reason": "latest chapter rewritten; the world step re-ticks"}
+        [event] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_EXPIRED)
+        assert (event.related_object_type, event.related_object_id, event.chapter_number) == (
+            "world_conflict", held.id, 1,
+        )
+        assert _payload(event)["reason"] == "latest chapter rewritten; the world step re-ticks"
     assert not any(row.source == "historical_rewrite" for row in conflicts.values())
     with Session() as session:
         assert WorldConflictRepository(session).open_blocking(world.project_id, next_chapter=2).id == fresh.id
@@ -1922,6 +1960,41 @@ def test_a_quiet_tick_leaves_the_project_row_unlocked() -> None:
             other.rollback()
 
     assert result.graph_delta_ids == []
+    engine.dispose()
+
+
+def test_a_quiet_retick_expires_the_retired_ticks_open_conflicts() -> None:
+    from forwin.world_engine.conflict_types import ConflictDraft
+
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    chapter = _chapter(Session, world, 1, days=1)
+    far = chapter.story_time_end + 10 * DAY
+    _commit_tick(Session, world, _built(Session, _context(world, chapter), [TickCandidate(
+        candidate_id="setup", origin="actor_turn", summary="setup", effects=WorldEffects(),
+        next_turn_at={world.hero: far, world.rival: far, world.faction: far},
+    )], tick_id="setup"), tick_id="setup")
+    with Session.begin() as session:
+        retired = WorldConflictRepository(session).create(
+            ConflictDraft(
+                project_id=world.project_id, source="world_tick", origin_key="tick-retired", detected_after_chapter=1,
+                story_time=0, involved_refs=[], violated="impact_review", impact_level="major",
+                summary="summary-retired", proposed_change={}, blocks_from_chapter=2,
+            ),
+            required_decider="human", options=("veto_world",),
+        ).id
+    # A rewrite of chapter 1 retired the tick that raised the conflict.
+    commit = _canon_commit(chapter)
+    commit.result_json = json.dumps({"historical_rewrite": {"retired_tick_ids": ["tick-retired"]}})
+
+    with Session.begin() as session:
+        result = _service(Session, _WorldLLM()).run(session, commit, policy=POLICY)
+
+    assert (result.graph_delta_ids, result.skipped_reason) == ([], "")
+    [row] = _conflicts(Session, world)
+    assert (row.id, row.status) == (retired, "expired")
+    [event] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_EXPIRED)
+    assert event.related_object_id == retired
     engine.dispose()
 
 

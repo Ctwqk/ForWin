@@ -132,6 +132,7 @@ class TickConflicts:
         tick_id: str,
         delegate: WorldConflictDelegate,
         audit_writer_factory: Callable[[], GateAuditWriter],
+        retired_tick_ids: frozenset[str] = frozenset(),
     ) -> None:
         self.session = session
         self.context = context
@@ -143,10 +144,12 @@ class TickConflicts:
         self.repo = WorldConflictRepository(session)
         self.conflict_ids: list[str] = []
         self.resolutions: list[InTickResolution] = []
-        # The open conflict over each intent and violation: it already holds a new change of that kind.
+        # The open conflict over each intent and violation: it already holds a new change of that kind. The
+        # conflicts of the retired ticks this tick replaces expire when it commits, so they hold nothing for it.
         self._open = {
             (row.intent_ref, row.violated): row.id
-            for row in self.repo.list(context.project_id, status="open") if row.intent_ref
+            for row in self.repo.list(context.project_id, status="open")
+            if row.intent_ref and row.origin_key not in retired_tick_ids
         }
 
     def hold(self, draft: ConflictDraft, *, extra: Mapping[str, Any]) -> str:

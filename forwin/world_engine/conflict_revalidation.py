@@ -1,12 +1,14 @@
 """Expire the open world conflicts a historical rewrite left without ground; no model is asked.
 
 A rewrite of the latest chapter retires the tick that ran after it (``retired_tick_ids`` in the commit's
-historical_rewrite result); the chapter's world step expires the open conflicts that tick raised before it
-ticks the chapter again. A rewrite of an earlier chapter keeps the later ticks; its world step expires each
-open tick conflict, detected after the rewritten chapter or later, whose held change no longer stands
-against the latest canon. Each expiry records a WORLD_CONFLICT_EXPIRED event with its reason.
+historical_rewrite result); the tick the chapter's world step runs in its place expires the open conflicts
+the retired tick raised in its commit section, after its LLM calls. A rewrite of an earlier chapter keeps the
+later ticks; its world step expires each open tick conflict, detected after the rewritten chapter or later,
+whose held change no longer stands against the latest canon, and stops without asking any model. Each
+expiry records a WORLD_CONFLICT_EXPIRED event with its reason.
 
-The conflict rows are locked before anything else, as a resolve locks them.
+The conflict rows are locked before the project row, as a resolve locks them, and only until the world
+step commits.
 """
 
 from __future__ import annotations
@@ -48,7 +50,8 @@ def expire_retired_tick_conflicts(
 ) -> list[str]:
     """Expire the open conflicts the retired ``tick_ids`` raised; their ids, oldest first.
 
-    ``chapter_number`` is the rewritten chapter whose world step expires them.
+    ``chapter_number`` is the rewritten chapter whose world step expires them. A conflict decided since is
+    no longer open and is left as it is.
     """
     repo = WorldConflictRepository(session)
     rows = repo.open_by_origin(project_id, tick_ids)

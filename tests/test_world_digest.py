@@ -138,23 +138,22 @@ def test_digest_orders_sections_and_ranks_actors_by_relevance(source):
     assert _build(source).text == digest.text
 
 
-def test_digest_trims_from_the_end_under_budget(source, caplog):
-    from forwin.planning.world_digest import render_digest_sections
+def test_digest_trims_lines_and_preserves_section_diversity(source, caplog):
     full = _build(source)
-    prefix = render_digest_sections(full.sections[:3])
-    trimmed = _build(source, budget=len(prefix))
-    assert trimmed.text == prefix
-    assert [section.key for section in trimmed.sections] == KEYS[:3]
-    assert trimmed.trimmed_keys == list(reversed(KEYS[3:]))
+    trimmed = _build(source, budget=700)
+    assert len(trimmed.text) <= 700
+    assert len([section for section in trimmed.sections if section.lines]) >= 4
+    assert trimmed.sections[0].key == "protagonist"
+    assert len(trimmed.sections[0].lines) == 1
+    for section in trimmed.sections:
+        original = next(item for item in full.sections if item.key == section.key)
+        assert section.lines == original.lines[:len(section.lines)]
+    assert _build(source, budget=700) == trimmed
     assert _build(source, budget=len(full.text)).text == full.text
-    below = _build(source, budget=len(prefix) - 1)
-    assert [section.key for section in below.sections] == KEYS[:2]
-    assert len(below.text) <= len(prefix) - 1
-    assert not caplog.records
     empty = _build(source, budget=0)
     assert empty.text == "" and empty.sections == []
-    assert empty.trimmed_keys == list(reversed(KEYS))
-    assert any(record.levelname == "WARNING" and "protagonist" in record.message for record in caplog.records)
+    assert set(empty.trimmed_keys) == set(KEYS)
+    assert any("protagonist" in record.message for record in caplog.records)
 
 
 def test_digest_lists_only_news_arriving_within_window(source):
@@ -432,7 +431,7 @@ def test_realistic_digest_fits_default_budget(source):
     digest = _build(source, budget=8000)
     assert len(digest.text) <= 8000
     assert {"protagonist", "actors", "news_in_transit", "offscreen_events"} <= {section.key for section in digest.sections}
-    assert len(_lines(digest, "actors")) == 8
+    assert 1 <= len(_lines(digest, "actors")) <= 8
     assert _lines(digest, "news_in_transit") and _lines(digest, "offscreen_events")
 
 
@@ -581,7 +580,7 @@ def test_digest_long_english_prose_keeps_core_sections(source, monkeypatch):
                                        window_end_minute=101000, budget_chars=8000, runtime=source.runtime)
     assert len(digest.text) <= 8000
     assert [section.key for section in digest.sections[:4]] == KEYS[:4]
-    assert len(_lines(digest, "actors")) == 8
+    assert 1 <= len(_lines(digest, "actors")) <= 8
     assert len(_lines(digest, "news_in_transit")) == len(_lines(digest, "offscreen_events")) == 3
 
 
@@ -597,3 +596,16 @@ def test_digest_lists_world_conditions(source):
     assert _lines(digest, "world_conditions") == [
         "condition-label | level=high", "secret-condition | level=high",
     ]
+
+
+def test_digest_keeps_a_short_companion_when_the_top_actor_cannot_fit(source):
+    from forwin.planning.world_digest import DigestSection, render_digest_sections
+
+    full = _build(source)
+    hero = full.sections[0]
+    clock = next(section for section in full.sections if section.key == "clocks")
+    cap = len(render_digest_sections([DigestSection(hero.key, hero.title, hero.lines[:1]), clock]))
+    trimmed = _build(source, budget=cap)
+    assert len(trimmed.text) <= cap
+    assert trimmed.sections[0].key == "protagonist"
+    assert len([section for section in trimmed.sections if section.lines]) >= 2

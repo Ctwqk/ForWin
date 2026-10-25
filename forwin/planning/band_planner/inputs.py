@@ -6,7 +6,7 @@ import json
 import logging
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import select
@@ -58,6 +58,10 @@ _LOG = logging.getLogger(__name__)
 
 class BandPayloadBudgetExceeded(ValueError):
     """The payload's required context cannot fit within its character budget."""
+
+    def __init__(self, message: str, *, trim_record: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.trim_record = trim_record or {}
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,7 @@ class BandPlanInputs:
     # Whether ``schedule`` is new; a band keeps the schedule it was first planned with.
     schedule_is_new: bool
     window_end_minute: int
+    trim_record: dict[str, Any] = field(default_factory=dict)
 
 
 def build_band_inputs(
@@ -288,21 +293,22 @@ def build_band_inputs(
         ],
         "stalled_threads": _stalled_threads(session, project_id, as_of=as_of, runtime=runtime),
     }
-    _trim_payload(payload, runtime=runtime, lexicon=lexicon, rows=rows,
-                  window_minutes=window_end - now, budget_chars=policy.planning.band_payload_budget_chars,
-                  required_facts=required_facts)
+    trim_record = _trim_payload(
+        payload, runtime=runtime, lexicon=lexicon, rows=rows, window_minutes=window_end - now,
+        budget_chars=policy.planning.band_payload_budget_chars, required_facts=required_facts,
+    )
     offered = _offered_refs(payload, runtime=runtime)
     return BandPlanInputs(
         payload=payload, digest_text=digest.text, offered=offered, as_of=as_of, runtime=runtime,
         calendar=calendar, lexicon=lexicon, experience=experience, calibration=calibration, schedule=schedule,
-        schedule_is_new=schedule_is_new, window_end_minute=window_end,
+        schedule_is_new=schedule_is_new, window_end_minute=window_end, trim_record=trim_record,
     )
 
 
 def _trim_payload(
     payload: dict[str, Any], *, runtime: BookStateRuntime, lexicon: BookLexicon,
     rows: Mapping[int, ChapterPlan], window_minutes: int, budget_chars: int, required_facts: set[str],
-) -> None:
+) -> dict[str, Any]:
     """Narrow locality once, then trim optional items round-robin by category.
 
     Remove the least relevant item that no kept item references; pinned items are skipped,
@@ -386,7 +392,7 @@ def _trim_payload(
                          and not (key == "intents" and item["id"] in required_intents)
                          and not (key == "clocks" and item["id"] in required_clocks)]
 
-    _trim_optional_items(payload, optional=optional, trimmable=trimmable, budget_chars=budget_chars)
+    return _trim_optional_items(payload, optional=optional, trimmable=trimmable, budget_chars=budget_chars)
 
 
 def _payload_locality_orders(
@@ -457,7 +463,7 @@ def _payload_dependencies(key: str, item: dict[str, Any]) -> list[str]:
 def _trim_optional_items(
     payload: dict[str, Any], *, optional: dict[str, list[dict[str, Any]]],
     trimmable: tuple[str, ...], budget_chars: int,
-) -> None:
+) -> dict[str, Any]:
     # A retained item keeps its subjects available. Dropping a location or actor must not
     # silently remove several other categories, or leave a news item without its fact.
     referenced = Counter(ref for key in trimmable for item in payload[key] for ref in _payload_dependencies(key, item) if ref)
@@ -493,10 +499,14 @@ def _trim_optional_items(
             raise BandPayloadBudgetExceeded(
                 f"band payload budget cannot fit required planning context: {current_size} characters "
                 f"remain; planning.band_payload_budget_chars={budget_chars}",
+                trim_record={"before_chars": before, "after_chars": current_size,
+                             "budget_chars": budget_chars, "removed": dict(removed), "overflow": True},
             )
     if removed:
         _LOG.info("Band payload trimmed: before_chars=%s after_chars=%s budget_chars=%s removed=%s",
                   before, current_size, budget_chars, dict(removed))
+    return {"before_chars": before, "after_chars": current_size, "budget_chars": budget_chars,
+            "removed": dict(removed), "overflow": False}
 
 
 def _offered_refs(payload: dict[str, Any], *, runtime: BookStateRuntime) -> OfferedRefs:

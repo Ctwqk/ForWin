@@ -250,10 +250,11 @@ class BandPlanner:
             )
         except BandPayloadBudgetExceeded as exc:
             call = _BandPlanCall(issues=[_error(PAYLOAD_BUDGET_EXCEEDED, str(exc))],
-                                 failure_reason=PAYLOAD_BUDGET_EXCEEDED)
+                                 failure_reason=PAYLOAD_BUDGET_EXCEEDED, trim_record=exc.trim_record)
         else:
             call = self._call(session, project_id=project_id, inputs=inputs, band=band, chapter_numbers=chapter_numbers,
                               beat_sheet=beat_sheet, policy=policy)
+            call.trim_record = inputs.trim_record
         if call.error is not None:
             # An audit failure may abort the caller's transaction; spent calls still need their audit trail.
             if isinstance(call.error, DBAPIError):
@@ -453,6 +454,7 @@ class BandPlanner:
                 "warnings": [issue.model_dump(mode="json") for issue in call.warnings],
                 "band_plan_id": outcome.band_plan_id, "chapter_plan_ids": list(outcome.chapter_plan_ids),
                 "superseded_by_concurrent_plan": superseded,
+                "band_payload_trim": call.trim_record,
                 "skill_summary": [], "business_retry_events": call.business_retries,
             },
         )
@@ -476,6 +478,7 @@ class _BandPlanCall:
     messages: list[dict] = field(default_factory=list)
     attempts: list[dict[str, Any]] = field(default_factory=list)
     business_retries: list[dict[str, Any]] = field(default_factory=list)
+    trim_record: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -225,7 +225,8 @@ _CASES: dict[str, _Case] = {
     ),
     "exit_state_unaddressed": (
         _no_setup,
-        lambda world: [_draft(world, number, milestone_ids=["milestone-1"] if number == 9 else [])
+        lambda world: [_draft(world, number, milestone_ids=["milestone-1"] if number == 9 else [],
+                              intended_changes=[{"ref": world.rival, "field": "alive_status", "value": "dead"}])
                        for number in range(9, 13)],
         lambda world: ("exit_state_unaddressed", "warning", 12, world.rival),
     ),
@@ -714,3 +715,45 @@ def test_container_builds_the_plan_amender(monkeypatch, llm_available: bool) -> 
     assert isinstance(amender.band_planner.feasibility, FeasibilityAuditor)
     with pytest.raises(RuntimeError, match="generation"):
         container("publisher_worker").build_plan_amender()
+
+
+@pytest.mark.parametrize("actual, expected, changes, as_of, mismatch", [
+    ("alive", "alive", [], 12, False),
+    ("dead", "alive", [("hero", "alive_status", "alive")], 12, True),
+    ("dead", "alive", [("hero", "alive_status", "alive")], 8, False),
+    ("alive", "alive", [("hero", "alive_status", "dead")], 8, True),
+    (None, None, [], 12, True),
+])
+def test_exit_state_compares_values(actual, expected, changes, as_of, mismatch):
+    from forwin.planning.feasibility import _exit_state_issues
+    from tests.test_world_digest import _runtime
+
+    runtime = _runtime()
+    runtime.as_of_chapter = as_of
+    if actual is not None:
+        runtime.world.states_by_node_id["hero"]["alive_status"] = actual
+    sheet = ArcBeatSheetData.model_validate({
+        "protagonist_ref": "hero", "phases": [], "band_breakdown": [
+            {"band_index": 0, "chapter_start": 9, "chapter_end": 12}],
+        "exit_state": [{"ref": "hero", "field": "alive_status", "value": expected}],
+    })
+    chapter = SimpleNamespace(number=12, changes=changes)
+    issues = _exit_state_issues(sheet, [chapter], [], runtime=runtime)
+    assert [issue.code for issue in issues] == (["exit_state_unaddressed"] if mismatch else [])
+
+
+@pytest.mark.parametrize("field", ["profile.species", "species", "state.restraint.state", "restraint.state"])
+def test_exit_state_reads_nested_and_profile_fields(field):
+    from forwin.planning.feasibility import _exit_state_issues
+    from tests.test_world_digest import _runtime
+
+    runtime = _runtime()
+    runtime.as_of_chapter = 12
+    runtime.world.nodes_by_id["hero"].profile["species"] = "expected"
+    runtime.world.states_by_node_id["hero"]["restraint"] = {"state": "expected"}
+    sheet = ArcBeatSheetData.model_validate({
+        "protagonist_ref": "hero", "phases": [], "band_breakdown": [
+            {"band_index": 0, "chapter_start": 9, "chapter_end": 12}],
+        "exit_state": [{"ref": "hero", "field": field, "value": "expected"}],
+    })
+    assert _exit_state_issues(sheet, [SimpleNamespace(number=12, changes=[])], [], runtime=runtime) == []

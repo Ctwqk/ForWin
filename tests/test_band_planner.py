@@ -1255,6 +1255,8 @@ def test_required_band_payload_over_budget_returns_failure_and_blocks_before_wri
         assert len(traces) == 2
         assert all(json.loads(trace.output_summary_json)["failure_reason"] == "payload_budget_exceeded"
                    for trace in traces)
+        assert all(json.loads(trace.output_summary_json)["band_payload_trim"]["overflow"] for trace in traces)
+        assert all(json.loads(trace.output_summary_json)["band_payload_trim"]["before_chars"] > 1 for trace in traces)
         assert client.calls == []
     engine.dispose()
 
@@ -1326,6 +1328,10 @@ def test_band_payload_small_overflow_keeps_clock_and_recent_event(band_input_bui
     cap = len(json.dumps(full.payload, ensure_ascii=False)) - 100
     trimmed = band_input_builder(runtime, cap=cap)
     assert len(json.dumps(trimmed.payload, ensure_ascii=False)) <= cap
+    assert trimmed.trim_record["before_chars"] == len(json.dumps(full.payload, ensure_ascii=False))
+    assert trimmed.trim_record["after_chars"] == len(json.dumps(trimmed.payload, ensure_ascii=False))
+    assert trimmed.trim_record["removed"] == {"facts": 1}
+    assert trimmed.trim_record["budget_chars"] == cap
     assert trimmed.offered.clock_ids == {"clock"}
     assert "recent" in trimmed.offered.event_ids
     removed = set(full.offered.facts) - set(trimmed.offered.facts)
@@ -1549,3 +1555,31 @@ def test_band_payload_keeps_remote_observer_and_protected_fact(band_input_builde
     assert "observer" in result.offered.actor_ids
     assert all(item["location_ref"] in result.offered.location_ids | {""} for item in result.payload["actors"])
     assert all(set(item["related_refs"]) <= result.offered.actor_ids for item in result.payload["facts"])
+
+
+def test_successful_band_trace_records_payload_trim(monkeypatch):
+    from sqlalchemy import create_engine
+    from forwin.models import Base
+    from forwin.planning.band_planner import service
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = get_session_factory(engine)
+    world, arc_id, sheet_id = _book(sessions)
+    build = service.build_band_inputs
+    captured = []
+
+    def inputs(*args, **kwargs):
+        result = build(*args, **kwargs)
+        captured.append(result.trim_record)
+        return result
+
+    monkeypatch.setattr(service, "build_band_inputs", inputs)
+    client = StubLLM(_band(world, range(1, 5)))
+    result = _plan_band(sessions, _planner(client, StubAudit()), world, arc_id, sheet_id)
+    assert result.band_plan_id is not None
+    with sessions() as session:
+        (trace,) = _traces(session, world.project_id)
+        assert json.loads(trace.output_summary_json)["band_payload_trim"] == captured[0]
+        assert captured[0]["before_chars"] >= captured[0]["after_chars"] > 0
+    engine.dispose()

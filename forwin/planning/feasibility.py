@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -28,6 +29,7 @@ from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
 from forwin.book_state.story_clock import StoryCalendar, StoryClockError
+from forwin.book_state.schema import WORLD_NODE_FIELDS
 from forwin.models.planning_v6 import BandPlanRow
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.world_conflict import WorldPlanConflictRow
@@ -159,7 +161,10 @@ class FeasibilityAuditor:
         issues = [issue for chapter in chapters for issue in walk.issues(chapter)]
         if beat_sheet is not None:
             issues.extend(_milestone_issues(beat_sheet, chapters, kept))
-            issues.extend(_exit_state_issues(beat_sheet, chapters, kept))
+            exit_runtime = runtime
+            if runtime.as_of_chapter > high:
+                exit_runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=high)
+            issues.extend(_exit_state_issues(beat_sheet, chapters, kept, runtime=exit_runtime))
         now = BookStateQuery(session).current_story_minute(project_id, as_of_chapter=runtime.as_of_chapter) or 0
         in_band = [chapter for chapter in [*chapters, *kept] if band[0] <= chapter.number <= band[1]]
         issues.extend(_band_world_issues(runtime, in_band, as_of=runtime.as_of_chapter, now=now))
@@ -350,23 +355,53 @@ def _milestone_issues(
 
 def _exit_state_issues(
     beat_sheet: ArcBeatSheetData, chapters: Sequence[_Chapter], kept: Sequence[_Chapter],
+    *, runtime: BookStateRuntime,
 ) -> list[PlanIssue]:
-    """Exit-state refs no chapter of the arc's last band changes, once the audit reaches that band."""
+    """Compare the arc-end state, projecting only changes still ahead of canon."""
     if not beat_sheet.band_breakdown:
         return []
     last = max(beat_sheet.band_breakdown, key=lambda band: band.chapter_start)
     if not any(last.chapter_start <= chapter.number <= last.chapter_end for chapter in chapters):
         return []
-    touched = {ref for chapter in [*chapters, *kept] if last.chapter_start <= chapter.number <= last.chapter_end
-               for ref, _name, _value in chapter.changes}
+    states = {}
+    for item in beat_sheet.exit_state:
+        node = runtime.world.get_node(item.ref)
+        states[item.ref] = {"state": deepcopy(runtime.world.get_state(item.ref)),
+                            "profile": deepcopy(node.profile) if node is not None else {}}
+
+    def path(ref: str, name: str) -> list[str]:
+        parts = name.strip().split(".")
+        if parts[0] in {"state", "profile"}:
+            return parts
+        node = runtime.world.get_node(ref)
+        fields = WORLD_NODE_FIELDS.get(str(node.node_type), {}) if node is not None else {}
+        section = "profile" if parts[0] in fields.get("profile", ()) else "state"
+        return [section, *parts]
+
+    for chapter in sorted([*chapters, *kept], key=lambda item: item.number):
+        if not runtime.as_of_chapter < chapter.number <= last.chapter_end:
+            continue
+        for ref, name, value in chapter.changes:
+            if ref not in states:
+                continue
+            parts = path(ref, name)
+            target = states[ref]
+            for part in parts[:-1]:
+                if not isinstance(target.get(part), dict):
+                    target[part] = {}
+                target = target[part]
+            target[parts[-1]] = deepcopy(value)
+    missing = object()
     issues = []
     for item in beat_sheet.exit_state:
-        if item.ref in touched or any(issue.ref == item.ref for issue in issues):
+        actual = states[item.ref]
+        for part in path(item.ref, item.field):
+            actual = actual.get(part, missing) if isinstance(actual, dict) else missing
+        if actual is not missing and actual == item.value:
             continue
         issues.append(PlanIssue(
             code="exit_state_unaddressed", severity="warning", chapter_number=last.chapter_end, ref=item.ref,
-            message=(f"no chapter of the arc's last band ({last.chapter_start}-{last.chapter_end}) has an intended "
-                     f"change of {item.ref}, which the exit state needs ({item.field})"),
+            message=f"arc-end state of {item.ref} does not match the exit state's expected value for {item.field}",
         ))
     return issues
 

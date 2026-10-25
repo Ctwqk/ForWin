@@ -71,11 +71,11 @@ def build_world_digest(
     budget_chars: int,
     runtime: BookStateRuntime | None = None,
 ) -> WorldDigest:
-    """Build nine sections, then remove whole sections from the end to fit the budget.
+    """Build nine sections, then shed lower-ranked lines while preserving section coverage.
 
     Hidden intents and objective secrets are included: this digest must never be supplied
     to the chapter writer. Equal relevance is resolved by node id, independent of row order.
-    trimmed_keys records removal order: the last section first.
+    trimmed_keys records each affected section once, in first-removal order.
     """
     if budget_chars < 0:
         raise ValueError("budget_chars must be nonnegative")
@@ -185,12 +185,29 @@ def build_world_digest(
         ))
     sections = [DigestSection(key, WORLD_DIGEST_TITLES[key], lines[key]) for key in DIGEST_SECTION_KEYS]
     trimmed_keys: list[str] = []
+    # Reserve one other section's best line when the budget can hold it beside the protagonist.
+    protagonist_line = DigestSection(sections[0].key, sections[0].title, sections[0].lines[:1])
+    companion = next((section.key for section in sections[1:] if section.lines and len(render_digest_sections([
+        protagonist_line, DigestSection(section.key, section.title, section.lines[:1]),
+    ])) <= budget_chars), None)
     text = render_digest_sections(sections)
     while sections and len(text) > budget_chars:
-        key = sections.pop().key
-        trimmed_keys.append(key)
-        if key == "protagonist":
-            logger.warning("World digest protagonist section trimmed for project %s at budget %s", project_id, budget_chars)
+        # Later lines have lower relevance. Preserve one line per populated section
+        # before removing any section's last line; section order breaks equal ranks.
+        index = max((i for i, section in enumerate(sections)
+                     if section.key != companion or len(section.lines) > 1), key=lambda i: (
+            not sections[i].lines, len(sections[i].lines) > 1,
+            len(sections[i].lines), i,
+        ))
+        section = sections[index]
+        if section.key not in trimmed_keys:
+            trimmed_keys.append(section.key)
+        if len(section.lines) > 1:
+            sections[index] = DigestSection(section.key, section.title, section.lines[:-1])
+        else:
+            sections.pop(index)
+            if section.key == "protagonist":
+                logger.warning("World digest protagonist section trimmed for project %s at budget %s", project_id, budget_chars)
         text = render_digest_sections(sections)
     return WorldDigest(sections, text, trimmed_keys)
 

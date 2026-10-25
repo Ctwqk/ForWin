@@ -144,6 +144,26 @@ class ManualActionMetricView(BaseModel):
     unknown_duration_count: int = 0
 
 
+class RoleCostMetricView(BaseModel):
+    role: str
+    metrics: CostMetricsView = Field(default_factory=CostMetricsView)
+
+
+class ChapterCostAutonomyView(BaseModel):
+    project_id: str
+    chapter_number: int
+    roles: list[RoleCostMetricView] = Field(default_factory=list)
+    world_conflicts: int = 0
+    human_decided_conflicts: int = 0
+    band_checkpoint_pauses_by_code: dict[str, int] = Field(default_factory=dict)
+    band_payload_trim_runs: int = 0
+    band_payload_trim_events: int = 0
+    band_payload_removed_chars: int = 0
+    band_payload_removed_items: dict[str, int] = Field(default_factory=dict)
+    oversized_intent_deferrals: dict[str, int] = Field(default_factory=dict)
+    repeatedly_deferred_intents: dict[str, int] = Field(default_factory=dict)
+
+
 class CostLedgerReportView(BaseModel):
     schema_version: Literal[1] = 1
     project_id: str = ""
@@ -160,6 +180,7 @@ class CostLedgerReportView(BaseModel):
     manual_action_duration_ms: int = 0
     unknown_manual_duration_count: int = 0
     manual_actions: list[ManualActionMetricView] = Field(default_factory=list)
+    chapters: list[ChapterCostAutonomyView] = Field(default_factory=list)
 
 
 class RuleProvenanceEntryView(BaseModel):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any, Literal
@@ -16,6 +16,7 @@ from forwin.models.draft import CandidateDraftRecord
 from forwin.models.genesis import PromptTrace
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan, Project
+from forwin.models.world_conflict import WorldPlanConflictRow
 
 
 CostDimension = Literal[
@@ -129,6 +130,30 @@ class ManualActionMetric(BaseModel):
     unknown_duration_count: int = 0
 
 
+class RoleCostMetric(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    role: str
+    metrics: CostMetrics = Field(default_factory=CostMetrics)
+
+
+class ChapterCostAutonomy(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    project_id: str
+    chapter_number: int
+    roles: list[RoleCostMetric] = Field(default_factory=list)
+    world_conflicts: int = 0
+    human_decided_conflicts: int = 0
+    band_checkpoint_pauses_by_code: dict[str, int] = Field(default_factory=dict)
+    band_payload_trim_runs: int = 0
+    band_payload_trim_events: int = 0
+    band_payload_removed_chars: int = 0
+    band_payload_removed_items: dict[str, int] = Field(default_factory=dict)
+    oversized_intent_deferrals: dict[str, int] = Field(default_factory=dict)
+    repeatedly_deferred_intents: dict[str, int] = Field(default_factory=dict)
+
+
 class CostLedgerReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -147,6 +172,7 @@ class CostLedgerReport(BaseModel):
     manual_action_duration_ms: int = 0
     unknown_manual_duration_count: int = 0
     manual_actions: list[ManualActionMetric] = Field(default_factory=list)
+    chapters: list[ChapterCostAutonomy] = Field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -366,6 +392,11 @@ class CostLedgerService:
         }
         traces = self._traces(project_id=project_id)
         trace_by_id = {str(row.id or ""): row for row in traces}
+        represented_trace_ids = {
+            str(trace.id) for trace in traces
+            if any(isinstance(item, dict) and item.get("source") != "router_trace"
+                   and any(key in item for key in _ATTEMPT_SIGNAL_KEYS) for item in _json_list(trace.attempts_json))
+        }
         explicit_trace_event = self._explicit_trace_events(events)
         band_ranges = self._band_ranges(project_id=project_id)
         chapter_arc_ids = self._chapter_arc_ids(project_id=project_id)
@@ -427,6 +458,35 @@ class CostLedgerService:
                 continue
             matched_traces.append(trace)
             records.extend(self._trace_records(trace, context=context))
+
+        for event in events:
+            if event.event_type not in {DecisionEventType.LLM_REQUEST_SUCCEEDED, DecisionEventType.LLM_REQUEST_FAILED}:
+                continue
+            payload = _json_object(event.payload_json)
+            # Writer workflow envelopes describe a whole operation, not an additional model call.
+            if not any(payload.get(key) for key in ("stage_key", "prompt_trace_id", "attempt_group_id")):
+                continue
+            trace_id = str(payload.get("prompt_trace_id") or "")
+            if trace_id in represented_trace_ids or (event.related_object_type == "prompt_trace"
+                                                    and event.related_object_id in represented_trace_ids):
+                continue
+            if not self._matches_event(
+                event, project_filter=project_id, chapter_filter=chapter_number, band_filter=band_id,
+                candidate_filter=candidate_id, candidate_by_review=candidate_by_review,
+                band_ranges=band_ranges, chapter_arc_ids=chapter_arc_ids,
+            ):
+                continue
+            context = _TraceContext(
+                project_id=event.project_id, chapter_number=int(event.chapter_number or 0),
+                band_id=event.band_id or self._band_for_chapter(
+                    project_id=event.project_id, chapter_number=int(event.chapter_number or 0),
+                    band_ranges=band_ranges, chapter_arc_ids=chapter_arc_ids),
+                candidate_id=_event_candidate(event, payload, candidate_by_review=candidate_by_review),
+                default_stage_key=str(payload.get("stage_key") or ""),
+            )
+            attempt = {**payload, "attempt_no": payload.get("attempt_no", 1),
+                       "status": "success" if event.event_type == DecisionEventType.LLM_REQUEST_SUCCEEDED else "failed"}
+            records.extend(self._trace_records(PromptTrace(attempts_json=json.dumps([attempt])), context=context))
 
         total = _MutableMetrics()
         dimension_totals: dict[tuple[CostDimension, str], _MutableMetrics] = (
@@ -495,7 +555,103 @@ class CostLedgerService:
                 item.unknown_duration_count for item in manual_actions
             ),
             manual_actions=manual_actions,
+            chapters=self._chapter_reports(
+                records=records, traces=matched_traces, contexts=context_cache, events=matched_events,
+                all_events=events, project_id=project_id, chapter_number=chapter_number,
+                band_id=band_id, candidate_id=candidate_id, band_ranges=band_ranges, chapter_arc_ids=chapter_arc_ids,
+            ),
         )
+
+    def _chapter_reports(
+        self, *, records: list[_CostRecord], traces: list[PromptTrace], contexts: dict[str, _TraceContext],
+        events: list[DecisionEvent], all_events: list[DecisionEvent], project_id: str, chapter_number: int,
+        band_id: str, candidate_id: str, band_ranges: list[tuple[str, str, str, int, int]],
+        chapter_arc_ids: dict[tuple[str, int], str],
+    ) -> list[ChapterCostAutonomy]:
+        chapters: dict[tuple[str, int], ChapterCostAutonomy] = {}
+        roles: dict[tuple[str, int], dict[str, _MutableMetrics]] = defaultdict(lambda: defaultdict(_MutableMetrics))
+
+        def chapter(project: str, number: int | None) -> ChapterCostAutonomy:
+            key = (project, int(number or 0))
+            if key not in chapters:
+                chapters[key] = ChapterCostAutonomy(project_id=key[0], chapter_number=key[1])
+            return chapters[key]
+
+        for record in records:
+            chapter(record.project_id, record.chapter_number)
+            roles[(record.project_id, record.chapter_number)][_record_role(record)].add(record)
+        for trace in traces:
+            context = contexts[str(trace.id)]
+            row = chapter(context.project_id, context.chapter_number)
+            trim = _json_object(trace.output_summary_json).get("band_payload_trim")
+            if not isinstance(trim, dict) or not trim:
+                continue
+            removed = trim.get("removed")
+            removed = removed if isinstance(removed, dict) else {}
+            chars = max(0, _nonnegative_int(trim.get("before_chars")) - _nonnegative_int(trim.get("after_chars")))
+            counts = Counter(row.band_payload_removed_items)
+            counts.update({str(key): _nonnegative_int(value) for key, value in removed.items()})
+            chapters[(row.project_id, row.chapter_number)] = row.model_copy(update={
+                "band_payload_trim_runs": row.band_payload_trim_runs + 1,
+                "band_payload_trim_events": row.band_payload_trim_events + int(bool(chars or trim.get("overflow"))),
+                "band_payload_removed_chars": row.band_payload_removed_chars + chars,
+                "band_payload_removed_items": dict(sorted(counts.items())),
+            })
+
+        deferrals: dict[tuple[str, str], Counter[int]] = defaultdict(Counter)
+        for event in all_events:
+            payload = _json_object(event.payload_json)
+            if (event.event_type == DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED
+                    and payload.get("reason", event.reason) == "prompt_too_large_deferred"
+                    and payload.get("intent_id")):
+                deferrals[(event.project_id, str(payload["intent_id"]))][int(event.chapter_number or 0)] += 1
+        for event in events:
+            row = chapter(event.project_id, event.chapter_number)
+            payload = _json_object(event.payload_json)
+            if event.event_type == DecisionEventType.BAND_CHECKPOINT_HIT:
+                outcome = parse_gate_outcome(payload)
+                codes = outcome.issue_keys if outcome is not None else payload.get("issue_codes", [])
+                codes = codes if isinstance(codes, list) else []
+                for code in sorted({str(code) for code in codes if code} or {"unknown"}):
+                    row.band_checkpoint_pauses_by_code[code] = row.band_checkpoint_pauses_by_code.get(code, 0) + 1
+            if (event.event_type == DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED
+                    and payload.get("reason", event.reason) == "prompt_too_large_deferred" and payload.get("intent_id")):
+                intent = str(payload["intent_id"])
+                row.oversized_intent_deferrals[intent] = row.oversized_intent_deferrals.get(intent, 0) + 1
+                count = sum(count for number, count in deferrals[(event.project_id, intent)].items()
+                            if number <= row.chapter_number)
+                if count > 1:
+                    row.repeatedly_deferred_intents[intent] = count
+        statement = select(WorldPlanConflictRow).order_by(WorldPlanConflictRow.id)
+        if project_id:
+            statement = statement.where(WorldPlanConflictRow.project_id == project_id)
+        for conflict in self.session.scalars(statement).all():
+            number = (conflict.blocks_from_chapter if conflict.source == "chapter_extraction"
+                      else conflict.detected_after_chapter)
+            conflict_band = self._band_for_chapter(
+                project_id=conflict.project_id, chapter_number=number,
+                band_ranges=band_ranges, chapter_arc_ids=chapter_arc_ids,
+            )
+            refs = _json_list(conflict.result_refs_json)
+            if not self._matches(
+                project_id=conflict.project_id, chapter_number=number, band_id=conflict_band,
+                candidate_id=candidate_id if candidate_id and f"candidate:{candidate_id}" in refs else "",
+                project_filter=project_id, chapter_filter=chapter_number, band_filter=band_id, candidate_filter=candidate_id,
+            ):
+                continue
+            row = chapter(conflict.project_id, number)
+            human = conflict.status == "resolved" and _json_object(conflict.decision_json).get("decided_by") == "human"
+            chapters[(row.project_id, number)] = row.model_copy(update={
+                "world_conflicts": row.world_conflicts + 1,
+                "human_decided_conflicts": row.human_decided_conflicts + int(human),
+            })
+        return [row.model_copy(update={
+            "roles": [RoleCostMetric(role=role, metrics=metrics.freeze())
+                      for role, metrics in sorted(roles[key].items())],
+            "band_checkpoint_pauses_by_code": dict(sorted(row.band_checkpoint_pauses_by_code.items())),
+            "oversized_intent_deferrals": dict(sorted(row.oversized_intent_deferrals.items())),
+            "repeatedly_deferred_intents": dict(sorted(row.repeatedly_deferred_intents.items())),
+        }) for key, row in sorted(chapters.items())]
 
     def _events(self, *, project_id: str) -> list[DecisionEvent]:
         statement = select(DecisionEvent).order_by(
@@ -979,6 +1135,23 @@ class CostLedgerService:
         return str(row.event_type or "") in _EXTERNAL_REQUEST_EVENT_TYPES
 
 
+def _record_role(record: _CostRecord) -> str:
+    stage, family = record.stage_key, record.task_family
+    if stage in {"review.world_conflict", "spark_pause_gate"} or stage.startswith("gate_") or family == "codex_delegate":
+        return "codex_delegate"
+    if stage.startswith("world.") or family == "world_engine":
+        return "world_engine"
+    if stage.startswith("plan.") or family in {"planner", "planning", "arc_planning", "chapter_plan_materialization"}:
+        return "planner"
+    if "extract" in stage or "chapter_delta" in stage or family == "extraction":
+        return "extraction"
+    if stage.startswith("review") or stage in {"chapter_review", "chapter_review_form", "chapter_review_json_repair", "repair_verification"} or family in {"review", "reviewer", "review_chapter", "chapter_review_form"}:
+        return "reviewer"
+    if family in {"writer", "write_chapter", "repair"} or stage in {"chapter_draft", "chapter_rewrite", "writer_preview", "writer_preview_fallback", "chapter_generation", "chapter_repair", "scene_generation", "scene_breakdown", "scene_stitch"}:
+        return "writer"
+    return "other"
+
+
 def render_cost_ledger_markdown(report: CostLedgerReport) -> str:
     totals = report.totals
     lines = [
@@ -1037,10 +1210,24 @@ def render_cost_ledger_markdown(report: CostLedgerReport) -> str:
             f"{item.source} | {item.count} | {item.duration_ms} | "
             f"{item.unknown_duration_count} |"
         )
+    for chapter in report.chapters:
+        lines.extend(["", f"## Chapter {chapter.chapter_number} ({chapter.project_id})", "",
+                      "| role | calls | prompt tokens | completion tokens | total tokens |",
+                      "|---|---:|---:|---:|---:|"])
+        for role in chapter.roles:
+            metrics = role.metrics
+            lines.append(f"| {role.role} | {metrics.attempts} | {metrics.prompt_tokens} | {metrics.completion_tokens} | {metrics.total_tokens} |")
+        lines.extend(["", f"- World conflicts: {chapter.world_conflicts}; human-decided: {chapter.human_decided_conflicts}",
+                      f"- Band checkpoint pauses by code: {json.dumps(chapter.band_checkpoint_pauses_by_code, sort_keys=True)}",
+                      f"- Band payload trims: {chapter.band_payload_trim_events}/{chapter.band_payload_trim_runs} runs; removed chars: {chapter.band_payload_removed_chars}; removed items: {json.dumps(chapter.band_payload_removed_items, sort_keys=True)}",
+                      f"- Oversized intent deferrals: {json.dumps(chapter.oversized_intent_deferrals, sort_keys=True)}",
+                      f"- Repeatedly deferred intents (through chapter): {json.dumps(chapter.repeatedly_deferred_intents, sort_keys=True)}"])
     return "\n".join(lines) + "\n"
 
 
 __all__ = [
+    "ChapterCostAutonomy",
+    "RoleCostMetric",
     "CostDimensionMetric",
     "CostLedgerReport",
     "CostLedgerService",

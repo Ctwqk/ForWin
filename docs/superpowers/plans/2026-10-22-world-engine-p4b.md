@@ -579,25 +579,26 @@
 
 顺序依据最终整支审查 I-2：`scripts/purge_all_projects.py` 调用 `require_v5_schema`，只能在库已升到 `0006_planning_v6` 之后运行；线上库目前在 `0001_v5_baseline`，部署副本（`/Users/magi1/ForWin-swarm`）里没有清库脚本。所以是“先迁移、再用新代码清库”。每条命令都注明在哪个 checkout、对哪个库版本执行。
 
-1. **停写**（线上，旧代码）：`task_active_generation_check` 确认没有活跃生成任务；暂停全部任务，优先 `task_pause`；关闭自动调度；暂停 post-Canon worker。
+1. **停写**（线上，旧代码）：`task_active_generation_check` 确认没有活跃生成任务；暂停全部任务，优先 `task_pause`；关闭自动调度；暂停 post-Canon worker。随后停止使用线上库的 ForWin 服务（infra-150 上的 API `:8899` 与 MCP `:8896`、magi1 上的 runtime），直到第 9 步以新代码启动，避免旧代码在迁移期间访问 0006 库。
 2. **备份**（线上库，0001）：`pg_dump`；外部存储：MinIO 中的 artifacts、Qdrant 的 `chapter_memories` 与 `llm_kb_vectors`、`data/llm_kb`、`data/world_vaults`、`data/publisher_covers`。
 3. **迁移前检查**（线上库，0001；只读 SQL，用 psql 或部署副本的连接）：
    - `SELECT project_id, chapter_number, count(*) FROM chapter_plans GROUP BY 1,2 HAVING count(*) > 1`。有结果时，0006 的 `uq_chapter_plans_project_chapter` 会失败，需先在用户确认下删除重复行（这些项目随后都会被清掉）。
    - 列出存储中名字或 base_url 含 codex-spark、但 model 不在 `FORWIN_CODEX_MODELS` 中的 model profile（P3 裁定 P3）。
    - 运行 `docs/operations/world-engine-p4-deploy-preflight.md` 中的退化卷范围 SQL（P4a R34）。
-   - 确认部署同步脚本 `deploy-github-sync.sh` 是否会自动执行 `alembic upgrade head`（只读查看脚本）。它决定第 5、7 步是否合并为一步。
-4. **合入 master 并推送**（源码 checkout `/Users/magi1/ForWin-source-github`）：把 `claude/world-engine-p4` 合入 master，推送到 GitHub `Ctwqk/ForWin`。
-5. **迁移**（新代码，线上库 0001 → 0006）：用合入后的 master 对线上库执行 `alembic upgrade head`，一次完成 `0001 → … → 0006_planning_v6`（0002–0006 的回填按有数据的库编写，`tests/test_planning_v6_schema.py` 覆盖了带数据的 0005 升级）。如果第 3 步确认同步脚本会自动迁移，这一步改由第 7 步完成，但清库必须等迁移完成之后。
-6. **清库**（新代码，线上库 0006）：`scripts/purge_all_projects.py` 先 dry-run，经用户确认后再执行。
-7. **部署**：`ssh infra-150 '/home/taiwei/deploy-github-sync/bin/deploy-github-sync.sh --apply --project forwin'`；部署后重启各服务（Qdrant 就绪缓存）。
-8. **清库后复查**（线上库 0006）：重跑第 3 步的 SQL，应全部为空；确认没有 `origin_key` 为空的 world 冲突行（Task 4 裁定）；确认存储的 runtime policy 能被新代码加载（`future_constraints` 已由兼容垫片丢弃）。
-9. **配置 Codex**：设置 `FORWIN_CODEX_MODELS`，用一次只读调用确认 Codex bridge 以 `gpt-6-astra` 应答，且 `actual_model` 一致。
-10. **冒烟**：
+   - 只读查看部署同步脚本 `deploy-github-sync.sh` 是否会自动执行 `alembic upgrade head`；无论结果如何，第 5 步都先显式迁移，同步脚本的迁移届时是空操作。
+4. **合入 master 并推送**（源码 checkout `/Users/magi1/ForWin-source-github`，在 magi1 上）：把 `claude/world-engine-p4` 合入 master，推送到 GitHub `Ctwqk/ForWin`。此时服务仍处于停写状态，部署副本未变。
+5. **迁移**（源码 checkout `/Users/magi1/ForWin-source-github`，合入后的 master；`DATABASE_URL` 指向线上库；库版本 0001 → 0006）：显式执行 `alembic upgrade head`，一次完成 `0001 → … → 0006_planning_v6`（0002–0006 的回填按有数据的库编写，`tests/test_planning_v6_schema.py` 覆盖了带数据的 0005 升级）。无论同步脚本是否会自动迁移，都在这里先迁移，之后同步脚本的迁移只是已在 head 的空操作。
+6. **核对版本**（同一 checkout，线上库）：`alembic current` 必须显示 `0006_planning_v6`，否则停止。
+7. **清库**（同一 checkout，线上库 0006）：`scripts/purge_all_projects.py` 先 dry-run，经用户确认后再执行。脚本自带的 `require_v5_schema` 检查保持不变。
+8. **清库后复查**（同一 checkout，线上库 0006）：重跑第 3 步的 SQL，应全部为空；确认没有 `origin_key` 为空的 world 冲突行（Task 4 裁定）；用新代码加载存储的 runtime policy，确认可加载（`future_constraints` 已由兼容垫片丢弃）。任何一项不通过就停止，不进入部署。
+9. **部署**（前提：线上库为 0006，第 8 步通过）：`ssh infra-150 '/home/taiwei/deploy-github-sync/bin/deploy-github-sync.sh --apply --project forwin'`；部署后重启各服务（Qdrant 就绪缓存）。服务在这一步才以新代码启动。
+10. **配置 Codex**：设置 `FORWIN_CODEX_MODELS`，用一次只读调用确认 Codex bridge 以 `gpt-6-astra` 应答，且 `actual_model` 一致。
+11. **冒烟**：
     1. 用测试书走完 Genesis 到 start-writing，确认生成了节拍表（含 setting_brief）与 protection、world_variable 与 checkable 规则。
     2. 写第 1 章：确认 band 计划、POV 视图、抽取、tick、plan 步骤都正常。
     3. 用 `world-conflicts` 列表和 MCP `world_conflict_list` 读到同一份数据。
     4. 重写第 1 章：确认 tick 被退役并重新运行；第 2 章草稿若存在，确认其正文冲突过期、需要重新审查（最终审查建议）。
-11. **收尾**：由用户决定何时重新打开自动调度，并进入 P5 验收（运行成本需用户批准）。部署稳定后，按 `Design-docs/DESIGN_STATUS.md` 的“部署后清理”清单提交收尾改动。
+12. **收尾**：由用户决定何时重新打开自动调度，并进入 P5 验收（运行成本需用户批准）。部署稳定后，按 `Design-docs/DESIGN_STATUS.md` 的“部署后清理”清单提交收尾改动。
 
 ---
 

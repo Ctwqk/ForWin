@@ -10,6 +10,7 @@ of writing it again.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
@@ -35,6 +36,9 @@ from forwin.world_engine.chapter_conflicts import (
 )
 from forwin.world_engine.conflict_delegate import WorldConflictDelegate
 from forwin.world_engine.conflict_repository import WorldConflictRepository
+
+
+logger = logging.getLogger(__name__)
 
 
 class ChapterConflictBlocked(RuntimeError):
@@ -107,7 +111,15 @@ class ChapterConflicts:
         candidate = candidates.latest_for_chapter(project_id=project_id, chapter_number=chapter_number)
         draft = session.get(ChapterDraft, candidate.candidate_draft_id) if candidate is not None else None
         if draft is None:
-            # Nothing was saved to resume from: the chapter is written again.
+            # End any plan write before locking conflict rows; a fresh draft must not inherit these decisions.
+            ids = [row.id for row in pending]
+            session.commit()
+            for conflict_id in ids:
+                row = conflicts.get(project_id, conflict_id, for_update=True)
+                conflicts.attach_result_refs(row, ["candidate:missing-draft"])
+            session.commit()
+            logger.warning("Chapter %s of project %s has a missing resume draft; write afresh. Consumed conflicts: %s",
+                           chapter_number, project_id, ", ".join(ids))
             return None
         writer_output = self.stage._load_writer_output_from_meta(draft.llm_raw_response)
         helpers = {

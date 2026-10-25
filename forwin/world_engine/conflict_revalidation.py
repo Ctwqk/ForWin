@@ -6,8 +6,8 @@ the retired tick raised in its commit section, after its LLM calls. There it als
 conflicts over the next chapter's draft when that chapter is drafted or in needs_review: the draft was reviewed
 against the replaced text, so the next chapter's review is retried. A rewrite of an earlier chapter keeps the
 later ticks; its world step expires each open tick conflict, detected after the rewritten chapter or later,
-whose held change no longer stands against the latest canon, and stops without asking any model. Each
-expiry records a WORLD_CONFLICT_EXPIRED event with its reason.
+whose held change no longer stands against the latest canon, along with conflicts over later reviewed drafts,
+and stops without asking any model. Each expiry records a WORLD_CONFLICT_EXPIRED event with its reason.
 
 The conflict rows are locked before the project row, as a resolve locks them, and only until the world
 step commits.
@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from forwin.audit.events import DecisionEventType
@@ -107,10 +107,10 @@ def expire_next_chapter_conflicts(session: Session, *, project_id: str, chapter_
 def expire_stale_open_conflicts(
     session: Session, *, project_id: str, from_chapter: int, policy: RuntimePolicy, reason: str,
 ) -> list[str]:
-    """Expire each open world_tick conflict detected after ``from_chapter`` or later whose held change no
-    longer stands against the latest canon; their ids, oldest first.
+    """Expire stale world_tick conflicts and reviewed draft conflicts after a rewrite; their ids, oldest first.
 
-    In order, the stored held change must still parse, may not set the status of an intent canon has since
+    Chapter extraction conflicts blocking reviewed drafts after ``from_chapter`` lose their review basis.
+    For world ticks, the stored held change must still parse, may not set the status of an intent canon has since
     settled (Ruling P22), must pass the running-state check against the latest canon (Ruling P30), and
     every ref the conflict involves must still exist. The first that fails expires the conflict with
     ``reason`` and what failed: a resolve could carry out nothing but a veto of it any more.
@@ -119,9 +119,18 @@ def expire_stale_open_conflicts(
         select(WorldPlanConflictRow)
         .where(
             WorldPlanConflictRow.project_id == project_id,
-            WorldPlanConflictRow.source == "world_tick",
             WorldPlanConflictRow.status == "open",
-            WorldPlanConflictRow.detected_after_chapter >= from_chapter,
+            or_(
+                and_(WorldPlanConflictRow.source == "world_tick",
+                     WorldPlanConflictRow.detected_after_chapter >= from_chapter),
+                and_(WorldPlanConflictRow.source == "chapter_extraction",
+                     WorldPlanConflictRow.blocks_from_chapter > from_chapter,
+                     select(ChapterPlan.id).where(
+                         ChapterPlan.project_id == project_id,
+                         ChapterPlan.chapter_number == WorldPlanConflictRow.blocks_from_chapter,
+                         ChapterPlan.status.in_(_REVIEWED_DRAFT_STATUSES),
+                     ).exists()),
+            ),
         )
         .order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id)
         .with_for_update()
@@ -132,11 +141,19 @@ def expire_stale_open_conflicts(
     # FOR NO KEY UPDATE after the conflict rows, as a resolve takes it: canon holds still while it is read.
     session.execute(select(Project.id).where(Project.id == project_id).with_for_update(key_share=True))
     latest = BookStateRepository(session).latest_canon_chapter(project_id) or 0
-    runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=latest)
+    runtime = (BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=latest)
+               if any(row.source == "world_tick" for row in rows) else None)
     repo = WorldConflictRepository(session)
     expired = []
     for row in rows:
-        failure = _stale_reason(session, row, runtime=runtime, policy=policy)
+        if row.source == "chapter_extraction":
+            status = session.scalar(select(ChapterPlan.status).where(
+                ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == row.blocks_from_chapter,
+            ))
+            failure = (f"chapter {row.blocks_from_chapter}'s draft was reviewed against replaced text; retry its review"
+                       if status in _REVIEWED_DRAFT_STATUSES else "")
+        else:
+            failure = _stale_reason(session, row, runtime=runtime, policy=policy)
         if failure:
             _expire(session, repo, row, reason=f"{reason}: {failure}", chapter_number=from_chapter)
             expired.append(row.id)

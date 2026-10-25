@@ -10,6 +10,7 @@ resolutions this way; a direct conflict resolve checks the resolution's candidat
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from copy import deepcopy
 
 from sqlalchemy.orm import Session
@@ -44,6 +45,7 @@ class RunningStateCheck:
         travel_tolerance: float,
         onstage_refs: frozenset[str] = frozenset(),
         chapter_delta: GraphDelta | None = None,
+        retired_tick_ids: Sequence[str] = (),
     ) -> None:
         self.session = session
         self.context = context
@@ -64,7 +66,7 @@ class RunningStateCheck:
             mover, arrive = move.get("entity_id"), move.get("arrive_minute")
             if isinstance(mover, str) and type(arrive) is int:
                 self.last_arrival_by_mover[mover] = max(arrive, self.last_arrival_by_mover.get(mover, arrive))
-        self.builder = WorldTickDeltaBuilder(session)
+        self.builder = WorldTickDeltaBuilder(session, retired_tick_ids=retired_tick_ids)
         self.accepted: list[TickCandidate] = []
         # The last candidate checked and the delta of the accepted ones plus it, for ``admit``.
         self._checked: tuple[TickCandidate, GraphDelta] | None = None

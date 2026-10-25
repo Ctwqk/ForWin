@@ -182,7 +182,12 @@ class WorldTickService:
         number = int(commit.chapter_number or 0)
         latest = BookStateRepository(session).latest_canon_chapter(commit.project_id) or 0
         if not policy.world.enabled:
-            if number == latest and _rewritten(commit):
+            if number < latest and _rewritten(commit):
+                expire_stale_open_conflicts(
+                    session, project_id=commit.project_id, from_chapter=number, policy=policy,
+                    reason=f"rewrite of chapter {number}",
+                )
+            elif number == latest and _rewritten(commit):
                 # No tick follows, so no model call: the next chapter's stale conflicts can expire right away.
                 expire_next_chapter_conflicts(session, project_id=commit.project_id, chapter_number=number)
             return _skipped(tick_id, "world_disabled")
@@ -250,7 +255,7 @@ class _Tick:
         self.runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=number)
         self.calendar = StoryCalendarRepository(session).get(project_id)
         self.lexicon = BookLexiconRepository(session).get(project_id)
-        self.builder = WorldTickDeltaBuilder(session)
+        self.builder = WorldTickDeltaBuilder(session, retired_tick_ids=self.retired_tick_ids)
         self.conflicts = TickConflicts(
             session, context=self.context, runtime=self.runtime, policy=policy, tick_id=tick_id,
             delegate=service.conflict_delegate, audit_writer_factory=service.audit_writer_factory,
@@ -611,6 +616,7 @@ class _Tick:
             self.session, context=self.context, runtime=self.runtime, lexicon=self.lexicon, calendar=self.calendar,
             tick_id=self.tick_id, travel_tolerance=self.policy.review.travel_tolerance,
             onstage_refs=self.onstage_refs, chapter_delta=self.chapter,
+            retired_tick_ids=self.retired_tick_ids,
         )
 
     def _admitted(self, base: Sequence[TickCandidate]) -> list[TickCandidate]:

@@ -767,6 +767,14 @@ class _ProjectPlanAmender:
             session, conflict=conflict, decision=decision, policy=policy,
         )
 
+    def propose_chapter_revision(self, session, *, conflict, decision, policy: RuntimePolicy):
+        return self.container.build_plan_amender(policy=policy).propose_chapter_revision(
+            session, conflict=conflict, decision=decision, policy=policy,
+        )
+
+    def publish_chapter_revision(self, session, proposal):
+        return self.container.build_plan_amender().publish_chapter_revision(session, proposal)
+
     def record_world_amendment_failure(self, session, *, conflict, issues, policy: RuntimePolicy):
         return self.container.build_plan_amender(policy=policy).record_world_amendment_failure(
             session, conflict=conflict, issues=issues, policy=policy,

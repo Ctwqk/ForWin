@@ -12,10 +12,13 @@ from forwin.book_state.runtime import BookStateRuntime
 from forwin.world_engine.types import NEW_ACTOR_REF_PREFIX, NEW_FACT_REF_PREFIX, WorldEffects
 
 
-def new_actor_name_taken(name: str, runtime: BookStateRuntime, reserved_names: Collection[str] = ()) -> bool:
+def new_actor_name_taken(
+    name: str, runtime: BookStateRuntime, reserved_names: Collection[str] = (),
+    *, ignored_node_ids: Collection[str] = (),
+) -> bool:
     names = set(reserved_names)
     for node in [*runtime.world.nodes_by_id.values(), *runtime.map.nodes_by_id.values()]:
-        if getattr(node, "is_active", True):
+        if node.id not in ignored_node_ids and getattr(node, "is_active", True):
             names.add(node.name)
             names.update(getattr(node, "aliases", ()))
     return normalized_name(name) in {normalized_name(value) for value in names}

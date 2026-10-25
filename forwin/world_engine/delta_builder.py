@@ -101,8 +101,9 @@ class TickDeltaBuild:
 class WorldTickDeltaBuilder:
     """Build a tick's candidates into the tick's single world_engine GraphDelta."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, retired_tick_ids: Sequence[str] = ()) -> None:
         self.session = session
+        self.retired_tick_ids = tuple(retired_tick_ids)
 
     def build(
         self,
@@ -147,6 +148,7 @@ class WorldTickDeltaBuilder:
             lexicon=BookLexiconRepository(self.session).get(project_id),
             reserved_actor_names=reserved_names,
             reusable_actor_names=reusable_names,
+            retired_tick_ids=self.retired_tick_ids,
         )
         return builder.build(candidates, news_in_transit)
 
@@ -168,6 +170,7 @@ class _TickBuilder:
         lexicon: BookLexicon,
         reserved_actor_names: Collection[str] = (),
         reusable_actor_names: dict[str, str] | None = None,
+        retired_tick_ids: Sequence[str] = (),
     ) -> None:
         self.context = context
         self.project_id = context.project_id
@@ -180,6 +183,7 @@ class _TickBuilder:
         self.lexicon = lexicon
         self.reserved_actor_names = {normalized_name(name) for name in reserved_actor_names}
         self.reusable_actor_names = dict(reusable_actor_names or {})
+        self.retired_tick_ids = tuple(retired_tick_ids)
         self.issues: list[TickIssue] = []
         self.node_patches: list[NodePatch] = []
         self.created_nodes: dict[str, NodePatch] = {}
@@ -569,9 +573,20 @@ class _TickBuilder:
         name = actor.name.strip()
         node_id = self._local_id(actor.node_type, actor.key)
         reserved = self.reserved_actor_names
-        if actor.node_type == "character" and self.reusable_actor_names.get(node_id) == name:
-            reserved = reserved - {normalized_name(name)}
-        if not name or new_actor_name_taken(name, self.runtime, reserved):
+        ignored_nodes: set[str] = set()
+        if actor.node_type == "character":
+            # Preserve the identity the same candidate/key created in a retired predecessor tick.
+            prior_ids = [node_id, *(_tick_local_id(self.project_id, tick, self.candidate_id, actor.node_type, actor.key)
+                                    for tick in self.retired_tick_ids)]
+            for prior_id in prior_ids:
+                node = self.world.nodes_by_id.get(prior_id)
+                if (self.reusable_actor_names.get(prior_id) == name
+                        and (node is None or not node.is_active or node.status in {"inactive", "retired", "deleted"})):
+                    node_id = prior_id
+                    reserved = reserved - {normalized_name(name)}
+                    ignored_nodes.add(prior_id)
+                    break
+        if not name or new_actor_name_taken(name, self.runtime, reserved, ignored_node_ids=ignored_nodes):
             self._issue("error", "new_actor_name_taken", f"New actor name is unavailable: {name!r}")
             return
         location = self._location(actor.location_id, "new actor location")

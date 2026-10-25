@@ -22,6 +22,7 @@ from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 
 if TYPE_CHECKING:
+    from forwin.genesis import BookGenesisService
     from forwin.application.project_control import ProjectControlApplicationService
     from forwin.application.projects import ProjectApplicationService
     from forwin.application.tasks import TaskApplicationService
@@ -86,6 +87,10 @@ class HttpRuntime:
         default_factory=threading.RLock,
         repr=False,
     )
+    _genesis_services: dict[tuple[str, str], BookGenesisService] = field(
+        default_factory=dict, repr=False,
+    )
+    _genesis_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def get_session(self) -> Session:
         if self.session_factory is None:
@@ -139,6 +144,7 @@ class HttpRuntime:
             candidate = PublisherManager(
                 self.session_factory,
                 extension_api_key=self.config.publisher_extension_api_key,
+                heartbeat_stale_seconds=self.config.publisher_heartbeat_stale_seconds,
                 preferred_client_id=self.config.publisher_preferred_client_id,
                 strict_preferred_client=self.config.publisher_strict_preferred_client,
                 publisher_session_secret=self.config.publisher_session_secret,
@@ -175,9 +181,11 @@ class HttpRuntime:
 
     def shutdown(self) -> None:
         from forwin.http.automation import stop_automation_scheduler
+        from forwin.http.request_support import _close_all_genesis_services
 
         stop_automation_scheduler(self)
         self.project_pipelines.close()
+        _close_all_genesis_services(self)
         container = self.container
         if container is not None:
             container.close()

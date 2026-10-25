@@ -38,6 +38,8 @@ class StubLLM:
         self.calls.append((messages, kwargs))
         self.llm_attempt_events.append({
             "attempt_no": 1, "stage_key": kwargs["stage_key"], "provider_request_id": str(len(self.calls)),
+            "attempt_group_id": str(len(self.calls)),
+            "profile_id": "test-profile", "model": "test-model",
         })
         response = next(self.responses)
         if isinstance(response, Exception):
@@ -446,8 +448,10 @@ def test_runner_call_kwargs_trace_and_allowed_values():
     trace = call.prompt_trace
     assert trace["trace_scope"] == "world_engine" and trace["stage_key"] == "world.actor_turn"
     assert trace["template_id"] == "world_engine:actor_turn"
-    assert trace["backend"] == "deepseek_chain"
-    assert trace["model_profile"]["actual_model"] == "test-actual-model"
+    assert trace["backend"] == "openai_compatible"
+    assert trace["fallback_used"] is False
+    assert trace["model_profile"]["profile_id"] == "test-profile"
+    assert trace["model_profile"]["model"] == "test-model"
     assert trace["input_snapshot"]["seed"] == 77
     assert trace["attempts"][0]["provider_request_id"] == "1"
     assert trace["output_summary"]["actor_turn_ok"] is True

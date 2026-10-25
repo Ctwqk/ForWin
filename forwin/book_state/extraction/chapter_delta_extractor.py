@@ -15,7 +15,7 @@ from forwin.book_state.story_clock import (
 from forwin.observability.llm_trace import (
     RAW_REQUEST_KEY, RAW_RESPONSE_KEY, mark_latest_attempt_parse_failure,
     mark_latest_attempt_workflow,
-    served_model_profile,
+    llm_trace_metadata,
 )
 from forwin.models.project import ChapterPlan
 from forwin.skills import serialize_prompt_layers
@@ -273,13 +273,10 @@ class ChapterDeltaExtractor:
         business_retries: list[dict[str, Any]], extraction: ChapterDeltaExtraction | None,
         issues: list[ExtractionIssue], plan_fingerprint: str,
     ) -> dict[str, Any]:
-        last_call_result = getattr(self.llm_client, "last_call_result", None)
-        trace = getattr(last_call_result, "trace", {}) or {}
         layers = serialize_prompt_layers(messages, [])
         return {
             "trace_scope": "writer", "stage_key": _STAGE_KEY,
-            "backend": str(trace.get("backend") or getattr(last_call_result, "backend", "") or ""),
-            "fallback_used": bool(getattr(last_call_result, "fallback_used", False)),
+            **llm_trace_metadata(attempts, llm_client=self.llm_client),
             "template_id": "extraction:chapter_delta", "template_version": "v1",
             "effective_system_prompt": "\n\n".join(str(item["content"]).strip() for item in layers if item["role"] == "system"),
             "prompt_layers": layers,
@@ -289,7 +286,6 @@ class ChapterDeltaExtractor:
                 "plan_fingerprint": plan_fingerprint,
                 "stage_key": _STAGE_KEY, "selected_skills": [],
             },
-            "model_profile": served_model_profile(attempts, llm_client=self.llm_client),
             "attempts": attempts,
             "output_summary": {
                 "extraction_ok": extraction is not None, "issues": [issue.model_dump() for issue in issues],

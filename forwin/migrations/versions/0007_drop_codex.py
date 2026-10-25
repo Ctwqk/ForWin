@@ -5,7 +5,7 @@ Revises: 0006_planning_v6
 Create Date: 2026-10-25 00:00:00.000000
 
 Rewrites the retired pause-gate and world-conflict decider literals in stored
-runtime policies and world-plan conflicts, removes the retired model preference
+runtime policies (including generation-task snapshots) and world-plan conflicts, removes the retired model preference
 keys that are no longer accepted by RuntimePolicy, and renames the pause-gate
 stage key and delegate task family.
 
@@ -31,6 +31,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Upgrade schema and stored literals."""
     _rewrite_runtime_policies(downgrade=False)
+    _rewrite_task_policy_snapshots(downgrade=False)
     _rewrite_world_conflicts(downgrade=False)
     _rewrite_prompt_traces(downgrade=False)
     op.drop_column("prompt_traces", "permission_profile")
@@ -48,6 +49,7 @@ def downgrade() -> None:
         sa.Column("permission_profile", sa.String(), server_default="", nullable=True),
     )
     _rewrite_runtime_policies(downgrade=True)
+    _rewrite_task_policy_snapshots(downgrade=True)
     _rewrite_world_conflicts(downgrade=True)
     _rewrite_prompt_traces(downgrade=True)
 
@@ -66,6 +68,37 @@ def _dump_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def _rewrite_policy(policy: dict[str, Any], *, downgrade: bool) -> bool:
+    changed = False
+
+    pause = policy.get("pause")
+    if isinstance(pause, dict):
+        expected = "spark" if downgrade else "llm"
+        retired = "llm" if downgrade else "spark"
+        if pause.get("gate_delegate") == retired:
+            pause["gate_delegate"] = expected
+            changed = True
+
+    world = policy.get("world")
+    if isinstance(world, dict):
+        expected = "codex" if downgrade else "llm"
+        retired = "llm" if downgrade else "codex"
+        if world.get("conflict_delegate") == retired:
+            world["conflict_delegate"] = expected
+            changed = True
+
+    if not downgrade:
+        models = policy.get("models")
+        if isinstance(models, dict) and "role_preferences" in models:
+            models.pop("role_preferences", None)
+            changed = True
+        review = policy.get("review")
+        if isinstance(review, dict) and "repair_models" in review:
+            review.pop("repair_models", None)
+            changed = True
+    return changed
+
+
 def _rewrite_runtime_policies(*, downgrade: bool) -> None:
     bind = op.get_bind()
     rows = bind.execute(
@@ -75,33 +108,7 @@ def _rewrite_runtime_policies(*, downgrade: bool) -> None:
         policy = _load_json_object(raw_policy)
         if policy is None:
             continue
-        changed = False
-
-        pause = policy.get("pause")
-        if isinstance(pause, dict):
-            expected = "spark" if downgrade else "llm"
-            retired = "llm" if downgrade else "spark"
-            if pause.get("gate_delegate") == retired:
-                pause["gate_delegate"] = expected
-                changed = True
-
-        world = policy.get("world")
-        if isinstance(world, dict):
-            expected = "codex" if downgrade else "llm"
-            retired = "llm" if downgrade else "codex"
-            if world.get("conflict_delegate") == retired:
-                world["conflict_delegate"] = expected
-                changed = True
-
-        if not downgrade:
-            models = policy.get("models")
-            if isinstance(models, dict) and "role_preferences" in models:
-                models.pop("role_preferences", None)
-                changed = True
-            review = policy.get("review")
-            if isinstance(review, dict) and "repair_models" in review:
-                review.pop("repair_models", None)
-                changed = True
+        changed = _rewrite_policy(policy, downgrade=downgrade)
 
         if changed:
             bind.execute(
@@ -110,6 +117,28 @@ def _rewrite_runtime_policies(*, downgrade: bool) -> None:
                     "WHERE id = :id"
                 ),
                 {"policy": _dump_json(policy), "id": project_id},
+            )
+
+
+def _rewrite_task_policy_snapshots(*, downgrade: bool) -> None:
+    bind = op.get_bind()
+    rows = bind.execute(
+        sa.text("SELECT id, execution_payload_json FROM generation_tasks")
+    ).all()
+    for task_id, raw_payload in rows:
+        payload = _load_json_object(raw_payload)
+        if payload is None:
+            continue
+        policy = payload.get("policy_snapshot")
+        if not isinstance(policy, dict):
+            continue
+        if _rewrite_policy(policy, downgrade=downgrade):
+            bind.execute(
+                sa.text(
+                    "UPDATE generation_tasks SET execution_payload_json = :payload "
+                    "WHERE id = :id"
+                ),
+                {"payload": _dump_json(payload), "id": task_id},
             )
 
 

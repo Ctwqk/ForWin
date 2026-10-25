@@ -960,24 +960,21 @@
       if (!selectEl) return '';
       clearNode(selectEl);
       const profiles = Array.isArray(runtimeCatalogState?.model_profiles) ? runtimeCatalogState.model_profiles : [];
-      if (!profiles.length) {
-        const option = document.createElement('option');
-        option.value = '';
-        option.textContent = '暂无模型配置';
-        selectEl.appendChild(option);
-        selectEl.disabled = true;
-        return '';
-      }
-      const selectedId = preferredId || runtimeCatalogState?.default_model_profile_id || profiles[0]?.id || '';
-      profiles.forEach((profile, index) => {
+      const selectedId = preferredId ?? '';
+      const unpinned = document.createElement('option');
+      unpinned.value = '';
+      unpinned.textContent = '按路由 chain（不固定）';
+      unpinned.selected = selectedId === '';
+      selectEl.appendChild(unpinned);
+      profiles.forEach((profile) => {
         const option = document.createElement('option');
         option.value = profile.id;
         option.textContent = `${profile.name}${profile.id === runtimeCatalogState.default_model_profile_id ? ' · 默认' : ''}`;
-        option.selected = profile.id === selectedId || (!selectedId && index === 0);
+        option.selected = profile.id === selectedId;
         selectEl.appendChild(option);
       });
       selectEl.disabled = false;
-      return selectEl.value || selectedId || '';
+      return selectEl.value;
     }
 
     function syncBookBulkActions() {

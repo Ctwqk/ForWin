@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from forwin.observability.llm_trace import llm_trace_metadata
 from forwin.observability.payloads import (
     attempt_group_ids,
     audit_payload,
@@ -216,10 +217,7 @@ class WriterExecutionStage:
                                 "stage_key": trace_stage_key,
                                 "failure_path": "writer_before_output",
                             },
-                            "model_profile": {
-                                "profile_id": model_profile_id,
-                                "model": model_name,
-                            },
+                            **llm_trace_metadata(failed_attempts, llm_client=self.writer.llm_client),
                             "attempts": failed_attempts,
                             "output_summary": {
                                 "status": "failed",

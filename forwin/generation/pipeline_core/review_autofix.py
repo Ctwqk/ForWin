@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import partial
 
+from forwin.observability.llm_trace import llm_trace_metadata
 from forwin.book_state.extraction.chapter_delta_extractor import ensure_chapter_delta
 from forwin.naming.entity_registrar import EntityRegistrar, LLMEntityAdmissionClassifier
 from forwin.protocol.writer import WriterOutput
@@ -480,6 +481,7 @@ class ReviewWorkflowStage:
             trace.setdefault("stage_key", "repair_verification")
             trace.setdefault("input_snapshot", {"chapter_number": repaired_output.chapter_number})
             trace["attempts"] = [*(trace.get("attempts") or []), *attempts]
+            trace.update(llm_trace_metadata(trace["attempts"], llm_client=client))
         merged_review = review.model_copy(update={
             "repair_verification": verification, "prompt_trace": trace,
         })

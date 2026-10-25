@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from forwin.observability.llm_trace import own_transaction_audit_writer, save_world_prompt_trace
+from forwin.observability.llm_trace import llm_trace_metadata, own_transaction_audit_writer, save_world_prompt_trace
 from forwin.audience.feedback import run_feedback_aggregation_pass
 from forwin.models.base import new_id
 from forwin.models.canon import CanonCommitRecord
@@ -993,6 +993,7 @@ class PostCanonMaintenanceService:
                         "chapter_number": commit.chapter_number,
                     },
                     "attempts": comment_attempts,
+                    **llm_trace_metadata(comment_attempts, llm_client=getattr(self, "llm_client", None)),
                 },
                 artifact_store=self.artifact_store,
             )
@@ -1005,6 +1006,7 @@ class PostCanonMaintenanceService:
                 "chapter_number": int(commit.chapter_number or 0),
                 "step_name": step_name,
                 "attempts": _safe_attempts(attempts),
+                **llm_trace_metadata(attempts, llm_client=getattr(self, "llm_client", None)),
             },
         )
 

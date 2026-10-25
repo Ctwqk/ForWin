@@ -32,6 +32,8 @@ class StubLLM:
         self.llm_attempt_events.append({
             "attempt_no": 1, "stage_key": kwargs["stage_key"],
             "provider_request_id": str(len(self.calls)),
+            "attempt_group_id": str(len(self.calls)),
+            "profile_id": "test-profile", "model": "test-model",
         })
         response = next(self.responses)
         if isinstance(response, Exception):
@@ -316,15 +318,16 @@ def test_new_actor_requires_map_location_and_existing_group(changes, path):
     assert any(path in issue for issue in call.issues)
 
 
-def test_trace_preserves_backend_and_actual_model():
+def test_trace_uses_served_attempts_instead_of_legacy_router_result():
     client = StubLLM({"outcomes": [_outcome()]})
     client.last_call_result = SimpleNamespace(
         backend="deepseek_chain", actual_model="test-actual-model", fallback_used=True, trace={},
     )
     trace = _adjudicate(client).prompt_trace
-    assert trace["backend"] == "deepseek_chain"
-    assert trace["fallback_used"] is True
-    assert trace["model_profile"]["actual_model"] == "test-actual-model"
+    assert trace["backend"] == "openai_compatible"
+    assert trace["fallback_used"] is False
+    assert trace["model_profile"]["profile_id"] == "test-profile"
+    assert trace["model_profile"]["model"] == "test-model"
 
 
 def _prompt_payload(runtime, **kwargs):

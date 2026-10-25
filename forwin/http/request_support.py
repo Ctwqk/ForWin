@@ -82,38 +82,52 @@ def _build_genesis_service(
     runtime: HttpRuntime,
     infrastructure: InfrastructureConfig | None = None,
     *,
-    model_profile_id: str = "",
+    policy: RuntimePolicy | None = None,
 ) -> BookGenesisService:
     resolved = infrastructure or runtime.config or InfrastructureConfig(minimax_api_key="")
     shared_container = (
-        infrastructure is None
-        and not model_profile_id
-        and runtime.container is not None
+        runtime.container is not None
+        and (infrastructure is None or resolved == runtime.container.infrastructure)
+        and (policy is None or policy == runtime.container.policy)
     )
-    policy = RuntimePolicy.for_profile(
-        "standard",
-        model_profile_id=str(model_profile_id or "").strip(),
+    if shared_container:
+        service = runtime.container.generation_services().book_genesis
+        setattr(service, "_forwin_runtime_owned", True)
+        setattr(service, "_forwin_runtime_shared", True)
+        return service
+
+    policy = policy or RuntimePolicy.for_profile("standard")
+    key = (
+        json.dumps(resolved.model_dump(mode="json"), sort_keys=True),
+        json.dumps(policy.model_dump(mode="json"), sort_keys=True),
     )
-    container = (
-        runtime.container
-        if shared_container
-        else RuntimeContainer.from_config(resolved, policy=policy, role="api")
-    )
-    service = (
-        container.generation_services().book_genesis
-        if shared_container
-        else container.build_book_genesis_service()
-    )
-    setattr(service, "_forwin_runtime_owned", True)
-    setattr(service, "_forwin_runtime_shared", bool(shared_container))
-    return service
+    with runtime._genesis_lock:
+        service = runtime._genesis_services.get(key)
+        if service is None:
+            container = RuntimeContainer.from_config(resolved, policy=policy, role="api")
+            service = container.build_book_genesis_service()
+            setattr(service, "_forwin_runtime_owned", True)
+            setattr(service, "_forwin_runtime_cached", True)
+            runtime._genesis_services[key] = service
+        return service
+
+
+def _close_all_genesis_services(runtime: HttpRuntime) -> None:
+    with runtime._genesis_lock:
+        for service in runtime._genesis_services.values():
+            _close_genesis_service(runtime, service, close_cached=True)
+        runtime._genesis_services.clear()
 
 
 def _close_genesis_service(
     runtime: HttpRuntime,
     service: BookGenesisService | None,
+    *,
+    close_cached: bool = False,
 ) -> None:
     if getattr(service, "_forwin_runtime_shared", False):
+        return
+    if getattr(service, "_forwin_runtime_cached", False) and not close_cached:
         return
     for label, resource in (
         ("client", getattr(service, "llm_client", None)),

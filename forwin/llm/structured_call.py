@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from forwin.audit.events import DecisionEventInfo, DecisionEventType
-from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
+from forwin.observability.llm_trace import llm_trace_metadata, mark_latest_attempt_parse_failure
 
 
 _SENSITIVE_LOG_KEYS = {
@@ -187,8 +187,8 @@ def run_structured_llm_call(
     else:
         causal_root_id = envelope.causal_root_id
     sanitized_snapshot = _sanitize_complete_log(input_snapshot)
-    _drain_attempts(llm_client)
 
+    # Keep pending business attempts until this workflow's final, thread-local drain.
     raw_output = ""
     profile_id = ""
     model = ""
@@ -224,7 +224,11 @@ def run_structured_llm_call(
             )
 
     attempts = _drain_attempts(llm_client)
-    fallback_used = len({item.get("profile_id") for item in attempts if item.get("profile_id")}) > 1
+    metadata = llm_trace_metadata(attempts, llm_client=llm_client)
+    identity = metadata["model_profile"]
+    profile_id = identity.get("profile_id", profile_id)
+    model = identity.get("model", model)
+    fallback_used = metadata["fallback_used"]
     logged_attempts = [_sanitize_complete_log(item) for item in attempts]
     output_summary = {
         "gate_kind": gate_kind,

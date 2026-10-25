@@ -35,7 +35,7 @@ _MAX_CHAPTER_PAGE_LIMIT = 200
 def _build_project_genesis_service(session, project: Project, build_genesis_service):
     policy_record = ProjectPolicyStore(session).load(project)
     return build_genesis_service(
-        model_profile_id=policy_record.policy.model_profile_id,
+        policy=policy_record.policy,
     )
 
 
@@ -436,7 +436,7 @@ def start_project_writing(
             raise HTTPException(409, "Genesis revision 不存在。")
         genesis_service = build_genesis_service(
             infrastructure,
-            model_profile_id=policy_record.policy.model_profile_id,
+            policy=policy_record.policy,
         )
         updater = StateUpdater(session)
         try:

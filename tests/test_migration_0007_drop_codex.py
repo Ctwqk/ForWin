@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+import importlib
 import json
+from types import SimpleNamespace
 
 from alembic import command
 import pytest
@@ -9,6 +11,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from forwin import models
+from forwin.generation.task_payload import execution_payload, payload_from_json
 from forwin.models.base import alembic_config
 from forwin.runtime.policy import RuntimePolicy
 from tests.postgres import postgres_empty_test_url
@@ -52,6 +55,90 @@ def _legacy_policy_json() -> str:
     }
     policy["review"]["repair_models"] = ["deepseek-reasoner"]
     return json.dumps(policy)
+
+
+def _legacy_task_payload_json() -> str:
+    payload = execution_payload(
+        mode="continue",
+        policy=RuntimePolicy.for_profile("standard"),
+        policy_version=7,
+        root_event_id="root-before-cutover",
+        num_chapters=3,
+        max_chapters=12,
+    ).model_dump(mode="json")
+    payload["policy_snapshot"] = json.loads(_legacy_policy_json())
+    payload["policy_snapshot"]["models"].pop("chains", None)
+    return json.dumps(payload)
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_0007_legacy_task_payload_loads_after_upgrade(legacy_database, status) -> None:
+    config, engine = legacy_database
+    before = _legacy_task_payload_json()
+    with Session(engine) as session, session.begin():
+        _seed_project(session, runtime_policy_json=_legacy_policy_json())
+        session.add(models.GenerationTask(
+            id="task-1", project_id="project-1", status=status,
+            execution_payload_json=before,
+        ))
+
+    command.upgrade(config, MIGRATION)
+
+    with engine.connect() as connection:
+        raw = connection.execute(sa.text(
+            "SELECT execution_payload_json FROM generation_tasks WHERE id = 'task-1'"
+        )).scalar_one()
+    _assert_migrated_task_payload(before, raw)
+
+    command.downgrade(config, PREVIOUS)
+    with engine.connect() as connection:
+        raw = connection.execute(sa.text(
+            "SELECT execution_payload_json FROM generation_tasks WHERE id = 'task-1'"
+        )).scalar_one()
+    policy = json.loads(raw)["policy_snapshot"]
+    assert policy["pause"]["gate_delegate"] == "spark"
+    assert policy["world"]["conflict_delegate"] == "codex"
+
+
+def _assert_migrated_task_payload(before: str, after: str) -> None:
+    payload = payload_from_json(after)
+    assert payload.policy_version == 7
+    assert payload.policy_snapshot.pause.gate_delegate == "llm"
+    assert payload.policy_snapshot.world.conflict_delegate == "llm"
+    expected = json.loads(before)
+    actual = json.loads(after)
+    expected.pop("policy_snapshot")
+    actual.pop("policy_snapshot")
+    assert actual == expected
+
+
+def test_0007_task_payload_rewrite_without_database(monkeypatch) -> None:
+    migration = importlib.import_module("forwin.migrations.versions.0007_drop_codex")
+    before = _legacy_task_payload_json()
+    rows = {"task-1": before, "blank": "", "invalid": "not-json", "absent": "{}"}
+
+    class Bind:
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            if sql.startswith("SELECT"):
+                return SimpleNamespace(all=lambda: list(rows.items()) if "generation_tasks" in sql else [])
+            assert sql.startswith("UPDATE generation_tasks SET execution_payload_json")
+            rows[params["id"]] = params["payload"]
+
+    monkeypatch.setattr(migration.op, "get_bind", lambda: Bind())
+    monkeypatch.setattr(migration.op, "drop_column", lambda *args: None)
+    monkeypatch.setattr(migration.op, "add_column", lambda *args: None)
+    migration.upgrade()
+    _assert_migrated_task_payload(before, rows["task-1"])
+    assert {key: rows[key] for key in ("blank", "invalid", "absent")} == {
+        "blank": "", "invalid": "not-json", "absent": "{}",
+    }
+    migration.downgrade()
+    policy = json.loads(rows["task-1"])["policy_snapshot"]
+    assert policy["pause"]["gate_delegate"] == "spark"
+    assert policy["world"]["conflict_delegate"] == "codex"
+    assert "repair_models" not in policy["review"]
+    assert "role_preferences" not in policy["models"]
 
 
 def _seed_conflict(session: Session) -> None:

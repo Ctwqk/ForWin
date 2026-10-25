@@ -5,7 +5,7 @@ import os
 from typing import Any
 
 from forwin.llm.compat import call_chat_compat
-from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
+from forwin.observability.llm_trace import llm_trace_metadata, mark_latest_attempt_parse_failure
 from forwin.protocol.context import ReviewContextPack
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
@@ -328,9 +328,8 @@ class LLMWebNovelReviewer:
         attempts = drain()
         return attempts if isinstance(attempts, list) else []
 
-    @staticmethod
     def _build_prompt_trace(
-        *,
+        self, *,
         context: ReviewContextPack,
         writer_output: WriterOutput,
         messages: list[dict],
@@ -359,7 +358,7 @@ class LLMWebNovelReviewer:
                 "chapter_number": context.chapter_number,
                 "body_char_count": int(getattr(writer_output, "char_count", 0) or 0),
             },
-            "model_profile": {},
+            **llm_trace_metadata(attempts, llm_client=self.llm_client),
             "attempts": attempts,
             "output_summary": {
                 "chapter_number": context.chapter_number,

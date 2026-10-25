@@ -148,20 +148,20 @@ def test_attempt_annotations_stay_with_the_calling_thread(make_client):
         assert second_done.wait(5)
         mark_latest_attempt_parse_failure(client, parser_name="first", stage_key="same_stage", error="invalid")
         mark_latest_attempt_workflow(client, attempt_no=2, stage_key="same_stage")
-        return client.llm_attempt_group_id
+        return client.llm_attempt_group_id, client.drain_llm_attempt_events()[0]
 
     def second():
         assert first_done.wait(5)
         client.chat([], task_family="review", stage_key="same_stage")
         second_done.set()
-        return client.llm_attempt_group_id
+        return client.llm_attempt_group_id, client.drain_llm_attempt_events()[0]
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         first_future, second_future = pool.submit(first), pool.submit(second)
-        first_group, second_group = first_future.result(), second_future.result()
+        (first_group, first_attempt), (second_group, second_attempt) = first_future.result(), second_future.result()
     assert first_group != second_group
     assert client.llm_attempt_group_id == ""
-    first_attempt, second_attempt = client.llm_attempt_events
+    assert client.llm_attempt_events == []
     assert first_attempt["attempt_group_id"] == first_group
     assert first_attempt["parse_ok"] is False
     assert first_attempt["workflow_attempt_no"] == 2

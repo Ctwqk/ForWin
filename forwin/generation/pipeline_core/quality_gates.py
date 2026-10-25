@@ -22,7 +22,7 @@ from forwin.observability.payloads import (
     audit_payload,
     safe_error_summary,
 )
-from forwin.observability.llm_trace import safe_prompt_trace_attempts, served_model_profile
+from forwin.observability.llm_trace import llm_trace_metadata, safe_prompt_trace_attempts, served_model_profile
 from forwin.models.phase import BandExperiencePlan
 from forwin.planning.band_plan_patcher import BandPlanPatcher
 from forwin.review.decision.rules.obligation_scope import BandScopeCandidate
@@ -186,6 +186,7 @@ def _persist_canon_quality_attempt_trace(
                     "gate_id": "canon_quality",
                 },
                 "attempts": safe_attempts,
+                **llm_trace_metadata(safe_attempts, llm_client=self.llm_client),
                 "output_summary": {
                     "status": "failed" if error is not None else "completed",
                     "chapter_number": chapter_number,
@@ -886,7 +887,6 @@ class QualityDiagnosticsStage:
         error_category = self._error_category_from_attempts(safe_attempts, exc)
         selected_skills = summarize_skill_layers(skill_layers)
         operation_id = self._audit_operation_id()
-        model_profile = served_model_profile(safe_attempts, llm_client=self.llm_client)
         trace_payload = {
             "trace_scope": "writer",
             "stage_key": stage_key,
@@ -902,7 +902,7 @@ class QualityDiagnosticsStage:
                 writer_mode=str(getattr(self.writer, "writer_mode", "") or ""),
                 selected_skills=selected_skills,
             ),
-            "model_profile": model_profile,
+            **llm_trace_metadata(safe_attempts, llm_client=self.llm_client),
             "attempts": safe_attempts,
             "output_summary": audit_payload(
                 stage=stage_key,

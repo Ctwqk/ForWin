@@ -121,8 +121,6 @@ class OpenAICompatibleAdapter(
             self.retry_initial_delay_seconds,
             float(retry_max_delay_seconds),
         )
-        self.model_fallback_events: list[dict[str, str]] = []
-        self.llm_attempt_events: list[dict[str, object]] = []
         self._attempt_context = threading.local()
         self._client_lock = threading.Lock()
         self.client = self._build_http_client()

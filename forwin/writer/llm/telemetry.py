@@ -13,6 +13,24 @@ logger = logging.getLogger(__name__)
 
 
 class TelemetryMixin:
+    @property
+    def llm_attempt_events(self) -> list[dict[str, object]]:
+        """Pending attempts owned by this thread, across workflow/business retries.
+
+        A chat starts a new group for annotations, but only an explicit drain
+        consumes the workflow's attempts. Shared clients never expose another
+        request thread's prompts, responses, or served identity.
+        """
+        if not hasattr(self._attempt_context, "attempts"):
+            self._attempt_context.attempts = []
+        return self._attempt_context.attempts
+
+    @property
+    def model_fallback_events(self) -> list[dict[str, str]]:
+        if not hasattr(self._attempt_context, "fallbacks"):
+            self._attempt_context.fallbacks = []
+        return self._attempt_context.fallbacks
+
     def drain_model_fallback_events(self) -> list[dict[str, str]]:
         events = list(self.model_fallback_events)
         self.model_fallback_events.clear()

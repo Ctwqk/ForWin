@@ -469,7 +469,7 @@ class RuntimeContainer:
         return PublisherRuntimeService(
             session_factory=core.session_factory,
             extension_api_key=infrastructure.publisher_extension_api_key,
-            heartbeat_stale_seconds=90,
+            heartbeat_stale_seconds=infrastructure.publisher_heartbeat_stale_seconds,
             preferred_client_id=infrastructure.publisher_preferred_client_id,
             publisher_session_secret=infrastructure.publisher_session_secret,
             publisher_session_encryption_required=(

@@ -21,7 +21,7 @@ from forwin.checker.reference_classifier import (
 from forwin.llm.compat import call_chat_compat
 from forwin.models.base import new_id
 from forwin.models.entity import Entity
-from forwin.observability.llm_trace import RAW_REQUEST_KEY, RAW_RESPONSE_KEY, mark_latest_attempt_parse_failure, served_model_profile
+from forwin.observability.llm_trace import RAW_REQUEST_KEY, RAW_RESPONSE_KEY, llm_trace_metadata, mark_latest_attempt_parse_failure
 from forwin.protocol.context import EntitySnapshot
 from forwin.protocol.writer import WriterOutput
 from forwin.utils import parse_llm_json
@@ -279,7 +279,7 @@ class LLMEntityAdmissionClassifier:
                 "template_id": "naming:entity_admission", "template_version": "v1",
                 "effective_system_prompt": messages[0]["content"], "prompt_layers": messages,
                 "input_snapshot": {"project_id": project_id, "chapter_number": chapter_number},
-                "model_profile": served_model_profile(attempts, llm_client=self.llm_client),
+                **llm_trace_metadata(attempts, llm_client=self.llm_client),
                 "attempts": attempts,
             })
 

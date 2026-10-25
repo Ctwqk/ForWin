@@ -63,6 +63,9 @@ _SAFE_PROMPT_ATTEMPT_KEYS = frozenset(
         "schema_name",
         "workflow_attempt_no",
         "workflow_retry",
+        "candidate_chain",
+        "skipped_profiles",
+        "route_policy_version",
     }
 )
 
@@ -74,7 +77,8 @@ def served_model_profile(
 ) -> dict[str, str]:
     """Identify the last served (or failed) attempt, never the configured pin.
 
-    Callers that drain telemetry must pass that call's attempts explicitly.
+    The plain client's pending events are thread-local. Callers that drain
+    telemetry must pass that workflow's attempts explicitly.
     A pre-call/scaffold trace has no served model and returns an empty mapping.
     """
     if attempts is None:
@@ -97,6 +101,40 @@ def served_model_profile(
     return {}
 
 
+def llm_trace_metadata(
+    attempts: list[dict[str, object]], *, llm_client: object | None = None,
+) -> dict[str, Any]:
+    """Derive trace identity from its collected attempts, never mutable last-call state."""
+    profiles_by_group: dict[str, set[str]] = {}
+    for attempt in attempts:
+        profile_id = str(attempt.get("profile_id") or "")
+        if profile_id:
+            group = str(attempt.get("attempt_group_id") or "")
+            profiles_by_group.setdefault(group, set()).add(profile_id)
+    return {
+        "model_profile": served_model_profile(attempts, llm_client=llm_client),
+        "backend": (
+            str(getattr(llm_client, "provider", "openai_compatible") or "openai_compatible")
+            if attempts else ""
+        ),
+        # Different providers on separate business calls are not a chain fallback.
+        "fallback_used": any(len(profiles) > 1 for profiles in profiles_by_group.values()),
+    }
+
+
+def _safe_routing_profiles(value: object, *, skipped: bool) -> list[dict[str, str]]:
+    """Keep only the public scalar fields of nested routing evidence."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    keys = ("profile_id", "reason") if skipped else (
+        "profile_id", "profile_name", "model", "base_url_host", "provider_kind",
+    )
+    return [
+        {key: safe_error_summary(item[key]) for key in keys if isinstance(item.get(key), str)}
+        for item in value if isinstance(item, dict)
+    ]
+
+
 def safe_prompt_trace_attempts(
     attempts: list[dict[str, object]],
     *,
@@ -114,6 +152,16 @@ def safe_prompt_trace_attempts(
         if "error_message" in safe:
             safe["error_message"] = safe_error_summary(
                 str(safe.get("error_message") or "")
+            )
+        for key in ("candidate_chain", "skipped_profiles"):
+            if key in safe:
+                safe[key] = _safe_routing_profiles(
+                    safe[key], skipped=key == "skipped_profiles",
+                )
+        if "route_policy_version" in safe:
+            version = safe["route_policy_version"]
+            safe["route_policy_version"] = (
+                safe_error_summary(version) if isinstance(version, str) else ""
             )
         safe_attempts.append(safe)
     if not safe_attempts and exc is not None:
@@ -565,21 +613,14 @@ def build_workflow_trace(
     """Build the common trace envelope while retaining role-specific input and output fields."""
     from forwin.skills import serialize_prompt_layers
 
-    last_call_result = getattr(llm_client, "last_call_result", None) if attempts else None
-    trace = getattr(last_call_result, "trace", {}) or {}
     layers = serialize_prompt_layers(messages, [])
     return {
         "trace_scope": trace_scope, "stage_key": stage_key,
-        "backend": str(trace.get("backend") or getattr(last_call_result, "backend", "") or ""),
-        "fallback_used": bool(getattr(last_call_result, "fallback_used", False)),
+        **llm_trace_metadata(attempts, llm_client=llm_client),
         "template_id": template_id, "template_version": "v1",
         "effective_system_prompt": "\n\n".join(str(item["content"]).strip() for item in layers if item["role"] == "system"),
         "prompt_layers": layers,
         "input_snapshot": input_snapshot,
-        "model_profile": {
-            **{key: getattr(llm_client, key, "") for key in ("profile_id", "profile_name", "model", "base_url")},
-            "actual_model": getattr(last_call_result, "actual_model", "") or "",
-        },
         "attempts": attempts,
         "output_summary": output_summary,
     }

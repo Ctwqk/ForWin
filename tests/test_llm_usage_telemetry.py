@@ -152,17 +152,20 @@ def test_parse_failure_marker_mutates_the_drained_attempt(llm_client) -> None:
 
 
 def test_concurrent_client_calls_have_distinct_attempt_groups(llm_client) -> None:
-    def invoke(label: str) -> str:
-        return llm_client.chat(
+    def invoke(label: str):
+        output = llm_client.chat(
             [{"role": "user", "content": label}],
             task_family="review", stage_key="chapter_review",
         )
+        return output, llm_client.drain_llm_attempt_events()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        outputs = list(executor.map(invoke, ["first", "second"]))
-    attempts = llm_client.drain_llm_attempt_events()
+        results = list(executor.map(invoke, ["first", "second"]))
+    outputs = [output for output, _ in results]
+    attempts = [attempt for _, events in results for attempt in events]
 
     assert outputs == ["first", "second"]
+    assert llm_client.drain_llm_attempt_events() == []
     assert len(attempts) == 2
     assert len({str(item["attempt_group_id"]) for item in attempts}) == 2
     assert {item["_raw_request_payload"]["messages"][0]["content"] for item in attempts} == {"first", "second"}

@@ -251,6 +251,15 @@ def _infrastructure_env_values() -> dict[str, object]:
         "publisher_strict_preferred_client": _env_bool(
             env, "FORWIN_PUBLISHER_STRICT_PREFERRED_CLIENT", False
         ),
+        "publisher_heartbeat_stale_seconds": _env_int(
+            env, "FORWIN_PUBLISHER_HEARTBEAT_STALE_SECONDS", 90
+        ),
+        "publisher_heartbeat_monitor_interval_seconds": _env_int(
+            env, "FORWIN_PUBLISHER_HEARTBEAT_MONITOR_INTERVAL_SECONDS", 30
+        ),
+        "publisher_heartbeat_monitor_failures": _env_int(
+            env, "FORWIN_PUBLISHER_HEARTBEAT_MONITOR_FAILURES", 2
+        ),
         "http_bind": _env_str(env, "FORWIN_HTTP_BIND", "127.0.0.1"),
         "http_basic_user": _env_str(env, "FORWIN_HTTP_BASIC_USER"),
         "http_basic_password": _env_str(env, "FORWIN_HTTP_BASIC_PASSWORD"),
@@ -351,6 +360,9 @@ class _InfrastructureFields:
     publisher_login_discord_webhook_url: str = ""
     publisher_preferred_client_id: str = ""
     publisher_strict_preferred_client: bool = False
+    publisher_heartbeat_stale_seconds: int = 90
+    publisher_heartbeat_monitor_interval_seconds: int = 30
+    publisher_heartbeat_monitor_failures: int = 2
     http_bind: str = "127.0.0.1"
     http_basic_user: str = ""
     http_basic_password: str = ""

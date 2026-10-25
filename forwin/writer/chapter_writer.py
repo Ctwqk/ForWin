@@ -10,7 +10,7 @@ from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import SceneContinuation, SceneOutput, ScenePlan, is_scene_location_ref
 from forwin.protocol.writer import WriterOutput
 from forwin.skills import serialize_prompt_layers, summarize_skill_layers
-from forwin.observability.llm_trace import mark_latest_attempt_parse_failure, served_model_profile
+from forwin.observability.llm_trace import llm_trace_metadata, mark_latest_attempt_parse_failure
 from forwin.observability.context import OperationContext
 from forwin.observability.ports import NullObservability
 from forwin.writer.prompt_budget import prompt_revision_hash
@@ -976,23 +976,10 @@ class ChapterWriter:
             for item in prompt_layers
             if str(item.get("role", "")).strip() == "system"
         )
-        last_call_result = getattr(self.llm_client, "last_call_result", None)
-        trace = (
-            getattr(last_call_result, "trace", {})
-            if last_call_result is not None
-            else {}
-        )
         return {
             "trace_scope": "writer",
             "stage_key": stage_key,
-            "backend": str(
-                trace.get("backend", "")
-                or getattr(last_call_result, "backend", "")
-                or ""
-            ),
-            "fallback_used": bool(getattr(last_call_result, "fallback_used", False))
-            if last_call_result is not None
-            else False,
+            **llm_trace_metadata(attempts, llm_client=self.llm_client),
             "template_id": template_id,
             "template_version": "v1",
             "effective_system_prompt": effective_system_prompt,
@@ -1002,7 +989,6 @@ class ChapterWriter:
                 "stage_key": stage_key,
                 "selected_skills": selected_skills,
             },
-            "model_profile": served_model_profile(attempts, llm_client=self.llm_client),
             "attempts": attempts if isinstance(attempts, list) else [],
             "output_summary": {
                 **output_summary,

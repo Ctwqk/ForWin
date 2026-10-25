@@ -4,7 +4,7 @@
       const length = policy.chapter_length || {};
       return [
         policy.quality_profile || 'standard',
-        policy.model_profile_id || runtimeCatalogState?.default_model_profile_id || '环境默认模型',
+        policy.model_profile_id || '按路由 chain（不固定）',
         `${length.min_chars || 0}/${length.target_chars || 0}/${length.max_chars || 0} 字`,
       ].join(' | ');
     }
@@ -510,7 +510,7 @@
       card.appendChild(createNode('div', `RuntimePolicy v${policyVersion}`, 'task-id'));
       const badges = createNode('div', '', 'badge-row');
       badges.appendChild(createNode('span', policy.quality_profile || 'standard', 'badge ok'));
-      badges.appendChild(createNode('span', policy.model_profile_id || runtimeCatalogState?.default_model_profile_id || '环境默认模型', 'badge'));
+      badges.appendChild(createNode('span', policy.model_profile_id || '按路由 chain（不固定）', 'badge'));
       badges.appendChild(createNode('span', `Gate · ${pausePolicy.gate_delegate || 'human'}`, 'badge'));
       card.appendChild(badges);
       card.appendChild(createNode('div', `当前策略：${runtimePolicyLabel(policy)}\n下一 gate：${project.next_gate || item.generation_control?.next_gate || '-'}\n人工检查间隔：${pausePolicy.review_interval_chapters || 0}`, 'meta-line'));

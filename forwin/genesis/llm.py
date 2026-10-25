@@ -5,7 +5,7 @@ from forwin.observability.llm_trace import (
     build_llm_decision_event_payloads,
     mark_latest_attempt_parse_failure,
     prepare_prompt_trace_payload,
-    served_model_profile,
+    llm_trace_metadata,
 )
 from forwin.audit.events import (
     DecisionEventInfo,
@@ -454,21 +454,8 @@ def _trace_payload(
         for item in attempts
         if isinstance(item, dict)
     ]
-    last_call_result = getattr(self.llm_client, "last_call_result", None)
-    trace = (
-        getattr(last_call_result, "trace", {}) if last_call_result is not None else {}
-    )
-    backend = str(
-        trace.get("backend", "") or getattr(last_call_result, "backend", "") or ""
-    )
-    fallback_used = (
-        bool(getattr(last_call_result, "fallback_used", False))
-        if last_call_result is not None
-        else False
-    )
     return {
-        "backend": backend,
-        "fallback_used": fallback_used,
+        **llm_trace_metadata(llm_attempts, llm_client=self.llm_client),
         "effective_system_prompt": effective_system_prompt,
         "prompt_layers": prompt_layers
         if prompt_layers is not None
@@ -484,7 +471,6 @@ def _trace_payload(
             "messages": messages,
             "selected_skills": selected,
         },
-        "model_profile": served_model_profile(llm_attempts, llm_client=self.llm_client),
         "attempts": (llm_attempts if isinstance(llm_attempts, list) else [])
         + business_attempts,
         "output_summary": {

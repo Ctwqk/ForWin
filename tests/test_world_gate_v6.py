@@ -636,6 +636,8 @@ def test_review_policy_travel_tolerance() -> None:
 def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
 
+    from forwin.planning.beat_sheet.service import ChapterMilestoneRefs
+
     delta = GraphDelta(id="delta-3", project_id="project-1", chapter_number=3, source_type="chapter_extraction")
     calls: list[dict[str, Any]] = []
 
@@ -660,11 +662,11 @@ def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.Mo
     shared_runtime = object()
     milestone_calls: list[tuple[Any, ...]] = []
 
-    def milestone_refs(*args: Any) -> frozenset[str]:
+    def milestone_refs(*args: Any) -> ChapterMilestoneRefs:
         milestone_calls.append(args[1:])
-        return frozenset({"milestone-ref"})
+        return ChapterMilestoneRefs(frozenset({"milestone-ref"}), frozenset({("exit-ref", "state.status", "destroyed")}))
 
-    monkeypatch.setattr("forwin.planning.beat_sheet.service.milestone_refs_for_chapter", milestone_refs)
+    monkeypatch.setattr("forwin.planning.beat_sheet.service.chapter_milestone_refs", milestone_refs)
     monkeypatch.setattr(world_review.BookStateProjection, "load_runtime_as_of", lambda *args, **kwargs: shared_runtime)
     monkeypatch.setattr(world_review, "ChapterDeltaTranslator", Translator)
     monkeypatch.setattr(world_review, "BookStateReviewGate", Gate)
@@ -699,7 +701,8 @@ def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.Mo
     ]
     assert calls == [{"approved_by": ["chapter_extraction"], "base_chapter": 2,
                       "travel_tolerance": 0.35, "runtime": shared_runtime,
-                      "milestone_refs": frozenset({"milestone-ref"})}]
+                      "milestone_refs": frozenset({"milestone-ref"}),
+                      "planned_endings": frozenset({("exit-ref", "state.status", "destroyed")})}]
     assert milestone_calls == [("project-1", 3)]
 
 

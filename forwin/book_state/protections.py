@@ -168,13 +168,15 @@ def delta_boundary_violations(
     *,
     chapter: int,
     milestone_refs: frozenset[str] = frozenset(),
+    planned_endings: frozenset[tuple[str, str, str]] = frozenset(),
 ) -> list[DeltaBoundaryViolation]:
     """The protections in force in ``chapter`` that ``delta`` breaks, then the milestone refs it ends.
 
     A state protection compares its guarded value before the delta with the value after the delta's non-create
     node patches of its ref. A must_not_know protection is broken by a knowledge tag, flashback or not, in which its
     observer comes to know or believe its fact, as the tag's fact or the secret the tag touches. A milestone ref is
-    broken only by ending it, a death or an ended status: milestones expect their refs to change otherwise.
+    broken only by ending it, a death or an ended status: milestones expect their refs to change otherwise. An ending
+    in ``planned_endings``, as (ref, state path, value), is the plan's own goal and breaks nothing.
     """
     tags = [tag for tag in delta.metadata.get("knowledge_tags") or [] if isinstance(tag, dict)]
     violations = []
@@ -197,7 +199,7 @@ def delta_boundary_violations(
     for ref in sorted(milestone_refs):
         for path in (_ALIVE_PATH, _STATUS_PATH):
             old, new, evidence = _fold(runtime, delta, ref, path)
-            if _ends(path, old, new):
+            if _ends(path, old, new) and (ref, path, new) not in planned_endings:
                 violations.append(DeltaBoundaryViolation(
                     protection_node_id="", milestone_ref=ref, kind=MILESTONE_KIND, ref=ref, observer_ref="",
                     fact_ref="", field=path, value=new, until_chapter=OPEN_PROTECTION_UNTIL,

@@ -125,6 +125,40 @@ def test_delta_respects_kept_states_weak_knowledge_and_expired_protections(prote
     assert _violations(protection, delta, *extra) == []
 
 
+def test_planned_ending_is_not_a_milestone_violation():
+    kill = _delta(_patch("b", "state.alive_status", "dead"),
+                  _patch("g", "state.status", "disbanded", node_type="group"))
+    runtime = _runtime()
+
+    def ended(planned_endings):
+        return [(v.ref, v.value) for v in delta_boundary_violations(
+            runtime, kill, chapter=4, milestone_refs=frozenset({"b", "g"}), planned_endings=planned_endings,
+        )]
+
+    assert ended(frozenset()) == [("b", "dead"), ("g", "disbanded")]
+    # The exit state's own ending is the arc's goal; another ending of an exit-state ref still counts.
+    assert ended(frozenset({("b", "state.alive_status", "dead"), ("g", "state.status", "destroyed")})) == [
+        ("g", "disbanded"),
+    ]
+    assert ended(frozenset({("b", "state.alive_status", "dead"), ("g", "state.status", "disbanded")})) == []
+
+
+def test_protected_refs_read_shared_protections():
+    from forwin.world_engine.tick_nodes import protected_refs
+
+    runtime = _runtime()
+    runtime.narrative.nodes_by_id = {node.id: node for node in (
+        _protection("must_be_alive", until_chapter=0).model_copy(update={"id": "open"}),
+        _protection("must_hold_state", "item", field="holder_id", value="a").model_copy(update={"id": "held"}),
+        _protection("must_exist", "f", status="released").model_copy(update={"id": "released"}),
+        _protection("must_exist", "g", until_chapter=3).model_copy(update={"id": "expired"}),
+        _protection("must_not_know", "b", observer_ref="b", fact_ref="secret").model_copy(update={"id": "knowledge"}),
+    )}
+
+    assert protected_refs(runtime, next_chapter=4) == ["a", "item"]
+    assert protected_refs(runtime, next_chapter=5) == ["a"]
+
+
 def test_active_protections_read_each_payload_once():
     nodes = [
         _protection("must_be_alive", until_chapter=0).model_copy(update={"id": "open"}),

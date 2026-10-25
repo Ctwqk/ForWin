@@ -14,6 +14,7 @@ from forwin.book_state.reviewer import BookStateReviewIssue, BookStateReviewVerd
 from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
 from forwin.generation.pipeline_core.repair_patches import _current_chapter_repair_experience_plan
 from forwin.naming import EntityAdmissionPlan
+from forwin.planning.beat_sheet.service import ChapterMilestoneRefs
 from forwin.protocol.book_state import FactNode, MapNode, WorldNode
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.review import world_consistency
@@ -66,7 +67,7 @@ def _review(monkeypatch, code, related_refs=None):
     )
     # Only the database-backed milestone lookup and translation/gate boundary are substituted; topic
     # construction, reviewer rendering, repair instructions, overlays and writer builders all run normally.
-    monkeypatch.setattr(world_consistency, "milestone_refs_for_chapter", lambda *args: frozenset())
+    monkeypatch.setattr(world_consistency, "chapter_milestone_refs", lambda *args: ChapterMilestoneRefs())
     monkeypatch.setattr(world_consistency, "review_chapter_extraction", lambda *args, **kwargs: ChapterWorldReview(
         translation=translation, gate=gate,
     ))

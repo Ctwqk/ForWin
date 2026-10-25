@@ -50,6 +50,8 @@ _PARSER_NAME = "ArcBeatSheet JSON parser"
 # Story minutes the world digest looks ahead per arc chapter: one day.
 _DIGEST_MINUTES_PER_CHAPTER = 24 * 60
 _OUTPUT_SCHEMA = ArcBeatSheetData.model_json_schema()
+# The state fields an exit-state item ends a ref with: its alive status (death) or its status (an ended status).
+_ENDING_FIELDS = frozenset({"alive_status", "status"})
 _ALLOWED = {
     "protection_kind": list(PROTECTION_KINDS),
     "reveal_target_state": list(KNOWLEDGE_STATES),
@@ -525,6 +527,46 @@ def milestone_refs_for_chapter(session: Session, project_id: str, chapter_number
     return frozenset(refs)
 
 
+@dataclass(frozen=True)
+class ChapterMilestoneRefs:
+    """What a chapter's text may not end, and the endings the plan itself sets."""
+
+    refs: frozenset[str] = frozenset()
+    # (ref, state path, value) of the exit state's alive-status and status items; an ending among them is the goal.
+    planned_endings: frozenset[tuple[str, str, str]] = frozenset()
+
+
+def chapter_milestone_refs(session: Session, project_id: str, chapter_number: int) -> ChapterMilestoneRefs:
+    """The refs chapter ``chapter_number``'s text may not end: strictly future hard milestones', plus the current
+    arc's exit-state refs.
+
+    A milestone whose range already includes the chapter may be under way in it, so its refs may change. An
+    exit-state item that sets the alive status or the status is a planned ending, unless a future milestone still
+    needs its ref.
+    """
+    future: set[str] = set()
+    exit_refs: set[str] = set()
+    endings: set[tuple[str, str, str]] = set()
+    repo = ArcBeatSheetRepository(session)
+    for row in repo.active_for_project(project_id):
+        data = repo.load(row)
+        for milestone in data.milestones:
+            if milestone.hard and milestone.target_range[0] > chapter_number:
+                future.update(milestone.required_refs)
+        arc = session.get(ArcPlanVersion, row.arc_plan_id)
+        if arc is None or not arc.chapter_start <= chapter_number <= arc.chapter_end:
+            continue
+        for item in data.exit_state:
+            exit_refs.add(item.ref)
+            field = item.field.strip().removeprefix("state.")
+            if field in _ENDING_FIELDS and isinstance(item.value, str):
+                endings.add((item.ref, f"state.{field}", item.value))
+    return ChapterMilestoneRefs(
+        refs=frozenset(future | exit_refs),
+        planned_endings=frozenset(ending for ending in endings if ending[0] not in future),
+    )
+
+
 def band_breakdown_issues(bands: Sequence[BandSpan], chapter_start: int, chapter_end: int) -> list[str]:
     """Bands cover the arc in order; each spans MIN-MAX chapters, or one band covers an arc shorter than MIN."""
     issues = _coverage_issues(
@@ -629,4 +671,12 @@ def _reveal_candidates(project_id: str, pack: Mapping[str, Any], runtime: BookSt
     return result
 
 
-__all__ = ["STAGE_KEY", "ArcBeatSheetService", "band_breakdown_issues", "beat_sheet_issues", "milestone_refs_for_chapter"]
+__all__ = [
+    "STAGE_KEY",
+    "ArcBeatSheetService",
+    "ChapterMilestoneRefs",
+    "band_breakdown_issues",
+    "beat_sheet_issues",
+    "chapter_milestone_refs",
+    "milestone_refs_for_chapter",
+]

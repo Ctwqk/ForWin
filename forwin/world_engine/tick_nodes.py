@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from forwin.book_state.lexicon import BookLexicon
-from forwin.book_state.narrative import RELEASED_PROTECTION_STATUS
+from forwin.book_state.protections import active_protections
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.book_state.schema import IMPACT_LEVELS
 from forwin.book_state.story_clock import StoryCalendar
@@ -189,19 +189,10 @@ def unavailable(*, intents: Sequence[WorldNode] = (), actor_ids: Sequence[str] =
 
 def protected_refs(runtime: BookStateRuntime, *, next_chapter: int) -> list[str]:
     """The refs active protections guard in ``next_chapter``: an actor may not touch them and is not told why."""
-    refs: set[str] = set()
-    for node in runtime.narrative.nodes_by_id.values():
-        if node.node_type != "review_constraint" or node.status != "active":
-            continue
-        if node.payload.get("status") == RELEASED_PROTECTION_STATUS or node.payload.get("kind") == "must_not_know":
-            continue
-        until = node.payload.get("until_chapter", 0)
-        if type(until) is int and until != 0 and until < next_chapter:
-            continue
-        ref = str(node.payload.get("ref") or "").strip()
-        if ref:
-            refs.add(ref)
-    return sorted(refs)
+    return sorted({
+        protection.ref for protection in active_protections(runtime, chapter=next_chapter)
+        if protection.kind != "must_not_know"
+    })
 
 
 def actor_safe_vetoes(rows: Sequence[WorldPlanConflictRow]) -> list[WorldPlanConflictRow]:

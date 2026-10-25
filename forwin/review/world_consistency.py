@@ -15,7 +15,7 @@ from forwin.book_state.extraction.evidence import (
 from forwin.book_state.extraction.world_review import review_chapter_extraction
 from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
-from forwin.planning.beat_sheet.service import milestone_refs_for_chapter
+from forwin.planning.beat_sheet.service import chapter_milestone_refs
 from forwin.protocol.book_state import ObserverType
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
@@ -97,6 +97,7 @@ class WorldConsistencyReviewer:
             ))
         # Without a current admission plan the entity admission signal already fails the candidate.
         elif (admission_plan := _current_admission_plan(writer_output, generation_meta)) is not None:
+            milestones = chapter_milestone_refs(session, project_id, chapter_number)
             world = review_chapter_extraction(
                 session,
                 project_id=project_id,
@@ -105,7 +106,8 @@ class WorldConsistencyReviewer:
                 admission_plan=admission_plan,
                 chapter_summary=writer_output.end_of_chapter_summary,
                 travel_tolerance=travel_tolerance,
-                milestone_refs=milestone_refs_for_chapter(session, project_id, chapter_number),
+                milestone_refs=milestones.refs,
+                planned_endings=milestones.planned_endings,
             )
             names = world.names
             fact_topics = world.translation.fact_topics

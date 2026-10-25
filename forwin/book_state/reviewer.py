@@ -84,11 +84,13 @@ class BookStateReviewGate:
         travel_tolerance: float = DEFAULT_TRAVEL_TOLERANCE,
         runtime: BookStateRuntime | None = None,
         milestone_refs: frozenset[str] = frozenset(),
+        planned_endings: frozenset[tuple[str, str, str]] = frozenset(),
     ) -> BookStateReviewVerdict:
         """Review each delta against the runtime as of ``base_chapter``.
 
         ``milestone_refs`` are the refs later hard milestones and the arc's exit state need, which a chapter's
-        delta may not end; the caller computes them from the beat sheets.
+        delta may not end unless the ending is in ``planned_endings`` (ref, state path, value); the caller computes
+        both from the beat sheets.
         """
         if base_chapter is None:
             base_chapter = self.projection.repo.compile_base_chapter(
@@ -113,7 +115,7 @@ class BookStateReviewGate:
                 issues.extend(
                     _ChapterExtractionChecks(
                         self.session, runtime, delta, travel_tolerance=travel_tolerance,
-                        milestone_refs=milestone_refs,
+                        milestone_refs=milestone_refs, planned_endings=planned_endings,
                     ).run()
                 )
             else:
@@ -354,12 +356,14 @@ class _ChapterExtractionChecks:
         *,
         travel_tolerance: float,
         milestone_refs: frozenset[str] = frozenset(),
+        planned_endings: frozenset[tuple[str, str, str]] = frozenset(),
     ) -> None:
         self.session = session
         self.runtime = runtime
         self.delta = delta
         self.tolerance = travel_tolerance
         self.milestone_refs = milestone_refs
+        self.planned_endings = planned_endings
         self.movements = _records(delta.metadata.get("movements"))
         self.knowledge_tags = _records(delta.metadata.get("knowledge_tags"))
         self.item_transfers = _records(delta.metadata.get("item_transfers"))
@@ -695,6 +699,7 @@ class _ChapterExtractionChecks:
         """
         for violation in delta_boundary_violations(
             self.runtime, self.delta, chapter=self.delta.chapter_number, milestone_refs=self.milestone_refs,
+            planned_endings=self.planned_endings,
         ):
             if violation.kind == MILESTONE_KIND:
                 self._issue(

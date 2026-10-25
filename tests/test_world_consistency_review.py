@@ -343,6 +343,52 @@ def test_milestone_ref_from_the_beat_sheet_names_the_entity_only() -> None:
     engine.dispose()
 
 
+def test_only_endings_that_contradict_the_plan_are_milestone_violations() -> None:
+    from sqlalchemy import select
+
+    from forwin.models.project import ArcPlanVersion
+    from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+    from forwin.planning.beat_sheet.types import ArcBeatSheetData
+
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    kill_rival = _output(world, {"entity_changes": [
+        {"ref": world.rival, "field": "alive_status", "new_value": "dead", "evidence": "e"},
+    ]})
+
+    def review_with_sheet(*milestone_ranges: tuple[int, int]) -> list[tuple[str, str]]:
+        with Session.begin() as session:
+            arc = session.scalars(select(ArcPlanVersion).where(
+                ArcPlanVersion.project_id == world.project_id, ArcPlanVersion.arc_number == 1)).one()
+            ArcBeatSheetRepository(session).create(world.project_id, arc.id, ArcBeatSheetData(
+                protagonist_ref=world.hero, phases=[], band_breakdown=[],
+                milestones=[{"id": f"m-{start}", "description": "d", "target_range": [start, end],
+                             "required_refs": [world.rival], "hard": True} for start, end in milestone_ranges],
+                # The arc ends with the rival dead.
+                exit_state=[{"ref": world.rival, "field": "state.alive_status", "value": "dead"},
+                            {"ref": world.hero, "field": "location_id", "value": world.loc(2)}],
+            ), source="llm", reason="test")
+        return _codes(_world_review(Session, world, kill_rival))
+
+    # The exit state's own ending is the arc's goal; a milestone whose range includes the chapter may be under way.
+    assert review_with_sheet() == []
+    assert review_with_sheet((1, 3)) == []
+    # A strictly future hard milestone still needs the rival.
+    assert review_with_sheet((1, 3), (2, 4)) == [("milestone_ref_ended", "error")]
+    verdict = _world_review(Session, world, kill_rival)
+    assert verdict.issues[0].original_result["boundary"]["impact_level"] == "critical"
+    # The hero's exit state is not an ending, so ending the hero still counts.
+    kill_hero = _output(world, {"entity_changes": [
+        {"ref": world.hero, "field": "alive_status", "new_value": "dead", "evidence": "e"},
+    ]})
+    assert _codes(_world_review(Session, world, kill_hero)) == [("milestone_ref_ended", "error")]
+    # Inside a milestone's range a protection still guards the ref.
+    review_with_sheet((1, 3))
+    _commit_protection(Session, world, ref=world.rival, kind="must_be_alive")
+    assert _codes(_world_review(Session, world, kill_rival)) == [("protection_violated", "error")]
+    engine.dispose()
+
+
 def test_protection_fix_covers_every_kind_and_masks_missing_names() -> None:
     from forwin.book_state.narrative import PROTECTION_KINDS
     from forwin.writer.prompt_core.world_view import UNNAMED_ACTOR_LABEL, UNNAMED_FACT_TOPIC

@@ -191,7 +191,7 @@ def test_chapter_conflict_draft_fields() -> None:
     assert (draft.intent_ref, draft.actor_ref) == ("", "")
     assert draft.proposed_change == {
         "kind": "chapter_boundary", "chapter": CHAPTER, "boundary": asdict(protection), "candidate_id": "candidate-1",
-        "detected_by": "draft_review", "names": {},
+        "detected_by": "draft_review", "names": {}, "safe_evidence": "",
     }
     assert (milestone_draft.violated, milestone_draft.impact_level) == ("milestone", "critical")
     assert milestone_draft.origin_key == f"chapter_extraction:{CHAPTER}:milestone:{SHADOW}"

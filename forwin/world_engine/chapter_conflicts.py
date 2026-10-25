@@ -27,6 +27,7 @@ from forwin.book_state.reviewer import BookStateReviewVerdict
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.generation.gate_delegation import GateAuditWriter
 from forwin.models.world_conflict import WorldPlanConflictRow
+from forwin.planning.fact_text import states_proposition
 from forwin.protocol.book_state import ObserverType
 from forwin.protocol.review import ReviewVerdict
 from forwin.runtime.policy import RuntimePolicy
@@ -85,6 +86,7 @@ def chapter_conflict_draft(
     story_time: int,
     candidate_id: str = "",
     names: Mapping[str, str] | None = None,
+    safe_evidence: str = "",
     detected_by: str = DRAFT_REVIEW_DETECTION,
 ) -> ConflictDraft:
     """The conflict for a boundary chapter ``chapter_number``'s text still breaks, as ``detected_by`` found it.
@@ -105,9 +107,27 @@ def chapter_conflict_draft(
         proposed_change={
             "kind": CHAPTER_BOUNDARY_CHANGE, "chapter": chapter_number, "boundary": asdict(v),
             "candidate_id": candidate_id, "detected_by": detected_by, "names": dict(names or {}),
+            "safe_evidence": safe_evidence,
         },
         blocks_from_chapter=chapter_number,
     )
+
+
+def boundary_evidence(runtime: BookStateRuntime, violation: DeltaBoundaryViolation) -> str:
+    """Project evidence for the card using fact topics and neutral concealed names.
+
+    A quote stating a proposition is replaced by its topics; raw evidence stays in the boundary for inspection.
+    """
+    evidence = violation.evidence
+    topics = [forbidden_topic_text(_subject_names(runtime, fact))
+              for fact in runtime.world.facts_by_id.values() if states_proposition(evidence, fact.proposition)]
+    if topics:
+        evidence = "; ".join(dict.fromkeys(topics))
+    concealed = {node.name for node in runtime.world.nodes_by_id.values()
+                 if node.name and is_concealed(runtime.world, node)}
+    for name in sorted(concealed, key=len, reverse=True):
+        evidence = evidence.replace(name, UNNAMED_ACTOR_LABEL)
+    return evidence
 
 
 def boundary_names(runtime: BookStateRuntime, violation: DeltaBoundaryViolation) -> dict[str, str]:
@@ -257,6 +277,7 @@ class ChapterConflictRecorder:
             draft = chapter_conflict_draft(
                 violation, project_id=project_id, chapter_number=chapter_number, story_time=story_time,
                 candidate_id=candidate_id, names=boundary_names(runtime, violation), detected_by=detected_by,
+                safe_evidence=boundary_evidence(runtime, violation),
             )
             drafts.setdefault(draft.origin_key, draft)
         return list(drafts.values())

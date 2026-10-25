@@ -173,3 +173,23 @@ def test_drawer_shows_a_world_conflicts_held_change_by_visibility(page, browser_
     # A world conflict's options keep their tokens.
     row.get_by_role("button", name="决定", exact=True).click()
     expect(page.locator("#project_control_action_field_option option")).to_have_text(["veto_world", "amend_plan"])
+
+
+@pytest.mark.parametrize("evidence", [
+    "Shadow-Name explains PROPOSITION-OF-THE-SECRET under Concealed-Rule.",
+    "The observer reads a sealed letter.",
+], ids=["sensitive", "harmless"])
+def test_chapter_conflict_card_uses_safe_evidence(page, browser_test_base_url, monkeypatch, evidence):
+    from tests.browser.fixtures import sample_chapter_conflict
+    from tests.test_chapter_conflict_resume_safety import _draft
+
+    conflict = sample_chapter_conflict()
+    conflict["proposed_change"] = _draft(monkeypatch, evidence).proposed_change
+    backend = MockForWinBackend(world_plan_conflicts=[conflict])
+    goto_home(page, browser_test_base_url, backend)
+    switch_home_tab(page, "task")
+    page.get_by_role("button", name="查看详情").first.click()
+    card = page.locator("#world_conflicts_card")
+    for sensitive in ("Shadow-Name", "PROPOSITION-OF-THE-SECRET", "Concealed-Rule"):
+        expect(card).not_to_contain_text(sensitive)
+    expect(card).to_contain_text(conflict["proposed_change"]["safe_evidence"])

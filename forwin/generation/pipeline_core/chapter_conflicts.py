@@ -116,8 +116,13 @@ class ChapterConflicts:
             "context": self.context, "writer_output": writer_output,
         }
         rewrites = [row for row in pending if _decided_option(row) == "rewrite_chapter"]
-        resumed = (self.stage.repair.repair_world_conflict(**helpers, conflicts=rewrites) if rewrites
-                   else self.stage.repair.review_candidate(**helpers))
+        if rewrites:
+            resumed = self.stage.repair.repair_world_conflict(**helpers, conflicts=rewrites)
+        else:
+            self.stage._emit_progress(
+                "stage_changed", stage="continuity_review", project_id=project_id, current_chapter=chapter_number,
+            )
+            resumed = self.stage.repair.review_candidate(**helpers)
         candidate = candidates.latest_for_chapter(project_id=project_id, chapter_number=chapter_number)
         # Lock order: the conflict rows come before the chapter plan the review just wrote.
         session.commit()

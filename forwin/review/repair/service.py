@@ -668,6 +668,7 @@ def _repair_world_conflict(
         current_review_trace_id="",
         current_review_event=current_review_event,
         repair_phase=WORLD_CONFLICT_REPAIR_PHASE,
+        world_conflict_ids=tuple(sorted(conflict.id for conflict in conflicts)),
     )
 
 
@@ -688,6 +689,7 @@ def _run_repair_loop_for_phase(
     current_review_trace_id: str,
     current_review_event,
     repair_phase: str,
+    world_conflict_ids: tuple[str, ...] = (),
 ) -> tuple[WriterOutput, ReviewVerdict, bool]:
     historical_attempts = repo.list_chapter_rewrite_attempts(
         project_id, chapter_plan.chapter_number
@@ -707,6 +709,11 @@ def _run_repair_loop_for_phase(
             repair_cycle_root_draft_id,
         )
         phase_attempts = _attempts_for_repair_phase(cycle_attempts, repair_phase)
+        if world_conflict_ids:
+            # A decided conflict authorizes one pass; retries of that decision share its budget.
+            phase_attempts = [attempt for attempt in phase_attempts if tuple(sorted(
+                json.loads(attempt.design_patch_json or "{}").get("world_conflict_ids", []),
+            )) == world_conflict_ids]
         phase_rewrite_limit = self.policy.review.effective_rewrite_limit(
             has_blocking_issue=any(
                 issue.blocking for issue in current_review.issues
@@ -831,6 +838,8 @@ def _run_repair_loop_for_phase(
             repair_scope=repair_scope,
             repair_instruction=repair_instruction,
         )
+        if world_conflict_ids:
+            design_patch = {**design_patch, "world_conflict_ids": list(world_conflict_ids)}
         if any(repair_model_preference.values()):
             design_patch = {
                 **design_patch,

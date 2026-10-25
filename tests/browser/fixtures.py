@@ -1201,6 +1201,7 @@ def sample_chapter_conflict(
             "candidate_id": f"candidate-{chapter_number}",
             "detected_by": "draft_review",
             "names": {"hero": "林夜"},
+            "safe_evidence": "林夜倒在雾港码头。",
             "boundary": {
                 "protection_node_id": "protection-1",
                 "milestone_ref": "",

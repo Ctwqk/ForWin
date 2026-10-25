@@ -536,11 +536,11 @@
       const change = conflict.proposed_change || {};
       const boundary = change.boundary;
       if (isChapterConflict(conflict) && boundary && typeof boundary === 'object') {
-        // Names only: the server names concealed entities neutrally and never sends a fact's proposition.
+        // Render only the server projection; the boundary retains raw author inspection data.
         const names = change.names || {};
         const until = Number(boundary.until_chapter || 0);
         row.appendChild(createNode('div', `保护类型：${boundary.kind || '未知'} | 引用名：${names[boundary.ref] || UNNAMED_ENTITY_LABEL} | until_chapter：${until ? `第 ${until} 章` : '未设截止'}`, 'meta-line'));
-        if (boundary.evidence) row.appendChild(createNode('div', `证据引文：「${boundary.evidence}」`, 'meta-line'));
+        if (change.safe_evidence) row.appendChild(createNode('div', `证据引文：「${change.safe_evidence}」`, 'meta-line'));
         return;
       }
       const events = Array.isArray(change.effects?.events) ? change.effects.events : [];

@@ -439,9 +439,16 @@ def _gate_error_codes() -> set[str]:
             severity, code = keywords.get("severity"), keywords.get("code")
         else:
             continue
-        if isinstance(severity, ast.Constant) and severity.value == "error" and isinstance(code, ast.Constant):
-            codes.add(code.value)
+        # A conditional severity or code (``"error" if hard else "warning"``) counts each constant branch.
+        if "error" in _constant_branches(severity):
+            codes.update(_constant_branches(code))
     return codes
+
+
+def _constant_branches(node) -> set:
+    if isinstance(node, ast.IfExp):
+        return _constant_branches(node.body) | _constant_branches(node.orelse)
+    return {node.value} if isinstance(node, ast.Constant) else set()
 
 
 def test_every_gate_error_code_has_a_repair_fix() -> None:

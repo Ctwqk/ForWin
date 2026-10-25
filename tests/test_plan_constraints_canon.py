@@ -329,7 +329,7 @@ def test_replay_routes_plan_constraints_without_tick_conflicts(monkeypatch):
     ])
     replacement = object.__new__(HistoricalCanonReplacement)
     replacement.plan = SimpleNamespace(chapter_number=2)
-    replacement.dropped_tick_refs = {}
+    replacement.vanished_refs = {}
     dropped = []
     monkeypatch.setattr(replacement, "_drop_world_tick_delta", lambda *args: dropped.append(args))
     compiler = BookStateCompiler(None)

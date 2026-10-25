@@ -741,19 +741,8 @@ class ConflictResolutionService:
         The held change was checked against the canon of its tick; earlier resolutions or a rewrite may
         have changed it since. A veto changes nothing that can fail.
         """
-        from .tick import _chapter_onstage_refs
-
-        deltas = BookStateRepository(self.session).list_graph_deltas(
-            conflict.project_id, after_chapter=context.chapter_number - 1, through_chapter=context.chapter_number,
-        )
-        chapter = next((delta for delta in reversed(deltas) if delta.source_type == CHAPTER_EXTRACTION_SOURCE_TYPE), None)
-        check = RunningStateCheck(
-            self.session, context=context, runtime=runtime,
-            lexicon=BookLexiconRepository(self.session).get(conflict.project_id),
-            calendar=StoryCalendarRepository(self.session).get(conflict.project_id),
-            tick_id=tick_id, travel_tolerance=self.policy.review.travel_tolerance,
-            onstage_refs=_chapter_onstage_refs(self.session, conflict.project_id, context.chapter_number, chapter),
-            chapter_delta=chapter,
+        check = canon_running_check(
+            self.session, conflict.project_id, context=context, runtime=runtime, policy=self.policy, tick_id=tick_id,
         )
         for candidate in candidates:
             issues = check.admit(candidate)
@@ -811,6 +800,36 @@ class ConflictResolutionService:
         return outcome.graph_delta_ids, warnings
 
 
+def canon_running_check(
+    session: Session,
+    project_id: str,
+    *,
+    context: TickContext,
+    runtime: BookStateRuntime,
+    policy: RuntimePolicy,
+    tick_id: str,
+) -> RunningStateCheck:
+    """The running-state check a held change passes against the latest canon chapter before it commits (Ruling P30).
+
+    ``runtime`` and ``context`` are that chapter's; the chapter's onstage cast and moves bound the check as
+    they bound its tick.
+    """
+    from .tick import _chapter_onstage_refs
+
+    deltas = BookStateRepository(session).list_graph_deltas(
+        project_id, after_chapter=context.chapter_number - 1, through_chapter=context.chapter_number,
+    )
+    chapter = next((delta for delta in reversed(deltas) if delta.source_type == CHAPTER_EXTRACTION_SOURCE_TYPE), None)
+    return RunningStateCheck(
+        session, context=context, runtime=runtime,
+        lexicon=BookLexiconRepository(session).get(project_id),
+        calendar=StoryCalendarRepository(session).get(project_id),
+        tick_id=tick_id, travel_tolerance=policy.review.travel_tolerance,
+        onstage_refs=_chapter_onstage_refs(session, project_id, context.chapter_number, chapter),
+        chapter_delta=chapter,
+    )
+
+
 def _in_transaction_block(session: Session) -> bool:
     """Whether the session runs inside a ``begin()`` context or a SAVEPOINT, where a commit is refused."""
     # SQLAlchemy keeps the begin() context it is in on the session; it has no public accessor for it.
@@ -846,6 +865,7 @@ __all__ = [
     "ConflictStale",
     "OptionSideEffects",
     "PropagatedNews",
+    "canon_running_check",
     "conflict_resolved_event",
     "next_tick_minute",
     "option_candidates",

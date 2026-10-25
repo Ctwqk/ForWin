@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -47,7 +47,7 @@ from forwin.world_engine.conflict_events import (
 )
 from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.world_engine.superseded_resolutions import supersede_resolutions
-from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE
+from forwin.world_engine.types import TICK_ID_PREFIX, WORLD_ENGINE_SOURCE_TYPE
 from forwin.book_state.narrative import (
     PLAN_CONSTRAINT_SOURCE_TYPE, PROTECTION_STATUS_PATH, RELEASED_PROTECTION_STATUS,
 )
@@ -133,17 +133,35 @@ def _patch_ref(patch: object) -> str:
 
 
 def _created_refs(delta: GraphDelta) -> list[str]:
-    """The world and narrative nodes, edges and facts a delta creates."""
+    """The world, map and narrative nodes, edges and facts a delta creates."""
     return [
         *(patch.node_id for patch in delta.node_patches if str(patch.op) == "create"),
         *(patch.target_ref for patch in delta.narrative_patches if str(patch.op) == "create"),
         *(patch.edge_id for patch in delta.edge_patches if str(patch.op) == "create"),
+        *(patch.target_id for patch in delta.map_patches if str(patch.op) == "create"),
         *(
             f"{FACT_REF_PREFIX}{patch.fact_id}"
             for patch in delta.fact_patches
             if str(patch.op) == "create"
         ),
     ]
+
+
+def _is_world_tick_delta(delta: GraphDelta) -> bool:
+    """A world step's tick delta; a direct resolve's ("conflict-") is not one."""
+    return delta.source_type == WORLD_ENGINE_SOURCE_TYPE and str(
+        delta.metadata.get("tick_id") or ""
+    ).startswith(TICK_ID_PREFIX)
+
+
+@dataclass(frozen=True)
+class VanishedRef:
+    """A ref the rewrite removed from canon, and the delta that had created it."""
+
+    ref: str
+    # The replaced chapter's contribution created it, or a tick delta the rewrite dropped or retired.
+    origin: Literal["retired_contribution", "dropped_tick"]
+    delta_id: str
 
 
 def _read_refs(delta: GraphDelta) -> list[str]:
@@ -413,8 +431,11 @@ class HistoricalCanonReplacement:
     retained_delta_ids: list[str]
     ordered_deltas: list[GraphDelta]
     replayed_chapters: list[int] = field(default_factory=list)
-    # Refs that dropped tick deltas created, each with the dropped delta's id.
-    dropped_tick_refs: dict[str, str] = field(default_factory=dict)
+    # Refs that are gone once the rewrite lands: created by the replaced chapter's
+    # contribution and not by its replacement, or by a tick delta the rewrite took out.
+    vanished_refs: dict[str, VanishedRef] = field(default_factory=dict)
+    # The rewritten latest chapter's ticks, retired so that its world step ticks it again.
+    retired_tick_ids: list[str] = field(default_factory=list)
 
     def retire_old_contribution(self) -> None:
         repo = BookStateRepository(self.session)
@@ -442,6 +463,7 @@ class HistoricalCanonReplacement:
         *,
         compiler: BookStateCompiler,
     ) -> BookStateCompileResult:
+        self._record_retired_contribution_refs()
         if self.retained_delta_ids:
             compile_result = self._replay_retained_chapter_deltas(
                 compile_result,
@@ -461,6 +483,27 @@ class HistoricalCanonReplacement:
         )
         return compile_result
 
+    def _record_retired_contribution_refs(self) -> None:
+        """What the replaced chapter created and its replacement does not create again.
+
+        Extraction ids are content-stable, so a rewrite that keeps an entity, fact
+        or relation creates the same id again; only refs that are really gone vanish.
+        """
+        retired_ids = set(self.retired_delta_ids)
+        recreated = {
+            ref
+            for delta in self.plan.approved_book_state_changes.graph_deltas
+            for ref in _created_refs(delta)
+        }
+        for delta in self.ordered_deltas:
+            if delta.id not in retired_ids:
+                continue
+            for ref in _created_refs(delta):
+                if ref not in recreated:
+                    self.vanished_refs.setdefault(
+                        ref, VanishedRef(ref, "retired_contribution", delta.id)
+                    )
+
     def _replay_retained_chapter_deltas(
         self,
         compile_result: BookStateCompileResult,
@@ -468,7 +511,10 @@ class HistoricalCanonReplacement:
         delta_ids: list[str],
         compiler: BookStateCompiler,
     ) -> BookStateCompileResult:
-        """Restore retained edits and ticks after the replacement contribution."""
+        """Restore retained edits and ticks after the replacement contribution.
+
+        A rewritten latest chapter's ticks are retired instead: its world step ticks it again.
+        """
         repo = BookStateRepository(self.session)
         project_id = compile_result.project_id
         chapter_number = compile_result.chapter_number
@@ -517,6 +563,12 @@ class HistoricalCanonReplacement:
         ]
         if {delta.id for delta in deltas} != retained_ids:
             raise ValueError("historical rewrite delta manifest missing or invalid")
+        if self.through_chapter == self.plan.chapter_number:
+            # The latest chapter's tick reasoned on the replaced text: its world step ticks again.
+            for delta in deltas:
+                if _is_world_tick_delta(delta):
+                    self._retire_for_retick(delta)
+            deltas = [delta for delta in deltas if not _is_world_tick_delta(delta)]
         deltas = self._replay(runtime, deltas, compiler=compiler)
         provisional_world = self.session.get(
             WorldSnapshotRow, compile_result.world_snapshot_id
@@ -666,49 +718,125 @@ class HistoricalCanonReplacement:
 
         A world tick's delta read the canon it ran on, so it is checked against
         the replayed runtime the way the compiler checks a new delta. A delta
-        that reads what a dropped tick delta created cannot replay either: a
-        tick is dropped as well, any other delta aborts the rewrite.
+        that reads a vanished ref cannot replay either: a tick is dropped as
+        well, any other delta aborts the rewrite. Any other delta whose recorded
+        values the replayed runtime no longer holds replays as recorded, and the
+        drift is recorded.
         """
         replayed = []
         for delta in deltas:
-            dependency = self._dropped_tick_dependency(delta)
             if delta.source_type == PLAN_CONSTRAINT_SOURCE_TYPE:
                 delta = _rebase_plan_constraints(runtime, delta, rewritten_chapter=self.plan.chapter_number)
             elif delta.source_type == WORLD_ENGINE_SOURCE_TYPE:
                 mismatches = compiler.cas_mismatches(runtime, delta)
-                if mismatches or dependency is not None:
-                    self._drop_world_tick_delta(delta, mismatches, dependency)
+                vanished = self._vanished_dependency(delta)
+                if mismatches or vanished is not None:
+                    self._drop_world_tick_delta(delta, mismatches, vanished)
                     continue
-            elif dependency is not None:
-                ref, dropped_id = dependency
+            elif (vanished := self._vanished_dependency(delta)) is not None:
                 raise HistoricalRewriteInvalid(
-                    f"historical rewrite dropped world tick delta {dropped_id}, "
-                    f"which delta {delta.id} depends on through {ref}"
+                    f"rewriting chapter {self.plan.chapter_number} removes {vanished.ref}, "
+                    f"which delta {delta.id} (chapter {delta.chapter_number}) uses: "
+                    f"{self._vanished_reason(vanished)}"
                 )
+            else:
+                self._record_state_drift(delta, compiler.cas_mismatches(runtime, delta))
             compiler.projection.apply_delta_to_runtime(runtime, delta)
             for ref in _created_refs(delta):
-                self.dropped_tick_refs.pop(ref, None)
+                self.vanished_refs.pop(ref, None)
             replayed.append(delta)
         for delta in replayed:
             compiler._persist_delta_side_effects(runtime, delta)
         return replayed
 
-    def _dropped_tick_dependency(self, delta: GraphDelta) -> tuple[str, str] | None:
-        """A ref this delta reads that a dropped tick delta created, and that delta."""
-        if not self.dropped_tick_refs:
+    def _vanished_dependency(self, delta: GraphDelta) -> VanishedRef | None:
+        """A vanished ref this delta reads without creating it."""
+        if not self.vanished_refs:
             return None
         created = set(_created_refs(delta))
         for ref in _read_refs(delta):
-            dropped_id = self.dropped_tick_refs.get(ref)
-            if dropped_id is not None and ref not in created:
-                return ref, dropped_id
+            vanished = self.vanished_refs.get(ref)
+            if vanished is not None and ref not in created:
+                return vanished
         return None
+
+    def _vanished_reason(self, vanished: VanishedRef) -> str:
+        if vanished.origin == "retired_contribution":
+            return f"{vanished.ref} came from replaced chapter {self.plan.chapter_number}"
+        return f"{vanished.ref} came from dropped delta {vanished.delta_id}"
+
+    def _record_state_drift(
+        self, delta: GraphDelta, mismatches: list[tuple[str, Any, Any]]
+    ) -> None:
+        """Record that a replayed delta's recorded values no longer match; it still replays.
+
+        Refusing it would make a rewrite impossible whenever a later chapter
+        holds a stale but harmless value.
+        """
+        if not mismatches:
+            return
+        self.session.add(
+            DecisionEvent(
+                project_id=self.plan.project_id,
+                chapter_number=delta.chapter_number,
+                scope="chapter",
+                event_family="business_event",
+                event_type=DecisionEventType.HISTORICAL_REWRITE_STATE_DRIFT,
+                actor_type="system",
+                summary=(
+                    f"Rewriting chapter {self.plan.chapter_number} changed "
+                    f"{len(mismatches)} value(s) delta {delta.id} recorded; it replays as recorded."
+                ),
+                payload_json=json.dumps(
+                    _as_jsonable(
+                        {
+                            "rewritten_chapter": self.plan.chapter_number,
+                            "graph_delta_id": delta.id,
+                            "source_type": delta.source_type,
+                            "cas_mismatches": [
+                                {"patch": label, "expected": patch.old_value, "current": current}
+                                for label, patch, current in mismatches
+                            ],
+                        }
+                    ),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                related_object_type="graph_delta",
+                related_object_id=delta.id,
+            )
+        )
+
+    def _retire_for_retick(self, delta: GraphDelta) -> None:
+        """Take the rewritten latest chapter's tick out of canon; its world step ticks the new text.
+
+        As for a dropped tick, the delta leaves the ledger, the resolutions it
+        carried are superseded and what it created vanishes for the deltas
+        replayed after it. Nobody has to decide anything: the world step
+        expires its open conflicts and runs a full tick (``retired_tick_ids``).
+        """
+        tick_id = str(delta.metadata.get("tick_id") or "")
+        BookStateRepository(self.session).retire_chapter_deltas(
+            self.plan.project_id, delta.chapter_number, delta_ids=[delta.id]
+        )
+        supersede_resolutions(
+            self.session,
+            project_id=self.plan.project_id,
+            graph_delta_id=delta.id,
+            reason=(
+                f"Rewriting chapter {self.plan.chapter_number} retired world tick "
+                f"{tick_id}; the world step ticks the chapter again."
+            ),
+        )
+        for ref in _created_refs(delta):
+            self.vanished_refs[ref] = VanishedRef(ref, "dropped_tick", delta.id)
+        self.retired_tick_ids.append(tick_id)
 
     def _drop_world_tick_delta(
         self,
         delta: GraphDelta,
         mismatches: list[tuple[str, Any, Any]],
-        dependency: tuple[str, str] | None,
+        vanished: VanishedRef | None,
     ) -> None:
         """Take the tick's delta out of effect; a human decides how the world responds.
 
@@ -721,7 +849,7 @@ class HistoricalCanonReplacement:
             self.plan.project_id, delta.chapter_number, delta_ids=[delta.id]
         )
         for ref in _created_refs(delta):
-            self.dropped_tick_refs[ref] = delta.id
+            self.vanished_refs[ref] = VanishedRef(ref, "dropped_tick", delta.id)
         superseded = supersede_resolutions(
             self.session,
             project_id=self.plan.project_id,
@@ -733,10 +861,9 @@ class HistoricalCanonReplacement:
         )
         reasons = [label for label, _, _ in mismatches]
         involved_refs = [_patch_ref(patch) for _, patch, _ in mismatches]
-        if dependency is not None:
-            ref, dropped_id = dependency
-            reasons.append(f"{ref} came from dropped delta {dropped_id}")
-            involved_refs.append(ref)
+        if vanished is not None:
+            reasons.append(self._vanished_reason(vanished))
+            involved_refs.append(vanished.ref)
         conflict = WorldConflictRepository(self.session).create(
             replay_cas_conflict_draft(
                 delta,
@@ -766,9 +893,13 @@ class HistoricalCanonReplacement:
                             }
                             for label, patch, current in mismatches
                         ],
-                        "dropped_dependency": (
-                            {"ref": dependency[0], "graph_delta_id": dependency[1]}
-                            if dependency is not None
+                        "vanished_dependency": (
+                            {
+                                "ref": vanished.ref,
+                                "origin": vanished.origin,
+                                "graph_delta_id": vanished.delta_id,
+                            }
+                            if vanished is not None
                             else None
                         ),
                         # The ledger no longer holds the delta; this is its record.

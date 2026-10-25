@@ -41,6 +41,7 @@ class DecisionEventType:
     WORLD_CONFLICT_RESOLVED = "world_conflict_resolved"
     WORLD_CONFLICT_EXPIRED = "world_conflict_expired"
     WORLD_CONFLICT_AMEND_FAILED = "world_conflict_amend_failed"
+    HISTORICAL_REWRITE_STATE_DRIFT = "historical_rewrite_state_drift"
     PROMPT_TRACE_RECORDED = "prompt_trace_recorded"
 
     RUNTIME_POLICY_UPDATED = "runtime_policy_updated"
@@ -203,6 +204,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.WORLD_CONFLICT_RESOLVED,
     DecisionEventType.WORLD_CONFLICT_EXPIRED,
     DecisionEventType.WORLD_CONFLICT_AMEND_FAILED,
+    DecisionEventType.HISTORICAL_REWRITE_STATE_DRIFT,
     DecisionEventType.PROMPT_TRACE_RECORDED,
     DecisionEventType.RUNTIME_POLICY_UPDATED,
     DecisionEventType.MANUAL_CHECKPOINT_CREATED,

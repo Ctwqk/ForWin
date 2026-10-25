@@ -266,6 +266,8 @@ class CanonAdmissionService:
                         "superseded_commit_id": rewrite.previous.id,
                         "retired_delta_ids": rewrite.retired_delta_ids,
                         "replayed_chapters": rewrite.replayed_chapters,
+                        # The world step expires these ticks' open conflicts and ticks the chapter again.
+                        "retired_tick_ids": rewrite.retired_tick_ids,
                     }
                 session.add(
                     CanonCommitRecord(

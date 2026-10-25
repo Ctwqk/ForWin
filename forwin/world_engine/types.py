@@ -16,6 +16,8 @@ from forwin.protocol.book_state import WORLD_EDGE_TYPES
 
 # The source_type of the tick's GraphDelta.
 WORLD_ENGINE_SOURCE_TYPE = "world_engine"
+# A world step's tick id: the prefix and the chapter's canon commit id. A direct resolve uses "conflict-".
+TICK_ID_PREFIX = "tick-"
 # A knowledge effect's ref to a fact the same effects create: ``fact:new:<key>``.
 NEW_FACT_REF_PREFIX = f"{FACT_REF_PREFIX}new:"
 # The agenda_ref of an agenda change that creates an agenda.

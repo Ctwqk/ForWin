@@ -18,6 +18,10 @@ chapter's story minutes from its start (``window_start``) to its end (``now``):
    admission together with the side effects of the conflicts decided in the tick. News an active
    protection forbids waits in the queue for the next tick.
 
+A rewritten chapter's world step first expires the open conflicts the rewrite took the ground from
+(conflict_revalidation): the latest chapter's retired tick's, before it ticks the chapter again, or, for an
+earlier chapter, the ones whose held change no longer stands, before it stops.
+
 An LLM outage never fails the tick: the node is skipped and the deterministic rest still commits. Canon
 that moved under the tick ends it with CanonStaleVersion: before each LLM phase, at the commit, and for
 a tick that commits nothing (Ruling P27).
@@ -56,6 +60,7 @@ from .conflict_repository import WorldConflictRepository
 from .conflict_resolution import (
     PropagatedNews, next_tick_minute, propagation_candidate, reconcile_plot_responses, unprotected_news,
 )
+from .conflict_revalidation import expire_retired_tick_conflicts, expire_stale_open_conflicts
 from .conflict_types import ConflictDraft
 from .constraints import ConstraintIssue, apply_budgets, classify_impact
 from .delta_builder import WorldTickDeltaBuilder
@@ -86,12 +91,11 @@ from .tick_nodes import (
     unavailable,
 )
 from .types import (
-    WORLD_ENGINE_SOURCE_TYPE, EffectEntityChange, NewsItem, TickCandidate, TickContext, WorldEffects, tick_seed,
+    TICK_ID_PREFIX, WORLD_ENGINE_SOURCE_TYPE, EffectEntityChange, NewsItem, TickCandidate, TickContext, WorldEffects,
+    tick_seed,
 )
 
 
-# A world step's tick id: the prefix and the chapter's canon commit id. A direct resolve uses "conflict-".
-TICK_ID_PREFIX = "tick-"
 # The tick's one news candidate; it goes after every candidate whose events it spreads.
 NEWS_CANDIDATE_ID = "propagation"
 # Due offstage intents one tick adjudicates, earliest first; the rest stay due for the next tick.
@@ -165,9 +169,14 @@ class WorldTickService:
         project = session.get(Project, commit.project_id)
         total = int(project.target_total_chapters or 0) if project is not None else 0
         book_complete = 0 < total <= number
-        # A rewritten chapter's world step runs after later chapters landed: the world already moved on.
+        # A rewritten chapter's world step runs after later chapters landed: the world already moved on, so
+        # only the open conflicts the rewrite took the ground from go.
         latest = BookStateRepository(session).latest_canon_chapter(commit.project_id) or 0
         if number != latest:
+            expire_stale_open_conflicts(
+                session, project_id=commit.project_id, from_chapter=number, policy=policy,
+                reason=f"rewrite of chapter {number}",
+            )
             return _skipped(tick_id, "chapter_not_latest")
         ticks = _chapter_ticks(session, commit.project_id, number)
         own = [delta_id for delta_id, delta_tick_id in ticks if delta_tick_id == tick_id]
@@ -177,10 +186,11 @@ class WorldTickService:
                 tick_id=tick_id, graph_delta_ids=own, conflict_ids=[], dropped_candidate_ids=[],
                 postponed_candidate_ids=[], skipped_reason="tick_already_committed",
             )
-        # Rewriting the latest chapter keeps the tick that ran after it; a second tick would move the world
-        # on twice for one chapter. A direct resolve's delta ("conflict-") is no tick of the chapter.
-        if any(delta_tick_id.startswith(TICK_ID_PREFIX) for _delta_id, delta_tick_id in ticks):
-            return _skipped(tick_id, "chapter_already_ticked")
+        # Rewriting the latest chapter retired the tick that ran after it: its open conflicts expire before
+        # this tick reads the open ones, and this tick moves the world on in its place.
+        expire_retired_tick_conflicts(
+            session, project_id=commit.project_id, chapter_number=number, tick_ids=_retired_tick_ids(commit),
+        )
         tick = _Tick(self, session, commit, policy=policy, tick_id=tick_id)
         return tick.finish_holds() if book_complete else tick.run()
 
@@ -789,6 +799,14 @@ def _chapter_ticks(session: Session, project_id: str, chapter_number: int) -> li
         tick_id = metadata.get("tick_id") if isinstance(metadata, dict) else None
         ticks.append((delta_id, tick_id if isinstance(tick_id, str) else ""))
     return ticks
+
+
+def _retired_tick_ids(commit: CanonCommitRecord) -> list[str]:
+    """The ticks the commit's historical rewrite retired; none for a first commit of the chapter."""
+    result = json.loads(commit.result_json or "{}")
+    rewrite = result.get("historical_rewrite") if isinstance(result, dict) else None
+    tick_ids = rewrite.get("retired_tick_ids") if isinstance(rewrite, dict) else None
+    return [tick_id for tick_id in tick_ids if isinstance(tick_id, str)] if isinstance(tick_ids, list) else []
 
 
 def _chapter_delta(session: Session, commit: CanonCommitRecord) -> GraphDelta | None:

@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from forwin.audit.events import DecisionEventType
+from forwin.audit.events import KNOWN_DECISION_EVENT_TYPES, DecisionEventType
 from forwin.book_state.projection import BookStateProjection
 from forwin.canon.admission import CanonAdmissionService
 from forwin.canon.historical_rewrite import HistoricalCanonRewriteRepository
@@ -25,7 +25,9 @@ from forwin.models.project import ChapterPlan
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.models.draft import CandidateDraftRecord
 from forwin.planning.goals import load_goals_json
-from forwin.protocol.book_state import ApprovedGraphDeltaSet, CognitionPatch, EdgePatch, GraphDelta, NodePatch
+from forwin.protocol.book_state import (
+    ApprovedGraphDeltaSet, CognitionPatch, EdgePatch, FactPatch, GraphDelta, NodePatch,
+)
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from forwin.world_engine.conflict_repository import WorldConflictRepository
@@ -86,11 +88,14 @@ def _set(node_id: str, field_path: str, old_value: str, new_value: str) -> NodeP
     )
 
 
-def _chapter_delta(project_id: str, chapter: int, delta_id: str, *patches: NodePatch | EdgePatch) -> GraphDelta:
+def _chapter_delta(
+    project_id: str, chapter: int, delta_id: str, *patches: NodePatch | EdgePatch | FactPatch,
+) -> GraphDelta:
     return GraphDelta(
         id=delta_id, project_id=project_id, chapter_number=chapter, summary=delta_id,
         node_patches=[patch for patch in patches if isinstance(patch, NodePatch)],
         edge_patches=[patch for patch in patches if isinstance(patch, EdgePatch)],
+        fact_patches=[patch for patch in patches if isinstance(patch, FactPatch)],
     )
 
 
@@ -171,9 +176,10 @@ def _commit_tick(Session, delta: GraphDelta, *, tick_id: str | None = None):
         )
 
 
-def _tick_three(project_id: str, *patches: NodePatch) -> GraphDelta:
+def _tick_three(project_id: str, *patches: NodePatch, cognition: list[CognitionPatch] | None = None) -> GraphDelta:
     return _tick_delta(
-        project_id, 3, "tick-3", _set(CAMP, "state.mood", "calm", "angry"), *patches, impacts={"c-1": "minor"},
+        project_id, 3, "tick-3", _set(CAMP, "state.mood", "calm", "angry"), *patches, cognition=cognition,
+        impacts={"c-1": "minor"},
     )
 
 
@@ -212,23 +218,35 @@ def _resolve_in_tick(
     return resolved
 
 
+def _in_project(project_id: str, patches: tuple) -> tuple:
+    """The patches, each create's payload in the project."""
+    return tuple(
+        patch.model_copy(update={"new_value": {**patch.new_value, "project_id": project_id}})
+        if str(patch.op) == "create" else patch
+        for patch in patches
+    )
+
+
 def _book(
     Session,
     *,
     list_chapter_two_tick: bool = True,
     with_plan_constraint: bool = False,
     chapter_one: tuple[NodePatch, ...] = (),
+    chapter_two: tuple[NodePatch | FactPatch, ...] = (),
     chapter_three: tuple[NodePatch | EdgePatch, ...] = (),
     tick_three: tuple[NodePatch, ...] = (),
+    tick_three_cognition: tuple[CognitionPatch, ...] = (),
     tick_two_resolutions: tuple[ConflictOption, ...] = (),
     tick_three_resolutions: tuple[ConflictOption, ...] = (),
 ) -> _Book:
     """Chapters 1-3 are Canon and chapter 4 is still to write; a world tick ran after chapter 2 and after chapter 3.
 
     The chapter 2 tick opens the gate, renames it, convenes a meeting and tells the scout a
-    secret; the chapter 3 tick angers the camp. ``chapter_three`` and ``tick_three`` add
-    patches to chapter 3's own delta and to its tick. Each tick also decides one conflict per
-    option in its ``*_resolutions``, whose side effects bind to the next chapter's plan.
+    secret; the chapter 3 tick angers the camp. ``chapter_two`` adds patches to the original
+    chapter 2 delta; ``chapter_three``, ``tick_three`` and ``tick_three_cognition`` add patches
+    to chapter 3's own delta and to its tick. Each tick also decides one conflict per option in
+    its ``*_resolutions``, whose side effects bind to the next chapter's plan.
     """
     with Session.begin() as session:
         updater = StateUpdater(session)
@@ -260,7 +278,10 @@ def _book(
             )
     _complete_post_canon(Session, project_id, 1, commits[1], world_delta_ids=())
     commits[2] = _accept(Session, project_id, 2, version=1, deltas=[
-        _chapter_delta(project_id, 2, "delta-ch2-original", _create(project_id, "event-original")),
+        _chapter_delta(
+            project_id, 2, "delta-ch2-original", _create(project_id, "event-original"),
+            *_in_project(project_id, chapter_two),
+        ),
     ])
     tick_2 = _commit_tick(Session, _tick_delta(
         project_id, 2, "tick-2",
@@ -286,7 +307,9 @@ def _book(
     commits[3] = _accept(Session, project_id, 3, version=1, deltas=[
         _chapter_delta(project_id, 3, "delta-ch3", _create(project_id, "event-later"), *chapter_three),
     ])
-    tick_3 = _commit_tick(Session, _tick_three(project_id, *tick_three)).graph_delta_ids
+    tick_3 = _commit_tick(
+        Session, _tick_three(project_id, *_in_project(project_id, tick_three), cognition=list(tick_three_cognition)),
+    ).graph_delta_ids
     resolved[3] = _resolve_in_tick(Session, project_id, 3, tick_3[0], tick_three_resolutions)
     _complete_post_canon(Session, project_id, 3, commits[3], world_delta_ids=tick_3)
     return _Book(
@@ -300,20 +323,24 @@ def _book(
     )
 
 
-def _rewrite_chapter_two(book: _Book, *, version: int, delta: GraphDelta) -> CanonAdmissionOutcome:
+def _rewrite_chapter(book: _Book, number: int, *, version: int, delta: GraphDelta) -> CanonAdmissionOutcome:
     with book.Session.begin() as session:
         HistoricalCanonRewriteRepository(session).mark_pending(
-            project_id=book.project_id, chapter_number=2, reason="correct chapter two",
+            project_id=book.project_id, chapter_number=number, reason=f"correct chapter {number}",
         )
-        chapter = session.get(ChapterPlan, book.chapter_ids[2])
+        chapter = session.get(ChapterPlan, book.chapter_ids[number])
         chapter.status = "planned"
         session.flush()
         plan = _prepare_chapter_candidate(
             session, project_id=book.project_id, chapter=chapter, version=version,
-            body=f"Chapter 2 version {version}.", summary="Chapter 2 rewritten.",
+            body=f"Chapter {number} version {version}.", summary=f"Chapter {number} rewritten.",
             delta_id="", delta_summary="", node_id="", graph_deltas=[delta],
         )
     return CanonAdmissionService(session_factory=book.Session).commit_plan(plan)
+
+
+def _rewrite_chapter_two(book: _Book, *, version: int, delta: GraphDelta) -> CanonAdmissionOutcome:
+    return _rewrite_chapter(book, 2, version=version, delta=delta)
 
 
 def _quiet_rewrite(book: _Book, version: int) -> CanonAdmissionOutcome:
@@ -485,7 +512,7 @@ def test_rewrite_replays_tick_deltas_and_turns_cas_failure_into_conflict(Session
     )
     assert {key: payload[key] for key in (
         "conflict_id", "source", "violated", "impact_level", "required_decider", "blocks_from_chapter",
-        "proposed_change", "rewritten_chapter", "dropped_dependency",
+        "proposed_change", "rewritten_chapter", "vanished_dependency",
     )} == {
         "conflict_id": conflict.id,
         "source": "historical_rewrite",
@@ -495,7 +522,7 @@ def test_rewrite_replays_tick_deltas_and_turns_cas_failure_into_conflict(Session
         "blocks_from_chapter": 4,
         "proposed_change": _replay_change(book.tick_2, "tick-2"),
         "rewritten_chapter": 2,
-        "dropped_dependency": None,
+        "vanished_dependency": None,
     }
     # The dropped delta leaves the ledger, so the event keeps what it was.
     assert payload["graph_delta"]["id"] == book.tick_2
@@ -683,7 +710,7 @@ def test_tick_depending_on_a_dropped_tick_cascades(Session) -> None:
         payload = json.loads(session.scalar(select(DecisionEvent.payload_json).where(
             DecisionEvent.related_object_id == cascaded.id,
         )))
-    assert payload["dropped_dependency"] == {"ref": MEETING, "graph_delta_id": book.tick_2}
+    assert payload["vanished_dependency"] == {"ref": MEETING, "origin": "dropped_tick", "graph_delta_id": book.tick_2}
     assert payload["cas_mismatches"] == []
 
 
@@ -1014,3 +1041,179 @@ def test_rewrite_superseding_a_plot_response_unholds_the_intent(Session, bound):
         assert repo.pending_plot_responses(book.project_id) == []
         assert json.loads(repo.get(book.project_id, conflict_id).decision_json).get("pending_plan_response") is not True
         assert json.loads(session.get(ChapterPlan, book.chapter_ids[4]).world_bindings_json) == []
+
+
+# refs the replaced chapter created and its replacement does not
+
+
+NEWS_FACT = "fact:fact-chapter-two-news"
+ORIGINAL_EVENT = "event-original"
+
+
+def _camp_allied_with_original_event() -> EdgePatch:
+    """Chapter 3 allies the camp with the event the original chapter 2 created."""
+    return EdgePatch(
+        edge_id="edge-camp-original", op="create", source_id=CAMP, target_id=ORIGINAL_EVENT,
+        edge_type="ally_of", edge_family="social", new_value={},
+    )
+
+
+def test_retained_tick_reading_vanished_event_fact_is_dropped(Session) -> None:
+    # The original chapter 2 records an event fact, and the chapter 3 tick tells the scout the news.
+    book = _book(
+        Session,
+        chapter_two=(FactPatch(fact_id=NEWS_FACT.removeprefix("fact:"), op="create", new_value={
+            "id": NEWS_FACT.removeprefix("fact:"), "proposition": "chapter two news",
+        }),),
+        tick_three_cognition=(CognitionPatch(
+            observer_type=OBSERVER[0], observer_id=OBSERVER[1], op="merge", field_path="knowledge_by_ref",
+            old_value={NEWS_FACT: None}, new_value={NEWS_FACT: "knows"}, evidence_refs=["world_tick:tick-3"],
+        ),),
+    )
+
+    # The rewritten chapter 2 no longer records it; the tick's knowledge patch still CAS-matches.
+    outcome = _quiet_rewrite(book, 2)
+
+    assert outcome.blocked is False, outcome.failure_reason
+    assert book.tick_3 not in _delta_ids(book)
+    assert book.tick_2 in _delta_ids(book)
+    assert NEWS_FACT not in _knowledge(book, 3)[0]
+    assert _state(book, 3, CAMP)["mood"] == "calm"
+    replay = _replay_conflict(book)
+    assert (replay.violated, replay.required_decider, replay.detected_after_chapter) == ("replay_cas", "human", 3)
+    assert json.loads(replay.proposed_change_json) == _replay_change(book.tick_3, "tick-3")
+    assert json.loads(replay.involved_refs_json) == [NEWS_FACT]
+    assert f"{NEWS_FACT} came from replaced chapter 2" in replay.summary
+    assert "chapter two news" not in replay.summary
+    with Session() as session:
+        payload = json.loads(session.scalar(select(DecisionEvent.payload_json).where(
+            DecisionEvent.related_object_id == replay.id,
+            DecisionEvent.event_type == DecisionEventType.WORLD_CONFLICT_DETECTED,
+        )))
+    assert payload["vanished_dependency"] == {
+        "ref": NEWS_FACT, "origin": "retired_contribution", "graph_delta_id": "delta-ch2-original",
+    }
+    assert payload["cas_mismatches"] == []
+
+
+def test_later_chapter_using_vanished_entity_aborts_rewrite(Session) -> None:
+    book = _book(Session, chapter_three=(_camp_allied_with_original_event(),))
+    before = _outcome_snapshot(book)
+    assert "edge-camp-original" in before[2]
+
+    # The rewritten chapter 2 creates another event; chapter 3 still allies the camp with the original one.
+    outcome = _quiet_rewrite(book, 2)
+
+    assert outcome.stale is True
+    assert (
+        f"rewriting chapter 2 removes {ORIGINAL_EVENT}, which delta delta-ch3 (chapter 3) uses"
+        in outcome.failure_reason
+    )
+    assert "replaced chapter 2" in outcome.failure_reason
+    assert _outcome_snapshot(book) == before
+    assert before[0] == "committed"
+    assert _conflicts(book) == []
+    assert ORIGINAL_EVENT in _runtime(book, 3).world.nodes_by_id
+
+
+def test_recreated_stable_id_does_not_vanish(Session) -> None:
+    book = _book(Session, chapter_three=(_camp_allied_with_original_event(),))
+
+    # The rewrite tells the same event again: the translator gives it the same id.
+    outcome = _rewrite_chapter_two(book, version=2, delta=_chapter_delta(
+        book.project_id, 2, "delta-ch2-v2", _create(book.project_id, ORIGINAL_EVENT), _create(book.project_id, "event-v2"),
+    ))
+
+    assert outcome.blocked is False, outcome.failure_reason
+    runtime = _runtime(book, 3)
+    assert {ORIGINAL_EVENT, "event-v2"} <= set(runtime.world.nodes_by_id)
+    assert "edge-camp-original" in runtime.world.edges_by_id
+    assert {book.tick_2, book.tick_3} <= _delta_ids(book)
+    assert _conflicts(book) == []
+
+
+def test_state_drift_records_event_without_abort(Session) -> None:
+    # Chapter 3 sets ajar the gate the chapter 2 tick opened.
+    book = _book(Session, chapter_three=(_set(GATE, "state.phase", "open", "ajar"),))
+
+    # The rewritten chapter 2 seals the gate, so the chapter 2 tick drops and chapter 3 finds a sealed gate.
+    outcome = _sealing_rewrite(book, 2)
+
+    assert outcome.blocked is False, outcome.failure_reason
+    assert book.tick_2 not in _delta_ids(book)
+    # Chapter 3 replays as written, and the drift is on record.
+    assert _state(book, 3, GATE)["phase"] == "ajar"
+    assert book.tick_3 in _delta_ids(book)
+    assert DecisionEventType.HISTORICAL_REWRITE_STATE_DRIFT in KNOWN_DECISION_EVENT_TYPES
+    with Session() as session:
+        [event] = session.scalars(select(DecisionEvent).where(
+            DecisionEvent.project_id == book.project_id,
+            DecisionEvent.event_type == DecisionEventType.HISTORICAL_REWRITE_STATE_DRIFT,
+        )).all()
+    assert (event.chapter_number, event.related_object_type, event.related_object_id) == (3, "graph_delta", "delta-ch3")
+    payload = json.loads(event.payload_json)
+    assert {key: payload[key] for key in ("rewritten_chapter", "graph_delta_id", "cas_mismatches")} == {
+        "rewritten_chapter": 2,
+        "graph_delta_id": "delta-ch3",
+        "cas_mismatches": [{"patch": f"node:{GATE}:state.phase", "expected": "open", "current": "sealed"}],
+    }
+    # Only the dropped tick asks a human anything.
+    assert [json.loads(conflict.proposed_change_json)["graph_delta_id"] for conflict in _conflicts(book)] == [
+        book.tick_2,
+    ]
+
+
+# a rewrite of the latest chapter
+
+
+RALLY = "event-tick-rally"
+
+
+def test_rewriting_latest_chapter_retires_its_tick_and_cascades_its_dependents(Session) -> None:
+    # The chapter 3 tick gathers a rally and decides a plot response bound to chapter 4.
+    book = _book(
+        Session, tick_three=(_create("", RALLY, phase="gathered"),), tick_three_resolutions=("plot_responds",),
+    )
+    responds = book.resolved[3]["plot_responds"]
+    _no_obligation, response_patch = _side_effects(book, responds)
+    # A human then disperses the rally through a direct resolve on chapter 3.
+    [direct] = _commit_tick(Session, _tick_delta(
+        book.project_id, 3, "conflict-direct", _set(RALLY, "state.phase", "gathered", "dispersed"),
+    )).graph_delta_ids
+    obliges = _resolve_in_tick(Session, book.project_id, 3, direct, ("accept_with_obligation",))["accept_with_obligation"]
+    _obligation_id, direct_patch = _side_effects(book, obliges)
+
+    outcome = _rewrite_chapter(book, 3, version=2, delta=_chapter_delta(
+        book.project_id, 3, "delta-ch3-v2", _create(book.project_id, "event-later"),
+    ))
+
+    assert outcome.blocked is False, outcome.failure_reason
+    with Session() as session:
+        result = json.loads(session.get(CanonCommitRecord, outcome.commit_id).result_json)
+    assert result["historical_rewrite"]["retired_tick_ids"] == ["tick-3"]
+    # The tick left canon without a conflict; the world step ticks the chapter again.
+    assert not {book.tick_3, direct} & _delta_ids(book)
+    assert _tick_delta_ids_by_tick(book) == {"tick-2": [book.tick_2]}
+    assert _state(book, 3, CAMP)["mood"] == "calm"
+    assert RALLY not in _runtime(book, 3).world.nodes_by_id
+    # What each decided is superseded, and the plan patches they bound to chapter 4 reverted.
+    with Session() as session:
+        repository = WorldConflictRepository(session)
+        superseded = {conflict_id: json.loads(repository.get(book.project_id, conflict_id).decision_json)
+                      for conflict_id in (responds, obliges)}
+    assert {conflict_id: decision["superseded_by_delta"] for conflict_id, decision in superseded.items()} == {
+        responds: book.tick_3, obliges: direct,
+    }
+    assert sorted(json.loads(row.metadata_json)["reverted_plan_patch_id"] for row in _revert_patches(book)) == sorted(
+        [response_patch, direct_patch],
+    )
+    # The direct resolve read the rally the retired tick gathered: it drops with it, for a human.
+    replay = _replay_conflict(book)
+    assert json.loads(replay.proposed_change_json)["graph_delta_id"] == direct
+    assert f"{RALLY} came from dropped delta {book.tick_3}" in replay.summary
+    with Session() as session:
+        payload = json.loads(session.scalar(select(DecisionEvent.payload_json).where(
+            DecisionEvent.related_object_id == replay.id,
+            DecisionEvent.event_type == DecisionEventType.WORLD_CONFLICT_DETECTED,
+        )))
+    assert payload["vanished_dependency"] == {"ref": RALLY, "origin": "dropped_tick", "graph_delta_id": book.tick_3}

@@ -1074,23 +1074,27 @@ def test_failed_option_side_effect_rolls_back_and_escalates_and_slips_are_not_ra
 # fix round 1
 
 
-def _rewrite_chapter_one(Session, world: _World, chapter_plan_id: str, original: GraphDelta) -> str:
-    """Rewrite the latest chapter, 1, with the same extraction under a new delta id; the new commit's id."""
+def _rewrite_chapter(Session, world: _World, number: int, chapter_plan_id: str, delta: GraphDelta) -> str:
+    """Rewrite accepted chapter ``number`` with ``delta`` as its extraction; the new commit's id."""
     with Session.begin() as session:
         HistoricalCanonRewriteRepository(session).mark_pending(
-            project_id=world.project_id, chapter_number=1, reason="rewrite the latest chapter",
+            project_id=world.project_id, chapter_number=number, reason=f"rewrite chapter {number}",
         )
         plan = session.get(ChapterPlan, chapter_plan_id)
         plan.status = "planned"
         session.flush()
         candidate = _prepare_chapter_candidate(
-            session, project_id=world.project_id, chapter=plan, version=2, body="Chapter 1 version 2.",
-            summary="Chapter 1 rewritten.", delta_id="", delta_summary="", node_id="",
-            graph_deltas=[original.model_copy(update={"id": f"{original.id}-v2"})],
+            session, project_id=world.project_id, chapter=plan, version=2, body=f"Chapter {number} version 2.",
+            summary=f"Chapter {number} rewritten.", delta_id="", delta_summary="", node_id="", graph_deltas=[delta],
         )
     outcome = CanonAdmissionService(session_factory=Session).commit_plan(candidate)
     assert not outcome.blocked, outcome.failure_reason
     return outcome.commit_id
+
+
+def _rewrite_chapter_one(Session, world: _World, chapter_plan_id: str, original: GraphDelta) -> str:
+    """Rewrite the latest chapter, 1, with the same extraction under a new delta id; the new commit's id."""
+    return _rewrite_chapter(Session, world, 1, chapter_plan_id, original.model_copy(update={"id": f"{original.id}-v2"}))
 
 
 def _commit_record(Session, commit_id: str) -> CanonCommitRecord:
@@ -1100,17 +1104,20 @@ def _commit_record(Session, commit_id: str) -> CanonCommitRecord:
         return record
 
 
-def test_rewriting_the_latest_chapter_keeps_its_tick_and_runs_no_second_one(monkeypatch) -> None:
+def test_rewriting_latest_chapter_retires_its_tick_and_reticks(monkeypatch) -> None:
     engine, Session = _session_factory()
     world = _seed_tick_world(Session, monkeypatch)
     with Session.begin() as session:
         updater = StateUpdater(session)
         arc = updater.create_arc_plan(world.project_id, "arc")
-        plan_id = updater.create_chapter_plan(world.project_id, arc.id, 1, "c1", "c1 event", ["goal"]).id
+        plan = updater.create_chapter_plan(world.project_id, arc.id, 1, "c1", "c1 event", ["goal"])
         updater.create_chapter_plan(world.project_id, arc.id, 2, "c2", "c2 event", ["goal"])
+        # The chapter binds the onstage intent but never delivers it.
+        plan.world_bindings_json = json.dumps([{"kind": "intent", "ref": _onstage(world)}])
+        plan_id = plan.id
     original = _delta(Session, world, 1, _time(4, "日"))
     first = _accept(Session, world.project_id, 1, version=1, deltas=[original])
-    # No slip is allowed and every conflict waits for a human, so a second tick would block chapter 2.
+    # No slip is allowed and every conflict waits for a human: each tick holds the slip for a human.
     policy = _policy(max_onstage_slips=0, conflict_delegate="human")
     llm = _WorldLLM(adjudicate=_outcomes(), actor_turn=_quiet_turns)
 
@@ -1120,31 +1127,129 @@ def test_rewriting_the_latest_chapter_keeps_its_tick_and_runs_no_second_one(monk
 
     ticked = tick(first[0])
     _complete_post_canon(Session, world.project_id, 1, first, world_delta_ids=tuple(ticked.graph_delta_ids))
-    assert _runtime(Session, world).world.get_state(_onstage(world))["status"] == "due"
-    calls = len(llm.calls)
-
-    with Session.begin() as session:
-        session.get(ChapterPlan, plan_id).world_bindings_json = json.dumps([
-            {"kind": "intent", "ref": _onstage(world)},
-        ])
+    [held] = _conflicts(Session, world)
+    assert (held.violated, held.status, held.origin_key) == ("onstage_slip", "open", f"tick-{first[0]}")
 
     rewritten = _rewrite_chapter_one(Session, world, plan_id, original)
-    again = tick(rewritten)
 
-    assert again == WorldTickResult(
-        tick_id=f"tick-{rewritten}", graph_delta_ids=[], conflict_ids=[], dropped_candidate_ids=[],
-        postponed_candidate_ids=[], skipped_reason="chapter_already_ticked",
-    )
-    assert len(llm.calls) == calls
-    # The rewrite replayed the first tick's delta; it stays the chapter's one tick.
-    assert [json.loads(row.metadata_json)["tick_id"] for row in _tick_deltas(Session, world)] == [
+    # The rewrite took the first tick out of canon instead of replaying it, and asked nobody anything.
+    assert _tick_deltas(Session, world) == []
+    assert json.loads(_commit_record(Session, rewritten).result_json)["historical_rewrite"]["retired_tick_ids"] == [
         f"tick-{first[0]}",
     ]
-    runtime = _runtime(Session, world)
-    assert runtime.world.get_state(_onstage(world))["slip_count"] == 0
-    assert _conflicts(Session, world) == []
+    assert [row.id for row in _conflicts(Session, world)] == [held.id]
+
+    again = tick(rewritten)
+
+    # A full tick ran on the rewritten chapter: the retired tick's conflict expired first, so its slip is held again.
+    assert again.skipped_reason == ""
+    assert again.graph_delta_ids == [f"world-tick:{world.project_id}:tick-{rewritten}"]
+    assert [json.loads(row.metadata_json)["tick_id"] for row in _tick_deltas(Session, world)] == [f"tick-{rewritten}"]
+    conflicts = {row.id: row for row in _conflicts(Session, world)}
+    [fresh] = [row for conflict_id, row in conflicts.items() if conflict_id != held.id]
+    assert again.conflict_ids == [fresh.id]
+    assert (fresh.violated, fresh.status, fresh.origin_key) == ("onstage_slip", "open", f"tick-{rewritten}")
+    expired = conflicts[held.id]
+    assert expired.status == "expired"
+    assert json.loads(expired.decision_json) == {"reason": "latest chapter rewritten; the world step re-ticks"}
+    [event] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_EXPIRED)
+    assert (event.related_object_type, event.related_object_id, event.chapter_number) == ("world_conflict", held.id, 1)
+    assert _payload(event)["reason"] == "latest chapter rewritten; the world step re-ticks"
+    assert not any(row.source == "historical_rewrite" for row in conflicts.values())
     with Session() as session:
-        assert WorldConflictRepository(session).open_blocking(world.project_id, next_chapter=2) is None
+        assert WorldConflictRepository(session).open_blocking(world.project_id, next_chapter=2).id == fresh.id
+    engine.dispose()
+
+
+def _held(intent_id: str, actor_id: str) -> TickCandidate:
+    """An adjudicated outcome that only resolves its intent."""
+    return TickCandidate(
+        candidate_id=f"adjudication:{intent_id}", origin="adjudication", actor_id=actor_id, intent_id=intent_id,
+        summary=f"summary-held-{intent_id}", effects=WorldEffects(), intent_status_changes={intent_id: "resolved"},
+    )
+
+
+def test_older_rewrite_expires_stale_open_conflicts_only(monkeypatch) -> None:
+    from forwin.world_engine.conflict_types import ConflictDraft
+
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch, rival_strikes=True)
+    with Session.begin() as session:
+        updater = StateUpdater(session)
+        arc = updater.create_arc_plan(world.project_id, "arc")
+        plan_ids = {
+            number: updater.create_chapter_plan(world.project_id, arc.id, number, f"c{number}", "event", ["goal"]).id
+            for number in (1, 2)
+        }
+    original = _delta(Session, world, 1, _time(1, "日"))
+    first = _accept(Session, world.project_id, 1, version=1, deltas=[original])
+    _complete_post_canon(Session, world.project_id, 1, first, world_delta_ids=())
+    second = _accept(Session, world.project_id, 2, version=1, deltas=[_delta(Session, world, 2, _time(1, "日"))])
+    _complete_post_canon(Session, world.project_id, 2, second, world_delta_ids=())
+    strike, later, onstage = _strike(world), _later(world), _onstage(world)
+
+    def conflict(name: str, held: TickCandidate | None, *, after: int = 2, source: str = "world_tick",
+                 refs: Sequence[str] = ()) -> str:
+        with Session.begin() as session:
+            return WorldConflictRepository(session).create(
+                ConflictDraft(
+                    project_id=world.project_id, source=source, origin_key=f"tick-{name}",
+                    detected_after_chapter=after, story_time=0,
+                    involved_refs=[*((held.intent_id, held.actor_id) if held else ()), *refs],
+                    violated="impact_review" if held else "replay_cas", impact_level="major", summary=f"summary-{name}",
+                    proposed_change=held.model_dump(mode="json") if held else {"graph_delta_id": "delta-gone"},
+                    intent_ref=held.intent_id if held else "", actor_ref=held.actor_id if held else "",
+                    blocks_from_chapter=after + 1,
+                ),
+                required_decider="human", options=("veto_world", "accept_with_obligation"),
+            ).id
+
+    ids = {
+        # The rival settles his strike: he is dead in the rewritten chapter 1 (Ruling P30).
+        "dead_actor": conflict("dead_actor", _held(strike, world.rival)),
+        # The held change resolves the onstage intent the rewritten chapter 1 disrupts (Ruling P22).
+        "settled_intent": conflict("settled_intent", _held(onstage, world.hero)),
+        "missing_ref": conflict("missing_ref", _held(later, world.hero), refs=["character-never-was"]),
+        "fresh": conflict("fresh", _held(later, world.hero)),
+        # Detected before the rewritten chapter, or not a world tick's: neither is looked at.
+        "earlier": conflict("earlier", _held(strike, world.rival), after=0),
+        "replay": conflict("replay", None, source="historical_rewrite"),
+    }
+    rewritten = _rewrite_chapter(Session, world, 1, plan_ids[1], original.model_copy(update={
+        "id": f"{original.id}-v2",
+        "node_patches": [
+            *original.node_patches,
+            NodePatch(node_id=world.rival, node_type="character", op="set", field_path="state.alive_status",
+                      old_value="alive", new_value="dead"),
+            NodePatch(node_id=onstage, node_type="intent", op="set", field_path="state.status",
+                      old_value="planned", new_value="disrupted"),
+        ],
+    }))
+    llm = _WorldLLM(actor_turn=_quiet_turns)
+
+    with Session.begin() as session:
+        result = _service(Session, llm).run(session, _commit_record(Session, rewritten), policy=POLICY)
+
+    assert result.skipped_reason == "chapter_not_latest"
+    assert llm.calls == []
+    assert _tick_deltas(Session, world) == []
+    rows = {row.id: row for row in _conflicts(Session, world)}
+    statuses = {name: rows[conflict_id].status for name, conflict_id in ids.items()}
+    assert statuses == {
+        "dead_actor": "expired", "settled_intent": "expired", "missing_ref": "expired",
+        "fresh": "open", "earlier": "open", "replay": "open",
+    }
+    reasons = {name: json.loads(rows[ids[name]].decision_json)["reason"]
+               for name in ("dead_actor", "settled_intent", "missing_ref")}
+    assert all(reason.startswith("rewrite of chapter 1: ") for reason in reasons.values())
+    assert "dead_owner_acts" in reasons["dead_actor"]
+    assert onstage in reasons["settled_intent"]
+    assert "character-never-was" in reasons["missing_ref"]
+    events = _events(Session, world, DecisionEventType.WORLD_CONFLICT_EXPIRED)
+    assert sorted(event.related_object_id for event in events) == sorted(
+        ids[name] for name in ("dead_actor", "settled_intent", "missing_ref")
+    )
+    assert {_payload(event)["reason"] for event in events} == set(reasons.values())
     engine.dispose()
 
 

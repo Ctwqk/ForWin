@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from copy import deepcopy
+from copy import copy, deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -109,6 +109,27 @@ def active_rule_predicates(runtime: BookStateRuntime) -> list[RulePredicate]:
 
 
 @dataclass(frozen=True)
+class RuleMovementLeg:
+    mover_id: str
+    from_id: str
+    to_id: str
+    mode_ids: tuple[str, ...]
+    movement_index: int | None = None
+
+
+def runtime_for_movement(runtime: BookStateRuntime, leg: RuleMovementLeg) -> BookStateRuntime:
+    """A travel view with the mover's modes at this leg, leaving the base world untouched."""
+    effective = copy(runtime)
+    effective.world = copy(runtime.world)
+    effective.world.states_by_node_id = dict(runtime.world.states_by_node_id)
+    effective.world.states_by_node_id[leg.mover_id] = {
+        **runtime.world.get_state(leg.mover_id),
+        "location_id": leg.from_id, "travel_mode_ids": list(leg.mode_ids),
+    }
+    return effective
+
+
+@dataclass(frozen=True)
 class RuleSubjectChanges:
     moves: tuple[tuple[str, str], ...] = ()
     relation_creates: tuple[tuple[str, str, str], ...] = ()
@@ -116,6 +137,7 @@ class RuleSubjectChanges:
     state_transitions: tuple[tuple[str, str, Any, Any], ...] = ()
     knowledge: tuple[tuple[str, str, str, str], ...] = ()
     intent_locations: tuple[tuple[str, str], ...] = ()
+    movement_legs: tuple[RuleMovementLeg, ...] = ()
 
 
 def _records(value):
@@ -127,7 +149,9 @@ def _active_edge(payload):
 
 
 def changes_from_delta(runtime: BookStateRuntime, delta: GraphDelta) -> RuleSubjectChanges:
-    moves = [(m.get("entity_id", ""), m.get("to_id", "")) for m in _records(delta.metadata.get("movements"))]
+    movements = _records(delta.metadata.get("movements"))
+    matched: set[int] = set()
+    patched_legs = []
     transitions = []
     payloads = {}
     for patch in delta.node_patches:
@@ -150,9 +174,36 @@ def changes_from_delta(runtime: BookStateRuntime, delta: GraphDelta) -> RuleSubj
         for field in old.keys() | new.keys():
             if old.get(field) != new.get(field):
                 transitions.append((patch.node_id, field, old.get(field), new.get(field)))
-        if (after.get("node_type") in ACTOR_NODE_TYPES and old.get("location_id") != new.get("location_id")
+        if ((after.get("node_type") in ACTOR_NODE_TYPES or str(patch.op) != "create")
+                and old.get("location_id") != new.get("location_id")
                 and new.get("location_id")):
-            moves.append((patch.node_id, new["location_id"]))
+            start, target = old.get("location_id") or "", new["location_id"]
+            index = next((i for i, m in enumerate(movements) if i not in matched
+                          and m.get("entity_id") == patch.node_id and m.get("to_id") == target
+                          and (not m.get("from_id") or m["from_id"] == start)), None)
+            leg = RuleMovementLeg(patch.node_id, start, target,
+                                  tuple(old.get("travel_mode_ids") or ()), index)
+            patched_legs.append(leg)
+            if index is not None:
+                matched.add(index)
+    records, locations = {}, {}
+    for index, movement in enumerate(movements):
+        mover = movement.get("entity_id", "")
+        state = runtime.world.get_state(mover)
+        start = movement.get("from_id") or locations.get(mover, state.get("location_id") or "")
+        target = movement.get("to_id", "")
+        # Without a matching location patch there is no ordering anchor for equipment changes.
+        if index not in matched:
+            records[index] = RuleMovementLeg(mover, start, target, tuple(state.get("travel_mode_ids") or ()), index)
+        locations[mover] = target
+    legs = []
+    for leg in patched_legs:
+        if leg.movement_index is not None:
+            for index in list(records):
+                if index < leg.movement_index:
+                    legs.append(records.pop(index))
+        legs.append(leg)
+    legs.extend(records.values())
     edges = {}
     for patch in delta.edge_patches:
         edge = runtime.world.edges_by_id.get(patch.edge_id)
@@ -176,7 +227,8 @@ def changes_from_delta(runtime: BookStateRuntime, delta: GraphDelta) -> RuleSubj
             creates.append((after.get("source_id", ""), after.get("edge_type", ""), after.get("target_id", "")))
     knowledge = tuple((k.get("observer_id", ""), k.get("fact_ref", ""), k.get("channel", ""), k.get("source_id", ""))
                       for k in _records(delta.metadata.get("knowledge_tags")))
-    return RuleSubjectChanges(tuple(dict.fromkeys(moves)), tuple(creates), tuple(ends), tuple(transitions), knowledge)
+    return RuleSubjectChanges(tuple((leg.mover_id, leg.to_id) for leg in legs), tuple(creates), tuple(ends),
+                              tuple(transitions), knowledge, movement_legs=tuple(legs))
 
 
 def changes_from_new_intents(runtime: BookStateRuntime, candidate) -> RuleSubjectChanges:
@@ -222,6 +274,15 @@ def evaluate_rules(runtime: BookStateRuntime, predicates, changes: RuleSubjectCh
                  if e.id not in changes.relation_ends and _active_edge(e.model_dump(mode="python"))]
     relations.extend(changes.relation_creates)
     created_types = {ref: after for ref, field, _before, after in changes.state_transitions if field == "node_type"}
+    legs = changes.movement_legs
+    if not legs:
+        derived, locations = [], {}
+        for mover, target in changes.moves:
+            state = runtime.world.get_state(mover)
+            derived.append(RuleMovementLeg(mover, locations.get(mover, state.get("location_id") or ""),
+                                           target, tuple(state.get("travel_mode_ids") or ())))
+            locations[mover] = target
+        legs = tuple(derived)
     violations = []
     for rule in predicates:
         p, refs = rule.params, set()
@@ -253,10 +314,10 @@ def evaluate_rules(runtime: BookStateRuntime, predicates, changes: RuleSubjectCh
                         if fact.removeprefix(FACT_REF_PREFIX) == p["fact_ref"].removeprefix(FACT_REF_PREFIX)
                         and channel in p["channels"] and source in p["source_refs"])
         elif rule.kind == "requires_travel_mode":
-            for mover, target in changes.moves:
-                if not _lacks_mode(runtime, rule, mover):
+            for leg in legs:
+                mover, start, target = leg.mover_id, leg.from_id, leg.to_id
+                if not _lacks_mode(runtime_for_movement(runtime, leg), rule, mover):
                     continue
-                start = runtime.world.get_state(mover).get("location_id")
                 if not start or start == target:
                     continue
                 original = runtime.map.shortest_path(start, target, metric="travel_time")

@@ -391,7 +391,7 @@ class _ChapterExtractionChecks:
 
     def _rule_issues(self) -> None:
         from forwin.book_state.rule_predicates import (
-            RULE_PREDICATE_KINDS, active_rule_predicates, changes_from_delta, evaluate_rules,
+            RULE_PREDICATE_KINDS, active_rule_predicates, evaluate_rules,
         )
 
         for node in self.runtime.world.nodes_by_id.values():
@@ -404,11 +404,17 @@ class _ChapterExtractionChecks:
         rule_runtime = copy(self.runtime)
         rule_runtime.map = self.graph
         for violation in evaluate_rules(rule_runtime, active_rule_predicates(self.runtime),
-                                        changes_from_delta(self.runtime, self.delta)):
+                                        self.rule_changes):
             self._issue("error" if violation.hard else "warning", "rule_violated",
                         f"rule:{violation.rule_id}", violation.message)
 
     # movements
+
+    @cached_property
+    def rule_changes(self):
+        from forwin.book_state.rule_predicates import changes_from_delta
+
+        return changes_from_delta(self.runtime, self.delta)
 
     @cached_property
     def graph(self) -> MapGraph:
@@ -435,22 +441,25 @@ class _ChapterExtractionChecks:
         return graph
 
     def _movement_issues(self) -> None:
-        movers = {str(movement.get("entity_id") or "") for movement in self.movements}
-        # A location change with no movement record (a faction's, say) keeps the patch-based check.
+        from forwin.book_state.rule_predicates import active_rule_predicates, runtime_for_movement
+
         unrecorded = [
-            patch for patch in self.delta.node_patches
-            if _is_location_patch(patch) and patch.node_id not in movers
+            leg for leg in self.rule_changes.movement_legs if leg.movement_index is None
+            and leg.from_id and leg.to_id and leg.from_id != leg.to_id
         ]
         if unrecorded:
-            self.issues.extend(_location_patch_issues(self.graph, unrecorded))
-            from forwin.book_state.rule_predicates import active_rule_predicates
-
+            lexicon = None
             if any(p.hard and p.kind == "requires_travel_mode" for p in active_rule_predicates(self.runtime)):
                 lexicon = BookLexiconRepository(self.session).get(self.delta.project_id)
-                for patch in unrecorded:
-                    if (patch.old_value and patch.new_value and patch.old_value != patch.new_value
-                            and self.graph.shortest_path(str(patch.old_value), str(patch.new_value)).reachable):
-                        self._shortest_minutes(lexicon, patch.node_id, str(patch.old_value), str(patch.new_value))
+            for leg in unrecorded:
+                route = self.graph.shortest_path(leg.from_id, leg.to_id, metric="travel_time")
+                if not route.reachable:
+                    self._issue("error", "movement_unreachable", f"node:{leg.mover_id}",
+                                f"no objective map path for {leg.mover_id} moving {leg.from_id} -> {leg.to_id}: "
+                                f"{route.blocked_reason}")
+                elif lexicon is not None:
+                    self._shortest_minutes(lexicon, leg.mover_id, leg.from_id, leg.to_id,
+                                           runtime=runtime_for_movement(self.runtime, leg))
         if not self.movements:
             return
         lexicon = BookLexiconRepository(self.session).get(self.delta.project_id)
@@ -459,7 +468,9 @@ class _ChapterExtractionChecks:
         # Each mover's shortest travel time per measured movement.
         required: dict[str, list[float]] = defaultdict(list)
         arrivals: dict[str, int] = {}
-        for movement in self.movements:
+        legs = {leg.movement_index: leg for leg in self.rule_changes.movement_legs
+                if leg.movement_index is not None}
+        for index, movement in enumerate(self.movements):
             mover = str(movement.get("entity_id") or "")
             target = f"node:{mover}"
             depart, arrive = _minute(movement.get("depart_minute")), _minute(movement.get("arrive_minute"))
@@ -471,10 +482,12 @@ class _ChapterExtractionChecks:
                 arrivals[mover] = max(arrive, last_arrival if last_arrival is not None else arrive)
             self._time_offset_issues(target, depart, arrive)
             self._restraint_issues(mover)
-            from_id, to_id = str(movement.get("from_id") or ""), str(movement.get("to_id") or "")
+            leg = legs[index]
+            from_id, to_id = leg.from_id, leg.to_id
             if not from_id or not to_id or from_id == to_id:
                 continue
-            shortest = self._shortest_minutes(lexicon, mover, from_id, to_id)
+            shortest = self._shortest_minutes(lexicon, mover, from_id, to_id,
+                                              runtime=runtime_for_movement(self.runtime, leg))
             if shortest is None:
                 continue
             required[mover].append(shortest)
@@ -539,14 +552,16 @@ class _ChapterExtractionChecks:
                 return True
         return False
 
-    def _shortest_minutes(self, lexicon: BookLexicon, mover: str, from_id: str, to_id: str) -> float | None:
+    def _shortest_minutes(self, lexicon: BookLexicon, mover: str, from_id: str, to_id: str,
+                          *, runtime: BookStateRuntime | None = None) -> float | None:
         """The mover's shortest time over a route it knows; None once a missing route is reported."""
         # Imported here: forwin.protocol's package init loads this module, and the travel module
         # imports forwin.protocol, so a module-level import cycles when the travel module loads first.
         from forwin.world_engine.travel import estimate_travel
 
         travel = estimate_travel(
-            self.runtime, lexicon, mover_id=mover, from_location_id=from_id, to_location_id=to_id,
+            runtime if runtime is not None else self.runtime, lexicon,
+            mover_id=mover, from_location_id=from_id, to_location_id=to_id,
             graph=self.graph,
         )
         target = f"node:{mover}"

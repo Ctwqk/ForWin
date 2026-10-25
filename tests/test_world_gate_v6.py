@@ -1078,3 +1078,134 @@ def test_gate_rule_predicate_postgres(hard):
     assert ("error" if hard else "warning", "rule_violated") in _codes(verdict)
     assert verdict.accepted is (not hard)
     engine.dispose()
+
+
+def _travel_rule_fixture(monkeypatch, *, modes=(), hard=True):
+    from forwin.book_state.lexicon import BookLexicon, TravelMode
+    from tests.test_rule_predicates import rule
+    from tests.test_world_constraints import _runtime
+
+    runtime = _runtime(rule("requires_travel_mode", hard=hard, edge_types=["road"], mode_ids=["m"]))
+    runtime.world.states_by_node_id["a"].update(
+        travel_mode_ids=list(modes), restraint={"state": "free", "by_ref": "", "since": None},
+    )
+    lexicon = BookLexicon(travel_modes=(TravelMode("m", "", 2, ("road",)),))
+    monkeypatch.setattr("forwin.book_state.reviewer.BookLexiconRepository.get", lambda *a: lexicon)
+    return runtime, lexicon
+
+
+def _review_travel_delta(runtime, patches, movements=()):
+    delta = GraphDelta(id="travel", project_id="p", chapter_number=4, source_type="world_engine",
+        story_time_start=600, story_time_end=1200, node_patches=patches,
+        metadata={"movements": list(movements)})
+    return BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta]),
+        runtime=runtime, base_chapter=3,
+    )
+
+
+@pytest.mark.parametrize("op", ["merge", "set"])
+@pytest.mark.parametrize("rule_count", [1, 2])
+def test_whole_state_movement_enforces_combined_travel_rules(monkeypatch, op, rule_count):
+    from copy import deepcopy
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.world_engine.travel import estimate_travel, estimate_travel_from
+    from tests.test_rule_predicates import rule
+
+    runtime, lexicon = _travel_rule_fixture(monkeypatch)
+    if rule_count == 2:
+        runtime.world.add_node(rule("requires_travel_mode", edge_types=["path"], mode_ids=["m"])
+                               .model_copy(update={"id": "r2"}))
+        runtime.map = MapGraph(nodes=list(runtime.map.nodes_by_id.values()), edges=[
+            *runtime.map.edges_by_id.values(),
+            MapEdge(id="alt", project_id="p", from_node_id="l1", to_node_id="l2",
+                    edge_type="path", travel_time=4),
+        ])
+    before = deepcopy(runtime.world.states_by_node_id)
+    state = runtime.world.get_state("a")
+    value = {"location_id": "l2"} if op == "merge" else {**state, "location_id": "l2"}
+    verdict = _review_travel_delta(runtime, [NodePatch(node_id="a", node_type="character", op=op,
+        field_path="state", old_value=state, new_value=value)])
+    estimate = estimate_travel(runtime, lexicon, mover_id="a", from_location_id="l1", to_location_id="l2")
+    assert estimate_travel_from(runtime, lexicon, mover_id="a", from_location_id="l1")["l2"] == estimate
+    assert not estimate.reachable and estimate.minutes is None
+    assert not verdict.accepted
+    assert ("error", "movement_rule_blocked") in _codes(verdict)
+    assert set(_codes(verdict)) <= {("error", "movement_rule_blocked"), ("error", "rule_violated")}
+    assert runtime.world.states_by_node_id == before
+
+
+@pytest.mark.parametrize("recorded", [True, False])
+def test_soft_travel_rule_warns_on_return_leg(monkeypatch, recorded):
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.world_engine.travel import estimate_travel, estimate_travel_from
+
+    runtime, lexicon = _travel_rule_fixture(monkeypatch, hard=False)
+    runtime.map = MapGraph(nodes=list(runtime.map.nodes_by_id.values()), edges=[
+        MapEdge(id="out", project_id="p", from_node_id="l1", to_node_id="l2",
+                edge_type="path", travel_time=2),
+        MapEdge(id="back", project_id="p", from_node_id="l2", to_node_id="l1",
+                edge_type="road", travel_time=2),
+    ])
+    patches = [NodePatch(node_id="a", node_type="character", op="set", field_path="state.location_id",
+                         old_value="l1", new_value=target) for target in ("l2", "l1")]
+    movements = [
+        {"entity_id": "a", "from_id": "l1", "to_id": "l2", "depart_minute": 600, "arrive_minute": 720},
+        {"entity_id": "a", "from_id": "l2", "to_id": "l1", "depart_minute": 720, "arrive_minute": 840},
+    ]
+    verdict = _review_travel_delta(runtime, patches, movements if recorded else ())
+    assert verdict.accepted
+    assert _codes(verdict) == [("warning", "rule_violated")]
+    for start, target in [("l1", "l2"), ("l2", "l1")]:
+        travel = estimate_travel(runtime, lexicon, mover_id="a", from_location_id=start, to_location_id=target)
+        assert travel.reachable and travel.minutes == 120
+        assert estimate_travel_from(runtime, lexicon, mover_id="a", from_location_id=start)[target] == travel
+
+
+@pytest.mark.parametrize("recorded", [True, False])
+@pytest.mark.parametrize("gain,before_move", [(True, True), (False, True), (True, False), (False, False)])
+def test_travel_rules_use_modes_at_movement(monkeypatch, recorded, gain, before_move):
+    from copy import deepcopy
+
+    initial, updated = ([], ["m"]) if gain else (["m"], [])
+    runtime, _ = _travel_rule_fixture(monkeypatch, modes=initial)
+    before = deepcopy(runtime.world.states_by_node_id)
+    mode = NodePatch(node_id="a", node_type="character", op="set", field_path="state.travel_mode_ids",
+                     old_value=initial, new_value=updated)
+    move = NodePatch(node_id="a", node_type="character", op="set", field_path="state.location_id",
+                     old_value="l1", new_value="l2")
+    movements = [{"entity_id": "a", "from_id": "l1", "to_id": "l2",
+                  "depart_minute": 600, "arrive_minute": 660}]
+    verdict = _review_travel_delta(runtime, [mode, move] if before_move else [move, mode],
+                                  movements if recorded else ())
+    allowed = gain if before_move else not gain
+    assert verdict.accepted is allowed, _codes(verdict)
+    assert _codes(verdict) == ([] if allowed else [
+        ("error", "movement_rule_blocked"), ("error", "rule_violated"),
+    ])
+    assert runtime.world.states_by_node_id == before
+
+
+@pytest.mark.parametrize("gain", [True, False])
+def test_cumulative_tick_travel_uses_prior_candidates_modes(monkeypatch, gain):
+    from forwin.world_engine.running_state import RunningStateCheck
+    from forwin.world_engine.types import TickContext
+    from tests.test_world_constraints import CALENDAR, _candidate, _change, _movement
+
+    initial, updated = ([], ["m"]) if gain else (["m"], [])
+    runtime, lexicon = _travel_rule_fixture(monkeypatch, modes=initial)
+    monkeypatch.setattr("forwin.world_engine.delta_builder.StoryCalendarRepository.get", lambda *a: CALENDAR)
+    check = RunningStateCheck(None,
+        context=TickContext(project_id="p", chapter_number=3, now=1000, window_start=600, seed=1),
+        runtime=runtime, lexicon=lexicon, calendar=CALENDAR, tick_id="tick", travel_tolerance=0.2)
+    assert check.admit(_candidate(_change("a", "travel_mode_ids", updated), candidate_id="equip")) == []
+    move = _candidate({"movements": [_movement(depart_at=800, arrive_at=920)]}, candidate_id="move")
+    issues = check.admit(move)
+    if gain:
+        assert issues == []
+        assert check.runtime.world.get_state("a")["location_id"] == "l2"
+    else:
+        assert "movement_rule_blocked" in [issue.code for issue in issues]
+        assert "rule_violated" in [issue.code for issue in issues]
+        assert check.runtime.world.get_state("a")["location_id"] == "l1"
+    assert runtime.world.get_state("a")["travel_mode_ids"] == initial

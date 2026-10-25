@@ -135,3 +135,57 @@ def test_exclusive_relation_counts_reactivated_edge():
     delta = GraphDelta(id="d", project_id="p", chapter_number=4,
                       edge_patches=[EdgePatch(edge_id="old", op="create")])
     assert evaluate_rules(runtime, active_rule_predicates(runtime), changes_from_delta(runtime, delta))[0].ref == "a"
+
+
+@pytest.mark.parametrize("record_indices", [(), (0,), (0, 2), (0, 1, 2)])
+def test_repeated_destinations_keep_each_legs_origin_and_modes(monkeypatch, record_indices):
+    from copy import deepcopy
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.rule_predicates import (
+        active_rule_predicates, changes_from_delta, evaluate_rules, runtime_for_movement,
+    )
+    from forwin.protocol.book_state import MapEdge
+    from forwin.world_engine.travel import estimate_travel, estimate_travel_from
+    from tests.test_world_gate_v6 import _codes, _review_travel_delta, _travel_rule_fixture
+
+    runtime, lexicon = _travel_rule_fixture(monkeypatch, modes=["m"], hard=False)
+    runtime.map = MapGraph(nodes=list(runtime.map.nodes_by_id.values()), edges=[
+        *runtime.map.edges_by_id.values(),
+        MapEdge(id="back", project_id="p", from_node_id="l2", to_node_id="l1", edge_type="path", travel_time=2),
+    ])
+    before = deepcopy(runtime.world.states_by_node_id)
+    patches = [
+        NodePatch(node_id="a", node_type="character", op="set", field_path="state.location_id",
+                  old_value="l1", new_value="l2"),
+        NodePatch(node_id="a", node_type="character", op="remove", field_path="state.travel_mode_ids",
+                  old_value=["m"], new_value="m"),
+        NodePatch(node_id="a", node_type="character", op="merge", field_path="state",
+                  old_value=runtime.world.get_state("a"), new_value={"location_id": "l1"}),
+        NodePatch(node_id="a", node_type="character", op="set", field_path="state.location_id",
+                  old_value="l1", new_value="l2"),
+    ]
+    movements = [
+        {"entity_id": "a", "from_id": "l1", "to_id": "l2", "depart_minute": 600, "arrive_minute": 660},
+        {"entity_id": "a", "from_id": "l2", "to_id": "l1", "depart_minute": 660, "arrive_minute": 780},
+        {"entity_id": "a", "from_id": "l1", "to_id": "l2", "depart_minute": 780, "arrive_minute": 900},
+    ]
+    movements = [movements[index] for index in record_indices]
+    delta = GraphDelta(id="d", project_id="p", chapter_number=4, node_patches=patches,
+                       metadata={"movements": movements})
+    changes = changes_from_delta(runtime, delta)
+    violations = evaluate_rules(runtime, active_rule_predicates(runtime), changes)
+    assert len(violations) == 1 and not violations[0].hard
+    verdict = _review_travel_delta(runtime, patches, movements)
+    assert verdict.accepted and _codes(verdict) == [("warning", "rule_violated")]
+    assert changes.moves == (("a", "l2"), ("a", "l1"), ("a", "l2"))
+    for leg, start, target, modes, minutes in zip(changes.movement_legs,
+            ("l1", "l2", "l1"), ("l2", "l1", "l2"), (("m",), (), ()), (60, 120, 120), strict=True):
+        assert (leg.from_id, leg.to_id, leg.mode_ids) == (start, target, modes)
+        effective = runtime_for_movement(runtime, leg)
+        travel = estimate_travel(effective, lexicon, mover_id="a", from_location_id=start, to_location_id=target)
+        assert travel.reachable and travel.minutes == minutes
+        assert estimate_travel_from(effective, lexicon, mover_id="a", from_location_id=start)[target] == travel
+        independent = deepcopy(runtime)
+        independent.world.states_by_node_id["a"]["travel_mode_ids"] = list(modes)
+        assert estimate_travel(independent, lexicon, mover_id="a", from_location_id=start, to_location_id=target) == travel
+    assert runtime.world.states_by_node_id == before

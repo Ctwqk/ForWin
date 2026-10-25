@@ -19,7 +19,7 @@ from forwin.protocol.book_state import GraphDelta
 
 from .constraints import is_living_actor
 from .delta_builder import tick_event_fact_ref
-from .travel import _MINUTES_PER_HOUR
+from .travel import estimate_travel_from
 from .types import WORLD_ENGINE_SOURCE_TYPE, EffectEvent, EffectKnowledge, NewsItem, TickCandidate
 
 
@@ -127,12 +127,13 @@ def propagate_news(
             news.learn(actor_id, fact_ref, _WITNESS_STATE, _WITNESS_CHANNEL)
         if event.visibility != "public" or event.location_id not in runtime.map.nodes_by_id:
             continue
+        estimates = estimate_travel_from(runtime, lexicon, mover_id=None, from_location_id=event.location_id)
         for actor_id, location_id in sorted(news.recipients.items()):
             if actor_id in witnesses or not location_id:
                 continue
-            route = runtime.map.shortest_path(event.location_id, location_id, metric="travel_time")
-            if route.reachable:
-                minutes = route.total_travel_time * _MINUTES_PER_HOUR / lexicon.news_speed_multiplier
+            estimate = estimates.get(location_id)
+            if estimate is not None and estimate.minutes is not None:
+                minutes = estimate.minutes / lexicon.news_speed_multiplier
                 news.hear(actor_id, fact_ref, event.at + math.ceil(minutes - _MINUTE_EPSILON))
     return news.result()
 

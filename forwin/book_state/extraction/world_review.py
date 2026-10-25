@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
 from forwin.naming.types import EntityAdmissionPlan
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
@@ -41,6 +42,8 @@ def review_chapter_extraction(
     chapter_summary: str,
     travel_tolerance: float,
 ) -> ChapterWorldReview:
+    base_chapter = max(chapter_number - 1, 0)
+    runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=base_chapter)
     review_verdict_id = f"book_state_direct_review_{project_id}_{chapter_number}"
     translation = ChapterDeltaTranslator(session).translate(
         project_id=project_id,
@@ -49,6 +52,7 @@ def review_chapter_extraction(
         admission_plan=admission_plan,
         chapter_summary=chapter_summary,
         review_verdict_id=review_verdict_id,
+        runtime=runtime,
     )
     if translation.delta is None:
         return ChapterWorldReview(translation=translation, gate=None)
@@ -70,7 +74,8 @@ def review_chapter_extraction(
     # when a historical rewrite still holds the chapter's old deltas.
     gate = BookStateReviewGate(session).review(
         changes,
-        base_chapter=max(chapter_number - 1, 0),
+        base_chapter=base_chapter,
+        runtime=runtime,
         travel_tolerance=travel_tolerance,
     )
     return ChapterWorldReview(translation=translation, gate=gate)

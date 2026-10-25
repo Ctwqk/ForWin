@@ -32,7 +32,7 @@ from forwin.utils import parse_llm_json
 from forwin.world_engine.conflict_repository import SUPERSEDED_BY_DELTA_KEY
 from forwin.world_engine.constraints import ConstraintIssue, is_living_actor
 from forwin.world_engine.effect_validation import scoped_effect_reference_issues
-from forwin.world_engine.travel import estimate_travel
+from forwin.world_engine.travel import estimate_travel_from
 from forwin.world_engine.types import (
     AGENDA_PRIORITY_MAX, AGENDA_PRIORITY_MIN, INVALID_OUTPUT, LLM_UNAVAILABLE, NEW_AGENDA_REF, PROMPT_TOO_LARGE,
     ActorTurnBatch, ActorTurnResult, TickCandidate, TickContext, WorldEffects,
@@ -354,13 +354,12 @@ def _reachable_places(
 ) -> list[dict[str, Any]]:
     if location_id not in runtime.map.nodes_by_id:
         return []
+    estimates = estimate_travel_from(runtime, lexicon, mover_id=actor_id, from_location_id=location_id)
     found: list[tuple[float, str, str]] = []
     for node in runtime.map.nodes_by_id.values():
         if node.id == location_id:
             continue
-        estimate = estimate_travel(
-            runtime, lexicon, mover_id=actor_id, from_location_id=location_id, to_location_id=node.id,
-        )
+        estimate = estimates[node.id]
         # minutes is None when only an objective path exists, not one the actor knows.
         if estimate.minutes is not None:
             found.append((estimate.minutes, node.id, node.name))

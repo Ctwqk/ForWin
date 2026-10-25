@@ -1025,3 +1025,30 @@ def test_first_due_at_band_end_waits_for_next_planner():
     assert candidate.slip_updates == {}
     _commit_bookkeeping(runtime, result.candidates, NOW)
     assert [node.id for node in due_onstage_intents(runtime)] == ["intent-1"]
+
+
+def test_news_single_source_matches_pairwise_minutes(monkeypatch):
+    from forwin.world_engine.travel import estimate_travel
+    import math
+
+    runtime = _runtime(*[_actor(f"actor-{i}", location=_site(i)) for i in range(1, 6)],
+                       edges=[(1, 2, 0.2), (2, 3, 0.4), (1, 3, 1.0), (3, 4, 2.0)])
+    lexicon = BookLexicon(news_speed_multiplier=1.5)
+    expected = {}
+    for i in range(2, 6):
+        estimate = estimate_travel(runtime, lexicon, mover_id=None,
+                                   from_location_id=_site(1), to_location_id=_site(i))
+        if estimate.minutes is not None:
+            expected[f"actor-{i}"] = 100 + math.ceil(estimate.minutes / 1.5 - 1e-6)
+    calls = []
+    original = runtime.map.single_source_travel_paths
+    def search(*args, **kwargs):
+        calls.append(args[0])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(runtime.map, "single_source_travel_paths", search)
+    monkeypatch.setattr(runtime.map, "shortest_path", lambda *args, **kwargs: pytest.fail("pairwise news search"))
+    result = propagate_news(runtime, lexicon, events=[EffectEvent(summary="event", location_id=_site(1),
+                            visibility="public", at=100)], in_transit=[], now=100,
+                            fact_ref_for_event={0: "fact:event"})
+    assert {item.observer_ref: item.arrive_at for item in result.in_transit} == expected
+    assert calls == [_site(1)]

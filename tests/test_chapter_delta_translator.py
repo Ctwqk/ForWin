@@ -990,3 +990,34 @@ def test_location_entity_change_is_skipped_when_the_entity_has_a_movement() -> N
         (world.loc(1), world.loc(2), "e2"),
     ]
     engine.dispose()
+
+
+def test_reused_runtime_must_match_project_and_as_of_chapter():
+    import pytest
+    from forwin.book_state.extraction.chapter_input import build_chapter_extraction_input
+    from forwin.book_state.reviewer import BookStateReviewGate
+    from forwin.world_engine.delta_builder import WorldTickDeltaBuilder
+    from forwin.world_engine.types import TickContext
+    from tests.test_world_actor_turns import _runtime
+
+    runtime = _runtime()
+    for project_id, chapter in (("p", 4), ("other", 3)):
+        with pytest.raises(AssertionError):
+            WorldTickDeltaBuilder(None).build(
+                context=TickContext(project_id=project_id, chapter_number=chapter, now=10, window_start=0, seed=1),
+                candidates=[], news_in_transit=[], tick_id="tick", runtime=runtime,
+            )
+        with pytest.raises(AssertionError):
+            BookStateReviewGate(None).review(
+                ApprovedGraphDeltaSet(project_id=project_id, chapter_number=chapter, graph_deltas=[]),
+                base_chapter=chapter, runtime=runtime,
+            )
+        with pytest.raises(AssertionError):
+            ChapterDeltaTranslator(None).translate(
+                project_id=project_id, chapter_number=chapter + 1,
+                extraction=_extraction(chapter + 1, {}), chapter_summary="summary",
+                admission_plan=EntityAdmissionPlan(project_id=project_id, chapter_number=chapter + 1,
+                                                   candidate_fingerprint="f"), runtime=runtime,
+            )
+        with pytest.raises(AssertionError):
+            build_chapter_extraction_input(None, project_id=project_id, chapter_number=chapter + 1, runtime=runtime)

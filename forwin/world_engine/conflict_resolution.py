@@ -788,6 +788,7 @@ class ConflictResolutionService:
             candidates=[*candidates, news.candidate] if news.candidate is not None else candidates,
             news_in_transit=news.in_transit,
             tick_id=tick_id,
+            runtime=runtime,
         )
         if build.delta is None:
             errors = "; ".join(issue.message for issue in build.issues if issue.severity == "error")

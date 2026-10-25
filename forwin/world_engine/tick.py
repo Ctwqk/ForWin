@@ -590,6 +590,7 @@ class _Tick:
             built = [*candidates, news.candidate] if news.candidate is not None else candidates
             build = self.builder.build(
                 context=context, candidates=built, news_in_transit=news.in_transit, tick_id=self.tick_id,
+                runtime=self.runtime,
             )
             errors = [issue for issue in build.issues if issue.severity == "error"]
             if errors:

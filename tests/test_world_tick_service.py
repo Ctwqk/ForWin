@@ -1276,9 +1276,9 @@ def _failing_build(monkeypatch: pytest.MonkeyPatch, candidate_prefix: str | None
         "_UnpatchedBuilder", (WorldTickDeltaBuilder,), {"build": original},
     ))
 
-    def build(self, *, context, candidates, news_in_transit, tick_id):  # noqa: ANN001
+    def build(self, *, context, candidates, news_in_transit, tick_id, runtime=None):  # noqa: ANN001
         result = original(
-            self, context=context, candidates=candidates, news_in_transit=news_in_transit, tick_id=tick_id,
+            self, context=context, candidates=candidates, news_in_transit=news_in_transit, tick_id=tick_id, runtime=runtime,
         )
         if len(candidates) < 2:
             return result
@@ -2130,3 +2130,39 @@ def test_tick_releases_or_settles_bound_holds_after_acceptance(monkeypatch, effe
         assert state["scheduled_at"] == second.story_time_end
     assert _runtime(Session, world, chapter=2).world.get_state(world.rival)["alive_status"] == "alive"
     engine.dispose()
+
+
+def test_tick_reuses_runtime_for_builds_and_gate(monkeypatch):
+    from forwin.book_state.reviewer import BookStateReviewGate
+
+    original_load = BookStateProjection.load_runtime_as_of
+    original_build = WorldTickDeltaBuilder.build
+    original_review = BookStateReviewGate.review
+    loads = []
+    def load(self, *args, **kwargs):
+        loads.append(kwargs["as_of_chapter"])
+        return original_load(self, *args, **kwargs)
+    monkeypatch.setattr(BookStateProjection, "load_runtime_as_of", load)
+    counts = []
+    for reuse in (True, False):
+        engine, Session = _session_factory()
+        world = _seed_tick_world(Session, monkeypatch, errands=24)
+        chapter = _chapter(Session, world, 1)
+        def build(self, **kwargs):
+            if not reuse:
+                kwargs["runtime"] = None
+            return original_build(self, **kwargs)
+        def review(self, changes, **kwargs):
+            if not reuse:
+                kwargs["runtime"] = None
+            return original_review(self, changes, **kwargs)
+        monkeypatch.setattr(WorldTickDeltaBuilder, "build", build)
+        monkeypatch.setattr(BookStateReviewGate, "review", review)
+        loads.clear()
+        result = _tick(Session, _WorldLLM(adjudicate=_settle_every_intent, actor_turn=_quiet_turns), chapter)
+        counts.append(len(loads))
+        assert result.dropped_candidate_ids == []
+        runtime = _runtime(Session, world)
+        assert {runtime.world.get_state(ref)["status"] for ref in _errands(world, 24)[:20]} == {"disrupted"}
+        engine.dispose()
+    assert counts[0] < counts[1] / 2, counts

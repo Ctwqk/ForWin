@@ -657,6 +657,8 @@ def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.Mo
                 approved_changes=reviewed,
             )
 
+    shared_runtime = object()
+    monkeypatch.setattr(world_review.BookStateProjection, "load_runtime_as_of", lambda *args, **kwargs: shared_runtime)
     monkeypatch.setattr(world_review, "ChapterDeltaTranslator", Translator)
     monkeypatch.setattr(world_review, "BookStateReviewGate", Gate)
     policy = RuntimePolicy.for_profile("standard")
@@ -688,7 +690,8 @@ def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.Mo
     assert [(item.id, item.metadata) for item in outcome.approved_changes.graph_deltas] == [
         ("delta-3", {"translation_warnings": []}),
     ]
-    assert calls == [{"approved_by": ["chapter_extraction"], "base_chapter": 2, "travel_tolerance": 0.35}]
+    assert calls == [{"approved_by": ["chapter_extraction"], "base_chapter": 2,
+                      "travel_tolerance": 0.35, "runtime": shared_runtime}]
 
 
 @pytest.mark.parametrize("payload", [
@@ -835,3 +838,79 @@ def test_malformed_reveal_directives_log_chapter(caplog):
     session = SimpleNamespace(scalar=lambda query: ChapterPlan(reveal_directives_json="{invalid"))
     assert chapter_reveal_directives(session, "project-corrupt", 7) == []
     assert "project-corrupt" in caplog.text and "chapter=7" in caplog.text
+
+
+def test_review_pass_loads_one_runtime(monkeypatch):
+    from forwin.book_state.projection import BookStateProjection
+
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    original = BookStateProjection.load_runtime_as_of
+    loads = []
+    def load(self, *args, **kwargs):
+        loads.append(kwargs["as_of_chapter"])
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(BookStateProjection, "load_runtime_as_of", load)
+    with Session() as session:
+        result = world_review.review_chapter_extraction(
+            session, project_id=world.project_id, chapter_number=1,
+            extraction=ChapterDeltaExtraction.model_validate({"body_sha256": "a" * 64, **_time(1, "日")}),
+            admission_plan=EntityAdmissionPlan(project_id=world.project_id, chapter_number=1,
+                                               candidate_fingerprint="fingerprint"),
+            chapter_summary="summary", travel_tolerance=0.2,
+        )
+    assert result.gate is not None and result.gate.accepted
+    assert loads == [0]
+    engine.dispose()
+
+
+def test_review_pass_reuses_real_loader_with_memory_repository(monkeypatch):
+    from types import SimpleNamespace
+    from forwin.book_state import projection
+    from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
+    from forwin.book_state.lexicon import BookLexicon
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.narrative import NarrativeControlGraph
+    from forwin.book_state.query import BookStateQuery
+    from forwin.book_state.runtime import ObjectiveWorldGraph
+
+    repo = SimpleNamespace(
+        latest_world_snapshot=lambda *args: None, latest_map_snapshot=lambda *args: None,
+        load_cognition_views=lambda *args, **kwargs: {},
+        load_base_world_graph=lambda *args, **kwargs: ObjectiveWorldGraph(),
+        load_base_map_graph=lambda *args, **kwargs: MapGraph(),
+        load_narrative_graph=lambda *args, **kwargs: NarrativeControlGraph(),
+        list_graph_deltas=lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(projection, "BookStateRepository", lambda session: repo)
+    monkeypatch.setattr(StoryCalendarRepository, "get", lambda *args: None)
+    monkeypatch.setattr(BookLexiconRepository, "get", lambda *args: BookLexicon())
+    monkeypatch.setattr(BookStateQuery, "current_story_minute", lambda *args, **kwargs: 0)
+    original = projection.BookStateProjection.load_runtime_as_of
+    loads = []
+    def load(self, *args, **kwargs):
+        loads.append(kwargs["as_of_chapter"])
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(projection.BookStateProjection, "load_runtime_as_of", load)
+    def run():
+        return world_review.review_chapter_extraction(
+            None, project_id="p", chapter_number=3,
+            extraction=ChapterDeltaExtraction.model_validate({"body_sha256": "a" * 64,
+                "time": {"elapsed": None, "evidence": ""}}),
+            admission_plan=EntityAdmissionPlan(project_id="p", chapter_number=3, candidate_fingerprint="f"),
+            chapter_summary="summary", travel_tolerance=0.2,
+        )
+    reused = run()
+    assert reused.gate is not None and reused.gate.accepted
+    assert loads == [2]
+    translate, review = ChapterDeltaTranslator.translate, BookStateReviewGate.review
+    def self_translate(self, **kwargs):
+        return translate(self, **{**kwargs, "runtime": None})
+    def self_review(self, changes, **kwargs):
+        return review(self, changes, **{**kwargs, "runtime": None})
+    monkeypatch.setattr(ChapterDeltaTranslator, "translate", self_translate)
+    monkeypatch.setattr(BookStateReviewGate, "review", self_review)
+    loads.clear()
+    independent = run()
+    assert independent == reused
+    assert loads == [2, 2, 2]

@@ -109,15 +109,20 @@ class WorldTickDeltaBuilder:
         candidates: Sequence[TickCandidate],
         news_in_transit: Sequence[NewsItem],
         tick_id: str,
+        runtime: BookStateRuntime | None = None,
     ) -> TickDeltaBuild:
         project_id = context.project_id
+        if runtime is None:
+            runtime = BookStateProjection(self.session).load_runtime_as_of(
+                project_id, as_of_chapter=context.chapter_number,
+            )
+        else:
+            assert (runtime.project_id, runtime.as_of_chapter) == (project_id, context.chapter_number)
         builder = _TickBuilder(
             context=context,
             tick_id=tick_id,
             # The tick lands after the chapter's own delta, so it builds on the committed chapter.
-            runtime=BookStateProjection(self.session).load_runtime_as_of(
-                project_id, as_of_chapter=context.chapter_number,
-            ),
+            runtime=runtime,
             calendar=StoryCalendarRepository(self.session).get(project_id),
             lexicon=BookLexiconRepository(self.session).get(project_id),
         )

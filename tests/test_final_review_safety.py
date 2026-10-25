@@ -214,7 +214,10 @@ def test_http_resolution_seeds_latest_chapter_and_onstage_refs(monkeypatch, sour
     monkeypatch.setattr(RunningStateCheck, "admit", admit)
     session = SimpleNamespace(scalar=lambda *a: SimpleNamespace(onstage_refs_json='["cast"]', pov_ref="pov"))
     service = module.ConflictResolutionService(session, admission=None, policy=RuntimePolicy.for_profile("standard"))
+    # Production pairs the latest-canon runtime with a context for the same chapter.
+    latest = source.runtime.as_of_chapter
     service._check_against_canon(SimpleNamespace(project_id="p"), ["candidate"], runtime=source.runtime,
-                                 context=TickContext(project_id="p", chapter_number=6, now=100, window_start=0, seed=1),
+                                 context=TickContext(project_id="p", chapter_number=latest, now=100, window_start=0,
+                                                     seed=1),
                                  tick_id="resolution")
     assert checked == ["candidate"]

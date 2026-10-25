@@ -107,8 +107,13 @@ class ChapterDeltaTranslator:
         admission_plan: EntityAdmissionPlan,
         chapter_summary: str,
         review_verdict_id: str = "",
+        runtime: BookStateRuntime | None = None,
     ) -> TranslationResult:
         as_of_chapter = max(int(chapter_number) - 1, 0)
+        if runtime is None:
+            runtime = BookStateProjection(self.session).load_runtime_as_of(project_id, as_of_chapter=as_of_chapter)
+        else:
+            assert (runtime.project_id, runtime.as_of_chapter) == (project_id, as_of_chapter)
         calendar = StoryCalendarRepository(self.session).get(project_id)
         start = BookStateQuery(self.session).current_story_minute(project_id, as_of_chapter=as_of_chapter)
         if start is None:
@@ -116,7 +121,7 @@ class ChapterDeltaTranslator:
         builder = _DeltaBuilder(
             project_id=project_id,
             chapter_number=int(chapter_number),
-            runtime=BookStateProjection(self.session).load_runtime_as_of(project_id, as_of_chapter=as_of_chapter),
+            runtime=runtime,
             calendar=calendar,
             lexicon=BookLexiconRepository(self.session).get(project_id),
             start=start,

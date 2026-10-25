@@ -78,15 +78,18 @@ class BookStateReviewGate:
         *,
         base_chapter: int | None = None,
         travel_tolerance: float = DEFAULT_TRAVEL_TOLERANCE,
+        runtime: BookStateRuntime | None = None,
     ) -> BookStateReviewVerdict:
         if base_chapter is None:
             base_chapter = self.projection.repo.compile_base_chapter(
                 changes.project_id, changes.chapter_number
             )
-        runtime = self.projection.load_runtime_as_of(
-            changes.project_id,
-            as_of_chapter=base_chapter,
-        )
+        if runtime is None:
+            runtime = self.projection.load_runtime_as_of(
+                changes.project_id, as_of_chapter=base_chapter,
+            )
+        else:
+            assert (runtime.project_id, runtime.as_of_chapter) == (changes.project_id, base_chapter)
         issues: list[BookStateReviewIssue] = []
         for delta in changes.graph_deltas:
             issues.extend(_canon_permission_issues(delta))

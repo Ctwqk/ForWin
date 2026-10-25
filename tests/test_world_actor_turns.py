@@ -777,3 +777,50 @@ def test_too_many_agenda_changes_retry_with_feedback():
     allowed = [{"turns": [_turn(agenda_changes=changes[:MAX_AGENDA_CHANGES_PER_TURN])]}]
     [kept] = _run(StubLLM(*allowed))
     assert kept.result is not None and kept.issues == []
+
+
+@pytest.mark.parametrize("actor_id", ["hero", "ally"])
+def test_single_source_reachability_matches_pairwise(monkeypatch, actor_id):
+    from forwin.book_state.lexicon import TravelMode
+    from forwin.world_engine.actor_turns import _reachable_places
+    from forwin.world_engine.travel import estimate_travel, estimate_travel_from
+    import math
+
+    runtime = _runtime()
+    runtime.map.add_node(_place("isolated"))
+    runtime.map.add_node(_place("mixed"))
+    runtime.map.add_edge(MapEdge(id="mixed-road", project_id="p", from_node_id="near", to_node_id="mixed",
+                                edge_type="road", travel_time=2))
+    runtime.map.add_edge(_route("blocked", "home", "isolated", 0.1, status="blocked"))
+    runtime.map.add_edge(MapEdge(id="gate", project_id="p", from_node_id="home", to_node_id="far",
+                                edge_type="world_gate", travel_time=5,
+                                metadata={"source_edge_type": "road"}))
+    runtime.world.states_by_node_id[actor_id]["travel_mode_ids"] = ["fast", "path", "unknown"]
+    lexicon = BookLexicon(travel_modes=(
+        TravelMode(id="fast", name="", speed_multiplier=10, allowed_edge_types=("road",)),
+        TravelMode(id="path", name="", speed_multiplier=2, allowed_edge_types=("path",)),
+    ))
+    expected = []
+    estimates = {}
+    for node in runtime.map.nodes_by_id.values():
+        result = estimate_travel(runtime, lexicon, mover_id=actor_id,
+                                 from_location_id="home", to_location_id=node.id)
+        estimates[node.id] = result
+        if node.id != "home" and result.minutes is not None:
+            expected.append((result.minutes, node.id, node.name))
+    expected = [{"location_id": ref, "name": name, "minutes": math.ceil(minutes - 1e-6)}
+                for minutes, ref, name in sorted(expected)]
+    def no_pairwise(*args, **kwargs):
+        pytest.fail("reachability must use one single-source search")
+    monkeypatch.setattr(runtime.map, "shortest_path", no_pairwise)
+    calls = []
+    original = runtime.map.single_source_travel_paths
+    def search(*args, **kwargs):
+        calls.append(args[0])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(runtime.map, "single_source_travel_paths", search)
+    assert estimate_travel_from(runtime, lexicon, mover_id=actor_id, from_location_id="home") == estimates
+    assert calls == ["home"]
+    calls.clear()
+    assert _reachable_places(runtime, lexicon, actor_id, "home") == expected
+    assert calls == ["home"]

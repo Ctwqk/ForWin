@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
 from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.runtime import BookStateRuntime
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
@@ -167,10 +168,14 @@ def _fulfillment_targets(
 def build_chapter_extraction_input(
     session: Session, *, project_id: str, chapter_number: int,
     scene_location_hints: Sequence[str] = (),
+    runtime: BookStateRuntime | None = None,
 ) -> ChapterExtractionInput:
-    runtime = BookStateProjection(session).load_runtime_as_of(
-        project_id, as_of_chapter=chapter_number - 1,
-    )
+    if runtime is None:
+        runtime = BookStateProjection(session).load_runtime_as_of(
+            project_id, as_of_chapter=chapter_number - 1,
+        )
+    else:
+        assert (runtime.project_id, runtime.as_of_chapter) == (project_id, chapter_number - 1)
     calendar = StoryCalendarRepository(session).get(project_id)
     lexicon = BookLexiconRepository(session).get(project_id)
     plan = session.scalar(select(ChapterPlan).where(

@@ -159,10 +159,7 @@ class MapGraph:
                 allow_hidden=allow_hidden,
                 allow_blocked=allow_blocked,
             ):
-                if (allowed_edge_types is not None
-                        and str(edge.edge_type) not in allowed_edge_types
-                        and not (edge.edge_type == "world_gate"
-                                 and str(edge.metadata.get("source_edge_type", "")) in allowed_edge_types)):
+                if not self._edge_type_allowed(edge, allowed_edge_types):
                     continue
                 weight = self._metric_weight(edge, str(metric), composite_weights=composite_weights)
                 current_cost = distances.get(current.node_id, float("inf"))
@@ -183,6 +180,58 @@ class MapGraph:
         if not allow_hidden and not allow_blocked:
             self.path_cache[cache_key] = result
         return result
+
+    @staticmethod
+    def _edge_type_allowed(edge: MapEdge, allowed_edge_types: frozenset[str] | None) -> bool:
+        return (allowed_edge_types is None or str(edge.edge_type) in allowed_edge_types
+                or (edge.edge_type == "world_gate"
+                    and str(edge.metadata.get("source_edge_type", "")) in allowed_edge_types))
+
+    def single_source_travel_paths(
+        self,
+        source_id: str,
+        *,
+        profiles: list[tuple[tuple[str, str] | None, frozenset[str] | None]],
+    ) -> list[dict[str, PathResult]]:
+        """One Dijkstra over independent observer/mode layers, without switching modes mid-route.
+
+        Search weights, edge availability and reported path times match ``shortest_path``.
+        Results belong to this map snapshot; callers keep them local to one actor or event.
+        """
+        distances = [{source_id: 0.0} for _ in profiles]
+        previous: list[dict[str, tuple[str, MapEdge]]] = [{} for _ in profiles]
+        queue = [(0.0, source_id, index) for index in range(len(profiles))
+                 if source_id in self.nodes_by_id]
+        heapq.heapify(queue)
+        visited: set[tuple[int, str]] = set()
+        while queue:
+            cost, node_id, index = heapq.heappop(queue)
+            if (index, node_id) in visited:
+                continue
+            visited.add((index, node_id))
+            observer, allowed = profiles[index]
+            for neighbor, edge in self.get_accessible_neighbors(node_id, observer=observer):
+                if not self._edge_type_allowed(edge, allowed):
+                    continue
+                next_cost = cost + self._metric_weight(edge, "travel_time")
+                if next_cost < distances[index].get(neighbor, float("inf")):
+                    distances[index][neighbor] = next_cost
+                    previous[index][neighbor] = (node_id, edge)
+                    heapq.heappush(queue, (next_cost, neighbor, index))
+        results = []
+        for index in range(len(profiles)):
+            paths = {}
+            for target in self.nodes_by_id:
+                if source_id not in self.nodes_by_id:
+                    paths[target] = self._unreachable(source_id, target, "travel_time",
+                                                      f"unknown from_node_id: {source_id}")
+                elif target not in distances[index]:
+                    paths[target] = self._unreachable(source_id, target, "travel_time", "no accessible path")
+                else:
+                    nodes, edges = self._reconstruct_path(source_id, target, previous[index])
+                    paths[target] = self._path_result(source_id, target, "travel_time", nodes, edges)
+            results.append(paths)
+        return results
 
     def all_pairs_shortest_paths(
         self,

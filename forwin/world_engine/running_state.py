@@ -47,6 +47,7 @@ class RunningStateCheck:
     ) -> None:
         self.session = session
         self.context = context
+        assert (runtime.project_id, runtime.as_of_chapter) == (context.project_id, context.chapter_number)
         self.base = runtime
         self.runtime = runtime
         self.lexicon = lexicon
@@ -89,6 +90,7 @@ class RunningStateCheck:
                 ),
                 # The delta builds on the context's chapter, as the commit will.
                 base_chapter=context.chapter_number,
+                runtime=self.base,
                 travel_tolerance=self.travel_tolerance,
             )
             issues.extend(
@@ -128,6 +130,7 @@ class RunningStateCheck:
         """The delta of the accepted candidates plus ``candidate``, or the candidate's build errors."""
         build = self.builder.build(
             context=self.context, candidates=[*self.accepted, candidate], news_in_transit=(), tick_id=self.tick_id,
+            runtime=self.base,
         )
         if build.delta is None:
             self._checked = None

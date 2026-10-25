@@ -144,7 +144,10 @@ def _skipped(tick_id: str, reason: str) -> WorldTickResult:
 
 
 class WorldTickService:
-    """Runs one world tick in the caller's session; the caller commits.
+    """Runs one world tick; the caller commits the final writes and step result together.
+
+    ``committed_units`` releases read transactions before model phases. It requires a session
+    without an enclosing ``begin()`` context; direct transactional callers may leave it disabled.
 
     ``llm_client`` is None when no model is configured: the LLM nodes are then skipped as unavailable.
     ``audit_writer_factory`` gives the Codex review a writer that commits on its own, so its audit trail
@@ -172,7 +175,9 @@ class WorldTickService:
         self.audit_writer_factory = audit_writer_factory
         self.save_prompt_trace = save_prompt_trace
 
-    def run(self, session: Session, commit: CanonCommitRecord, *, policy: RuntimePolicy) -> WorldTickResult:
+    def run(
+        self, session: Session, commit: CanonCommitRecord, *, policy: RuntimePolicy, committed_units: bool = False,
+    ) -> WorldTickResult:
         tick_id = f"{TICK_ID_PREFIX}{commit.id}"
         number = int(commit.chapter_number or 0)
         latest = BookStateRepository(session).latest_canon_chapter(commit.project_id) or 0
@@ -203,7 +208,7 @@ class WorldTickService:
         # Rewriting the latest chapter retired the tick that ran after it, and this tick moves the world on in
         # its place; the retired tick's open conflicts expire when this one commits.
         tick = _Tick(self, session, commit, policy=policy, tick_id=tick_id, retired_tick_ids=_retired_tick_ids(commit),
-                     rewritten=_rewritten(commit))
+                     rewritten=_rewritten(commit), committed_units=committed_units)
         return tick.finish_holds() if book_complete else tick.run()
 
 
@@ -217,9 +222,12 @@ class _Tick:
 
     def __init__(
         self, service: WorldTickService, session: Session, commit: CanonCommitRecord, *, policy: RuntimePolicy,
-        tick_id: str, retired_tick_ids: Sequence[str] = (), rewritten: bool = False,
+        tick_id: str, retired_tick_ids: Sequence[str] = (), rewritten: bool = False, committed_units: bool = False,
     ) -> None:
         self.service = service
+        self.committed_units = committed_units
+        self.committing = False
+        self.pending_events: list[DecisionEvent] = []
         self.session = session
         self.policy = policy
         self.tick_id = tick_id
@@ -247,6 +255,7 @@ class _Tick:
             session, context=self.context, runtime=self.runtime, policy=policy, tick_id=tick_id,
             delegate=service.conflict_delegate, audit_writer_factory=service.audit_writer_factory,
             retired_tick_ids=frozenset(self.retired_tick_ids),
+            before_llm=self._check_snapshot if committed_units else None,
         )
         self.views: dict[str, ActorView] = {}
         self.slip_conflicts: list[ConflictDraft] = []
@@ -255,7 +264,12 @@ class _Tick:
         self.unasked: list[str] = []
         # Bookkeeping for the due intents over the prompt guard even alone: each waits for the next tick.
         self.oversized: list[TickCandidate] = []
-        self.responses = WorldConflictRepository(session).active_plot_responses(project_id)
+        repo = WorldConflictRepository(session)
+        responses = repo.active_plot_responses(project_id)
+        self.responses = [row.id for row in responses]
+        self.answered = frozenset(row.intent_ref for row in responses if any(
+            plan.chapter_number <= number for plan in repo.response_carriers(row)
+        ))
         self.book_complete = False
 
     def finish_holds(self) -> WorldTickResult:
@@ -347,10 +361,7 @@ class _Tick:
         bound_intent_refs, band_ended, band_bound_intent_refs = onstage_plan_bindings(
             self.session, self.context.project_id, self.context.chapter_number,
         )
-        answered = frozenset(row.intent_ref for row in self.responses if any(
-            plan.chapter_number <= self.context.chapter_number
-            for plan in WorldConflictRepository(self.session).response_carriers(row)
-        ))
+        answered = self.answered
         released = release_held_intents(runtime, bound_intent_refs=bound_intent_refs | answered,
                                        interactions=interactions, now=now)
         onstage = onstage_bookkeeping(
@@ -665,6 +676,13 @@ class _Tick:
         resolution, so the loop ends.
         """
         context = self.context
+        if self.committed_units:
+            # Close the last read unit; everything below shares the completion transaction.
+            self.session.commit()
+        self.committing = True
+        self.conflicts.persist()
+        self.session.add_all(self.pending_events)
+        self.pending_events.clear()
         # Canon read before the project lock: a writer landing meanwhile changes the snapshot checked below.
         queue = latest_news_in_transit(self.session, context.project_id)
         while True:
@@ -714,8 +732,8 @@ class _Tick:
                 return [], warnings
             # Lifecycle rows follow the same conflict-before-project lock order as decisions.
             repo = WorldConflictRepository(self.session)
-            responses = [repo.get(context.project_id, row.id, for_update=True)
-                         for row in sorted(self.responses, key=lambda row: row.id)]
+            responses = [repo.get(context.project_id, row_id, for_update=True)
+                         for row_id in sorted(self.responses)]
             self._expire_rewrite_conflicts()
             self._lock_fresh_canon()
             try:
@@ -775,6 +793,8 @@ class _Tick:
         ) != self.snapshot_id:
             # Canon changed while the tick was reasoning: its view is stale, so the step rolls back and retries.
             raise CanonStaleVersion(f"Canon moved under world tick {self.tick_id}")
+        if self.committed_units and not self.committing:
+            self.session.commit()
 
     def _news(self, candidates: Sequence[TickCandidate], queue: Sequence[NewsItem]) -> PropagatedNews:
         """One propagation of the chapter's events, the events that will commit, and the queue."""
@@ -837,7 +857,7 @@ class _Tick:
         issues: Sequence[ConstraintIssue], trace_id: str = "", conflict_id: str = "",
     ) -> None:
         self.dropped.append(candidate_id)
-        self.session.add(DecisionEvent(
+        event = DecisionEvent(
             project_id=self.context.project_id,
             chapter_number=self.context.chapter_number,
             scope="chapter",
@@ -853,7 +873,11 @@ class _Tick:
             }, ensure_ascii=False, sort_keys=True),
             related_object_type="world_tick",
             related_object_id=self.tick_id,
-        ))
+        )
+        if self.committed_units and not self.committing:
+            self.pending_events.append(event)
+        else:
+            self.session.add(event)
 
 
 def _chapter_onstage_refs(

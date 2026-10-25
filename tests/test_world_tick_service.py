@@ -865,9 +865,9 @@ def test_world_step_runs_before_plan_and_records_tick_result() -> None:
     tick_service = _service(Session, llm)
     tick_run = tick_service.run
 
-    def tick(session, commit, *, policy):  # noqa: ANN001
+    def tick(session, commit, *, policy, committed_units=False):  # noqa: ANN001
         calls.append("tick")
-        return tick_run(session, commit, policy=policy)
+        return tick_run(session, commit, policy=policy, committed_units=committed_units)
 
     tick_service.run = tick  # type: ignore[method-assign]
     service = PostCanonMaintenanceService(

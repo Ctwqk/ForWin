@@ -649,8 +649,8 @@ class PostCanonMaintenanceService:
         try:
             self.heartbeat(claim)
             heartbeat.start()
-            # Arc activation and band planning commit separate units before the completion fence.
-            scope = self.session_factory() if claim.step_name == "plan" else self.session_factory.begin()
+            # World reasoning and planning release read units before model calls.
+            scope = self.session_factory() if claim.step_name in {"world", "plan"} else self.session_factory.begin()
             with scope as session:
                 commit = session.get(CanonCommitRecord, claim.canon_commit_id)
                 if commit is None or commit.status != "committed":
@@ -662,6 +662,8 @@ class PostCanonMaintenanceService:
                 if heartbeat.ownership_lost:
                     raise _lease_lost(claim, "complete")
                 self._acquire_completion_fence(session, claim)
+                if claim.step_name == "world":
+                    session.refresh(commit)
                 trace = self._enqueue_step_trace(
                     session=session,
                     commit=commit,
@@ -671,7 +673,7 @@ class PostCanonMaintenanceService:
                 if trace and claim.step_name not in {"world", "plan"}:
                     result["trace"] = trace
                 self._complete_claim_in_session(session, claim, result)
-                if claim.step_name == "plan":
+                if claim.step_name in {"world", "plan"}:
                     session.commit()
         except Exception as exc:
             heartbeat.stop_and_join()
@@ -914,6 +916,7 @@ class PostCanonMaintenanceService:
             session,
             commit,
             policy=ProjectPolicyStore(session).load(project).policy,
+            committed_units=True,
         )
         return tick.step_result()
 

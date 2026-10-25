@@ -120,7 +120,11 @@ def _utcnow() -> datetime:
 
 
 class TickConflicts:
-    """The conflicts one tick raises, and the decisions it carries out itself."""
+    """The conflicts one tick raises, and the decisions it carries out itself.
+
+    With ``before_llm``, rows stay transient until ``persist`` and the callback closes
+    the context read before delegation. No conflict write or lock crosses that call.
+    """
 
     def __init__(
         self,
@@ -133,8 +137,12 @@ class TickConflicts:
         delegate: WorldConflictDelegate,
         audit_writer_factory: Callable[[], GateAuditWriter],
         retired_tick_ids: frozenset[str] = frozenset(),
+        before_llm: Callable[[], None] | None = None,
     ) -> None:
         self.session = session
+        self.before_llm = before_llm
+        self.pending_rows: dict[str, WorldPlanConflictRow] = {}
+        self.pending_events: list[DecisionEvent] = []
         self.context = context
         self.runtime = runtime
         self.policy = policy
@@ -167,10 +175,12 @@ class TickConflicts:
             draft, live_intent=live_intent(self.runtime, draft.intent_ref),
             plot_responded=self._plot_responded(draft.intent_ref),
             reachable_chapter=project is not None and int(project.target_total_chapters or 0) > self.context.chapter_number,
-        ))
+        ), persist=self.before_llm is None)
+        if self.before_llm is not None:
+            self.pending_rows[row.id] = row
         if draft.intent_ref:
             self._open[key] = row.id
-        self.session.add(conflict_detected_event(
+        self._add_event(conflict_detected_event(
             row, chapter_number=self.context.chapter_number, extra={"tick_id": self.tick_id, **extra},
         ))
         self.conflict_ids.append(row.id)
@@ -179,9 +189,12 @@ class TickConflicts:
                 option=auto_option(draft), decided_by="auto", rationale=AUTO_RATIONALE, decided_at=_utcnow(),
             ))
         elif decider == "codex":
+            snapshot = build_conflict_context_snapshot(self.session, conflict=row)
+            if self.before_llm is not None:
+                self.before_llm()
             delegation = self.delegate.decide(
                 conflict=row,
-                context_snapshot=build_conflict_context_snapshot(self.session, conflict=row),
+                context_snapshot=snapshot,
                 policy=self.policy,
                 audit_writer=self.audit_writer_factory(),
             )
@@ -198,7 +211,7 @@ class TickConflicts:
     def _plot_responded(self, intent_ref: str) -> bool:
         return self.repo.has_plot_response(self.context.project_id, intent_ref) or any(
             item.decision.option == "plot_responds"
-            and self.repo.get(self.context.project_id, item.conflict_id).intent_ref == intent_ref
+            and self._row(item.conflict_id).intent_ref == intent_ref
             for item in self.resolutions
         )
 
@@ -265,7 +278,27 @@ class TickConflicts:
             return
         self.resolutions.append(InTickResolution(row.id, row.actor_ref, decision, candidates, trace_id))
 
+    def persist(self) -> None:
+        """Attach staged conflicts and events only in the final commit unit."""
+        self.session.add_all(self.pending_rows.values())
+        self.session.add_all(self.pending_events)
+        self.session.flush()
+        self.pending_rows.clear()
+        self.pending_events.clear()
+        self.before_llm = None
+
+    def _add_event(self, event: DecisionEvent) -> None:
+        if self.before_llm is not None:
+            self.pending_events.append(event)
+        else:
+            self.session.add(event)
+
+    def _row(self, conflict_id: str) -> WorldPlanConflictRow:
+        return self.pending_rows.get(conflict_id) or self.repo.get(self.context.project_id, conflict_id)
+
     def _locked(self, conflict_id: str) -> WorldPlanConflictRow:
+        if conflict_id in self.pending_rows:
+            return self.pending_rows[conflict_id]
         # Re-read under lock: a rolled-back SAVEPOINT leaves loaded rows expired.
         row = self.repo.get(self.context.project_id, conflict_id, for_update=True)
         if row is None:
@@ -274,14 +307,17 @@ class TickConflicts:
 
     def _hand_to_human(self, row: WorldPlanConflictRow) -> None:
         if row.status == "open":
-            self.repo.escalate(row)
+            if row.id in self.pending_rows:
+                row.required_decider = "human"
+            else:
+                self.repo.escalate(row)
 
     def _escalate(
         self, row: WorldPlanConflictRow, failure_reason: str, *, option: str, detail: str, trace_id: str = "",
     ) -> None:
         """Hand a conflict the tick could not carry out to a human, with its one ESCALATED event."""
         self._hand_to_human(row)
-        self.session.add(DecisionEvent(
+        self._add_event(DecisionEvent(
             project_id=row.project_id,
             chapter_number=self.context.chapter_number,
             scope="chapter",

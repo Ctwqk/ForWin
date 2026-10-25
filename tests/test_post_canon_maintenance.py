@@ -270,6 +270,9 @@ def test_trace_enqueue_failure_rolls_back_step_and_marks_run_retryable() -> None
         def get(self, _model, _identity):
             return commit
 
+        def refresh(self, _row):
+            pass
+
         def execute(self, _statement):
             return SimpleNamespace(rowcount=1)
 
@@ -282,7 +285,7 @@ def test_trace_enqueue_failure_rolls_back_step_and_marks_run_retryable() -> None
             return False
 
     service = PostCanonMaintenanceService(
-        session_factory=SimpleNamespace(begin=Transaction),
+        session_factory=Transaction,
         comment_analyzer=object(),
         artifact_store=object(),
         llm_client=SimpleNamespace(drain_llm_attempt_events=lambda: []),
@@ -353,9 +356,7 @@ def test_stale_completion_cannot_enqueue_trace() -> None:
 
     drains = iter(([], [{"attempt_no": 1}], []))
     service = PostCanonMaintenanceService(
-        session_factory=SimpleNamespace(
-            begin=lambda: nullcontext(FakeSession()),
-        ),
+        session_factory=lambda: nullcontext(FakeSession()),
         comment_analyzer=object(),
         artifact_store=object(),
         llm_client=SimpleNamespace(

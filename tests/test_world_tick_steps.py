@@ -185,6 +185,7 @@ def test_offstage_intent_touching_an_onstage_entity_becomes_an_onstage_intent(st
         runtime.world.get_node("intent").profile["requires_onstage"] = False
     events = []
     tick = object.__new__(_Tick)
+    tick.committed_units = False
     tick.runtime = runtime
     tick.session = SimpleNamespace(add=events.append)
     tick.context = TickContext(project_id="p", chapter_number=3, now=1000, window_start=800, seed=1)
@@ -249,6 +250,7 @@ def test_tick_checks_stage_an_onstage_touch_without_retrying_the_physical_change
     from tests.test_world_constraints import CALENDAR, LEXICON, _runtime as runtime_fixture, _candidate, _change
 
     tick = object.__new__(_Tick)
+    tick.committed_units = False
     tick.runtime = runtime_fixture()
     tick.context = TickContext(project_id="p", chapter_number=3, now=1000, window_start=800, seed=1)
     tick.calendar, tick.lexicon, tick.policy = CALENDAR, LEXICON, RuntimePolicy.for_profile("standard")
@@ -281,6 +283,7 @@ def _physical_test_tick(monkeypatch, runtime, onstage):
     from tests.test_world_constraints import CALENDAR, LEXICON
 
     tick = object.__new__(_Tick)
+    tick.committed_units = False
     tick.runtime = runtime
     tick.context = TickContext(project_id="p", chapter_number=3, now=1000, window_start=800, seed=1)
     tick.calendar, tick.lexicon, tick.policy = CALENDAR, LEXICON, RuntimePolicy.for_profile("standard")

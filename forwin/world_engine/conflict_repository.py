@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from forwin.models.base import new_id
 from forwin.models.project import ChapterPlan, Project
 from forwin.models.world_conflict import WorldConflictResultRefRow, WorldPlanConflictRow
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
@@ -39,8 +40,11 @@ class WorldConflictRepository:
         *,
         required_decider: ConflictDecider,
         options: Sequence[ConflictOption],
+        persist: bool = True,
     ) -> WorldPlanConflictRow:
+        """Build a conflict with an identity; optionally leave it transient until the tick commits."""
         row = WorldPlanConflictRow(
+            id=new_id(),
             project_id=draft.project_id,
             source=draft.source,
             origin_key=draft.origin_key,
@@ -58,8 +62,9 @@ class WorldConflictRepository:
             intent_ref=draft.intent_ref,
             actor_ref=draft.actor_ref,
         )
-        self.session.add(row)
-        self.session.flush()
+        if persist:
+            self.session.add(row)
+            self.session.flush()
         return row
 
     def get(

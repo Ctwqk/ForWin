@@ -100,7 +100,6 @@ class CostMetrics(BaseModel):
     total_tokens: int = 0
     duration_ms: int = 0
     provider_usage_attempts: int = 0
-    codex_usage_attempts: int = 0
     estimated_usage_attempts: int = 0
     missing_usage_attempts: int = 0
 
@@ -190,7 +189,6 @@ class _MutableMetrics:
     total_tokens: int = 0
     duration_ms: int = 0
     provider_usage_attempts: int = 0
-    codex_usage_attempts: int = 0
     estimated_usage_attempts: int = 0
     missing_usage_attempts: int = 0
 
@@ -206,7 +204,6 @@ class _MutableMetrics:
         self.total_tokens += record.total_tokens
         self.duration_ms += record.duration_ms
         self.provider_usage_attempts += int(record.usage_source == "provider")
-        self.codex_usage_attempts += int(record.usage_source == "codex_bridge")
         self.estimated_usage_attempts += int(record.usage_source == "estimated")
         self.missing_usage_attempts += int(record.usage_source == "missing")
 

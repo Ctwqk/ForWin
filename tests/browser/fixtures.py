@@ -207,19 +207,6 @@ class MockForWinBackend:
         if path == "/api/settings/llm" and method == "GET":
             json_reply(route, self.settings)
             return
-        if path == "/api/settings/codex/health":
-            json_reply(
-                route,
-                {
-                    "enabled": False,
-                    "healthy": False,
-                    "status": "disabled",
-                    "bridge_url": "",
-                    "message": "disabled",
-                },
-            )
-            return
-
         if path == "/api/personality-skills" and method == "GET":
             json_reply(route, {"skills": self.personality_skills})
             return

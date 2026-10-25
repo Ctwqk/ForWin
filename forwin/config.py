@@ -20,9 +20,6 @@ DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_MOONSHOT_MODEL = "kimi-k2.5"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
-DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
-DEFAULT_CODEX_MODELS = (DEFAULT_CODEX_MODEL, "gpt-6-luna")
-CODEX_MODELS_ENV = "FORWIN_CODEX_MODELS"
 DEFAULT_QDRANT_URL = "http://127.0.0.1:6335"
 DEFAULT_EMBEDDING_GATEWAY_URL = "http://10.0.0.150:8080"
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -311,22 +308,6 @@ def _infrastructure_env_values() -> dict[str, object]:
         "chapter_review_form_token_budget_chars": _env_int(
             env, "FORWIN_CHAPTER_REVIEW_FORM_TOKEN_BUDGET_CHARS", 8000
         ),
-        "codex_enabled": _env_bool(env, "FORWIN_CODEX_ENABLED", False),
-        "codex_models": tuple(_env_csv(env, CODEX_MODELS_ENV))
-        if CODEX_MODELS_ENV in env
-        else DEFAULT_CODEX_MODELS,
-        "codex_bridge_url": _env_str(
-            env, "FORWIN_CODEX_BRIDGE_URL", "http://host.docker.internal:8897"
-        ),
-        "codex_bridge_token": _env_str(env, "FORWIN_CODEX_BRIDGE_TOKEN"),
-        "codex_default_model": _env_str(
-            env,
-            "FORWIN_CODEX_DEFAULT_MODEL",
-            _env_str(env, "FORWIN_CODEX_MODEL", DEFAULT_CODEX_MODEL),
-        ),
-        "codex_sync_timeout_seconds": _env_float(
-            env, "FORWIN_CODEX_SYNC_TIMEOUT_SECONDS", 900.0
-        ),
         "default_scene_count": _env_int(env, "DEFAULT_SCENE_COUNT", 3),
         "max_scene_count": _env_int(env, "MAX_SCENE_COUNT", 4),
         "prompt_budget_chars": _env_int(env, "PROMPT_BUDGET_CHARS", 12000),
@@ -400,12 +381,6 @@ class _InfrastructureFields:
     phase_active_thread_limit: int = 20
     chapter_review_form_max_llm_retries: int = 1
     chapter_review_form_token_budget_chars: int = 8000
-    codex_enabled: bool = False
-    codex_bridge_url: str = "http://host.docker.internal:8897"
-    codex_bridge_token: str = ""
-    codex_default_model: str = DEFAULT_CODEX_MODEL
-    codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS
-    codex_sync_timeout_seconds: float = 900.0
     default_scene_count: int = 3
     max_scene_count: int = 4
     prompt_budget_chars: int = 12000

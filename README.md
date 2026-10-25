@@ -14,6 +14,10 @@ While the user-facing surface is a novel-generation platform, the engineering su
 - An **MCP tool server** that lets LLM agents query project state, trigger reviews, and apply controlled overrides through a typed tool interface.
 - Backed by **FastAPI + PostgreSQL + Qdrant + MinIO + Alembic** with a substantial automated test suite covering the governance, review, repair, and publishing paths.
 
+The Codex LLM backend was removed on 2026-10-25. Chat calls use per-route
+fallback chains through `LLMClient`; Codex remains available as an MCP operator.
+Pause-gate and world-conflict delegates are pending the Task 3 migration.
+
 ## Highlights
 
 - FastAPI web API for project management, runtime control, and publisher-facing workflows
@@ -56,8 +60,7 @@ forwin/
 ├── canon_quality/            # Deterministic canon-quality analyzers
 ├── publisher_runtime/        # Browser-extension publishing runtime
 ├── publishers/               # Publishing platform integration layer
-├── mcp/                      # ForWin MCP server
-└── codex_bridge/             # Optional Codex bridge runtime
+└── mcp/                      # ForWin MCP server
 
 Design-docs/                  # Current architecture docs, status, and maintenance log
 docs/                         # Operator docs and branch-scoped design specs

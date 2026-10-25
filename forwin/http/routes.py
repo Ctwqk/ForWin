@@ -47,7 +47,6 @@ from forwin.api_schema import (
     ChapterListResponse,
     ChapterReviewApproveResponse,
     ChapterReviewDetail,
-    CodexBridgeStatusResponse,
     DecisionEventsResponse,
     ExtensionBrowserSessionResponse,
     ExtensionClaimCommentSyncJobResponse,
@@ -293,12 +292,6 @@ def register_api_routes(
             ["GET"],
             handlers["search_project_world_studio"],
             {},
-        ),
-        (
-            "/api/settings/codex/health",
-            ["GET"],
-            handlers["get_codex_bridge_status"],
-            {"response_model": CodexBridgeStatusResponse},
         ),
         (
             "/api/tasks/active-generation-check",

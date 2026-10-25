@@ -62,7 +62,6 @@ def browser_test_base_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
             "FORWIN_PUBLISHER_EXTENSION_API_KEY": "browser-test-extension-key",
             "FORWIN_PUBLISHER_SESSION_SECRET": "browser-test-session-secret",
             "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED": "true",
-            "FORWIN_CODEX_ENABLED": "false",
             "MINIMAX_API_KEY": env.get("MINIMAX_API_KEY", "browser-test-key"),
         }
     )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import patch
 
 from forwin.http.adapters.api_system_routes import _load_rule_decision_breakdown, build_handlers
 
@@ -58,16 +57,6 @@ def test_home_breakdown_loads_from_persisted_review_engine_events() -> None:
     assert breakdown[0]["count"] == 1
 
 
-def _codex_health_handler(config: SimpleNamespace):
-    return build_handlers(
-        get_config=lambda: config,
-        get_publisher_manager=lambda: None,
-        get_session=lambda: None,
-        render_home_page=lambda **_kwargs: "",
-        render_publishers_page=lambda **_kwargs: "",
-    )["get_codex_bridge_status"]
-
-
 def _system_handlers(config: SimpleNamespace, *, memory_index=None):
     return build_handlers(
         get_config=lambda: config,
@@ -105,28 +94,10 @@ def test_health_reports_current_embedding_backend_status() -> None:
     }
 
 
-def test_codex_health_rejects_ok_payload_without_bridge_identity() -> None:
-    class WrongServiceClient:
-        def __init__(self, **_kwargs) -> None:
-            pass
+def test_codex_health_route_is_removed() -> None:
+    from forwin.http import create_app
 
-        def health(self) -> dict[str, object]:
-            return {"status": "ok"}
-
-        def close(self) -> None:
-            pass
-
-    config = SimpleNamespace(
-        codex_enabled=True,
-        codex_bridge_url="http://10.0.0.150:8897",
-        codex_bridge_token="",
-        codex_sync_timeout_seconds=90,
-    )
-    handler = _codex_health_handler(config)
-
-    with patch("forwin.http.adapters.api_system_routes.CodexBridgeClient", WrongServiceClient):
-        result = handler()
-
-    assert result.healthy is False
-    assert result.status == "wrong_backend"
-    assert "Codex Bridge" in result.message
+    assert "get_codex_bridge_status" not in _system_handlers(SimpleNamespace())
+    assert "/api/settings/codex/health" not in {
+        route.path for route in create_app().routes
+    }

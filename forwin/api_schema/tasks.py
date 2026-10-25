@@ -10,16 +10,6 @@ from forwin.planning.checkpoints import (
 )
 
 
-class CodexBridgeStatusResponse(BaseModel):
-    enabled: bool = False
-    bridge_url: str = ""
-    healthy: bool = False
-    status: str = "disabled"
-    backend: str = "codex_bridge"
-    message: str = ""
-    health: dict[str, Any] = Field(default_factory=dict)
-
-
 class GenerationControlInfo(BaseModel):
     plan_state: str = "none"
     writing_state: str = "not_started"
@@ -175,7 +165,6 @@ class ProjectBulkDeleteRequest(BaseModel):
 
 
 __all__ = [
-    "CodexBridgeStatusResponse",
     "GenerationControlInfo",
     "TaskResponse",
     "TaskSummaryResponse",

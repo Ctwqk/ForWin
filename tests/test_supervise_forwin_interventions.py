@@ -73,17 +73,6 @@ def test_build_report_includes_required_fields_and_summarizes_sensitive_payloads
                     },
                 ],
             }
-        if url == "http://forwin.example/api/settings/codex/health":
-            return {
-                "ok": True,
-                "payload": {
-                    "enabled": False,
-                    "healthy": False,
-                    "status": "disabled",
-                    "bridge_url": "http://host.docker.internal:8897",
-                    "token": "secret-token",
-                },
-            }
         raise AssertionError(url)
 
     def fake_run_command(args, **kwargs):
@@ -131,12 +120,12 @@ def test_build_report_includes_required_fields_and_summarizes_sensitive_payloads
         "actions_taken",
         "blocked_items",
     }
-    assert required <= report.keys()
+    assert required == report.keys()
     assert report["upload_jobs_checked"]["jobs"][0]["job_id"] == "job-failed"
     assert "body" not in report["upload_jobs_checked"]["jobs"][0]
     assert report["publisher_browser_heartbeat"]["missing_expected"] == ["fanqie"]
     blocked_kinds = {item["kind"] for item in report["blocked_items"]}
-    assert {"publisher_login_required", "upload_job_failed", "codex_bridge_unhealthy", "github_pr_needs_attention"} <= blocked_kinds
+    assert {"publisher_login_required", "upload_job_failed", "github_pr_needs_attention"} <= blocked_kinds
     serialized = json.dumps(report, ensure_ascii=False)
     assert "secret chapter body" not in serialized
     assert "secret-token" not in serialized
@@ -149,8 +138,6 @@ def test_github_cli_failure_falls_back_to_github_rest(monkeypatch) -> None:
             return {"ok": True, "payload": []}
         if url.endswith("/api/publishers/platforms"):
             return {"ok": True, "payload": []}
-        if url.endswith("/api/settings/codex/health"):
-            return {"ok": True, "payload": {"enabled": True, "healthy": True, "status": "ok"}}
         raise AssertionError(url)
 
     monkeypatch.setattr(supervisor, "http_json", fake_http_json)
@@ -217,8 +204,6 @@ def test_github_cli_and_rest_failure_is_reported_as_blocked_without_crashing(mon
             return {"ok": True, "payload": []}
         if url.endswith("/api/publishers/platforms"):
             return {"ok": True, "payload": []}
-        if url.endswith("/api/settings/codex/health"):
-            return {"ok": True, "payload": {"enabled": True, "healthy": True, "status": "ok"}}
         raise AssertionError(url)
 
     monkeypatch.setattr(supervisor, "http_json", fake_http_json)
@@ -358,8 +343,6 @@ def test_system_python_completes_upload_queue_scan_without_zip_strict_error() ->
                 ]
             elif self.path == "/api/publishers/platforms":
                 payload = []
-            elif self.path == "/api/settings/codex/health":
-                payload = {"enabled": True, "healthy": True, "status": "ok"}
             else:
                 self.send_error(404)
                 return
@@ -439,31 +422,6 @@ def test_classify_generation_tasks_ignores_project_tasks_superseded_by_completed
     assert {"kind": "checked_generation_tasks"} in actions
 
 
-def test_codex_bridge_disabled_payload_is_classified_as_unhealthy(monkeypatch) -> None:
-    monkeypatch.setattr(
-        supervisor,
-        "http_json",
-        lambda url: {
-            "ok": False,
-            "status": 200,
-            "payload": {
-                "enabled": False,
-                "healthy": False,
-                "status": "disabled",
-                "message": "Codex Bridge 未启用。",
-            },
-        },
-    )
-    blocked: list[dict] = []
-    actions: list[dict] = []
-
-    snapshot = supervisor.codex_bridge_health_snapshot("http://forwin.example", blocked, actions)
-
-    assert snapshot["ok"] is False
-    assert snapshot["status"] == "disabled"
-    assert [item["kind"] for item in blocked] == ["codex_bridge_unhealthy"]
-
-
 def test_main_writes_one_jsonl_record_and_exit_code_reflects_blocks(monkeypatch, tmp_path) -> None:
     output = tmp_path / "supervisor.jsonl"
     report = {
@@ -473,7 +431,6 @@ def test_main_writes_one_jsonl_record_and_exit_code_reflects_blocks(monkeypatch,
         "upload_jobs_checked": {"ok": True},
         "generation_tasks_checked": {"ok": True},
         "publisher_browser_heartbeat": {"ok": False},
-        "codex_bridge_health": {"ok": True},
         "actions_taken": [],
         "blocked_items": [{"kind": "publisher_login_required", "message": "fanqie login required"}],
     }

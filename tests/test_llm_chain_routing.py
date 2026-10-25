@@ -181,11 +181,7 @@ def _chat_call_site_violations(path: Path, source: str) -> list[str]:
         return []
     tree = ast.parse(source)
     violations = []
-    # These retained Task 2 classes also receive their clients by injection.
-    # Runtime construction below ensures they are not the production backend.
     injected_receivers = {"llm_client", "self.llm_client"}
-    if path == Path("forwin/llm/router.py"):
-        injected_receivers |= {"self.ordinary_adapter", "self.codex_client", "self.router"}
     if path == Path("forwin/llm_eval/runner.py"):
         # The eval-local adapter must come from the injected adapter factory.
         for node in ast.walk(tree):
@@ -225,7 +221,7 @@ def test_chat_call_site_scan_accepts_injected_clients():
 
 
 def test_every_chat_call_goes_through_llm_client_chain():
-    config = InfrastructureConfig(codex_enabled=True, llm_env_profiles=[profiles()["env-deepseek"].model_dump()])
+    config = InfrastructureConfig(llm_env_profiles=[profiles()["env-deepseek"].model_dump()])
     client = runtime_container.RuntimeContainer._build_llm_client(config, runtime_policy.RuntimePolicy.for_profile("standard"))
     try:
         assert isinstance(client, OpenAICompatibleAdapter)
@@ -584,9 +580,9 @@ def test_unknown_route_uses_default_chain(make_client, monkeypatch):
     assert [item["profile_id"] for item in client.llm_attempt_events[0]["candidate_chain"]] == ["env-minimax", "env-kimi"]
 
 
-def test_llm_configured_ignores_profiles_outside_chains_and_codex():
+def test_llm_configured_ignores_profiles_outside_chains():
     policy = runtime_policy.RuntimePolicy.for_profile("standard")
-    config = InfrastructureConfig(codex_enabled=True, llm_env_profiles=[])
+    config = InfrastructureConfig(llm_env_profiles=[])
     assert not runtime_container.llm_configured(config, policy)
     config = InfrastructureConfig(minimax_api_key="minimax-key")
     custom = policy.model_copy(update={"models": runtime_policy.ModelsPolicy(chains={"default": ("env-deepseek",)})})
@@ -598,7 +594,7 @@ def test_eval_factory_uses_chain_for_every_profile():
     from forwin.llm_eval.runner import LLMReliabilityRunner
     from forwin.llm_eval.schemas import EvalProfile
 
-    profile = EvalProfile(id="configured", base_url="https://provider.example/v1", model="configured-model", api_key="key", provider="codex_cli")
+    profile = EvalProfile(id="configured", base_url="https://provider.example/v1", model="configured-model", api_key="key", provider="openai_compatible")
     client = LLMReliabilityRunner._default_adapter_factory(profile)
     try:
         assert isinstance(client, OpenAICompatibleAdapter)

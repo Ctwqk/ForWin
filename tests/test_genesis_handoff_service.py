@@ -42,7 +42,6 @@ from tests.test_band_planner import HookedLLM
 
 class _NoApiKeyClient:
     api_key = ""
-    codex_enabled = False
     profile_id = ""
     profile_name = ""
     model = "fake-model"

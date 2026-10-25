@@ -105,7 +105,6 @@ def valid_seed() -> dict:
 
 class _StubLLM:
     api_key = "test-key"
-    codex_enabled = False
     profile_id = ""
     profile_name = ""
     model = "stub-model"

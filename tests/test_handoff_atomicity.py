@@ -36,7 +36,6 @@ _GATE_TIMEOUT_SECONDS = 60
 
 class _NoApiKeyClient:
     api_key = ""
-    codex_enabled = False
     profile_id = ""
     profile_name = ""
     model = "fake-model"

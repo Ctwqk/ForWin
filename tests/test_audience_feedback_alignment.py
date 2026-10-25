@@ -1147,7 +1147,7 @@ def test_feedback_comment_attempts_save_prompt_trace_and_events(tmp_path) -> Non
 @pytest.mark.parametrize("role", ["generation_worker", "outbox_worker"])
 def test_comment_analysis_container_respects_profile(monkeypatch, profile, llm_available, role) -> None:
     infrastructure = InfrastructureConfig(
-        minimax_api_key="test-key" if llm_available else "", codex_enabled=False,
+        minimax_api_key="test-key" if llm_available else "",
         retrieval_backend="hash",
     )
     policy = RuntimePolicy.for_profile(profile)

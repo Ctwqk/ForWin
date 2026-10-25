@@ -77,7 +77,6 @@ def entity_names(story_engine: dict[str, Any]) -> dict[str, str]:
 
 class _NoApiKeyClient:
     api_key = ""
-    codex_enabled = False
     profile_id = ""
     profile_name = ""
     model = "fake-model"

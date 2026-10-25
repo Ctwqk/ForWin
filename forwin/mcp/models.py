@@ -109,7 +109,6 @@ class CostMetricsView(BaseModel):
     total_tokens: int = 0
     duration_ms: int = 0
     provider_usage_attempts: int = 0
-    codex_usage_attempts: int = 0
     estimated_usage_attempts: int = 0
     missing_usage_attempts: int = 0
 

@@ -441,7 +441,6 @@ class RuntimeContainer:
                 gate_delegation=GateDelegationService(
                     spark_delegate=SparkGateDelegate(
                         llm_client=llm_client,
-                        requested_model=infrastructure.codex_default_model,
                     )
                 ),
             )

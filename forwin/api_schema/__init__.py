@@ -38,7 +38,6 @@ from .maintenance import (
 )
 
 from .tasks import (
-    CodexBridgeStatusResponse,
     GenerationControlInfo,
     TaskResponse,
     TaskSummaryResponse,
@@ -232,7 +231,6 @@ __all__ = [
     "PostCanonMaintenanceRunInfo",
     "PostCanonMaintenanceStatusResponse",
     "PostCanonRunStatus",
-    "CodexBridgeStatusResponse",
     "GenerationControlInfo",
     "TaskResponse",
     "TaskSummaryResponse",

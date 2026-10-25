@@ -18,7 +18,6 @@
         </div>
         <div class="badge-row">
           <span id="model_catalog_badge" class="badge">模型：环境目录</span>
-          <span id="codex_bridge_badge" class="badge">Codex：未检查</span>
           <span id="extension_ready_badge" class="badge @@EXTENSION_BADGE_CLASS@@">扩展回写：@@EXTENSION_READY_TEXT@@</span>
         </div>
       </div>
@@ -65,18 +64,6 @@
       <section id="panel_config" class="tab-panel">
         <div class="config-grid">
           <div class="stack">
-            <section class="card">
-              <div class="section-head">
-                <div>
-                  <h2>Codex Bridge</h2>
-                  <p>Pro 订阅通过宿主机 bridge 接入；失败时按路由策略回退普通模型。</p>
-                </div>
-                <button class="secondary" type="button" onclick="loadCodexBridgeStatus()" data-i18n="action.refresh">刷新</button>
-              </div>
-              <div id="codex_bridge_panel" class="list">
-                <div class="empty">等待检查 Codex Bridge 状态。</div>
-              </div>
-            </section>
             <section class="card">
               <div class="section-head">
                 <div>

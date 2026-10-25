@@ -33,4 +33,3 @@ include = ["forwin*"]
 
 [project.scripts]
 forwin = "forwin.cli:main"
-forwin-codex-bridge = "forwin.codex_bridge.__main__:main"

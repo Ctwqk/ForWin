@@ -34,7 +34,6 @@ jobs:
       FORWIN_DATABASE_URL: postgresql+psycopg://forwin:forwin@127.0.0.1:5432/forwin_test
       FORWIN_TEST_DATABASE_URL: postgresql+psycopg://forwin:forwin@127.0.0.1:5432/forwin_test
       FORWIN_QDRANT_URL: http://127.0.0.1:6335
-      FORWIN_CODEX_ENABLED: "false"
       MINIMAX_API_KEY: ci-test-key
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:

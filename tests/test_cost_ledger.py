@@ -309,7 +309,7 @@ class TestCostLedger:
         assert report.event_count == 1
         assert report.manual_action_count == 1
 
-    def test_cross_backend_fallback_is_retry_attributed_to_destination(self) -> None:
+    def test_chain_fallback_is_retry_attributed_to_destination(self) -> None:
         from forwin.observability.cost_ledger import CostLedgerService
 
         project = self._project()
@@ -321,7 +321,7 @@ class TestCostLedger:
                 attempts_json=json.dumps(
                     [
                         {
-                            "attempt_group_id": "ordinary-group",
+                            "attempt_group_id": "chain-group",
                             "attempt_no": 1,
                             "provider": "openai_compatible",
                             "model": "ordinary-model",
@@ -330,10 +330,10 @@ class TestCostLedger:
                             "usage_source": "missing",
                         },
                         {
-                            "attempt_group_id": "codex-group",
+                            "attempt_group_id": "chain-group",
                             "attempt_no": 1,
-                            "provider": "codex_bridge",
-                            "model": "codex-model",
+                            "provider": "moonshot",
+                            "model": "kimi-model",
                             "http_status": 200,
                             "output_chars": 20,
                             "usage_source": "missing",
@@ -350,7 +350,7 @@ class TestCostLedger:
         assert report.totals.retries == 1
         assert report.totals.fallbacks == 1
         assert _dimension(report, "provider", "openai_compatible").metrics.fallbacks == 0
-        destination = _dimension(report, "provider", "codex_bridge").metrics
+        destination = _dimension(report, "provider", "moonshot").metrics
         assert destination.retries == 1
         assert destination.fallbacks == 1
 

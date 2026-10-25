@@ -42,9 +42,7 @@ class TelemetryMixin:
         prompt_tokens: int | None = None,
         completion_tokens: int | None = None,
         total_tokens: int | None = None,
-        usage_source: Literal[
-            "provider", "codex_bridge", "estimated", "missing"
-        ] = "missing",
+        usage_source: Literal["provider", "estimated", "missing"] = "missing",
         retry_after: float | None = None,
         sleep_ms: int = 0,
         error_class: str = "",

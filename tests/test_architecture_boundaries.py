@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import importlib
 import inspect
+import re
 from dataclasses import fields
 from pathlib import Path
 
@@ -21,6 +22,26 @@ from forwin.http.routes import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.xfail(strict=True, reason="delegates move in Task 3")
+def test_no_codex_llm_backend_remains() -> None:
+    forbidden = re.compile(
+        r"codex_bridge|CodexBridge|codex_models|FORWIN_CODEX|codex_usage_attempts|"
+        r"gpt-5\.3-codex-spark|gpt-6-luna"
+    )
+    sources = [
+        *(ROOT / "forwin").rglob("*.py"),
+        *(path for path in (ROOT / "forwin/ui_assets").rglob("*") if path.is_file()),
+        ROOT / "pyproject.toml",
+    ]
+    offenders = [
+        f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}"
+        for path in sorted(sources)
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if forbidden.search(line)
+    ]
+    assert not offenders, "\n".join(offenders)
 
 
 def _python_sources(relative_path: str) -> list[Path]:

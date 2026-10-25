@@ -7,7 +7,6 @@ from tempfile import TemporaryDirectory
 
 from forwin.llm_eval.profiles import (
     load_eval_profiles,
-    profile_requires_api_key,
     redact_profile,
 )
 from forwin.llm_eval.reporting import summarize_attempts
@@ -72,17 +71,10 @@ def test_selected_provider_aliases_fallback_to_default_profiles() -> None:
     assert "deepseek" in profiles[2].base_url.lower()
 
 
-def test_selected_codex_spark_alias_uses_cli_subscription_not_api_key() -> None:
-    profiles = load_eval_profiles(
-        selected_ids=["codex-spark"],
-    )
+def test_removed_codex_aliases_do_not_create_profiles(monkeypatch) -> None:
+    monkeypatch.setattr("forwin.llm_eval.profiles._load_environment_profiles", lambda: [])
 
-    assert [profile.id for profile in profiles] == ["codex-spark"]
-    assert profiles[0].provider == "codex_cli"
-    assert profiles[0].base_url == "codex://cli"
-    assert profiles[0].model == "gpt-5.3-codex-spark"
-    assert profiles[0].api_key == ""
-    assert profile_requires_api_key(profiles[0]) is False
+    assert load_eval_profiles(selected_ids=["codex-spark", "spark", "codex"]) == []
 
 
 def test_output_validator_handles_markdown_json_missing_keys_and_prose() -> None:

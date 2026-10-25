@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 
+import httpx
+
 from forwin.canon_quality.chapter_review_form.cost_estimator import (
     CostEstimate,
     estimate_tokens_for_text,
     should_abort_for_cost_cap,
     usage_from_llm_client,
 )
-from forwin.llm.router import LLMCallRouter, RoutedModelAdapter
+from forwin.config import ModelProfileConfig
+from forwin.writer.llm import LLMClient
 
 
 class ClientWithAttempts:
@@ -61,33 +64,6 @@ class ClientWithCanonicalUsageAttempts:
     ]
 
 
-class OrdinaryRoutedUsageAdapter:
-    def __init__(self) -> None:
-        self.attempts: list[dict[str, object]] = []
-
-    def chat(self, _messages, **_kwargs) -> str:
-        self.attempts.append(
-            {
-                "attempt_group_id": "routed-usage",
-                "attempt_no": 1,
-                "http_status": 200,
-                "output_chars": 10,
-                "prompt_tokens": 29,
-                "completion_tokens": 8,
-                "total_tokens": 37,
-            }
-        )
-        return "ok"
-
-    def drain_llm_attempt_events(self) -> list[dict[str, object]]:
-        attempts = list(self.attempts)
-        self.attempts.clear()
-        return attempts
-
-    def drain_model_fallback_events(self) -> list[dict[str, str]]:
-        return []
-
-
 def test_estimate_tokens_for_chinese_text_uses_half_char_ratio() -> None:
     assert estimate_tokens_for_text("主倒计时还有五十九分钟。") >= 6
 
@@ -123,20 +99,36 @@ def test_usage_from_llm_client_reads_canonical_attempt_usage() -> None:
     assert usage.estimated is False
 
 
-def test_usage_from_routed_adapter_reads_attempts_without_draining_them() -> None:
-    adapter = RoutedModelAdapter(
-        LLMCallRouter(
-            ordinary_adapter=OrdinaryRoutedUsageAdapter(),
-            codex_enabled=False,
-        )
+def test_usage_from_llm_client_reads_attempts_without_draining_them(monkeypatch) -> None:
+    client = LLMClient(
+        profiles={"provider": ModelProfileConfig(
+            id="provider", name="Provider", api_key="test-key",
+            base_url="https://provider.example/v1", model="provider-model",
+        )},
+        chains={"default": ("provider",)},
+        retry_attempts=1,
     )
-    adapter.chat([{"role": "user", "content": "review"}])
 
-    usage = usage_from_llm_client(adapter)
+    def fake_post(url, **_kwargs):
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": 29, "completion_tokens": 8, "total_tokens": 37},
+            },
+            request=httpx.Request("POST", url),
+        )
 
-    assert usage.input_tokens == 29
-    assert usage.output_tokens == 8
-    assert adapter.drain_llm_attempt_events()[0]["total_tokens"] == 37
+    monkeypatch.setattr(client.client, "post", fake_post)
+    try:
+        client.chat([{"role": "user", "content": "review"}])
+        usage = usage_from_llm_client(client)
+
+        assert usage.input_tokens == 29
+        assert usage.output_tokens == 8
+        assert client.drain_llm_attempt_events()[0]["total_tokens"] == 37
+    finally:
+        client.close()
 
 
 def test_cost_cap_aborts_before_next_chapter_estimate_exceeds_cap() -> None:

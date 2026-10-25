@@ -8,11 +8,9 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 
 from forwin.api_schema import (
-    CodexBridgeStatusResponse,
     RuntimeCatalogResponse,
     runtime_catalog,
 )
-from forwin.llm.codex_client import CodexBridgeClient
 from forwin.models.audit import DecisionEvent
 from forwin.review.decision.dashboard import build_waiting_review_breakdown
 
@@ -77,83 +75,11 @@ def build_handlers(
             raise HTTPException(503, "服务尚未初始化")
         return runtime_catalog(config)
 
-    def get_codex_bridge_status() -> CodexBridgeStatusResponse:
-        config = get_config()
-        enabled = (
-            bool(getattr(config, "codex_enabled", False))
-            if config is not None
-            else False
-        )
-        bridge_url = (
-            str(getattr(config, "codex_bridge_url", "") or "").strip()
-            if config is not None
-            else ""
-        )
-        if not enabled:
-            return CodexBridgeStatusResponse(
-                enabled=False,
-                bridge_url=bridge_url,
-                healthy=False,
-                status="disabled",
-                message="Codex Bridge 未启用。",
-            )
-        if not bridge_url:
-            return CodexBridgeStatusResponse(
-                enabled=True,
-                bridge_url="",
-                healthy=False,
-                status="misconfigured",
-                message="FORWIN_CODEX_BRIDGE_URL 未配置。",
-            )
-        client = CodexBridgeClient(
-            bridge_url=bridge_url,
-            token=str(getattr(config, "codex_bridge_token", "") or ""),
-            timeout_seconds=min(
-                15.0, float(getattr(config, "codex_sync_timeout_seconds", 90) or 90)
-            ),
-        )
-        try:
-            health = client.health()
-            backend = str(health.get("backend", "") or "").strip()
-            if backend != "codex_bridge":
-                return CodexBridgeStatusResponse(
-                    enabled=True,
-                    bridge_url=bridge_url,
-                    healthy=False,
-                    status="wrong_backend",
-                    message="FORWIN_CODEX_BRIDGE_URL 未返回 Codex Bridge health payload。",
-                    health=health,
-                )
-            healthy = bool(
-                health.get("available", False) or health.get("status") == "ok"
-            )
-            return CodexBridgeStatusResponse(
-                enabled=True,
-                bridge_url=bridge_url,
-                healthy=healthy,
-                status=str(health.get("status", "ok" if healthy else "degraded") or ""),
-                message="Codex Bridge 可用。"
-                if healthy
-                else "Codex Bridge 返回 degraded。",
-                health=health,
-            )
-        except Exception as exc:  # noqa: BLE001
-            return CodexBridgeStatusResponse(
-                enabled=True,
-                bridge_url=bridge_url,
-                healthy=False,
-                status="unreachable",
-                message=f"{exc.__class__.__name__}: {exc}",
-            )
-        finally:
-            client.close()
-
     return {
         "health": health,
         "home_page": home_page,
         "publishers_page": publishers_page,
         "get_runtime_catalog": get_runtime_catalog,
-        "get_codex_bridge_status": get_codex_bridge_status,
     }
 
 

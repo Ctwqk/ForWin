@@ -135,7 +135,7 @@ def test_project_planning_clients_follow_policy_changes_and_close_once(monkeypat
 
 def test_project_policy_without_a_model_keeps_planning_off(monkeypatch):
     container = RuntimeContainer.for_api(
-        InfrastructureConfig(minimax_api_key="", codex_enabled=False),
+        InfrastructureConfig(minimax_api_key=""),
         policy=RuntimePolicy.for_profile("standard"),
     )
     build_client = Mock(side_effect=AssertionError("no client should be constructed"))

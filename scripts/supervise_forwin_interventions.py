@@ -600,43 +600,6 @@ def publisher_browser_heartbeat_snapshot(
     }
 
 
-def codex_bridge_health_snapshot(
-    api_base: str,
-    blocked_items: list[dict[str, Any]],
-    actions_taken: list[dict[str, Any]],
-) -> dict[str, Any]:
-    response = http_json(f"{api_base.rstrip('/')}/api/settings/codex/health")
-    payload = response.get("payload")
-    if not isinstance(payload, dict):
-        _append_block(
-            blocked_items,
-            kind="codex_bridge_unavailable",
-            severity="warning",
-            message=str(response.get("error") or "Codex Bridge health API unavailable"),
-        )
-        return {"ok": False, "error": response.get("error") or "unexpected Codex Bridge health response"}
-    summary = {
-        "ok": bool(payload.get("healthy")),
-        "enabled": bool(payload.get("enabled")),
-        "healthy": bool(payload.get("healthy")),
-        "status": payload.get("status") or "",
-        "backend": payload.get("backend") or "codex_bridge",
-        "message": _short_text(payload.get("message")),
-        "bridge_url": payload.get("bridge_url") or "",
-    }
-    if not summary["ok"]:
-        _append_block(
-            blocked_items,
-            kind="codex_bridge_unhealthy",
-            severity="codex",
-            message=str(summary.get("message") or summary.get("status") or "Codex Bridge is unhealthy"),
-            status=summary.get("status"),
-            enabled=summary.get("enabled"),
-        )
-    _action(actions_taken, "checked_codex_bridge_health", status=summary.get("status"))
-    return summary
-
-
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
     blocked_items: list[dict[str, Any]] = []
     actions_taken: list[dict[str, Any]] = []
@@ -674,11 +637,6 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         blocked_items,
         actions_taken,
     )
-    codex_bridge = codex_bridge_health_snapshot(
-        str(getattr(args, "api_base", "") or ""),
-        blocked_items,
-        actions_taken,
-    )
     report = {
         "checked_at": utc_now(),
         "github_prs_checked": github_prs,
@@ -686,7 +644,6 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "upload_jobs_checked": upload_jobs,
         "generation_tasks_checked": generation_tasks,
         "publisher_browser_heartbeat": publisher_heartbeat,
-        "codex_bridge_health": codex_bridge,
         "actions_taken": actions_taken,
         "blocked_items": blocked_items,
     }

@@ -325,7 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
     stat.add_argument("--project-id", required=True, help="项目ID")
 
     eval_parser = sub.add_parser(
-        "llm-eval", help="评估 LLM / Codex CLI 在 ForWin 场景下的可靠性"
+        "llm-eval", help="评估 LLM 在 ForWin 场景下的可靠性"
     )
     eval_sub = eval_parser.add_subparsers(
         dest="llm_eval_command", help="LLM eval 子命令"
@@ -338,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run.add_argument(
         "--profiles",
         default="",
-        help="逗号分隔的 profile id，例如 minimax,kimi,codex-spark",
+        help="逗号分隔的 profile id，例如 minimax,kimi,deepseek",
     )
     eval_run.add_argument(
         "--manifest", default="", help="独立 eval profile manifest JSON"

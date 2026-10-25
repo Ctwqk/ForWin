@@ -1209,3 +1209,30 @@ def test_cumulative_tick_travel_uses_prior_candidates_modes(monkeypatch, gain):
         assert "rule_violated" in [issue.code for issue in issues]
         assert check.runtime.world.get_state("a")["location_id"] == "l1"
     assert runtime.world.get_state("a")["travel_mode_ids"] == initial
+
+
+@pytest.mark.parametrize("node_type", ["faction", "organization", "group", "site_state"])
+@pytest.mark.parametrize("operation", ["create", "set"])
+def test_group_status_enum_rejects_invented_status(monkeypatch, node_type, operation):
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+    from forwin.protocol.book_state import WorldNode
+    from forwin.book_state.protections import ENDED_STATUSES
+
+    node = WorldNode(id="subject", project_id="p", node_type=node_type, name="Subject", state={"status": "active"})
+    runtime = BookStateRuntime(project_id="p", as_of_chapter=0, world=ObjectiveWorldGraph(
+        nodes=[node] if operation == "set" else [],
+    ), map_graph=MapGraph())
+    gate = BookStateReviewGate(None)
+    monkeypatch.setattr(gate.projection, "load_runtime_as_of", lambda *args, **kwargs: runtime)
+    for status in ["invented-status", "active", *sorted(ENDED_STATUSES)]:
+        patch = NodePatch(node_id=node.id, node_type=node_type, op=operation, **(
+            {"new_value": {**node.model_dump(mode="json"), "state": {"status": status}}}
+            if operation == "create" else {"field_path": "state.status", "old_value": "active", "new_value": status}
+        ))
+        verdict = gate.review(ApprovedGraphDeltaSet(project_id="p", chapter_number=0, graph_deltas=[
+            GraphDelta(id="delta", project_id="p", source_type="world_edit", node_patches=[patch]),
+        ]), base_chapter=0)
+        assert verdict.accepted is (status != "invented-status"), verdict.issues
+        if status == "invented-status":
+            assert ("error", "invalid_field_value") in _codes(verdict)

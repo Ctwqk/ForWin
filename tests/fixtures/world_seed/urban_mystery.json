@@ -658,10 +658,30 @@
           "id": "rule-lastride",
           "statement": "地铁末班车二十三点三十分发出，之后跨片区只能步行或打车。",
           "hardness": "hard",
+          "checkable": null
+        },
+        {
+          "id": "rule-terminal",
+          "statement": "已确认死亡的人物不能恢复生命状态。",
+          "hardness": "hard",
           "checkable": {
-            "kind": "service_window",
-            "travel_mode_id": "mode-subway",
-            "last_departure_minute": 1410
+            "kind": "irreversible_state",
+            "node_types": [
+              "character"
+            ],
+            "field": "alive_status",
+            "value": "dead"
+          }
+        },
+        {
+          "id": "rule-precinct-entry",
+          "statement": "第三分局只允许值班档案员和本分局成员进入。",
+          "hardness": "hard",
+          "checkable": {
+            "kind": "actor_cannot_enter",
+            "location_ref": "node-precinct",
+            "except_refs": ["cast-archivist"],
+            "except_member_of": ["faction-precinct"]
           }
         }
       ],

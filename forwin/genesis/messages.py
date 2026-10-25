@@ -9,6 +9,8 @@ from forwin.genesis.constants import (
 )
 from typing import Any
 from forwin.book_state.knowledge import KNOWLEDGE_STATES
+from forwin.book_state.rule_predicates import RULE_PREDICATE_KINDS
+from forwin.writer.prompt_core.rule_predicates import RULE_PREDICATE_DESCRIPTIONS
 from forwin.book_state.schema import (
     ACTOR_TIERS,
     CLOCK_SCOPES,
@@ -71,8 +73,9 @@ def _world_seed_output_requirement() -> str:
         "knowledge 每项为 {observer_ref, fact_id, state, channel}，"
         f"state 取 {' / '.join(KNOWLEDGE_STATES)}，channel 固定为 seeded。"
         "rules 每项为 {id, statement, hardness, checkable}，"
-        f"hardness 取 {' / '.join(RULE_HARDNESS)}，checkable 为 null 或含非空 kind 的对象；"
-        "clocks 每项为 {id, label, due_in: {amount, unit}, owner_ref, scope, on_expire}，"
+        f"hardness 取 {' / '.join(RULE_HARDNESS)}，checkable 为 null 或含 kind 与平铺参数的对象；"
+        + "；".join(f"{kind}: {RULE_PREDICATE_DESCRIPTIONS[kind]}" for kind in RULE_PREDICATE_KINDS)
+        + "clocks 每项为 {id, label, due_in: {amount, unit}, owner_ref, scope, on_expire}，"
         f"scope 取 {' / '.join(CLOCK_SCOPES)}；"
         "reader_promises 每项为 {id, summary, promise_type, expected_payoff_window}；reveal_candidates 每项为 {fact_id, arc_number, note}。"
         "means_refs、secrecy_refs、target_refs、related_refs 只能引用行动者 ref 或 facts 的 id；travel_mode_ids 引用 lexicon.travel_modes 的 id；"

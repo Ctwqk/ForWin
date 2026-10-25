@@ -59,7 +59,7 @@ def seed():
         "relations": [{"source": "cast-1", "target": "faction-1", "edge_type": "member_of", "note": "", "visibility": "public", "appellation": ""}],
         "facts": [{"id": "fact-1", "proposition": "", "truth_value": True, "sensitivity": "secret", "related_refs": ["cast-1"], "nobody_knows": False}],
         "knowledge": [{"observer_ref": "cast-1", "fact_id": "fact-1", "state": "knows", "channel": "seeded"}],
-        "rules": [{"id": "rule-1", "statement": "", "hardness": "hard", "checkable": {"kind": "constraint", "limit": 1}}],
+        "rules": [{"id": "rule-1", "statement": "", "hardness": "hard", "checkable": {"kind": "exclusive_relation", "edge_type": "serves", "max_per_source": 1}}],
         "clocks": [{"id": "clock-1", "label": "", "due_in": {"amount": 2, "unit": "日"}, "owner_ref": "faction-1", "scope": "public", "on_expire": ""}],
         "reader_promises": [{"id": "promise-1", "summary": "", "promise_type": "", "expected_payoff_window": ""}],
         "reveal_candidates": [{"fact_id": "fact-1", "arc_number": 1, "note": ""}],
@@ -390,7 +390,7 @@ def test_priority_requires_integer_in_range(seed, story_engine, map_atlas, value
     assert [i.code for i in validate(seed, story_engine, map_atlas)] == ["invalid_priority"]
 
 
-@pytest.mark.parametrize("checkable,valid", [(None, True), ({"kind": "x", "data": {"a": [1]}}, True), ({}, False), ({"kind": " "}, False), ({"kind": 3}, False), ([], False), ("x", False)])
+@pytest.mark.parametrize("checkable,valid", [(None, True), ({"kind": "x", "data": {"a": [1]}}, False), ({}, False), ({"kind": " "}, False), ({"kind": 3}, False), ([], False), ("x", False)])
 def test_checkable_shape(seed, story_engine, map_atlas, checkable, valid):
     seed["rules"][0]["checkable"] = checkable
     assert [i.code for i in validate(seed, story_engine, map_atlas)] == ([] if valid else ["invalid_checkable"])
@@ -495,3 +495,132 @@ def test_validation_is_deterministic_and_does_not_mutate(seed, story_engine, map
     assert [i.message for i in issues if i.code == "missing_actor"] == [
         "Missing actor: cast-1", "Missing actor: opp-1", "Missing actor: faction-1"
     ]
+
+
+@pytest.mark.parametrize("checkable", [
+    {"kind": "invented"},
+    {"kind": "actor_cannot_enter", "location_ref": "missing"},
+    {"kind": "actor_cannot_enter", "location_ref": "node-1", "except_refs": ["missing"]},
+    {"kind": "blocked_channel", "fact_ref": "missing", "source_refs": ["cast-1"], "channels": ["told"]},
+    {"kind": "requires_travel_mode", "edge_types": ["road"], "mode_ids": ["missing"]},
+    {"kind": "exclusive_relation", "edge_type": "serves", "max_per_source": 0},
+    "malformed",
+])
+def test_seed_invalid_checkable_is_an_issue(seed, story_engine, map_atlas, checkable):
+    seed["rules"][0]["checkable"] = checkable
+    for candidate in (seed, normalize_world_seed(seed, story_engine=story_engine, map_atlas=map_atlas)):
+        issues = validate(candidate, story_engine, map_atlas)
+        assert [(i.code, i.path, i.severity) for i in issues] == [
+            ("invalid_checkable", "rules[0].checkable", "error"),
+        ]
+
+
+@pytest.mark.parametrize("hardness,modes,detour,expected", [
+    ("hard", [], False, True),
+    ("soft", [], False, False),
+    ("hard", ["mode-1"], False, False),
+    ("hard", [], True, False),
+])
+def test_seed_predicate_isolating_major_actor_warns(seed, story_engine, map_atlas, hardness, modes, detour, expected):
+    seed["rules"][0].update(hardness=hardness, checkable={
+        "kind": "requires_travel_mode", "edge_types": ["road"], "mode_ids": ["mode-1"],
+    })
+    seed["actors"][0]["travel_mode_ids"] = modes
+    seed["actors"][1].update(actor_tier="major", agendas=deepcopy(seed["actors"][0]["agendas"]), travel_mode_ids=modes)
+    map_atlas["edges"] = [{"id": "edge-1", "from_node_id": "node-1", "to_node_id": "node-2", "kind": "road", "bidirectional": True}]
+    if detour:
+        map_atlas["edges"].append({**map_atlas["edges"][0], "id": "edge-2", "kind": "path"})
+    before = deepcopy(seed)
+    issues = validate(seed, story_engine, map_atlas)
+    assert [(i.code, i.path, i.severity) for i in issues] == (
+        [("rule_isolates_major_actor", "actors[1].location_ref", "warning")] if expected else []
+    )
+    assert seed == before
+
+
+@pytest.mark.parametrize("genre", ["xianxia", "interstellar", "urban_mystery"])
+def test_fixture_checkable_rule_parses(genre):
+    import json
+    from pathlib import Path
+    from forwin.book_state.rule_predicates import RuleRefScope, parse_checkable
+    from forwin.map.genesis_adapter import buildable_atlas_node_ids
+
+    pack = json.loads((Path(__file__).parent / "fixtures" / "world_seed" / f"{genre}.json").read_text())["pack"]
+    seed = pack["world_seed"]
+    scope = RuleRefScope(
+        locations=buildable_atlas_node_ids(pack["world"]["map_atlas"]),
+        actors=frozenset(story_engine_actor_refs(pack["world"]["story_engine"])),
+        facts=frozenset(f["id"] for f in seed["facts"]),
+        modes=frozenset(m["id"] for m in seed["lexicon"]["travel_modes"]),
+    )
+    rules = [r for r in seed["rules"] if r.get("checkable") is not None]
+    assert rules
+    for rule in rules:
+        predicate, issues = parse_checkable(rule["checkable"], scope=scope)
+        assert predicate is not None and issues == [], issues
+
+
+def test_seed_predicate_normalization_exposes_parsed_defaults(seed, story_engine, map_atlas):
+    seed["rules"][0]["checkable"] = {"kind": "actor_cannot_enter", "location_ref": "node-2"}
+    normalized = normalize_world_seed(seed, story_engine=story_engine, map_atlas=map_atlas)
+    assert normalized["rules"][0]["checkable"] == {
+        "kind": "actor_cannot_enter", "location_ref": "node-2", "include_children": True,
+        "except_refs": [], "except_member_of": [],
+    }
+    assert "include_children" not in seed["rules"][0]["checkable"]
+
+
+def test_seed_prompt_lists_all_predicate_shapes():
+    from forwin.book_state.rule_predicates import RULE_PREDICATE_KINDS
+    from forwin.genesis.messages import _world_seed_output_requirement
+    from forwin.writer.prompt_core.rule_predicates import RULE_PREDICATE_DESCRIPTIONS
+
+    prompt = _world_seed_output_requirement()
+    for kind in RULE_PREDICATE_KINDS:
+        assert f"{kind}: {RULE_PREDICATE_DESCRIPTIONS[kind]}" in prompt
+
+
+@pytest.mark.parametrize("exception", [None, "actor", "member"])
+def test_seed_entry_rules_respect_actor_and_membership_exceptions(seed, story_engine, map_atlas, exception):
+    seed["actors"][1].update(actor_tier="major", agendas=deepcopy(seed["actors"][0]["agendas"]))
+    map_atlas["edges"] = [{"id": "edge-1", "from_node_id": "node-1", "to_node_id": "node-2", "kind": "road"}]
+    seed["rules"] = [{"id": f"rule-{i}", "hardness": "hard", "checkable": {
+        "kind": "actor_cannot_enter", "location_ref": f"node-{i}",
+    }} for i in (1, 2)]
+    if exception == "actor":
+        seed["rules"][1]["checkable"]["except_refs"] = ["cast-1"]
+    elif exception == "member":
+        seed["rules"][1]["checkable"]["except_member_of"] = ["faction-1"]
+    issues = validate(seed, story_engine, map_atlas)
+    assert [i.code for i in issues] == (["rule_isolates_major_actor"] if exception is None else [])
+
+
+def test_seed_disconnected_map_does_not_blame_predicates(seed, story_engine, map_atlas):
+    seed["actors"][1].update(actor_tier="major", agendas=deepcopy(seed["actors"][0]["agendas"]))
+    seed["rules"][0]["checkable"] = {"kind": "requires_travel_mode", "edge_types": ["road"], "mode_ids": ["mode-1"]}
+    assert validate(seed, story_engine, map_atlas) == []
+
+
+def test_seed_review_panel_names_refs_and_shows_invalid_checkable(seed, story_engine, map_atlas):
+    import json
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the review-panel renderer check")
+    source = (Path(__file__).parents[1] / "forwin/ui_assets/home/app_genesis.js").read_text()
+    renderer = source[source.index("    function genesisWorldSeedRuleLines("):source.index("    function genesisWorldSeedOverviewLines(")]
+    seed["rules"][0]["checkable"] = {"kind": "actor_cannot_enter", "location_ref": "node-2", "except_refs": ["cast-1"]}
+    seed["rules"].append({"id": "rule-bad", "hardness": "soft", "checkable": {"kind": "invented"}})
+    payload = normalize_world_seed(seed, story_engine=story_engine, map_atlas=map_atlas)
+    detail = {"pack": {"world": {"story_engine": story_engine, "map_atlas": map_atlas}}}
+    issues = [{"code": "invalid_checkable", "path": "rules[1].checkable", "message": "unknown_rule_predicate"}]
+    script = renderer + '\nconsole.log(JSON.stringify(genesisWorldSeedRuleLines(...' + json.dumps([detail, payload, issues]) + ')));'
+    result = subprocess.run([node, "-e", script], check=True, capture_output=True, text=True)
+    lines = json.loads(result.stdout)
+    assert "actor_cannot_enter" in lines[0] and "B (node-2)" in lines[0] and "甲 (cast-1)" in lines[0]
+    assert "include_children=true" in lines[0]
+    assert "invalid_checkable" in lines[1] and "unknown_rule_predicate" in lines[1]
+    assert "proposition" not in result.stdout

@@ -25,6 +25,7 @@ from forwin.book_state.book_frame_repository import BookLexiconRepository, Story
 from forwin.book_state.lexicon import lexicon_from_payload
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.reviewer import BookStateReviewGate
+from forwin.book_state.rule_predicates import RuleRefScope, parse_checkable
 from forwin.book_state.schema import ACTOR_NODE_TYPES
 from forwin.book_state.story_clock import calendar_from_payload, format_story_time
 from forwin.canon import CanonAdmissionService
@@ -41,6 +42,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_frame import BookLexiconRow, StoryCalendarRow
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.project import Project
+from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta, NodePatch
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.updater import StateUpdater
@@ -195,6 +197,30 @@ def test_genres_differ_in_calendar_travel_and_rank_vocabulary() -> None:
         assert all(not (first & second) for first, second in combinations(names, 2)), label
 
 
+@pytest.mark.parametrize("genre", GENRES)
+def test_fixture_predicates_use_book_state_refs(genre: str) -> None:
+    pack = load_fixture(genre)["pack"]
+    seed = pack["world_seed"]
+    project_id = f"proj-predicates-{genre}"
+    map_ids = {node["id"]: f"map-{node['id']}" for node in pack["world"]["map_atlas"]["nodes"]}
+    lexicon = lexicon_from_payload(seed["lexicon"])
+    world, _, _ = build_world_seed_deltas(
+        project_id=project_id, revision_id="revision", seed=seed,
+        story_engine=pack["world"]["story_engine"], map_node_ids=map_ids,
+        calendar=calendar_from_payload(seed["calendar"]), lexicon=lexicon,
+    )
+    scope = RuleRefScope(
+        locations=frozenset(map_ids.values()),
+        actors=frozenset(p.node_id for p in world.node_patches if p.node_type in ACTOR_NODE_TYPES),
+        facts=frozenset(f"fact:{p.fact_id}" for p in world.fact_patches),
+        modes=frozenset(mode.id for mode in lexicon.travel_modes),
+    )
+    for patch in world.node_patches:
+        if patch.node_type == "rule" and (checkable := patch.new_value["profile"]["checkable"]) is not None:
+            predicate, issues = parse_checkable(checkable, scope=scope)
+            assert predicate is not None and issues == [], (patch.node_id, issues)
+
+
 # --- start-writing into chapter-0 BookState -----------------------------------------------------
 
 
@@ -287,6 +313,48 @@ def test_fixture_flows_from_genesis_to_chapter_zero_book_state(genre: str, sessi
             assert session.scalar(select(func.count(model.id)).where(model.project_id == project_id)) == 1
         assert StoryCalendarRepository(session).get(project_id) == calendar
         assert BookLexiconRepository(session).get(project_id) == lexicon_from_payload(seed["lexicon"])
+
+
+def test_handoff_seed_entry_rule_is_enforced_with_book_state_ids(session_factory) -> None:
+    fixture = load_fixture("urban_mystery")
+    project_id = "proj-handoff-entry-rule"
+    service = BookGenesisService(llm_client=_NoApiKeyClient())
+
+    with session_factory() as session:
+        create_ready_project(session, service, fixture, project_id)
+        start_writing(session, service, project_id)
+        runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=0)
+        map_ids = map_node_ids_by_genesis_ref(session, project_id)
+        rule_id = seed_ref_id(project_id, "rule", "rule-precinct-entry")
+        assert runtime.world.get_node(rule_id).profile["checkable"] == {
+            "kind": "actor_cannot_enter", "location_ref": map_ids["node-precinct"],
+            "include_children": True,
+            "except_refs": [seed_ref_id(project_id, "character", "cast-archivist")],
+            "except_member_of": [seed_ref_id(project_id, "faction", "faction-precinct")],
+        }
+
+        for actor_ref, allowed in (("opp-director", False), ("cast-archivist", True), ("cast-inspector", True)):
+            actor_id = seed_ref_id(project_id, "character", actor_ref)
+            start_id = runtime.world.get_state(actor_id)["location_id"]
+            station_id, precinct_id = map_ids["node-station"], map_ids["node-precinct"]
+            assert start_id != station_id
+            delta = GraphDelta(
+                id=f"entry-{actor_id}", project_id=project_id, chapter_number=1, source_type="chapter_extraction",
+                node_patches=[
+                    NodePatch(node_id=actor_id, node_type="character", op="set", field_path="state.location_id",
+                              old_value=start_id, new_value=station_id),
+                    NodePatch(node_id=actor_id, node_type="character", op="set", field_path="state.location_id",
+                              old_value=station_id, new_value=precinct_id),
+                ],
+            )
+            verdict = BookStateReviewGate(session).review(
+                ApprovedGraphDeltaSet(project_id=project_id, chapter_number=1, graph_deltas=[delta]),
+                base_chapter=0,
+            )
+            assert verdict.accepted is allowed, verdict.issues
+            assert [(issue.severity, issue.code, issue.target_ref) for issue in verdict.issues] == (
+                [] if allowed else [("error", "rule_violated", f"rule:{rule_id}")]
+            )
 
 
 def spy(label: str, real, calls: list[str]):

@@ -15,6 +15,11 @@ from forwin.book_state.lexicon import (
     lexicon_from_payload,
     lexicon_to_payload,
 )
+from forwin.book_state.map_graph import MapGraph
+from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+from forwin.book_state.rule_predicates import (
+    RulePredicate, RuleRefScope, RuleSubjectChanges, blocked_edge_types, evaluate_rules, parse_checkable,
+)
 from forwin.book_state.schema import (
     ACTOR_TIERS,
     CLOCK_SCOPES,
@@ -28,7 +33,9 @@ from forwin.book_state.story_clock import (
     calendar_from_payload,
     unit_minutes,
 )
-from forwin.protocol.book_state import WORLD_EDGE_TYPES
+from forwin.protocol.book_state import (
+    WORLD_EDGE_TYPES, WORLD_EDGE_TYPES_BY_FAMILY, MapEdge, MapEdgeType, MapNode, WorldEdge, WorldNode,
+)
 from forwin.map.genesis_adapter import buildable_atlas_node_ids
 
 
@@ -126,10 +133,22 @@ def _normalize_actor(item: Mapping) -> dict[str, Any]:
     }
 
 
-def _checkable(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, Mapping):
+def _checkable(value: Any, scope: RuleRefScope) -> Any:
+    if value is None:
         return None
-    return {**deepcopy(dict(value)), "kind": _text(value.get("kind"))}
+    predicate, _issues = parse_checkable(value, scope=scope)
+    if predicate is not None:
+        return {"kind": predicate.kind, **predicate.params}
+    return deepcopy(value)
+
+
+def _rule_scope(seed: Mapping, story_engine: Mapping, map_atlas: Mapping) -> RuleRefScope:
+    return RuleRefScope(
+        locations=buildable_atlas_node_ids(dict(map_atlas)),
+        actors=frozenset(story_engine_actor_refs(story_engine)),
+        facts=frozenset(_text(f["id"]) for f in _objects(seed.get("facts")) if f.get("id")),
+        modes=frozenset(_text(m["id"]) for m in _objects(_object(seed.get("lexicon")).get("travel_modes")) if m.get("id")),
+    )
 
 
 def story_engine_actor_refs(story_engine: Mapping) -> dict[str, str]:
@@ -145,6 +164,7 @@ def normalize_world_seed(
     payload: Mapping, *, story_engine: Mapping, map_atlas: Mapping,
 ) -> dict[str, Any]:
     """Coerce shapes without resolving, replacing, or inventing references."""
+    scope = _rule_scope(payload, story_engine, map_atlas)
     calendar = _object(payload.get("calendar"))
     lexicon = _object(payload.get("lexicon"))
     return {
@@ -180,7 +200,7 @@ def normalize_world_seed(
         } for item in _objects(payload.get("facts"))],
         "knowledge": [_texts(item, "observer_ref", "fact_id", "state", "channel")
                       for item in _objects(payload.get("knowledge"))],
-        "rules": [{**_texts(item, "id", "statement", "hardness"), "checkable": _checkable(item.get("checkable"))}
+        "rules": [{**_texts(item, "id", "statement", "hardness"), "checkable": _checkable(item.get("checkable"), scope)}
                   for item in _objects(payload.get("rules"))],
         "clocks": [{**_texts(item, "id", "label", "owner_ref", "scope", "on_expire"), "due_in": _duration(item.get("due_in"))}
                    for item in _objects(payload.get("clocks"))],
@@ -341,17 +361,23 @@ def validate_world_seed(
         enum(item, "state", KNOWLEDGE_STATES, "invalid_knowledge_state", path)
         enum(item, "channel", ("seeded",), "invalid_channel", path)
 
+    scope = _rule_scope(seed, story_engine, map_atlas)
+    predicates: list[RulePredicate] = []
     seen_rule_ids: set[str] = set()
     for index, rule in enumerate(_objects(seed.get("rules"))):
         path = f"rules[{index}]"
         unique_id(rule, seen_rule_ids, path)
         enum(rule, "hardness", RULE_HARDNESS, "invalid_hardness", path)
         checkable = rule.get("checkable")
-        if checkable is not None and (
-            not isinstance(checkable, Mapping)
-            or not isinstance(checkable.get("kind"), str) or not checkable["kind"].strip()
-        ):
-            issue("invalid_checkable", f"{path}.checkable", "checkable must be null or an object with a nonempty string kind")
+        if checkable is not None:
+            predicate, errors = parse_checkable(checkable, scope=scope)
+            for error in errors:
+                issue("invalid_checkable", f"{path}.checkable", error)
+            if predicate is not None:
+                predicates.append(predicate.model_copy(update={
+                    "rule_id": _text(rule.get("id")), "hard": rule.get("hardness") == "hard",
+                }))
+    issues.extend(_rule_reachability_issues(seed, story_engine, map_atlas, scope, predicates))
     seen_clock_ids: set[str] = set()
     for index, clock in enumerate(_objects(seed.get("clocks"))):
         path = f"clocks[{index}]"
@@ -369,6 +395,69 @@ def validate_world_seed(
         number = candidate.get("arc_number")
         if type(number) is not int or number not in arc_numbers:
             issue("invalid_arc_number", f"{path}.arc_number", f"Unknown arc number: {number}")
+    return issues
+
+
+def _rule_reachability_issues(
+    seed: Mapping, story_engine: Mapping, map_atlas: Mapping,
+    scope: RuleRefScope, predicates: list[RulePredicate],
+) -> list[WorldSeedIssue]:
+    hard = [p for p in predicates if p.hard and p.kind in {"requires_travel_mode", "actor_cannot_enter"}]
+    cast = _objects(story_engine.get("core_cast"))
+    actors = _objects(seed.get("actors"))
+    protagonist = next((a for a in actors if cast and a.get("ref") == cast[0].get("id")), None)
+    if not hard or protagonist is None or _text(protagonist.get("location_ref")) not in scope.locations:
+        return []
+    nodes = [MapNode(
+        id=_text(n["id"]), project_id="", node_type="site",
+        parent_id=_text(n.get("parent_id") or n.get("parent_region_id")),
+    ) for n in _objects(map_atlas.get("nodes")) if _text(n.get("id")) in scope.locations]
+    edges = [MapEdge(
+        id=_text(e.get("id") or index), project_id="",
+        from_node_id=_text(e["from_node_id"]), to_node_id=_text(e["to_node_id"]),
+        edge_type=e.get("kind", "road"), bidirectional=e.get("bidirectional") is not False,
+    ) for index, e in enumerate(_objects(map_atlas.get("edges")))
+        if _text(e.get("from_node_id")) in scope.locations and _text(e.get("to_node_id")) in scope.locations
+        and isinstance(e.get("kind", "road"), str)
+        and e.get("kind", "road") in {kind.value for kind in MapEdgeType}]
+    graph = MapGraph(nodes=nodes, edges=edges)
+    runtime = BookStateRuntime(project_id="", as_of_chapter=0, map_graph=graph, world=ObjectiveWorldGraph(
+        nodes=[WorldNode(id=ref, project_id="", node_type=kind) for ref, kind in story_engine_actor_refs(story_engine).items()],
+        states_by_node_id={_text(a.get("ref")): {"travel_mode_ids": _strings(a.get("travel_mode_ids"))} for a in actors},
+        edges=[WorldEdge(id=str(index), project_id="", source_id=r["source"], target_id=r["target"], edge_type=r["edge_type"],
+                         edge_family=next(family for family, kinds in WORLD_EDGE_TYPES_BY_FAMILY.items() if r["edge_type"] in kinds))
+               for index, r in enumerate(_objects(seed.get("relations")))
+               if isinstance(r.get("source"), str) and r["source"] in scope.actors
+               and isinstance(r.get("target"), str) and r["target"] in scope.actors
+               and isinstance(r.get("edge_type"), str) and r["edge_type"] in WORLD_EDGE_TYPES],
+    ))
+    edge_types = frozenset(e.edge_type for e in edges)
+
+    def reachable(actor: Mapping, target: str) -> bool:
+        mover = _text(actor.get("ref"))
+        start = _text(actor.get("location_ref"))
+        forbidden = {n.id for n in nodes if evaluate_rules(
+            runtime, hard, RuleSubjectChanges(intent_locations=((mover, n.id),)),
+        )}
+        filtered = MapGraph(nodes=nodes, edges=[e.model_copy(update={"bidirectional": False})
+                            for e in graph.edges_by_id.values() if e.to_node_id not in forbidden]) if forbidden else graph
+        return filtered.shortest_path(start, target, allowed_edge_types=(
+            edge_types - blocked_edge_types(runtime, hard, mover_id=mover)
+        )).reachable
+
+    issues = []
+    origin = _text(protagonist["location_ref"])
+    for index, actor in enumerate(actors):
+        target = _text(actor.get("location_ref"))
+        if actor is protagonist or actor.get("actor_tier") != "major" or target not in scope.locations or target == origin:
+            continue
+        if not (graph.shortest_path(origin, target).reachable or graph.shortest_path(target, origin).reachable):
+            continue
+        if not reachable(protagonist, target) and not reachable(actor, origin):
+            issues.append(WorldSeedIssue(
+                "warning", "rule_isolates_major_actor", f"actors[{index}].location_ref",
+                f"Hard predicates isolate {actor.get('ref')} from {protagonist.get('ref')}",
+            ))
     return issues
 
 

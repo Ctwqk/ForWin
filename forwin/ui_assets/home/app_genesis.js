@@ -596,6 +596,30 @@
       }
     }
 
+    function genesisWorldSeedRuleLines(detail, payload, issues) {
+      const world = detail?.pack?.world || {};
+      const engine = world.story_engine || {};
+      const names = new Map([
+        ...(world.map_atlas?.nodes || []), ...(engine.core_cast || []),
+        ...(engine.opposition || []), ...(engine.factions || []),
+        ...(payload.lexicon?.travel_modes || []), ...(payload.facts || []),
+      ].filter((item) => item.id && item.name).map((item) => [item.id, item.name]));
+      const refParams = new Set(['location_ref', 'except_refs', 'except_member_of', 'mode_ids', 'fact_ref', 'source_refs']);
+      const display = (value, refs) => {
+        if (Array.isArray(value)) return `[${value.map((item) => display(item, refs)).join(', ')}]`;
+        return refs && names.has(value) ? `${names.get(value)} (${value})` : JSON.stringify(value);
+      };
+      return (payload.rules || []).map((rule, index) => {
+        const path = `rules[${index}].checkable`;
+        const invalid = issues.filter((issue) => issue.code === 'invalid_checkable' && issue.path === path);
+        const label = `${rule.id || `rules[${index}]`} [${rule.hardness || ''}]`;
+        if (invalid.length) return `${label} · invalid_checkable · ${invalid.map((issue) => issue.message).join('; ')}`;
+        if (rule.checkable == null) return `${label} · checkable: null`;
+        const {kind, ...params} = rule.checkable;
+        return `${label} · ${kind} · ${Object.entries(params).map(([key, value]) => `${key}=${display(value, refParams.has(key))}`).join(', ')}`;
+      });
+    }
+
     function genesisWorldSeedOverviewLines(detail = currentGenesisDetail) {
       const payload = currentGenesisPayload(detail, 'world_seed') || {};
       const units = payload.calendar?.units;
@@ -603,6 +627,7 @@
       return [
         `calendar.units：${Array.isArray(units) ? units.length : 0}`,
         ...GENESIS_WORLD_SEED_LISTS.map((key) => `${key}：${Array.isArray(payload[key]) ? payload[key].length : 0}`),
+        ...genesisWorldSeedRuleLines(detail, payload, issues),
         `校验问题：${issues.length || '无'}`,
         ...issues.map((issue) => `[${issue.severity}] ${issue.code} · ${issue.path} · ${issue.message}`),
         '初始世界不提供逐字段表单，请用“AI 对话改写”修改。',

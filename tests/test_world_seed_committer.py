@@ -112,7 +112,7 @@ def seed():
             {"observer_ref": "cast-1", "fact_id": "fact-1", "state": "knows", "channel": "seeded"},
             {"observer_ref": "faction-1", "fact_id": "fact-2", "state": "believes", "channel": "seeded"},
         ],
-        "rules": [{"id": "rule-1", "statement": "rule-statement", "hardness": "hard", "checkable": {"kind": "constraint", "limit": 1}}],
+        "rules": [{"id": "rule-1", "statement": "rule-statement", "hardness": "hard", "checkable": {"kind": "exclusive_relation", "edge_type": "serves", "max_per_source": 1}}],
         "clocks": [{"id": "clock-1", "label": "clock-label", "due_in": {"amount": 3, "unit": "时"}, "owner_ref": "faction-1", "scope": "public", "on_expire": "clock-expire"}],
         "reader_promises": [{"id": "promise-1", "summary": "promise-summary", "promise_type": "promise-type", "expected_payoff_window": "window-1"}],
         "reveal_candidates": [{"fact_id": "fact-1", "arc_number": 1, "note": ""}],
@@ -229,7 +229,7 @@ def test_build_world_seed_deltas_maps_every_section(seed, story_engine) -> None:
     (rule,) = nodes["rule"]
     assert rule.node_id == node_id("rule", "rule-1") and rule.new_value["name"] == "rule-statement"
     assert rule.new_value["profile"] == {
-        "statement": "rule-statement", "hardness": "hard", "checkable": {"kind": "constraint", "limit": 1},
+        "statement": "rule-statement", "hardness": "hard", "checkable": {"kind": "exclusive_relation", "edge_type": "serves", "max_per_source": 1},
     }
     assert rule.new_value["state"] == {"status": "active"}
 
@@ -276,6 +276,74 @@ def test_build_world_seed_deltas_maps_every_section(seed, story_engine) -> None:
     assert promise.new_value["payload"]["promise_type"] == "promise-type"
     assert promise.new_value["payload"]["expected_payoff_window"] == "window-1"
     assert promise.new_value["payload"]["created_at_chapter"] == 0
+
+
+@pytest.mark.parametrize("checkable,expected", [
+    (None, None),
+    ({"kind": "actor_cannot_enter", "location_ref": "node-2", "include_children": False,
+      "except_refs": ["cast-1", "opp-1"], "except_member_of": ["faction-1"]},
+     {"kind": "actor_cannot_enter", "location_ref": "loc-db-2", "include_children": False,
+      "except_refs": [seed_ref_id("project-1", "character", ref) for ref in ("cast-1", "opp-1")],
+      "except_member_of": [seed_ref_id("project-1", "faction", "faction-1")]}),
+    ({"kind": "actor_cannot_enter", "location_ref": "node-1"},
+     {"kind": "actor_cannot_enter", "location_ref": "loc-db-1", "include_children": True,
+      "except_refs": [], "except_member_of": []}),
+    ({"kind": "blocked_channel", "fact_ref": "fact-1", "source_refs": ["cast-1", "faction-1"],
+      "channels": ["told", "rumor"]},
+     {"kind": "blocked_channel", "fact_ref": f"fact:{seed_ref_id('project-1', 'fact', 'fact-1')}",
+      "source_refs": [seed_ref_id("project-1", "character", "cast-1"), seed_ref_id("project-1", "faction", "faction-1")],
+      "channels": ["told", "rumor"]}),
+    ({"kind": "requires_travel_mode", "edge_types": ["road"], "mode_ids": ["mode-1"]},
+     {"kind": "requires_travel_mode", "edge_types": ["road"], "mode_ids": ["mode-1"]}),
+    ({"kind": "exclusive_relation", "edge_type": "serves", "max_per_source": 2},
+     {"kind": "exclusive_relation", "edge_type": "serves", "max_per_source": 2}),
+    ({"kind": "irreversible_state", "node_types": ["character"], "field": "alive_status", "value": "dead"},
+     {"kind": "irreversible_state", "node_types": ["character"], "field": "alive_status", "value": "dead"}),
+])
+def test_build_remaps_rule_predicate_refs(seed, story_engine, checkable, expected) -> None:
+    seed["rules"][0]["checkable"] = checkable
+    before = deepcopy(seed)
+
+    world, _, _ = _build(seed, story_engine)
+
+    rule = _patches_by_type(world)["rule"][0]
+    assert rule.new_value["profile"]["checkable"] == expected
+    assert seed == before
+
+
+@pytest.mark.parametrize("checkable,path,ref", [
+    ({"kind": "actor_cannot_enter", "location_ref": "missing-site"}, "location_ref", "missing-site"),
+    ({"kind": "actor_cannot_enter", "location_ref": "node-1", "except_refs": ["missing-actor"]},
+     "except_refs[0]", "missing-actor"),
+    ({"kind": "actor_cannot_enter", "location_ref": "node-1", "except_member_of": ["missing-group"]},
+     "except_member_of[0]", "missing-group"),
+    ({"kind": "blocked_channel", "fact_ref": "missing-fact", "source_refs": ["cast-1"], "channels": ["told"]},
+     "fact_ref", "missing-fact"),
+    ({"kind": "blocked_channel", "fact_ref": "fact-1", "source_refs": ["missing-source"], "channels": ["told"]},
+     "source_refs[0]", "missing-source"),
+    ({"kind": "requires_travel_mode", "edge_types": ["road"], "mode_ids": ["missing-mode"]},
+     "mode_ids[0]", "missing-mode"),
+])
+def test_build_rejects_unresolved_rule_predicate_refs(seed, story_engine, checkable, path, ref) -> None:
+    seed["rules"][0]["checkable"] = checkable
+
+    with pytest.raises(WorldSeedCommitError) as raised:
+        _build(seed, story_engine)
+
+    assert len(raised.value.issues) == 1
+    assert f"rules[0].checkable.{path}: {ref}" in raised.value.issues[0]
+
+
+@pytest.mark.parametrize("checkable", [
+    {"kind": "unknown", "location_ref": "node-1"},
+    {"kind": "actor_cannot_enter", "location_ref": "node-1", "other_ref": "cast-1"},
+    {"kind": "actor_cannot_enter", "location_ref": ""},
+    "invalid",
+])
+def test_build_rejects_invalid_rule_predicate(seed, story_engine, checkable) -> None:
+    seed["rules"][0]["checkable"] = checkable
+    with pytest.raises(WorldSeedCommitError, match=r"invalid_checkable rules\[0\].checkable"):
+        _build(seed, story_engine)
 
 
 def test_seed_ids_are_scoped_to_project_and_kind() -> None:

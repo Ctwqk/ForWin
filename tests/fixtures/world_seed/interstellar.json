@@ -628,18 +628,28 @@
           "id": "rule-cooldown",
           "statement": "跃迁艇每次跃迁后必须冷却六个标准时才能再次跃迁。",
           "hardness": "hard",
-          "checkable": {
-            "kind": "cooldown",
-            "travel_mode_id": "mode-jump",
-            "amount": 6,
-            "unit": "标准时"
-          }
+          "checkable": null
         },
         {
           "id": "rule-lag",
           "statement": "星区之间的通讯延迟随距离增加，没有即时对话。",
           "hardness": "soft",
           "checkable": null
+        },
+        {
+          "id": "rule-terminal",
+          "statement": "舰队解散后不能恢复为原来的组织。",
+          "hardness": "hard",
+          "checkable": {
+            "kind": "irreversible_state",
+            "node_types": [
+              "faction",
+              "organization",
+              "group"
+            ],
+            "field": "status",
+            "value": "dissolved"
+          }
         }
       ],
       "clocks": [

@@ -17,6 +17,7 @@ from forwin.book_state.lexicon import BookLexicon, lexicon_from_payload
 from forwin.book_state.narrative import promise_node_payload
 from forwin.book_state.repository import BookStateRepository, _loads
 from forwin.book_state.reviewer import BookStateReviewGate
+from forwin.book_state.rule_predicates import parse_checkable
 from forwin.book_state.story_clock import (
     StoryCalendar,
     calendar_from_payload,
@@ -319,6 +320,31 @@ class _SeedDeltaBuilder:
             return ""
         return self.map_node_ids[location_ref]
 
+    def _rule_checkable(self, payload: Any, path: str) -> dict[str, Any] | None:
+        if payload is None:
+            return None
+        predicate, errors = parse_checkable(payload, scope=None)
+        if predicate is None:
+            for error in errors:
+                self._issue("invalid_checkable", path, error)
+            return None
+        params = predicate.params
+        if predicate.kind == "actor_cannot_enter":
+            params["location_ref"] = self._location(params["location_ref"], f"{path}.location_ref")
+            for key in ("except_refs", "except_member_of"):
+                params[key] = [self._actor(ref, f"{path}.{key}[{index}]") for index, ref in enumerate(params[key])]
+        elif predicate.kind == "blocked_channel":
+            params["fact_ref"] = self._fact_ref(params["fact_ref"], f"{path}.fact_ref")
+            params["source_refs"] = [
+                self._actor(ref, f"{path}.source_refs[{index}]") for index, ref in enumerate(params["source_refs"])
+            ]
+        elif predicate.kind == "requires_travel_mode":
+            mode_ids = {mode.id for mode in self.lexicon.travel_modes}
+            for index, ref in enumerate(params["mode_ids"]):
+                if ref not in mode_ids:
+                    self._issue("unresolved_travel_mode_ref", f"{path}.mode_ids[{index}]", ref)
+        return {"kind": predicate.kind, **params}
+
     def _minutes_after_opening(self, duration: Mapping[str, Any]) -> int:
         return self.opening + duration_to_minutes(
             self.calendar, self.lexicon, amount=duration["amount"], unit_name=duration["unit"],
@@ -356,10 +382,14 @@ class _SeedDeltaBuilder:
             for intent_index, intent in enumerate(actor["intents"]):
                 node_patches.append(self._intent_node(actor, intent, f"{path}.intents[{intent_index}]"))
         for index, rule in enumerate(self.seed["rules"]):
-            rule_id = self._item_id(rule, f"rules[{index}]")
+            path = f"rules[{index}]"
+            rule_id = self._item_id(rule, path)
             node_patches.append(self._node(
                 "rule", rule_id, name=rule["statement"],
-                profile={"statement": rule["statement"], "hardness": rule["hardness"], "checkable": rule["checkable"]},
+                profile={
+                    "statement": rule["statement"], "hardness": rule["hardness"],
+                    "checkable": self._rule_checkable(rule["checkable"], f"{path}.checkable"),
+                },
                 state={"status": "active"},
             ))
         for index, clock in enumerate(self.seed["clocks"]):

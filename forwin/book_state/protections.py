@@ -15,12 +15,10 @@ from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
 from forwin.book_state.narrative import OPEN_PROTECTION_UNTIL, PROTECTION_KINDS, RELEASED_PROTECTION_STATUS
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.runtime import BookStateRuntime
-from forwin.book_state.schema import WORLD_NODE_FIELDS
+from forwin.book_state.schema import ENDED_STATUSES, WORLD_NODE_FIELDS
 from forwin.protocol.book_state import GraphDelta, ObserverType
 
 
-# The state.status values that end a faction, organization, group or site: it no longer exists.
-ENDED_STATUSES = frozenset({"destroyed", "dissolved", "disbanded", "inactive"})
 # The kind of a violation that ends a ref a later hard milestone or the arc's exit state needs.
 MILESTONE_KIND = "milestone"
 # Milestones come from the arc's beat sheet.

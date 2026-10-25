@@ -654,18 +654,23 @@
           "id": "rule-flight",
           "statement": "炼气期弟子不得长途御剑，只能徒步或搭乘宗门飞舟。",
           "hardness": "hard",
-          "checkable": {
-            "kind": "rank_gate",
-            "ladder_id": "ladder-realm",
-            "min_rank": "筑基",
-            "travel_mode_id": "mode-sword"
-          }
+          "checkable": null
         },
         {
           "id": "rule-cost",
           "statement": "每次启用封印类法术都要折损施术者的寿元。",
           "hardness": "soft",
           "checkable": null
+        },
+        {
+          "id": "rule-service",
+          "statement": "同一弟子同时只能侍奉一位主家。",
+          "hardness": "hard",
+          "checkable": {
+            "kind": "exclusive_relation",
+            "edge_type": "serves",
+            "max_per_source": 1
+          }
         }
       ],
       "clocks": [

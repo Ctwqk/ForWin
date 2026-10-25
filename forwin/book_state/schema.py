@@ -31,6 +31,9 @@ ALIVE_STATUSES = ("alive", "dead", "unknown")
 RESTRAINT_STATES = ("free", "restrained", "imprisoned")
 ACTOR_TIERS = ("major", "minor", "background")
 RULE_HARDNESS = ("hard", "soft")
+ENDED_STATUSES = frozenset({"destroyed", "dissolved", "disbanded", "inactive"})
+GROUP_STATUSES = ("active", *sorted(ENDED_STATUSES))
+SITE_STATUSES = ("active", "normal", "open", "closed", "sealed", "occupied", *sorted(ENDED_STATUSES))
 
 _V46_GENERIC_PROFILE_FIELDS = {
     "summary",
@@ -548,6 +551,10 @@ def _v6_value_issues(
         "clock": (("profile", "scope", CLOCK_SCOPES), ("state", "status", CLOCK_STATUSES)),
         "character": (("state", "alive_status", ALIVE_STATUSES),),
         "rule": (("profile", "hardness", RULE_HARDNESS),),
+        "faction": (("state", "status", GROUP_STATUSES),),
+        "organization": (("state", "status", GROUP_STATUSES),),
+        "group": (("state", "status", GROUP_STATUSES),),
+        "site_state": (("state", "status", SITE_STATUSES),),
     }.get(node_type, ())
     if node_type in ACTOR_NODE_TYPES:
         enum_fields += (("state", "actor_tier", ACTOR_TIERS),)

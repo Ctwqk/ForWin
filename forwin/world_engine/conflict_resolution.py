@@ -762,28 +762,32 @@ class ConflictResolutionService:
         boundary = _chapter_boundary(row)
         amends_milestone = decision.option == "amend_plan" and boundary.kind == MILESTONE_KIND
         beat_sheet_id = ""
+        proposal = None
         if amends_milestone:
             if self.plan_amender is None:
                 raise ConflictOptionUnavailable(
                     f"Conflict {row.id}: amending a milestone needs a plan amender; none is configured"
                 )
-            # Neither lock may last through the amender's model calls.
+            project_id, conflict_id = row.project_id, row.id
+            # End all three row locks before the model call; the proposal writes no canon.
             session.commit()
-            amended = self.plan_amender.amend(session, conflict=row, decision=decision, policy=self.policy)
-            if amended.failed or not amended.beat_sheet_id:
-                problems = "; ".join(f"{issue.code}: {issue.message}" for issue in amended.issues) or "no beat sheet"
-                raise ConflictOptionUnavailable(f"Conflict {row.id}: the beat sheet could not be revised: {problems}")
-            beat_sheet_id = amended.beat_sheet_id
-            row, plan = self._lock_chapter_conflict(row.project_id, row.id)
+            proposal = self.plan_amender.propose_chapter_revision(
+                session, conflict=row, decision=decision, policy=self.policy,
+            )
+            row, plan = self._lock_chapter_conflict(project_id, conflict_id)
         graph_delta_ids: tuple[str, ...] = ()
         with session.begin_nested():
+            if proposal is not None:
+                amended = self.plan_amender.publish_chapter_revision(session, proposal)
+                beat_sheet_id = amended.beat_sheet_id
             if decision.option == "amend_plan" and not amends_milestone:
                 graph_delta_ids = self.admission.commit_plan_constraints(
                     session=session, project_id=row.project_id, constraint_set_id=f"conflict:{row.id}",
                     creates=[], releases=[boundary.protection_node_id],
                 ).graph_delta_ids
-            # The amender attached its beat sheet to the conflict; a rewrite leaves no result until the resume.
-            refs = conflict_result_refs(row) if amends_milestone else list(graph_delta_ids)
+            # The revision ref is published in the same savepoint as its sheet and protection delta.
+            refs = ([*conflict_result_refs(row), f"beat_sheet:{beat_sheet_id}"]
+                    if amends_milestone else list(graph_delta_ids))
             repo = WorldConflictRepository(session)
             repo.mark_resolved(row, decision=decision, result_refs=refs)
             # The chapter waits in needs_review while another of its conflicts is open, so that one can be decided.

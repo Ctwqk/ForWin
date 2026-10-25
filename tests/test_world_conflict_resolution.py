@@ -1297,7 +1297,7 @@ def test_amend_plan_on_milestone_conflict_revises_beat_sheet_first() -> None:
     engine.dispose()
 
 
-def test_amendment_plans_the_new_band_when_the_revision_resplits_it() -> None:
+def test_amendment_keeps_the_band_when_the_revision_resplits_it() -> None:
     from forwin.models.planning_v6 import BandPlanRow
     from tests.test_arc_beat_sheet import StubLLM, _sheet
     from tests.test_band_planner import _band
@@ -1307,18 +1307,18 @@ def test_amendment_plans_the_new_band_when_the_revision_resplits_it() -> None:
     issues = [{"code": "exit_state_unaddressed", "severity": "warning", "chapter_number": 4, "ref": world.rival,
                "message": "m"}]
     conflict_id = _plan_conflict(Session, world, band_plan_id=band_plan_id, issues=issues)
-    # Chapters 1-4 now sit in the revised sheet's band 1-6.
+    # The model proposes new bands; the revision retains the current ownership.
     sheet_client = StubLLM(_sheet(world, bands=((1, 6), (7, 12))))
-    band_client = StubLLM(_band(world, range(1, 7)))
+    band_client = StubLLM(_band(world, range(1, 5)))
 
     result = _amend(Session, world.project_id, conflict_id, _amender(band_client, sheet_client))
 
     assert len(sheet_client.calls) == 1
-    assert band_client.payload(0)["band"] == {"band_index": 0, "chapter_start": 1, "chapter_end": 6}
-    assert band_client.payload(0)["chapters_to_plan"] == [1, 2, 3, 4, 5, 6]
+    assert band_client.payload(0)["band"] == {"band_index": 0, "chapter_start": 1, "chapter_end": 4}
+    assert band_client.payload(0)["chapters_to_plan"] == [1, 2, 3, 4]
     with Session() as session:
         planned = session.get(BandPlanRow, result.band_plan_id)
-        assert (planned.status, planned.chapter_start, planned.chapter_end) == ("active", 1, 6)
+        assert (planned.status, planned.chapter_start, planned.chapter_end) == ("active", 1, 4)
         assert planned.beat_sheet_id == result.beat_sheet_id
     assert _conflict_row(Session, world.project_id, conflict_id)[0] == "resolved"
     engine.dispose()
@@ -1638,23 +1638,21 @@ def _two_band_world(Session):
     return world, arc_id, band_plan_id
 
 
-def test_resplit_amendment_supersedes_stale_band_plans_and_plans_their_rows() -> None:
+def test_resplit_amendment_preserves_existing_band_ownership() -> None:
     from tests.test_arc_beat_sheet import StubLLM, _sheet
     from tests.test_band_planner import _band
 
     engine, Session = _session_factory()
     world, _arc_id, band_plan_id = _two_band_world(Session)
-    assert _active_spans(Session, world.project_id) == [(1, 4), (5, 8)]
     conflict_id = _plan_conflict(Session, world, violated="milestone", band_plan_id=band_plan_id)
     sheet_client = StubLLM(_sheet(world, bands=((1, 6), (7, 12))))
-    # The revised sheet's hard milestone is due by chapter 8, and rows 7-8 still count as planned.
-    band_client = StubLLM(_band(world, range(1, 7), _CARRIES_REVISED_MILESTONE), _band(world, range(7, 13)))
+    band_client = StubLLM(_band(world, range(1, 5), _CARRIES_REVISED_MILESTONE))
 
     result = _amend(Session, world.project_id, conflict_id, _amender(band_client, sheet_client))
 
-    # Chapters 5-8 were band 5-8's: they now belong to bands 1-6 and 7-12, and no stale band plan overlaps.
-    assert [band_client.payload(call)["band"]["chapter_start"] for call in (0, 1)] == [1, 7]
-    assert _active_spans(Session, world.project_id) == [(1, 6), (7, 12)]
+    assert len(band_client.calls) == 1
+    assert band_client.payload(0)["band"] == {"band_index": 0, "chapter_start": 1, "chapter_end": 4}
+    assert _active_spans(Session, world.project_id) == [(1, 4), (5, 8)]
     assert _conflict_row(Session, world.project_id, conflict_id)[0] == "resolved"
     assert result.band_plan_id
     engine.dispose()
@@ -1667,9 +1665,9 @@ def test_amendment_succeeds_only_when_every_band_is_planned(failing_band: int) -
 
     engine, Session = _session_factory()
     world, _arc_id, band_plan_id = _two_band_world(Session)
-    conflict_id = _plan_conflict(Session, world, violated="milestone", band_plan_id=band_plan_id)
+    conflict_id = _plan_conflict(Session, world, violated="milestone", band_plan_id=band_plan_id, band=(1, 8))
     down = [RuntimeError("provider down"), RuntimeError("provider down")]
-    answers = [*down] if failing_band == 1 else [_band(world, range(1, 7), _CARRIES_REVISED_MILESTONE), *down]
+    answers = [*down] if failing_band == 1 else [_band(world, range(1, 5), _CARRIES_REVISED_MILESTONE), *down]
     band_client = StubLLM(*answers)
 
     with pytest.raises(ConflictOptionUnavailable, match="llm_unavailable"):

@@ -64,6 +64,19 @@ _ALLOWED = {
 }
 
 
+@dataclass(frozen=True)
+class BeatSheetProposal:
+    """An unpublished sheet and its model trace; publication performs no model work."""
+
+    project_id: str
+    arc_plan_id: str
+    expected_sheet_id: str | None
+    data: ArcBeatSheetData
+    source: str
+    reason: str
+    trace: dict[str, Any]
+
+
 class ArcBeatSheetService:
     """Writes beat sheet versions in the caller's session; the caller commits.
 
@@ -106,9 +119,19 @@ class ArcBeatSheetService:
         reason: str, conflict_summary: str,
     ) -> ArcBeatSheetRow:
         """A new version that resolves ``conflict_summary``; the active one becomes superseded."""
+        return self.publish_proposal(session, self.propose_revision(
+            session, project_id=project_id, arc_plan=arc_plan, policy=policy,
+            reason=reason, conflict_summary=conflict_summary,
+        ))
+
+    def propose_revision(
+        self, session: Session, *, project_id: str, arc_plan: ArcPlanVersion, policy: RuntimePolicy,
+        reason: str, conflict_summary: str,
+    ) -> BeatSheetProposal:
+        """Generate a revision without locking or publishing a sheet or its canon constraints."""
         repo = ArcBeatSheetRepository(session)
         current = repo.active_for_arc(arc_plan.id)
-        return self._generate(
+        return self._propose(
             session, project_id=project_id, arc_plan=arc_plan, policy=policy, reason=reason,
             current=repo.load(current) if current is not None else None,
             expected_sheet_id=current.id if current is not None else None,
@@ -117,9 +140,16 @@ class ArcBeatSheetService:
 
     def _generate(
         self, session: Session, *, project_id: str, arc_plan: ArcPlanVersion, policy: RuntimePolicy, reason: str,
+    ) -> ArcBeatSheetRow:
+        return self.publish_proposal(session, self._propose(
+            session, project_id=project_id, arc_plan=arc_plan, policy=policy, reason=reason,
+        ))
+
+    def _propose(
+        self, session: Session, *, project_id: str, arc_plan: ArcPlanVersion, policy: RuntimePolicy, reason: str,
         expected_sheet_id: str | None = None,
         current: ArcBeatSheetData | None = None, revision: Mapping[str, str] | None = None,
-    ) -> ArcBeatSheetRow:
+    ) -> BeatSheetProposal:
         start, end = arc_bounds(arc_plan)
         # The refs are checked against the latest canon: chapter 0 at handoff.
         as_of = BookStateRepository(session).latest_canon_chapter(project_id) or 0
@@ -177,22 +207,49 @@ class ArcBeatSheetService:
             data, source = build_fallback_beat_sheet(
                 arc_plan, protagonist_ref=fallback_protagonist, band_size=policy.planning.band_size,
             ), "fallback"
-        session.execute(select(Project).where(Project.id == project_id).with_for_update(key_share=True)).scalar_one()
-        repo = ArcBeatSheetRepository(session)
-        active = repo.active_for_arc(arc_plan.id)
-        if active is not None and active.id != expected_sheet_id:
-            self.save_trace(session, self._prompt_trace(
-                call, project_id=project_id, as_of=as_of, arc_plan=arc_plan, reason=reason, source=source, row=active,
-            ))
-            return active
-        row = repo.create(project_id, arc_plan.id, data, source=source, reason=reason)
-        CanonAdmissionService().commit_plan_constraints(
-            session=session, project_id=project_id, constraint_set_id=row.id, creates=data.protections, releases=[],
-            release_sheet_id=active.id if active is not None else None,
+        if current is not None:
+            if data.band_breakdown != current.band_breakdown and "band_breakdown_restored" not in call.normalizations:
+                call.normalizations.append("band_breakdown_restored")
+            data = data.model_copy(update={"band_breakdown": current.model_copy(deep=True).band_breakdown})
+        return BeatSheetProposal(
+            project_id=project_id, arc_plan_id=arc_plan.id, expected_sheet_id=expected_sheet_id,
+            data=data, source=source, reason=reason,
+            trace=self._prompt_trace(
+                call, project_id=project_id, as_of=as_of, arc_plan=arc_plan, reason=reason, source=source,
+            ),
         )
-        self.save_trace(session, self._prompt_trace(
-            call, project_id=project_id, as_of=as_of, arc_plan=arc_plan, reason=reason, source=source, row=row,
-        ))
+
+    def publish_proposal(
+        self, session: Session, proposal: BeatSheetProposal, *, require_current: bool = False,
+        record_trace: bool = True,
+    ) -> ArcBeatSheetRow:
+        """Publish the sheet and protection delta in the caller's transaction, without a model call.
+
+        A chapter-conflict caller already holds conflict, project and chapter-plan locks and requires the
+        proposed revision's base to remain current. Other callers keep the winning concurrent sheet.
+        """
+        session.execute(select(Project).where(Project.id == proposal.project_id)
+                        .with_for_update(key_share=True)).scalar_one()
+        repo = ArcBeatSheetRepository(session)
+        active = repo.active_for_arc(proposal.arc_plan_id)
+        active_id = active.id if active is not None else None
+        if active_id != proposal.expected_sheet_id and require_current:
+            from forwin.world_engine.conflict_resolution import ConflictStale
+
+            raise ConflictStale("The beat sheet changed while its revision was being generated")
+        if active is not None and active_id != proposal.expected_sheet_id:
+            row = active
+        else:
+            row = repo.create(proposal.project_id, proposal.arc_plan_id, proposal.data,
+                              source=proposal.source, reason=proposal.reason)
+            CanonAdmissionService().commit_plan_constraints(
+                session=session, project_id=proposal.project_id, constraint_set_id=row.id,
+                creates=proposal.data.protections, releases=[], release_sheet_id=active_id,
+            )
+        if record_trace:
+            self.save_trace(session, {**proposal.trace, "output_summary": {
+                **proposal.trace["output_summary"], "beat_sheet_id": row.id, "version": row.version,
+            }})
         return row
 
     def _call(
@@ -223,7 +280,15 @@ class ArcBeatSheetService:
             else:
                 answered = True
                 try:
-                    parsed = ArcBeatSheetData.model_validate(parse_llm_json(raw, error_prefix=_PARSER_NAME))
+                    answer = parse_llm_json(raw, error_prefix=_PARSER_NAME)
+                    current_sheet = payload.get("current_beat_sheet")
+                    if isinstance(answer, dict) and isinstance(current_sheet, dict):
+                        bands = current_sheet["band_breakdown"]
+                        if answer.get("band_breakdown") != bands:
+                            if "band_breakdown_restored" not in call.normalizations:
+                                call.normalizations.append("band_breakdown_restored")
+                        answer["band_breakdown"] = bands
+                    parsed = ArcBeatSheetData.model_validate(answer)
                 except Exception as exc:  # noqa: BLE001 - a malformed answer is sent back to the model
                     call_error = exc
                     mark_latest_attempt_parse_failure(
@@ -285,7 +350,7 @@ class ArcBeatSheetService:
 
     def _prompt_trace(
         self, call: _BeatSheetCall, *, project_id: str, as_of: int, arc_plan: ArcPlanVersion, reason: str,
-        source: str, row: ArcBeatSheetRow,
+        source: str,
     ) -> dict[str, Any]:
         last_call_result = getattr(self.llm_client, "last_call_result", None) if call.attempts else None
         trace = getattr(last_call_result, "trace", {}) or {}
@@ -313,7 +378,7 @@ class ArcBeatSheetService:
             "attempts": call.attempts,
             "output_summary": {
                 "source": source, "failure_reason": call.failure_reason, "issues": call.issues,
-                "beat_sheet_id": row.id, "version": row.version,
+                "beat_sheet_id": "", "version": 0, "normalizations": call.normalizations,
                 "skill_summary": [], "business_retry_events": call.business_retries,
             },
         }
@@ -330,6 +395,7 @@ class _BeatSheetCall:
     messages: list[dict] = field(default_factory=list)
     attempts: list[dict[str, Any]] = field(default_factory=list)
     business_retries: list[dict[str, Any]] = field(default_factory=list)
+    normalizations: list[str] = field(default_factory=list)
 
 
 def beat_sheet_issues(
@@ -674,6 +740,7 @@ def _reveal_candidates(project_id: str, pack: Mapping[str, Any], runtime: BookSt
 __all__ = [
     "STAGE_KEY",
     "ArcBeatSheetService",
+    "BeatSheetProposal",
     "ChapterMilestoneRefs",
     "band_breakdown_issues",
     "beat_sheet_issues",

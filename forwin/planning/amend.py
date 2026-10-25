@@ -19,7 +19,7 @@ from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.planning.band_planner.service import BandPlanner
 from forwin.planning.band_planner.types import REWRITABLE_PLAN_STATUSES, BandPlanOutcome, PlanIssue
 from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
-from forwin.planning.beat_sheet.service import ArcBeatSheetService
+from forwin.planning.beat_sheet.service import ArcBeatSheetService, BeatSheetProposal
 from forwin.planning.beat_sheet.types import BandSpan
 from forwin.planning.feasibility import FeasibilityAuditor, band_for_chapter, open_plan_feasibility_conflict
 from forwin.runtime.policy import RuntimePolicy
@@ -216,6 +216,28 @@ class PlanAmender:
             if errors:
                 return AmendResult(band_plan_id=None, beat_sheet_id=beat_sheet_id, issues=errors)
         return AmendResult(band_plan_id=outcome.band_plan_id, beat_sheet_id=beat_sheet_id, issues=tuple(outcome.issues))
+
+    def propose_chapter_revision(
+        self, session: Session, *, conflict: WorldPlanConflictRow, decision: ConflictDecision, policy: RuntimePolicy,
+    ) -> BeatSheetProposal:
+        """Generate unlocked, then retain the model trace even if the resolution loses its race.
+
+        Only the trace commits here; the resolver validates under locks before publishing canon effects.
+        """
+        arc_plan, _ = _arc_with_sheet(session, conflict.project_id, int(conflict.blocks_from_chapter))
+        proposal = self.beat_sheet_service.propose_revision(
+            session, project_id=conflict.project_id, arc_plan=arc_plan, policy=policy,
+            reason=f"conflict:{conflict.id}",
+            conflict_summary="\n".join(text for text in (conflict.summary, decision.rationale) if text.strip()),
+        )
+        self.beat_sheet_service.save_trace(session, proposal.trace)
+        session.commit()
+        return proposal
+
+    def publish_chapter_revision(self, session: Session, proposal: BeatSheetProposal) -> AmendResult:
+        """Publish after the resolver's locked checks; its savepoint owns all canon writes and result refs."""
+        row = self.beat_sheet_service.publish_proposal(session, proposal, require_current=True, record_trace=False)
+        return AmendResult(band_plan_id=None, beat_sheet_id=row.id)
 
     def _revise_for_chapter_conflict(
         self, session: Session, conflict: WorldPlanConflictRow, decision: ConflictDecision, policy: RuntimePolicy,

@@ -399,6 +399,8 @@ def test_revise_creates_new_version_and_supersedes_old(Session) -> None:
         assert (second.version, second.status, second.revision_reason) == (2, "active", "conflict:conflict-1")
         assert repo.active_for_arc(arc_id).id == second_id
         assert [row.id for row in repo.active_for_project(world.project_id)] == [second_id]
+        assert _spans(repo.load(second)) == [(1, 6), (7, 12)]
+        assert len(client.calls) == 2
         assert repo.load(second).milestones[0].description == "revised-milestone"
         assert (repo.load(first).setting_brief, repo.load(second).setting_brief) == ("brief-value", "revised-brief")
         assert len(_traces(session, world.project_id)) == 2

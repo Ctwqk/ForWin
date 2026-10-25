@@ -36,7 +36,7 @@ COLUMNS_ADDED_AFTER_BASELINE = {
     "graph_deltas": {"story_time_start", "story_time_end"},
     "world_node_states": {"name", "aliases_json", "profile_json", "is_active"},
     "cognition_overlays": {"knowledge_by_ref_json"},
-    "world_snapshots": {"narrative_node_index_json", "narrative_edge_index_json"},
+    "world_snapshots": {"narrative_node_index_json", "narrative_edge_index_json", "seq"},
     "arc_plan_versions": {"title", "goal", "stakes", "payoff_direction"},
     "chapter_plans": {
         "band_plan_id", "pov_ref", "onstage_refs_json", "location_refs_json",

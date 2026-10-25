@@ -8,10 +8,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     String,
     Text,
+    select,
     true,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -269,12 +271,21 @@ class CognitionOverlayPatchRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
+def _next_world_snapshot_seq(context):
+    connection = context.connection
+    if connection.dialect.name == "postgresql":
+        return connection.scalar(select(func.nextval(func.pg_get_serial_sequence("world_snapshots", "seq"))))
+    # SQLite has no sequences; its single-writer inserts use the next stored value.
+    return connection.scalar(select(func.coalesce(func.max(WorldSnapshotRow.seq), 0) + 1))
+
+
 class WorldSnapshotRow(Base):
     __tablename__ = "world_snapshots"
     __table_args__ = (
         Index("ix_world_snapshots_project_chapter", "project_id", "as_of_chapter"),
     )
 
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(), default=_next_world_snapshot_seq)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     as_of_chapter: Mapped[int] = mapped_column(Integer, default=0)

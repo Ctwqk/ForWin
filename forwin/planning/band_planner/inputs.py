@@ -28,7 +28,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.planning.band_planner.types import band_id
 from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
-from forwin.planning.beat_sheet.types import ArcBeatSheetData, BandSpan, Milestone
+from forwin.planning.beat_sheet.types import READER_OBSERVER, ArcBeatSheetData, BandSpan, Milestone
 from forwin.planning.progression_rules import active_progression_rules_for_chapter
 from forwin.planning.world_digest import build_world_digest
 from forwin.protocol.experience import BandDelightSchedule, BandRewardItem
@@ -37,6 +37,7 @@ from forwin.runtime.policy import RuntimePolicy
 from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.world_engine.conflict_resolution import writer_response_text
 from forwin.world_engine.propagation import latest_news_in_transit
+from forwin.world_engine.travel import estimate_travel_from
 from forwin.writer.prompt_core.world_engine import EVENT_FACT_TYPE, MAX_ADJUDICATION_EVENT_FACTS
 
 
@@ -50,6 +51,10 @@ _RELATIONS_LIMIT = 40
 _NEWS_LIMIT = 20
 _STALE_THREAD_WINDOW = 3
 _THREAD_LIMIT = 20
+
+
+class BandPayloadBudgetExceeded(ValueError):
+    """The payload's required context cannot fit within its character budget."""
 
 
 @dataclass(frozen=True)
@@ -164,7 +169,15 @@ def build_band_inputs(
     relations = sorted((edge for edge in world.edges_by_id.values() if edge.is_active),
                        key=lambda edge: (protagonist not in (edge.source_id, edge.target_id), edge.id))[:_RELATIONS_LIMIT]
     news = _news(session, project_id, window_end=window_end)
-    facts = _facts(runtime)
+    required_facts = {
+        item.fact_ref for item in beat_sheet.reveal_targets
+        if item.observer == READER_OBSERVER
+        and item.range[0] <= band.chapter_end and item.range[1] >= band.chapter_start
+    }
+    protections = [item for item in beat_sheet.protections if item.until_chapter >= band.chapter_start]
+    required_facts.update(ref for item in protections for ref in (item.ref, item.fact_ref)
+                          if ref.startswith(FACT_REF_PREFIX))
+    facts = _facts(runtime, required_refs=required_facts)
     milestones = _nearby_milestones(beat_sheet, band)
     bindable = {*(node.id for node in intents), *(node.id for node in events), *(node.id for node in clocks),
                 *(edge.id for edge in relations), *(item["fact_ref"] for item in news), *(item["ref"] for item in facts)}
@@ -178,28 +191,8 @@ def build_band_inputs(
         )
         for row in pending_rows
     ]
-    rewards: dict[int, list[BandRewardItem]] = {}
-    for item in schedule.scheduled_rewards:
-        rewards.setdefault(int(item.chapter_hint), []).append(item)
     templates = trope_template_index()
     planned = set(chapter_numbers)
-    offered = OfferedRefs(
-        actor_ids=frozenset(node.id for node in actors),
-        character_ids=frozenset(node.id for node in actors if str(node.node_type) == "character"),
-        location_ids=frozenset(runtime.map.nodes_by_id),
-        facts={item["ref"]: item["proposition"] for item in facts},
-        intent_ids=frozenset(node.id for node in intents),
-        event_ids=frozenset(node.id for node in events),
-        clock_ids=frozenset(node.id for node in clocks),
-        relation_ids=frozenset(edge.id for edge in relations),
-        news_fact_refs=frozenset(item["fact_ref"] for item in news),
-        milestone_ids=frozenset(item.id for item in beat_sheet.milestones),
-        time_units=frozenset([*(unit.name for unit in calendar.units), *(alias.name for alias in lexicon.time_unit_aliases)]
-                             if calendar is not None else ()),
-        concealed_names=_concealed_names(runtime),
-        rewards_by_chapter={number: tuple(items) for number, items in rewards.items()},
-        pending=tuple(pending),
-    )
     payload: dict[str, Any] = {
         "arc": {
             "arc_number": int(arc_plan.arc_number or 0), "title": arc_plan.title, "goal": arc_plan.goal,
@@ -217,6 +210,7 @@ def build_band_inputs(
         "milestones": [item.model_dump(mode="json") for item in milestones],
         "reveal_targets": [item.model_dump(mode="json") for item in beat_sheet.reveal_targets
                            if item.range[0] <= band.chapter_end and item.range[1] >= band.chapter_start],
+        "protections": [item.model_dump(mode="json") for item in protections],
         "exit_state": [item.model_dump(mode="json") for item in beat_sheet.exit_state],
         "experience_schedule": {
             "rewards": [
@@ -234,6 +228,8 @@ def build_band_inputs(
             if previous is not None else None
         ),
         "story_now": now,
+        "time_units": sorted({*(unit.name for unit in calendar.units),
+                              *(alias.name for alias in lexicon.time_unit_aliases)}) if calendar is not None else [],
         "actors": [
             {"id": node.id, "name": node.name, "kind": str(node.node_type),
              "concealed": is_concealed(world, node),
@@ -245,6 +241,12 @@ def build_band_inputs(
         ],
         "locations": [{"id": node.id, "name": node.name, "subworld_id": node.subworld_id}
                       for node in sorted(runtime.map.nodes_by_id.values(), key=lambda item: item.id)],
+        "world_nodes": [
+            {"id": node.id, "name": node.name, "kind": str(node.node_type),
+             "location_ref": resolve_world_node_location_id(world, node.id)}
+            for node in sorted(world.nodes_by_id.values(), key=lambda item: item.id)
+            if node.is_active and str(node.node_type) not in (*ACTOR_NODE_TYPES, "intent", "event", "clock")
+        ],
         "facts": facts,
         "intents": [
             {"id": node.id, "owner_ref": node.profile.get("owner_ref"), "action_type": node.profile.get("action_type"),
@@ -277,10 +279,127 @@ def build_band_inputs(
         ],
         "stalled_threads": _stalled_threads(session, project_id, as_of=as_of, runtime=runtime),
     }
+    _trim_payload(payload, runtime=runtime, lexicon=lexicon, rows=rows,
+                  window_minutes=window_end - now, budget_chars=policy.planning.band_payload_budget_chars,
+                  required_facts=required_facts)
+    offered = _offered_refs(payload, runtime=runtime)
     return BandPlanInputs(
         payload=payload, digest_text=digest.text, offered=offered, as_of=as_of, runtime=runtime,
         calendar=calendar, lexicon=lexicon, experience=experience, calibration=calibration, schedule=schedule,
         schedule_is_new=schedule_is_new, window_end_minute=window_end,
+    )
+
+
+def _trim_payload(
+    payload: dict[str, Any], *, runtime: BookStateRuntime, lexicon: BookLexicon,
+    rows: Mapping[int, ChapterPlan], window_minutes: int, budget_chars: int, required_facts: set[str],
+) -> None:
+    """Keep local context first, then reachable context in travel-time order."""
+    protagonist = payload["protagonist_ref"]
+    origin = resolve_world_node_location_id(runtime.world, protagonist)
+    band_locations = {ref for row in rows.values() for ref in json.loads(row.location_refs_json or "[]")}
+    subworlds = {runtime.map.nodes_by_id[ref].subworld_id for ref in band_locations
+                if ref in runtime.map.nodes_by_id}
+    if not subworlds and origin in runtime.map.nodes_by_id:
+        subworlds.add(runtime.map.nodes_by_id[origin].subworld_id)
+    travel = estimate_travel_from(runtime, lexicon, mover_id=protagonist, from_location_id=origin) if origin in runtime.map.nodes_by_id else {}
+
+    def location_rank(item):
+        estimate = travel.get(item["id"])
+        minutes = estimate.minutes if estimate is not None and estimate.minutes is not None else float("inf")
+        return (item["subworld_id"] not in subworlds, minutes, item["id"])
+
+    payload["locations"] = sorted((item for item in payload["locations"]
+                                    if item["subworld_id"] in subworlds
+                                    or (travel.get(item["id"]) is not None
+                                        and travel[item["id"]].minutes is not None
+                                        and travel[item["id"]].minutes <= window_minutes)), key=location_rank)
+    location_order = {item["id"]: index for index, item in enumerate(payload["locations"])}
+    farthest = len(location_order) + 1
+    actor_order = {item["id"]: (-1 if item["id"] == protagonist
+                               else location_order.get(item["location_ref"], farthest))
+                   for item in payload["actors"]}
+    node_order = {**location_order, **actor_order,
+                  **{item["id"]: location_order.get(item["location_ref"], farthest)
+                     for item in payload["world_nodes"]}}
+
+    def rank(key, item):
+        if key == "locations":
+            return location_order[item["id"]]
+        if key == "actors":
+            return actor_order[item["id"]]
+        if key == "world_nodes":
+            return node_order[item["id"]]
+        if key == "intents":
+            return actor_order.get(item["owner_ref"], farthest)
+        if key == "facts":
+            return min((node_order.get(ref, farthest) for ref in item["related_refs"]), default=farthest)
+        return farthest
+
+    def narrow():
+        locations = {item["id"] for item in payload["locations"]}
+        payload["actors"] = [item for item in payload["actors"] if item["id"] == protagonist
+                             or not item["location_ref"] or item["location_ref"] in locations]
+        actors = {item["id"] for item in payload["actors"]}
+        payload["world_nodes"] = [item for item in payload["world_nodes"]
+                                  if not item["location_ref"] or item["location_ref"] in locations]
+        payload["intents"] = [item for item in payload["intents"] if item["owner_ref"] in actors]
+        intents = {item["id"] for item in payload["intents"]}
+        nodes = actors | locations | intents | {
+            item["id"] for key in ("world_nodes", "events", "clocks") for item in payload[key]
+        }
+        payload["facts"] = [item for item in payload["facts"] if item["ref"] in required_facts
+                            or not item["related_refs"] or nodes.intersection(item["related_refs"])]
+        payload["due_onstage_intent_ids"] = [ref for ref in payload["due_onstage_intent_ids"] if ref in intents]
+        payload["relations"] = [item for item in payload["relations"]
+                                if item["source"] in actors and item["target"] in actors]
+        facts = {item["ref"] for item in payload["facts"]}
+        payload["news"] = [item for item in payload["news"] if item["fact_ref"] in facts]
+        bindable = facts | intents | {item["id"] for key in ("events", "clocks", "relations") for item in payload[key]}
+        for item in payload["pending_responses"]:
+            item["refs"] = [ref for ref in item["refs"] if ref in bindable]
+
+    narrow()
+    trimmable = ("locations", "actors", "world_nodes", "facts", "intents", "events", "clocks", "relations", "news", "stalled_threads")
+    for key in ("actors", "world_nodes", "facts", "intents"):
+        payload[key].sort(key=lambda item: (rank(key, item), item.get("id", item.get("ref", ""))))
+    while len(json.dumps(payload, ensure_ascii=False)) > budget_chars:
+        candidates = [(rank(key, item), position, index, key)
+                      for position, key in enumerate(trimmable) for index, item in enumerate(payload[key])
+                      if not (key == "actors" and item["id"] == protagonist)
+                      and not (key == "locations" and item["id"] == origin)
+                      and not (key == "facts" and item["ref"] in required_facts)]
+        if not candidates:
+            raise BandPayloadBudgetExceeded("band payload budget cannot fit required planning context")
+        _, _, index, key = max(candidates)
+        payload[key].pop(index)
+        narrow()
+
+
+def _offered_refs(payload: dict[str, Any], *, runtime: BookStateRuntime) -> OfferedRefs:
+    """Derive validation refs from the final serialized-payload object."""
+    rewards: dict[int, list[BandRewardItem]] = {}
+    for item in payload["experience_schedule"]["rewards"]:
+        rewards.setdefault(item["chapter"], []).append(BandRewardItem(
+            chapter_hint=item["chapter"], category=item["category"], intent=item["intent"],
+            template_id=item["template_id"],
+        ))
+    return OfferedRefs(
+        actor_ids=frozenset(item["id"] for item in payload["actors"]),
+        character_ids=frozenset(item["id"] for item in payload["actors"] if item["kind"] == "character"),
+        location_ids=frozenset(item["id"] for item in payload["locations"]),
+        facts={item["ref"]: item["proposition"] for item in payload["facts"]},
+        intent_ids=frozenset(item["id"] for item in payload["intents"]),
+        event_ids=frozenset(item["id"] for item in payload["events"]),
+        clock_ids=frozenset(item["id"] for item in payload["clocks"]),
+        relation_ids=frozenset(item["id"] for item in payload["relations"]),
+        news_fact_refs=frozenset(item["fact_ref"] for item in payload["news"]),
+        milestone_ids=frozenset(item["id"] for item in payload["milestones"]),
+        time_units=frozenset(payload["time_units"]),
+        concealed_names=_concealed_names(runtime),
+        rewards_by_chapter={number: tuple(items) for number, items in rewards.items()},
+        pending=tuple(PendingResponse(item["id"], item["goal"], frozenset(item["refs"]))
+                      for item in payload["pending_responses"]),
     )
 
 
@@ -343,14 +462,17 @@ def _nearby_milestones(beat_sheet: ArcBeatSheetData, band: BandSpan) -> list[Mil
                   key=lambda item: (item.target_range, item.id))
 
 
-def _facts(runtime: BookStateRuntime) -> list[dict[str, Any]]:
-    """Every standing fact and the newest event facts, as world adjudication lists them."""
+def _facts(runtime: BookStateRuntime, *, required_refs: set[str]) -> list[dict[str, Any]]:
+    """Standing and recent event facts, plus every fact required by the band's beats."""
     facts = runtime.world.facts_by_id.values()
     events = sorted((fact for fact in facts if fact.fact_type == EVENT_FACT_TYPE),
                     key=lambda fact: (-fact.created_at_chapter, fact.id))[:MAX_ADJUDICATION_EVENT_FACTS]
-    shown = [fact for fact in facts if fact.fact_type != EVENT_FACT_TYPE] + events
+    event_ids = {fact.id for fact in events}
+    shown = [fact for fact in facts if fact.fact_type != EVENT_FACT_TYPE or fact.id in event_ids
+             or f"{FACT_REF_PREFIX}{fact.id}" in required_refs]
     return [
-        {"ref": f"{FACT_REF_PREFIX}{fact.id}", "proposition": fact.proposition, "sensitivity": fact.sensitivity_level}
+        {"ref": f"{FACT_REF_PREFIX}{fact.id}", "proposition": fact.proposition, "sensitivity": fact.sensitivity_level,
+         "related_refs": list(fact.related_node_refs)}
         for fact in sorted(shown, key=lambda item: item.id)
     ]
 
@@ -417,6 +539,7 @@ def _stalled_threads(session: Session, project_id: str, *, as_of: int, runtime: 
 
 __all__ = [
     "MINUTES_PER_DAY",
+    "BandPayloadBudgetExceeded",
     "BandPlanInputs",
     "OfferedRefs",
     "PendingResponse",

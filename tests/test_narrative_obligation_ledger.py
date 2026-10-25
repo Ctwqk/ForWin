@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from sqlalchemy import inspect
 
 from forwin.models import Project
@@ -232,3 +234,63 @@ def test_cancel_obligation_closes_only_open_obligations() -> None:
             assert repo.list_active_for_context(project.id, chapter_number=11) == []
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("status", ["resolved", "waived", "cancelled"])
+@pytest.mark.parametrize("operation", ["planned", "resolved", "expired"])
+def test_closed_obligation_cannot_be_reopened(status, operation):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from forwin.models import Base
+    from forwin.models.narrative_obligation import NarrativeObligationRow
+    from forwin.narrative_obligations.repository import ObligationClosed
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        repo = NarrativeObligationRepository(session)
+        item = repo.create_obligation(_active_obligation("project").model_copy(update={"status": status}))
+        before = repo._obligation_from_row(session.get(NarrativeObligationRow, item.id))
+        with pytest.raises(ObligationClosed, match="closed"):
+            if operation == "planned":
+                repo.mark_obligation_planned(item.id, linked_plan_patch_ids=["patch"])
+            elif operation == "resolved":
+                repo.mark_obligation_resolved(item.id, verifier_result={"pass": True}, evidence_refs=["evidence"])
+            else:
+                repo.expire_obligation(item.id, reason="deadline")
+        session.flush()
+        assert repo._obligation_from_row(session.get(NarrativeObligationRow, item.id)) == before
+    engine.dispose()
+
+
+def test_extraction_input_offers_only_open_obligations():
+    import json
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from forwin.models import Base
+    from forwin.models.project import ChapterPlan
+    from forwin.book_state.extraction.chapter_input import build_chapter_extraction_input
+    from tests.test_world_tick_steps import _runtime
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    runtime = _runtime()
+    with Session(engine) as session:
+        repo = NarrativeObligationRepository(session)
+        for status in ("active", "planned", "resolved", "waived", "cancelled", "expired", "blocked"):
+            repo.create_obligation(_active_obligation(runtime.project_id, status).model_copy(
+                update={"status": status, "origin_chapter_number": 4},
+            ))
+        session.add(ChapterPlan(project_id=runtime.project_id, arc_plan_id="arc", chapter_number=4,
+                                experience_plan_json=json.dumps({"obligations_to_resolve": [
+                                    "active", "planned", "resolved", "waived", "cancelled", "expired", "blocked", "missing",
+                                ]})))
+        session.flush()
+        result = build_chapter_extraction_input(session, project_id=runtime.project_id,
+                                                chapter_number=4, runtime=runtime)
+        offered = {item.target_id for item in result.fulfillment_targets if item.target_id.startswith("obligation:")}
+        assert "obligation:resolved" not in offered
+        assert offered == {
+            "obligation:active", "obligation:planned", "obligation:expired", "obligation:blocked",
+        }
+    engine.dispose()

@@ -2117,6 +2117,58 @@ def test_historical_rewrite_preserves_same_chapter_standalone_world_edit(
         assert snapshot.as_of_story_time == "independent edit time"
 
 
+def test_retained_replay_removes_provisional_snapshots_on_sqlite() -> None:
+    from datetime import datetime
+    from sqlalchemy import create_engine
+    from forwin.book_state.compiler import BookStateCompiler
+    from forwin.canon.historical_rewrite import HistoricalCanonReplacement
+    from forwin.models import Base
+    from forwin.protocol.book_state import BookStateCompileResult
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    try:
+        with Session(engine) as session, session.begin():
+            project = Project(title="Replay", premise="Retain edits", genre="test")
+            session.add(project)
+            session.flush()
+            compiler = BookStateCompiler(session)
+            runtime = compiler.projection.load_runtime_as_of(project.id, as_of_chapter=1)
+            provisional, provisional_map, _ = compiler.projection.persist_snapshots(runtime, as_of_chapter=2)
+            # Even a reader using timestamps must never see incomplete replay state.
+            session.get(WorldSnapshotRow, provisional.id).built_at = datetime(2099, 1, 1)
+            delta = GraphDelta(
+                id="retained-edit", project_id=project.id, chapter_number=2, source_type="world_edit",
+                node_patches=[NodePatch(
+                    node_id="retained-event", node_type="event", op="create",
+                    new_value={"id": "retained-event", "project_id": project.id,
+                               "node_type": "event", "state": {"event": "independent world edit"}},
+                )],
+            )
+            compiler.repo.append_graph_delta(delta)
+            replacement = HistoricalCanonReplacement(
+                session=session, plan=SimpleNamespace(project_id=project.id, chapter_number=2),
+                previous=None, marker=None, through_chapter=3,
+                retired_delta_ids=[], retained_delta_ids=[delta.id], ordered_deltas=[delta],
+            )
+            result = replacement._replay_retained_chapter_deltas(
+                BookStateCompileResult(
+                    project_id=project.id, chapter_number=2, committed=True,
+                    world_snapshot_id=provisional.id, map_snapshot_id=provisional_map.id,
+                ),
+                delta_ids=[delta.id], compiler=compiler,
+            )
+            assert session.get(WorldSnapshotRow, provisional.id) is None
+            assert session.get(MapSnapshotRow, provisional_map.id) is None
+            assert compiler.repo.latest_world_snapshot_id(project.id, 2) == result.world_snapshot_id
+            snapshot = session.get(WorldSnapshotRow, result.world_snapshot_id)
+            assert "independent world edit" in snapshot.world_node_state_index_json
+            reloaded = compiler.projection.load_runtime_as_of(project.id, as_of_chapter=3)
+            assert reloaded.world.states_by_node_id["retained-event"]["event"] == "independent world edit"
+    finally:
+        engine.dispose()
+
+
 @pytest.mark.parametrize(
     "record_ids",
     [

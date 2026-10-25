@@ -15,7 +15,7 @@ from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.project import ChapterPlan
-from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.narrative_obligations.repository import NarrativeObligationRepository, _CLOSED_STATUSES
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.protocol.experience import RewardTag
 
@@ -132,17 +132,20 @@ def _fulfillment_targets(
             row.id: row for row in session.scalars(select(NarrativeObligationRow).where(
                 NarrativeObligationRow.project_id == project_id,
                 NarrativeObligationRow.id.in_(obligation_ids),
+                NarrativeObligationRow.status.not_in(_CLOSED_STATUSES),
             ))
         }
         for ref in dict.fromkeys(obligation_ids):
             obligation = obligations.get(ref)
+            if obligation is None:
+                continue
             targets.append(FulfillmentTarget(
                 f"obligation:{ref}",
-                (obligation.payoff_test or obligation.summary or ref) if obligation else ref,
+                obligation.payoff_test or obligation.summary or ref,
             ))
     offered_ids = set(obligation_ids)
     for obligation in judged_obligations:
-        if obligation.id in offered_ids:
+        if obligation.status in _CLOSED_STATUSES or obligation.id in offered_ids:
             continue
         offered_ids.add(obligation.id)
         targets.append(FulfillmentTarget(

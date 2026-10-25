@@ -17,6 +17,10 @@ from .types import NarrativeObligation, NarrativePlanPatch
 _CLOSED_STATUSES = frozenset({"resolved", "waived", "cancelled"})
 
 
+class ObligationClosed(ValueError):
+    """A terminal obligation cannot change its status or resolution evidence."""
+
+
 class NarrativeObligationRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -99,6 +103,8 @@ class NarrativeObligationRepository:
         row = self.session.get(NarrativeObligationRow, obligation_id)
         if row is None:
             return None
+        if row.status in _CLOSED_STATUSES:
+            raise ObligationClosed(f"obligation {obligation_id} is closed ({row.status})")
         row.status = "planned"
         row.linked_plan_patch_ids_json = _json(linked_plan_patch_ids)
         future_chapters: list[int] = []
@@ -136,6 +142,8 @@ class NarrativeObligationRepository:
         row = self.session.get(NarrativeObligationRow, obligation_id)
         if row is None:
             return None
+        if row.status in _CLOSED_STATUSES:
+            raise ObligationClosed(f"obligation {obligation_id} is closed ({row.status})")
         row.status = "resolved"
         row.resolved_at = datetime.now(UTC)
         row.resolution_chapter = int(resolution_chapter or row.resolution_chapter or 0)
@@ -151,6 +159,8 @@ class NarrativeObligationRepository:
         row = self.session.get(NarrativeObligationRow, obligation_id)
         if row is None:
             return None
+        if row.status in _CLOSED_STATUSES:
+            raise ObligationClosed(f"obligation {obligation_id} is closed ({row.status})")
         row.status = "expired"
         metadata = _loads(row.metadata_json, {})
         metadata["expire_reason"] = str(reason or "")

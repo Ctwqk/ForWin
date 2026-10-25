@@ -2166,3 +2166,36 @@ def test_tick_reuses_runtime_for_builds_and_gate(monkeypatch):
         assert {runtime.world.get_state(ref)["status"] for ref in _errands(world, 24)[:20]} == {"disrupted"}
         engine.dispose()
     assert counts[0] < counts[1] / 2, counts
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "postgresql"])
+def test_snapshot_order_is_monotonic_within_one_transaction(backend):
+    from datetime import datetime, timedelta
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session as SASession
+    from forwin.models import Base
+    from forwin.models.book_state import WorldSnapshotRow
+    from tests.postgres import postgres_test_url
+    from forwin.book_state.repository import BookStateRepository
+
+    engine = create_engine("sqlite:///:memory:" if backend == "sqlite" else postgres_test_url("snapshot-seq"))
+    Base.metadata.create_all(engine)
+    with SASession(engine) as session, session.begin():
+        session.add(Project(id="snapshot-project", title="title", premise="premise", genre="test"))
+        session.flush()
+        stamp = datetime(2026, 10, 22)
+        first = WorldSnapshotRow(id="z-first", project_id="snapshot-project", as_of_chapter=2, built_at=stamp)
+        session.add(first)
+        session.flush()
+        second = WorldSnapshotRow(id="a-second", project_id="snapshot-project", as_of_chapter=2,
+                                  built_at=stamp - timedelta(seconds=1))
+        session.add(second)
+        session.flush()
+        repo = BookStateRepository(session)
+        assert repo.latest_world_snapshot_id("snapshot-project", 2) == "a-second"
+        assert repo.latest_world_snapshot("snapshot-project", 2).id == "a-second"
+        assert second.seq > first.seq > 0
+        session.add(WorldSnapshotRow(id="later-seq-earlier-chapter", project_id="snapshot-project", as_of_chapter=1))
+        session.flush()
+        assert repo.latest_world_snapshot_id("snapshot-project", 2) == "a-second"
+    engine.dispose()

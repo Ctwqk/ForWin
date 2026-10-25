@@ -46,7 +46,7 @@ def build_handlers(
                     .where(WorldSnapshotRow.project_id == project_id)
                     .order_by(
                         WorldSnapshotRow.as_of_chapter.desc(),
-                        WorldSnapshotRow.built_at.desc(),
+                        WorldSnapshotRow.seq.desc(),
                     )
                 )
                 .scalars()
@@ -69,7 +69,7 @@ def build_handlers(
             row = session.execute(
                 query.order_by(
                     WorldSnapshotRow.as_of_chapter.desc(),
-                    WorldSnapshotRow.built_at.desc(),
+                    WorldSnapshotRow.seq.desc(),
                 ).limit(1)
             ).scalar_one_or_none()
             if row is None:

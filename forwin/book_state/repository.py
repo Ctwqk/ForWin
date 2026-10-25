@@ -1232,7 +1232,7 @@ class BookStateRepository:
                 WorldSnapshotRow.project_id == project_id,
                 WorldSnapshotRow.as_of_chapter <= as_of_chapter,
             )
-            .order_by(WorldSnapshotRow.as_of_chapter.desc(), WorldSnapshotRow.built_at.desc(), WorldSnapshotRow.id.desc())
+            .order_by(WorldSnapshotRow.as_of_chapter.desc(), WorldSnapshotRow.seq.desc())
             .limit(1)
         )
 

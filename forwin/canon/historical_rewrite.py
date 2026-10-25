@@ -532,8 +532,7 @@ class HistoricalCanonReplacement:
                 ]
             )
         )
-        # Supersede the provisional compile snapshots; two snapshots created in
-        # one transaction otherwise have the same timestamp and random ID order.
+        # Discard incomplete compile state before publishing the retained replay.
         for model, snapshot_ids in (
             (WorldSnapshotRow, [compile_result.world_snapshot_id]),
             (MapSnapshotRow, [compile_result.map_snapshot_id]),

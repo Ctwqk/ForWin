@@ -70,6 +70,7 @@ class PlanningPolicy(FrozenPolicyModel):
     band_size: int = Field(default=6, ge=4, le=12)
     max_replans_per_band: int = Field(default=2, ge=0, le=5)
     digest_budget_chars: int = Field(default=8000, ge=2000, le=20000)
+    band_payload_budget_chars: int = Field(default=60000, ge=1)
 
     @classmethod
     def for_profile(cls, quality_profile: str) -> PlanningPolicy:

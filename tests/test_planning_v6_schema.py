@@ -78,6 +78,11 @@ def _assert_planning_schema(engine: sa.Engine) -> None:
     assert str(brief["default"]).split("::")[0] == "''"
     assert {c["name"] for c in inspector.get_columns("band_plans")} == BAND_PLAN_COLUMNS
     assert PLANNING_COLUMNS <= {c["name"] for c in inspector.get_columns("chapter_plans")}
+    snapshot_columns = {c["name"]: c for c in inspector.get_columns("world_snapshots")}
+    assert snapshot_columns["seq"]["nullable"] is False
+    assert isinstance(snapshot_columns["seq"]["type"], sa.BigInteger)
+    if engine.dialect.name == "postgresql":
+        assert snapshot_columns["seq"]["identity"]["always"] is False
     conflict_columns = {c["name"]: c for c in inspector.get_columns("world_plan_conflicts")}
     assert {"origin_key"} <= conflict_columns.keys()
     assert conflict_columns["origin_key"]["nullable"] is False
@@ -513,3 +518,34 @@ def test_0006_subworld_character_downgrade_definitions_match_baseline() -> None:
     expected = definitions(baseline.upgrade)
     assert len(expected) == 5
     assert definitions(migration._restore_subworld_character_paths) == expected
+
+
+def test_0006_snapshot_sequence_backfills_and_round_trips(legacy_database):
+    config, engine = legacy_database
+    stamp = datetime(2026, 10, 22)
+    with Session(engine) as session, session.begin():
+        session.add(models.Project(id="snapshot-project", title="title", premise="premise", genre="test"))
+        session.flush()
+        table = sa.Table("world_snapshots", sa.MetaData(), autoload_with=session.connection())
+        values = {column.name: (stamp if isinstance(column.type, sa.DateTime)
+                               else 0 if isinstance(column.type, sa.Integer) else "") for column in table.columns}
+        values["project_id"] = "snapshot-project"
+        for row_id, chapter, built_at in (("z", 2, stamp), ("b", 1, stamp), ("a", 1, stamp),
+                                          ("older", 1, datetime(2026, 10, 21))):
+            session.execute(table.insert().values(**dict(values, id=row_id, as_of_chapter=chapter, built_at=built_at)))
+    command.upgrade(config, "0006_planning_v6")
+    with engine.begin() as connection:
+        assert connection.execute(sa.text("SELECT id, seq FROM world_snapshots ORDER BY seq")).all() == [
+            ("older", 1), ("a", 2), ("b", 3), ("z", 4),
+        ]
+        table = sa.Table("world_snapshots", sa.MetaData(), autoload_with=connection)
+        connection.execute(table.insert().values(**dict(values, id="next", as_of_chapter=2, built_at=stamp)))
+        assert connection.execute(sa.text("SELECT seq FROM world_snapshots WHERE id = 'next'")).scalar_one() == 5
+        sequence = connection.execute(sa.text("SELECT pg_get_serial_sequence('world_snapshots', 'seq')")).scalar_one()
+    command.downgrade(config, "0005_world_plan_conflicts")
+    assert "seq" not in {column["name"] for column in sa.inspect(engine).get_columns("world_snapshots")}
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("SELECT to_regclass(:sequence)"), {"sequence": sequence}).scalar_one() is None
+    command.upgrade(config, "0006_planning_v6")
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("SELECT count(DISTINCT seq) FROM world_snapshots")).scalar_one() == 5

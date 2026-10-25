@@ -1004,3 +1004,209 @@ def test_planner_rebinds_an_orphaned_response_and_retires_its_old_patch(Session)
         old.status, old.world_bindings_json = "planned", "[]"
         assert old_patch not in reapply_active_patches(session, old)
         assert json.loads(old.world_bindings_json) == []
+
+
+def test_band_payload_respects_budget_and_matches_offered_refs():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session as SASession
+    from forwin.models import Base
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.protocol.book_state import FactNode, MapEdge
+    from forwin.planning.band_planner.inputs import build_band_inputs
+    from tests.test_world_tick_steps import _runtime, _actor, _intent
+
+    nodes = [_actor("hero", location="place-000")]
+    for index in range(120):
+        nodes.extend([_actor(f"actor-{index:03}", location=f"place-{index:03}"),
+                      _intent(f"intent-{index:03}", f"actor-{index:03}", at=0)])
+    runtime = _runtime(*nodes)
+    runtime.map = MapGraph(
+        nodes=[MapNode(id=f"place-{i:03}", project_id=runtime.project_id, node_type="site",
+                       name=f"Place {i} " + "x" * 200, subworld_id="band" if i < 3 else "outside")
+               for i in range(121)],
+        edges=[MapEdge(id=f"road-{i}", project_id=runtime.project_id, from_node_id="place-000",
+                       to_node_id=f"place-{i:03}", edge_type="road", travel_time=i, bidirectional=True)
+               for i in range(1, 120)],
+    )
+    for index in range(120):
+        fact = FactNode(id=f"fact-{index:03}", project_id=runtime.project_id, proposition="truth " + "y" * 300,
+                        related_node_refs=[f"actor-{index:03}"])
+        runtime.world.facts_by_id[fact.id] = fact
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with SASession(engine) as session:
+        arc = ArcPlanVersion(id="arc", project_id=runtime.project_id, chapter_start=4, chapter_end=7)
+        band = BandSpan(band_index=0, chapter_start=4, chapter_end=7)
+        sheet = ArcBeatSheetData(protagonist_ref="hero", phases=[], band_breakdown=[band])
+        policy = POLICY.model_copy(update={"planning": POLICY.planning.model_copy(
+            update={"band_payload_budget_chars": 7000},
+        )})
+        kwargs = dict(project_id=runtime.project_id, arc_plan=arc, beat_sheet=sheet, band=band,
+                      chapter_numbers=[4, 5, 6, 7], rows={}, as_of=3, runtime=runtime,
+                      policy=policy, notes=[], trope_cost_ceiling=3)
+        result = build_band_inputs(session, **kwargs)
+        payload = result.payload
+        from forwin.writer.prompt_core.planning import build_band_plan_messages
+        messages = build_band_plan_messages(payload=payload, digest_text=result.digest_text,
+                                            output_schema={}, allowed={})
+        prompt_payload, payload_end = json.JSONDecoder().raw_decode(messages[1]["content"])
+        assert payload_end <= 7000
+        assert prompt_payload == payload
+        assert build_band_inputs(session, **kwargs).payload == payload
+        assert payload["locations"][0]["id"] == "place-000"
+        assert "place-120" not in result.offered.location_ids
+        assert "hero" in result.offered.character_ids
+        for field, offered in (("actors", result.offered.actor_ids), ("locations", result.offered.location_ids),
+                               ("intents", result.offered.intent_ids), ("events", result.offered.event_ids),
+                               ("clocks", result.offered.clock_ids), ("relations", result.offered.relation_ids),
+                               ("milestones", result.offered.milestone_ids)):
+            assert {item["id"] for item in payload[field]} == offered
+        assert {item["ref"]: item["proposition"] for item in payload["facts"]} == result.offered.facts
+        assert {item["owner_ref"] for item in payload["intents"]} <= result.offered.actor_ids
+        assert all(set(runtime.world.facts_by_id[item["ref"][5:]].related_node_refs) & result.offered.actor_ids
+                   for item in payload["facts"])
+
+        from forwin.planning.band_planner.types import BandPlanOutput, ChapterPlanDraft
+        from forwin.planning.band_planner.validation import band_plan_issues
+        chapter = ChapterPlanDraft(
+            chapter_number=4, title="title", one_line="summary", goals=["goal"], pov_ref="hero",
+            onstage_refs=sorted(result.offered.actor_ids), location_refs=sorted(result.offered.location_ids),
+            expected_span={"amount": 1, "unit": "minute"},
+            world_bindings=[{"kind": kind, "ref": ref} for kind in ("intent", "secret", "clock", "event", "relation", "news")
+                            for ref in sorted(result.offered.binding_refs(kind))],
+        )
+        def ref_errors(item):
+            return {(issue.code, issue.ref) for issue in band_plan_issues(
+                BandPlanOutput(chapters=[item]), chapter_numbers=[4], offered=result.offered,
+                runtime=runtime, calendar=result.calendar, lexicon=result.lexicon,
+            ) if issue.code in {"unknown_actor", "unknown_location", "unknown_binding_ref", "unknown_milestone"}}
+        assert ref_errors(chapter) == set()
+        bad = chapter.model_copy(update={"onstage_refs": ["hero", "actor-119"], "location_refs": ["place-120"]})
+        assert ref_errors(bad) == {("unknown_actor", "actor-119"), ("unknown_location", "place-120")}
+        too_small = policy.model_copy(update={"planning": policy.planning.model_copy(
+            update={"band_payload_budget_chars": 1},
+        )})
+        with pytest.raises(ValueError, match="budget"):
+            build_band_inputs(session, **dict(kwargs, policy=too_small))
+    engine.dispose()
+
+
+@pytest.mark.parametrize("requirement", ["reader_reveal", "protection_fact", "protection_ref"])
+def test_band_payload_offers_node_facts_and_keeps_required_facts_under_budget(requirement):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session as SASession
+    from forwin.models import Base
+    from forwin.protocol.book_state import FactNode
+    from forwin.planning.band_planner.inputs import build_band_inputs
+    from tests.test_world_tick_steps import PROJECT, _runtime, _actor, _intent
+
+    runtime = _runtime(
+        _actor("hero", location="site-1"), _actor("remote", location="remote-site"),
+        WorldNode(id="society", project_id=PROJECT, node_type="institution", state={"location_id": "site-1"}),
+        WorldNode(id="group", project_id=PROJECT, node_type="group", state={"location_id": "site-1"}),
+        WorldNode(id="event", project_id=PROJECT, node_type="event", created_at_chapter=3),
+        WorldNode(id="clock", project_id=PROJECT, node_type="clock", state={"status": "running"}),
+        _intent("intent", "hero", at=0),
+    )
+    for node in runtime.map.nodes_by_id.values():
+        node.subworld_id = "band-subworld"
+    facts = [FactNode(id=f"about-{ref}", project_id=PROJECT, proposition=f"truth about {ref}",
+                      related_node_refs=[ref]) for ref in ("society", "site-1", "group", "event", "clock", "intent")]
+    facts += [FactNode(id=f"optional-{i:03}", project_id=PROJECT, proposition="optional " + "x" * 250,
+                       related_node_refs=["hero"]) for i in range(30)]
+    facts += [FactNode(id="required", project_id=PROJECT, proposition="required truth", fact_type="event",
+                       related_node_refs=["remote"], created_at_chapter=0),
+              FactNode(id="unrelated", project_id=PROJECT, proposition="remote truth", related_node_refs=["remote"]),
+              FactNode(id="global", project_id=PROJECT, proposition="unscoped truth")]
+    facts += [FactNode(id=ref, project_id=PROJECT, proposition=ref, related_node_refs=["remote"])
+              for ref in ("past", "future", "actor-reveal", "expired-protection")]
+    # A required event fact must also survive the ordinary recent-event selection.
+    facts += [FactNode(id=f"recent-{i:03}", project_id=PROJECT, proposition="recent truth", fact_type="event",
+                       related_node_refs=["remote"], created_at_chapter=3) for i in range(30)]
+    runtime.world.facts_by_id.update({fact.id: fact for fact in facts})
+    band = BandSpan(band_index=0, chapter_start=4, chapter_end=7)
+    extra = {"reveal_targets": [{"fact_ref": "fact:required", "observer": "reader",
+                                  "target_state": "knows", "range": [4, 4]}]} if requirement == "reader_reveal" else {
+        "protections": [{"ref": "hero", "kind": "must_not_know", "observer_ref": "hero",
+                         "fact_ref": "fact:required", "until_chapter": 4}] if requirement == "protection_fact" else [
+            {"ref": "fact:required", "kind": "must_exist", "until_chapter": 4}],
+    }
+    sheet = ArcBeatSheetData.model_validate({"protagonist_ref": "hero", "phases": [],
+                                           "band_breakdown": [band], **extra})
+    sheet = ArcBeatSheetData.model_validate({
+        **sheet.model_dump(),
+        "reveal_targets": [*sheet.reveal_targets,
+                           {"fact_ref": "fact:past", "observer": "reader", "target_state": "knows", "range": [1, 3]},
+                           {"fact_ref": "fact:future", "observer": "reader", "target_state": "knows", "range": [8, 9]},
+                           {"fact_ref": "fact:actor-reveal", "observer": "hero", "target_state": "knows", "range": [4, 7]}],
+        "protections": [*sheet.protections, {"ref": "hero", "kind": "must_not_know", "observer_ref": "hero",
+                                             "fact_ref": "fact:expired-protection", "until_chapter": 3}],
+    })
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with SASession(engine) as session:
+        kwargs = dict(project_id=PROJECT, arc_plan=ArcPlanVersion(id="arc", project_id=PROJECT,
+                      chapter_start=4, chapter_end=7), beat_sheet=sheet, band=band, chapter_numbers=[7],
+                      rows={}, as_of=3, runtime=runtime, notes=[], trope_cost_ceiling=3)
+        full = build_band_inputs(session, **kwargs, policy=POLICY)
+        assert "society" in {item["id"] for item in full.payload["world_nodes"]}
+        assert "fact:about-society" in full.offered.facts
+        assert {f"fact:about-{ref}" for ref in ("site-1", "group", "event", "clock", "intent")} <= full.offered.facts.keys()
+        assert "fact:global" in full.offered.facts
+        assert "fact:unrelated" not in full.offered.facts
+        assert not {"fact:past", "fact:future", "fact:actor-reveal", "fact:expired-protection"} & full.offered.facts.keys()
+        assert "fact:required" in full.offered.facts
+        policy = POLICY.model_copy(update={"planning": POLICY.planning.model_copy(
+            update={"band_payload_budget_chars": 3500},
+        )})
+        trimmed = build_band_inputs(session, **kwargs, policy=policy)
+        assert len(json.dumps(full.payload, ensure_ascii=False)) > 3500
+        assert len(json.dumps(trimmed.payload, ensure_ascii=False)) <= 3500
+        assert "fact:required" in trimmed.offered.facts
+        assert len(trimmed.offered.facts) < len(full.offered.facts)
+        assert trimmed.offered.facts == {item["ref"]: item["proposition"] for item in trimmed.payload["facts"]}
+        offered_nodes = {item["id"] for key in ("actors", "locations", "world_nodes", "intents", "events", "clocks")
+                         for item in trimmed.payload[key]}
+        assert all(item["ref"] == "fact:required" or not item["related_refs"]
+                   or offered_nodes.intersection(item["related_refs"]) for item in trimmed.payload["facts"])
+        assert build_band_inputs(session, **kwargs, policy=policy).payload == trimmed.payload
+    engine.dispose()
+
+
+def test_required_band_payload_over_budget_returns_failure_and_blocks_before_writing():
+    from sqlalchemy import create_engine
+    from forwin.models import Base
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = get_session_factory(engine)
+    world, arc_id, _ = _book(sessions)
+    policy = POLICY.model_copy(update={"planning": POLICY.planning.model_copy(
+        update={"band_payload_budget_chars": 1},
+    )})
+    client = StubLLM()
+    planner = _planner(client)
+    with sessions.begin() as session:
+        outcome = planner.plan_band(
+            session, project_id=world.project_id, arc_plan=session.get(ArcPlanVersion, arc_id),
+            beat_sheet_row=ArcBeatSheetRepository(session).active_for_arc(arc_id), policy=policy,
+            band=BandSpan(band_index=0, chapter_start=1, chapter_end=4),
+        )
+        assert outcome.failure_reason == "payload_budget_exceeded"
+        assert outcome.band_plan_id is None and outcome.chapter_plan_ids == []
+        assert [issue.code for issue in outcome.issues] == ["payload_budget_exceeded"]
+        assert WorldConflictRepository(session).list(world.project_id) == []
+        assert planner.ensure_plan_for_chapter(session, project_id=world.project_id,
+                                               chapter_number=1, policy=policy) is None
+        (conflict,) = WorldConflictRepository(session).list(world.project_id)
+        assert (conflict.source, conflict.status, conflict.required_decider, conflict.blocks_from_chapter) == (
+            "band_planning", "open", "human", 1,
+        )
+        assert _plans(session, world.project_id) == {}
+        assert list(session.scalars(select(BandPlanRow))) == []
+        traces = _traces(session, world.project_id)
+        assert len(traces) == 2
+        assert all(json.loads(trace.output_summary_json)["failure_reason"] == "payload_budget_exceeded"
+                   for trace in traces)
+        assert client.calls == []
+    engine.dispose()

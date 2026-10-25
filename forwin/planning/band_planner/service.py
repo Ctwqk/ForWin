@@ -24,7 +24,7 @@ from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.observability.llm_trace import (
     RAW_REQUEST_KEY, RAW_RESPONSE_KEY, mark_latest_attempt_parse_failure, mark_latest_attempt_workflow,
 )
-from forwin.planning.band_planner.inputs import BandPlanInputs, build_band_inputs
+from forwin.planning.band_planner.inputs import BandPayloadBudgetExceeded, BandPlanInputs, build_band_inputs
 from forwin.planning.band_planner.persistence import persist_band_plan
 from forwin.planning.band_planner.types import (
     REWRITABLE_PLAN_STATUSES, WORLD_BINDING_KINDS, BandPlanDraft, BandPlanOutcome, BandPlanOutput,
@@ -52,6 +52,7 @@ INFEASIBLE = "infeasible"
 AUDIT_ERROR = "audit_error"
 # The failure reason, and the issue code, when the book has no story calendar to measure chapter spans in.
 NO_STORY_CALENDAR = "no_story_calendar"
+PAYLOAD_BUDGET_EXCEEDED = "payload_budget_exceeded"
 BAND_PLANNING_SOURCE = "band_planning"
 _TASK_FAMILY = "planning"
 _PARSER_NAME = "BandPlan JSON parser"
@@ -241,13 +242,18 @@ class BandPlanner:
         runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=as_of)
         expected_active = (_active_band_plan_id(session, project_id, arc_plan.id, band)
                            if expected_band_plan_id is _UNSET else expected_band_plan_id)
-        inputs = build_band_inputs(
-            session, project_id=project_id, arc_plan=arc_plan, beat_sheet=beat_sheet, band=band,
-            chapter_numbers=chapter_numbers, rows=rows, as_of=as_of, runtime=runtime, policy=policy, notes=notes,
-            trope_cost_ceiling=self.trope_cost_ceiling,
-        )
-        call = self._call(session, project_id=project_id, inputs=inputs, band=band, chapter_numbers=chapter_numbers,
-                          beat_sheet=beat_sheet, policy=policy)
+        try:
+            inputs = build_band_inputs(
+                session, project_id=project_id, arc_plan=arc_plan, beat_sheet=beat_sheet, band=band,
+                chapter_numbers=chapter_numbers, rows=rows, as_of=as_of, runtime=runtime, policy=policy, notes=notes,
+                trope_cost_ceiling=self.trope_cost_ceiling,
+            )
+        except BandPayloadBudgetExceeded as exc:
+            call = _BandPlanCall(issues=[_error(PAYLOAD_BUDGET_EXCEEDED, str(exc))],
+                                 failure_reason=PAYLOAD_BUDGET_EXCEEDED)
+        else:
+            call = self._call(session, project_id=project_id, inputs=inputs, band=band, chapter_numbers=chapter_numbers,
+                              beat_sheet=beat_sheet, policy=policy)
         if call.error is not None:
             # Saved in the caller's session: a caller that rolls back on the exception discards the trace too.
             try:
@@ -481,8 +487,8 @@ class _BandPlanCall:
     # The feasibility warnings on the accepted draft.
     warnings: list[PlanIssue] = field(default_factory=list)
     # LLM_UNAVAILABLE when no call returned an answer, INFEASIBLE when the last answer was valid but failed the
-    # audit, INVALID_OUTPUT when it was invalid, AUDIT_ERROR when checking it raised, NO_STORY_CALENDAR when no
-    # model was asked; empty on success.
+    # audit, INVALID_OUTPUT when it was invalid, AUDIT_ERROR when checking it raised; NO_STORY_CALENDAR and
+    # PAYLOAD_BUDGET_EXCEEDED stop before asking the model. Empty on success.
     failure_reason: str = ""
     # What validation or the audit raised; the caller re-raises it.
     error: Exception | None = None

@@ -22,6 +22,7 @@ def test_profile_defaults_for_planning_and_writer_knobs(profile, expected) -> No
         policy.planning.digest_budget_chars,
         policy.writer.world_view_budget_chars,
     ) == expected
+    assert policy.planning.band_payload_budget_chars == 60000
 
 
 @pytest.mark.parametrize("band_size", [3, 13])
@@ -348,3 +349,15 @@ def test_unknown_writer_key_is_rejected() -> None:
         RuntimePolicy.model_validate(stored)
     assert exc.value.errors()[0]["loc"] == ("writer", "unknown")
     assert exc.value.errors()[0]["type"] == "extra_forbidden"
+
+
+@pytest.mark.parametrize("profile", ["standard", "pulp"])
+def test_band_payload_budget_loads_defaults_and_preserves_override(profile):
+    stored = RuntimePolicy.for_profile(profile).model_dump(mode="json")
+    del stored["planning"]["band_payload_budget_chars"]
+    assert RuntimePolicy.model_validate(stored).planning.band_payload_budget_chars == 60000
+    stored["planning"]["band_payload_budget_chars"] = 9000
+    assert RuntimePolicy.model_validate(stored).planning.band_payload_budget_chars == 9000
+    stored["planning"]["band_payload_budget_chars"] = 0
+    with pytest.raises(ValidationError):
+        RuntimePolicy.model_validate(stored)

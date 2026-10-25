@@ -8,10 +8,9 @@ from typing import TYPE_CHECKING, Callable, Literal, cast
 
 from forwin.application.generation import GenerationApplicationService
 from forwin.canon import CanonAdmissionService, CanonPreparationService
-from forwin.config import InfrastructureConfig
+from forwin.config import InfrastructureConfig, is_configured
 from forwin.generation.gate_delegation import GateDelegationService, SparkGateDelegate
 from forwin.genesis import BookGenesisService
-from forwin.llm.factory import maybe_wrap_with_codex_router
 from forwin.models.base import get_engine, get_session_factory, require_v5_schema
 from forwin.observability.service import ObservabilityService
 from forwin.planning.arc_progression import ArcProgressionService
@@ -369,7 +368,6 @@ class RuntimeContainer:
         core = self.core_services()
         infrastructure = core.infrastructure
         policy = core.policy
-        model_profile = infrastructure.resolve_model_profile(policy.model_profile_id)
         llm_client = self._build_llm_client(infrastructure, policy)
         try:
             skill_runtime = self._build_skill_runtime(infrastructure)
@@ -400,7 +398,7 @@ class RuntimeContainer:
                 llm_client,
                 core.observability,
             )
-            llm_available = bool(model_profile.api_key) or infrastructure.codex_enabled
+            llm_available = llm_configured(infrastructure, policy)
             comment_analyzer = CommentAnalyzer(
                 llm_client=llm_client
                 if policy.quality_profile == "standard" and llm_available else None
@@ -469,9 +467,6 @@ class RuntimeContainer:
         core: CoreRuntimeServices,
     ) -> PublisherRuntimeService:
         infrastructure = core.infrastructure
-        model_profile = infrastructure.resolve_model_profile(
-            core.policy.model_profile_id
-        )
         return PublisherRuntimeService(
             session_factory=core.session_factory,
             extension_api_key=infrastructure.publisher_extension_api_key,
@@ -483,8 +478,8 @@ class RuntimeContainer:
             ),
             strict_preferred_client=infrastructure.publisher_strict_preferred_client,
             observability=core.observability,
-            minimax_api_key=model_profile.api_key,
-            minimax_base_url=model_profile.base_url,
+            minimax_api_key=infrastructure.minimax_api_key,
+            minimax_base_url=infrastructure.minimax_base_url,
         )
 
     def _build_outbox_handlers(self) -> dict:
@@ -641,24 +636,21 @@ class RuntimeContainer:
         infrastructure: InfrastructureConfig,
         policy: RuntimePolicy,
     ):
-        profile = infrastructure.resolve_model_profile(policy.model_profile_id)
         llm_client = LLMClient(
-            api_key=profile.api_key,
-            base_url=profile.base_url,
-            model=profile.model,
+            profiles=infrastructure.llm_profiles,
+            chains=policy.models.chains,
+            pinned_profile_id=policy.model_profile_id,
             timeout_seconds=infrastructure.llm_timeout_seconds,
             retry_attempts=infrastructure.llm_retry_attempts,
             retry_initial_delay_seconds=(
                 infrastructure.llm_retry_initial_delay_seconds
             ),
             retry_max_delay_seconds=infrastructure.llm_retry_max_delay_seconds,
-            fallback_profiles=infrastructure.llm_env_profiles,
-            max_output_tokens=profile.max_output_tokens,
-            codex_models=infrastructure.codex_models,
+            embedding_api_key=infrastructure.embedding_api_key,
+            embedding_base_url=infrastructure.embedding_base_url,
+            embedding_model=infrastructure.embedding_model,
         )
-        llm_client.profile_id = profile.id
-        llm_client.profile_name = profile.name
-        return maybe_wrap_with_codex_router(llm_client, infrastructure)
+        return llm_client
 
     @staticmethod
     def _build_skill_runtime(config: InfrastructureConfig) -> SkillRuntimeBundle:
@@ -807,10 +799,16 @@ def _validate_runtime_role(role: str) -> RuntimeRole:
     return cast(RuntimeRole, normalized)
 
 
+def llm_configured(infrastructure: InfrastructureConfig, policy: RuntimePolicy) -> bool:
+    profiles = infrastructure.llm_profiles
+    profile_ids = {profile_id for chain in policy.models.chains.values() for profile_id in chain}
+    if policy.model_profile_id:
+        profile_ids.add(policy.model_profile_id)
+    return any(is_configured(profiles.get(profile_id)) for profile_id in profile_ids)
+
+
 def _llm_available(infrastructure: InfrastructureConfig, policy: RuntimePolicy) -> bool:
-    """A model profile with a key, or the Codex bridge, can answer LLM calls."""
-    profile = infrastructure.resolve_model_profile(policy.model_profile_id)
-    return bool(profile.api_key) or infrastructure.codex_enabled
+    return llm_configured(infrastructure, policy)
 
 
 def _close_resource(resource: object, label: str) -> None:

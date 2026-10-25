@@ -30,8 +30,6 @@ class WriterExecutionStage:
         paused_chapters: list[int],
         frozen_artifacts: list[str],
         trace_stage_key: str = "chapter_draft",
-        llm_preferred_provider_kind: str = "",
-        llm_preferred_model: str = "",
     ) -> WriterOutput | None:
         max_attempts = max(1, int(self.policy.writer_attention_retries))
         last_error: Exception | None = None
@@ -47,7 +45,6 @@ class WriterExecutionStage:
             if self._abort_requested():
                 return None
             started_at = time.perf_counter()
-            model_profile_id, model_name = self._current_model_identity()
             try:
                 self._record_decision_event(
                     updater=updater,
@@ -63,10 +60,6 @@ class WriterExecutionStage:
                         operation_id=self._audit_operation_id(),
                         attempt_no=attempt,
                         max_attempts=max_attempts,
-                        model_profile_id=model_profile_id,
-                        model=model_name,
-                        preferred_provider_kind=str(llm_preferred_provider_kind or ""),
-                        preferred_model=str(llm_preferred_model or ""),
                     ),
                 )
                 output = self._call_with_compatible_kwargs(
@@ -74,8 +67,9 @@ class WriterExecutionStage:
                     context,
                     skill_layers=writer_skill_layers,
                     trace_stage_key=trace_stage_key,
-                    llm_preferred_provider_kind=llm_preferred_provider_kind,
-                    llm_preferred_model=llm_preferred_model,
+                )
+                model_profile_id, model_name = self._current_model_identity(
+                    (output.generation_meta.get("prompt_trace") or {}).get("attempts", [])
                 )
                 duration_ms = max(0, int((time.perf_counter() - started_at) * 1000))
                 self._record_model_fallback_payloads(
@@ -102,8 +96,6 @@ class WriterExecutionStage:
                         max_attempts=max_attempts,
                         model_profile_id=model_profile_id,
                         model=model_name,
-                        preferred_provider_kind=str(llm_preferred_provider_kind or ""),
-                        preferred_model=str(llm_preferred_model or ""),
                     ),
                 )
                 self._record_decision_event(
@@ -122,8 +114,6 @@ class WriterExecutionStage:
                         model_profile_id=model_profile_id,
                         model=model_name,
                         attempt_no=attempt,
-                        preferred_provider_kind=str(llm_preferred_provider_kind or ""),
-                        preferred_model=str(llm_preferred_model or ""),
                     ),
                 )
                 self._record_decision_event(
@@ -174,6 +164,7 @@ class WriterExecutionStage:
                     duration_ms=duration_ms,
                 )
                 error_category = self._error_category_from_attempts(llm_attempts, exc)
+                model_profile_id, model_name = self._current_model_identity(llm_attempts)
                 logger.warning(
                     "Writer failed for chapter %d on attempt %d/%d: %s",
                     chapter_number,
@@ -202,8 +193,6 @@ class WriterExecutionStage:
                         model=model_name,
                         attempt_count=len(llm_attempts),
                         attempt_group_ids=attempt_group_ids(llm_attempts),
-                        preferred_provider_kind=str(llm_preferred_provider_kind or ""),
-                        preferred_model=str(llm_preferred_model or ""),
                     ),
                 )
                 drain_attempts = getattr(
@@ -289,10 +278,6 @@ class WriterExecutionStage:
                             delay_seconds=delay,
                             model_profile_id=model_profile_id,
                             model=model_name,
-                            preferred_provider_kind=str(
-                                llm_preferred_provider_kind or ""
-                            ),
-                            preferred_model=str(llm_preferred_model or ""),
                         ),
                     )
                     time.sleep(delay)
@@ -384,6 +369,7 @@ class WriterExecutionStage:
                 preview_error_category = self._error_category_from_attempts(
                     preview_attempts, preview_exc
                 )
+                preview_profile_id, preview_model = self._current_model_identity(preview_attempts)
                 preview_failure_event = self._record_decision_event(
                     updater=updater,
                     project_id=project_id,
@@ -409,6 +395,8 @@ class WriterExecutionStage:
                         timeout_seconds=preview_timeout_seconds,
                         attempt_count=len(preview_attempts),
                         attempt_group_ids=attempt_group_ids(preview_attempts),
+                        model_profile_id=preview_profile_id,
+                        model=preview_model,
                     ),
                 )
                 self._record_failure_prompt_trace(

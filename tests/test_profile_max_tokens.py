@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from forwin.config import InfrastructureConfig
+from forwin.config import InfrastructureConfig, ModelProfileConfig
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.writer.llm import profile_options
@@ -15,12 +15,9 @@ class _ProfileOptionsHarness(ProfileOptionsMixin, RoutingMixin):
 
 
 class _RoutingHarness(RoutingMixin):
-    profile_id = "primary"
-    profile_name = "Primary"
-    api_key = "primary-key"
-    base_url = "https://primary.example/v1"
-    model = "primary-model"
-    fallback_profiles: list[dict[str, str]] = []
+    pinned_profile_id = ""
+    chains = {"default": ("env-minimax",)}
+    profiles: dict[str, ModelProfileConfig] = {}
 
 
 class ProfileMaxTokensTests(unittest.TestCase):
@@ -93,24 +90,24 @@ class ProfileMaxTokensTests(unittest.TestCase):
             16384,
         )
 
-    def test_request_profiles_preserves_max_output_tokens_override(self) -> None:
+    def test_chain_profiles_preserves_max_output_tokens_override(self) -> None:
         harness = _RoutingHarness()
-        harness.fallback_profiles = [
-            {
+        harness.profiles = {
+            "env-minimax": ModelProfileConfig(**{
                 "id": "env-minimax",
                 "name": "MiniMax (.env)",
                 "api_key": "test-key",
                 "base_url": "https://api.minimaxi.com/v1",
                 "model": "MiniMax-M2.7",
                 "max_output_tokens": "16384",
-            }
-        ]
+            })
+        }
 
-        profiles = harness._request_profiles()
+        profiles = harness._chain_profiles("default")[0]
 
-        self.assertEqual(profiles[1]["max_output_tokens"], "16384")
+        self.assertEqual(profiles[0]["max_output_tokens"], "16384")
 
-    def test_real_source_minimax_primary_profile_carries_raised_cap(self) -> None:
+    def test_real_source_minimax_chain_profile_carries_raised_cap(self) -> None:
         config = InfrastructureConfig(
             minimax_api_key="test-key",
             minimax_base_url="https://api.minimaxi.com/v1",
@@ -120,8 +117,8 @@ class ProfileMaxTokensTests(unittest.TestCase):
         policy = RuntimePolicy.for_profile("standard")
         try:
             client = RuntimeContainer._build_llm_client(config, policy)
-            self.assertEqual(client.profile_id, "env-minimax")
-            profiles = client._request_profiles()
+            self.assertEqual(client.pinned_profile_id, "")
+            profiles = client._chain_profiles("review_json")[0]
         finally:
             client.close()
 
@@ -137,7 +134,7 @@ class ProfileMaxTokensTests(unittest.TestCase):
             "name": "OpenAI (.env)",
             "api_key": "test-key",
             "base_url": "https://api.openai.com/v1",
-            "model": "gpt-5.3-codex-spark",
+            "model": "gpt-example",
         }
 
         self.assertEqual(

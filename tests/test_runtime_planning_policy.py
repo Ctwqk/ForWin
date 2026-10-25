@@ -81,7 +81,7 @@ def test_outbox_plan_step_selects_each_projects_current_policy(monkeypatch):
             commit = SimpleNamespace(project_id=profile)
             assert maintenance._run_plan_step(session, commit) == {"planned_band_id": profile}
         assert seen == [("standard", 3, "project-model"), ("pulp", 2, "project-model"),
-                        ("standard", 3, container.infrastructure.resolve_model_profile("").model)]
+                        ("standard", 3, "")]
         assert container._generation_services is None
     finally:
         container.close()

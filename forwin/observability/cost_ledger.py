@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import parse_gate_outcome
+from forwin.observability.llm_trace import served_model_profile
 from forwin.models.audit import DecisionEvent
 from forwin.models.draft import CandidateDraftRecord
 from forwin.models.genesis import PromptTrace
@@ -888,7 +889,10 @@ class CostLedgerService:
     ) -> _TraceContext:
         input_snapshot = _json_object(trace.input_snapshot_json)
         output_summary = _json_object(trace.output_summary_json)
-        model_profile = _json_object(trace.model_profile_json)
+        model_profile = {
+            **_json_object(trace.model_profile_json),
+            **served_model_profile(_json_list(trace.attempts_json)),
+        }
         chapter_number = _snapshot_chapter(input_snapshot, output_summary)
         band_id = _snapshot_value(input_snapshot, output_summary, key="band_id")
         candidate_id = _snapshot_value(

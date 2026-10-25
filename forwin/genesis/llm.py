@@ -5,6 +5,7 @@ from forwin.observability.llm_trace import (
     build_llm_decision_event_payloads,
     mark_latest_attempt_parse_failure,
     prepare_prompt_trace_payload,
+    served_model_profile,
 )
 from forwin.audit.events import (
     DecisionEventInfo,
@@ -20,6 +21,7 @@ from forwin.utils import (
     LLMJSONParseError,
     parse_llm_json,
 )
+from forwin.writer.llm.errors import EmptyLLMResponse
 from forwin.genesis.constants import logger
 from forwin.observability.context import OperationContext
 from forwin.models.project import Project
@@ -312,10 +314,9 @@ def _call_json_with_trace_impl(
     is_world_seed = str(stage_key or "").split(":")[0] == "world_seed"
     token_cap = self.world_seed_max_tokens if is_world_seed else self.max_tokens
     max_tokens = min(token_cap, int(max_tokens or token_cap))
-    if (
-        hasattr(self.llm_client, "api_key")
-        and not str(getattr(self.llm_client, "api_key", "") or "").strip()
-        and not bool(getattr(self.llm_client, "codex_enabled", False))
+    if hasattr(self.llm_client, "profiles") and not any(
+        self.llm_client._chain_profiles(route)[0]
+        for route in {*self.llm_client.chains, "default"}
     ):
         attempts_payload.append({"status": "fallback", "reason": "missing_api_key"})
         return fallback, self._trace_payload(
@@ -386,7 +387,9 @@ def _call_json_with_trace_impl(
                     "error": str(exc),
                 }
             )
-            if isinstance(exc, LLMJSONParseError) and exc.empty_response:
+            if isinstance(exc, EmptyLLMResponse) or (
+                isinstance(exc, LLMJSONParseError) and exc.empty_response
+            ):
                 break
     logger.warning("Genesis stage %s fell back to deterministic scaffold.", stage_key)
     attempts_payload.append({"status": "fallback", "reason": "deterministic_scaffold"})
@@ -485,12 +488,7 @@ def _trace_payload(
             "messages": messages,
             "selected_skills": selected,
         },
-        "model_profile": {
-            "profile_id": getattr(self.llm_client, "profile_id", ""),
-            "profile_name": getattr(self.llm_client, "profile_name", ""),
-            "model": getattr(self.llm_client, "model", ""),
-            "base_url": getattr(self.llm_client, "base_url", ""),
-        },
+        "model_profile": served_model_profile(llm_attempts, llm_client=self.llm_client),
         "attempts": (llm_attempts if isinstance(llm_attempts, list) else [])
         + business_attempts,
         "output_summary": {

@@ -216,8 +216,8 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                 pipeline.engine.dispose()
                 engine.dispose()
 
-    def test_writer_call_receives_repair_model_preference(self) -> None:
-        db_path = postgres_test_url("writer-repair-model-preference")
+    def test_writer_call_receives_repair_stage_without_provider_override(self) -> None:
+        db_path = postgres_test_url("writer-repair-stage")
         pipeline = _build_pipeline(db_path)
         try:
             captured: dict[str, str] = {}
@@ -225,12 +225,12 @@ class WriterAttentionFallbackTests(unittest.TestCase):
             def fake_write_chapter(
                 context,  # noqa: ANN001
                 *,
-                llm_preferred_provider_kind: str = "",
-                llm_preferred_model: str = "",
-                **_kwargs,  # noqa: ANN003
+                trace_stage_key: str = "",
+                **kwargs,  # noqa: ANN003
             ) -> WriterOutput:
-                captured["provider"] = llm_preferred_provider_kind
-                captured["model"] = llm_preferred_model
+                captured["stage"] = trace_stage_key
+                self.assertNotIn("llm_preferred_provider_kind", kwargs)
+                self.assertNotIn("llm_preferred_model", kwargs)
                 return WriterOutput(
                     project_id="project-1",
                     chapter_number=1,
@@ -260,21 +260,19 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                     paused_chapters=[],
                     frozen_artifacts=[],
                     trace_stage_key="chapter_rewrite",
-                    llm_preferred_provider_kind="deepseek",
-                    llm_preferred_model="deepseek-reasoner",
                 )
 
             self.assertIsNotNone(result)
             self.assertEqual(
-                captured, {"provider": "deepseek", "model": "deepseek-reasoner"}
+                captured, {"stage": "chapter_rewrite"}
             )
             started = next(
                 call.args[0]
                 for call in updater.save_decision_event.call_args_list
                 if call.args[0].event_type == DecisionEventType.LLM_REQUEST_STARTED
             )
-            self.assertEqual(started.payload["preferred_provider_kind"], "deepseek")
-            self.assertEqual(started.payload["preferred_model"], "deepseek-reasoner")
+            self.assertNotIn("preferred_provider_kind", started.payload)
+            self.assertNotIn("preferred_model", started.payload)
         finally:
             pipeline.llm_client.close()
             pipeline.engine.dispose()

@@ -8,9 +8,7 @@ from unittest.mock import patch
 import httpx
 
 from forwin.protocol.experience import ArcPayoffMap, ReaderPromise, RevelationLayer
-from forwin.config import InfrastructureConfig
-from forwin.runtime.container import RuntimeContainer
-from forwin.runtime.policy import RuntimePolicy
+from forwin.config import ModelProfileConfig
 from forwin.writer.llm import LLMClient
 
 
@@ -22,40 +20,6 @@ class LLMClientRetryTests(unittest.TestCase):
                     task_family="world_engine", stage_key=stage_key, response_format=response_format,
                 ), "planning_json_general")
 
-    def test_runtime_passes_registry_to_profile_routing_and_options(self) -> None:
-        config = InfrastructureConfig(
-            codex_enabled=False,
-            codex_models=("custom-review",),
-            llm_env_profiles=[
-                {"id": "ordinary", "name": "Ordinary", "api_key": "test",
-                 "base_url": "https://openai.example/v1", "model": "gpt-ordinary"},
-                {"id": "review", "name": "Review", "api_key": "test",
-                 "base_url": "https://minimax.example/v1", "model": "custom-review"},
-            ],
-        )
-        client = RuntimeContainer._build_llm_client(
-            config, RuntimePolicy.for_profile("standard").with_user_settings(model_profile_id="ordinary"),
-        )
-        response = httpx.Response(
-            200, json={"choices": [{"message": {"content": "reviewed"}}]},
-            request=httpx.Request("POST", "https://minimax.example/v1/chat/completions"),
-        )
-        try:
-            with patch.object(client, "_post_with_wall_timeout", return_value=response) as post:
-                result = client.chat(
-                    [{"role": "developer", "content": "review"}], task_family="review",
-                    response_format={"type": "json_object"}, max_tokens=4096, temperature=1.2,
-                )
-            self.assertEqual(result, "reviewed")
-            payload = post.call_args.kwargs["json"]
-            self.assertEqual(payload["model"], "custom-review")
-            self.assertEqual(payload["max_tokens"], 4096)
-            self.assertEqual(payload["temperature"], 1.2)
-            self.assertEqual(payload["messages"][0]["role"], "developer")
-            self.assertEqual(payload["response_format"], {"type": "json_object"})
-            self.assertEqual(client.llm_attempt_events[0]["candidate_chain"][1]["provider_kind"], "spark")
-        finally:
-            client.close()
 
     def test_chapter_delta_extraction_routes_to_canon_extraction(self) -> None:
         self.assertEqual(LLMClient._llm_task_route(
@@ -85,9 +49,16 @@ class LLMClientRetryTests(unittest.TestCase):
                 self.closed = True
 
         client = LLMClient(
-            api_key="test-key",
-            base_url="https://primary.example/v1",
-            model="primary-model",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='test-key',
+                    base_url='https://primary.example/v1',
+                    model='primary-model',
+                ),
+            },
+            chains={"default": ('primary',)},
         )
         hanging_client = HangingHTTPClient()
         client.client = hanging_client  # type: ignore[assignment]
@@ -169,9 +140,16 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_retries_minimax_529_then_returns_content(self) -> None:
         client = LLMClient(
-            api_key="test-key",
-            base_url="https://primary.example/v1",
-            model="primary-model",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='test-key',
+                    base_url='https://primary.example/v1',
+                    model='primary-model',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=2,
             retry_initial_delay_seconds=0,
             retry_max_delay_seconds=0,
@@ -208,9 +186,16 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_records_attempt_telemetry_without_secrets(self) -> None:
         client = LLMClient(
-            api_key="test-key",
-            base_url="https://primary.example/v1",
-            model="primary-model",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='test-key',
+                    base_url='https://primary.example/v1',
+                    model='primary-model',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=2,
             retry_initial_delay_seconds=0,
             retry_max_delay_seconds=0,
@@ -252,21 +237,26 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_attempt_telemetry_records_group_profile_category_and_final_success(self) -> None:
         client = LLMClient(
-            api_key="primary-key",
-            base_url="https://primary.example/v1",
-            model="primary-model",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='primary-key',
+                    base_url='https://primary.example/v1',
+                    model='primary-model',
+                ),
+                'backup-profile': ModelProfileConfig(
+                    id='backup-profile',
+                    name='Backup',
+                    api_key='backup-key',
+                    base_url='https://backup.example/v1',
+                    model='backup-model',
+                ),
+            },
+            chains={"default": ('primary', 'backup-profile')},
             retry_attempts=1,
             retry_initial_delay_seconds=0,
             retry_max_delay_seconds=0,
-            fallback_profiles=[
-                {
-                    "id": "backup-profile",
-                    "name": "Backup",
-                    "api_key": "backup-key",
-                    "base_url": "https://backup.example/v1",
-                    "model": "backup-model",
-                }
-            ],
         )
 
         def fake_post(url, **kwargs):  # noqa: ANN001
@@ -306,9 +296,16 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_does_not_retry_timeout_when_disabled(self) -> None:
         client = LLMClient(
-            api_key="test-key",
-            base_url="https://primary.example/v1",
-            model="primary-model",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='test-key',
+                    base_url='https://primary.example/v1',
+                    model='primary-model',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=2,
             retry_initial_delay_seconds=0,
             retry_max_delay_seconds=0,
@@ -330,19 +327,26 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_does_not_fallback_after_timeout_when_retry_disabled(self) -> None:
         client = LLMClient(
-            api_key="primary-key",
-            base_url="https://primary.example/v1",
-            model="primary-model",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='primary-key',
+                    base_url='https://primary.example/v1',
+                    model='primary-model',
+                ),
+                'fallback-1': ModelProfileConfig(
+                    api_key='backup-key',
+                    base_url='https://backup.example/v1',
+                    model='backup-model',
+                    id='fallback-1',
+                    name='fallback-1',
+                ),
+            },
+            chains={"default": ('primary', 'fallback-1')},
             retry_attempts=2,
             retry_initial_delay_seconds=0,
             retry_max_delay_seconds=0,
-            fallback_profiles=[
-                {
-                    "api_key": "backup-key",
-                    "base_url": "https://backup.example/v1",
-                    "model": "backup-model",
-                }
-            ],
         )
         calls: list[str] = []
 
@@ -372,9 +376,16 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_wall_timeout_interrupts_hung_http_post(self) -> None:
         client = LLMClient(
-            api_key="test-key",
-            base_url="https://primary.example/v1",
-            model="primary-model",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='test-key',
+                    base_url='https://primary.example/v1',
+                    model='primary-model',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
         original_client = client.client
@@ -425,9 +436,16 @@ class LLMClientRetryTests(unittest.TestCase):
                 self.closed = True
 
         client = LLMClient(
-            api_key="test-key",
-            base_url="https://primary.example/v1",
-            model="primary-model",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='test-key',
+                    base_url='https://primary.example/v1',
+                    model='primary-model',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
         recovering_client = RecoveringHTTPClient()
@@ -457,19 +475,26 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_falls_back_to_next_profile_after_retryable_failures(self) -> None:
         client = LLMClient(
-            api_key="primary-key",
-            base_url="https://primary.example/v1",
-            model="primary-model",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='primary-key',
+                    base_url='https://primary.example/v1',
+                    model='primary-model',
+                ),
+                'fallback-1': ModelProfileConfig(
+                    api_key='backup-key',
+                    base_url='https://backup.example/v1',
+                    model='backup-model',
+                    id='fallback-1',
+                    name='fallback-1',
+                ),
+            },
+            chains={"default": ('primary', 'fallback-1')},
             retry_attempts=2,
             retry_initial_delay_seconds=0,
             retry_max_delay_seconds=0,
-            fallback_profiles=[
-                {
-                    "api_key": "backup-key",
-                    "base_url": "https://backup.example/v1",
-                    "model": "backup-model",
-                }
-            ],
         )
         calls: list[tuple[str, str]] = []
 
@@ -501,19 +526,26 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_falls_back_after_timeout_retries_are_exhausted(self) -> None:
         client = LLMClient(
-            api_key="primary-key",
-            base_url="https://primary.example/v1",
-            model="primary-model",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='primary-key',
+                    base_url='https://primary.example/v1',
+                    model='primary-model',
+                ),
+                'fallback-1': ModelProfileConfig(
+                    api_key='backup-key',
+                    base_url='https://backup.example/v1',
+                    model='backup-model',
+                    id='fallback-1',
+                    name='fallback-1',
+                ),
+            },
+            chains={"default": ('primary', 'fallback-1')},
             retry_attempts=2,
             retry_initial_delay_seconds=0,
             retry_max_delay_seconds=0,
-            fallback_profiles=[
-                {
-                    "api_key": "backup-key",
-                    "base_url": "https://backup.example/v1",
-                    "model": "backup-model",
-                }
-            ],
         )
         calls: list[str] = []
 
@@ -543,19 +575,26 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_does_not_fallback_for_non_retryable_http_error(self) -> None:
         client = LLMClient(
-            api_key="primary-key",
-            base_url="https://primary.example/v1",
-            model="primary-model",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='primary-key',
+                    base_url='https://primary.example/v1',
+                    model='primary-model',
+                ),
+                'fallback-1': ModelProfileConfig(
+                    api_key='backup-key',
+                    base_url='https://backup.example/v1',
+                    model='backup-model',
+                    id='fallback-1',
+                    name='fallback-1',
+                ),
+            },
+            chains={"default": ('primary', 'fallback-1')},
             retry_attempts=2,
             retry_initial_delay_seconds=0,
             retry_max_delay_seconds=0,
-            fallback_profiles=[
-                {
-                    "api_key": "backup-key",
-                    "base_url": "https://backup.example/v1",
-                    "model": "backup-model",
-                }
-            ],
         )
         calls: list[str] = []
 
@@ -575,9 +614,16 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_kimi_k25_disables_thinking_and_omits_temperature(self) -> None:
         client = LLMClient(
-            api_key="kimi-key",
-            base_url="https://api.moonshot.cn/v1",
-            model="kimi-k2.5",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='kimi-key',
+                    base_url='https://api.moonshot.cn/v1',
+                    model='kimi-k2.5',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
         payloads: list[dict] = []
@@ -610,9 +656,16 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_kimi_k25_raises_small_max_tokens_for_reasoning_budget(self) -> None:
         client = LLMClient(
-            api_key="kimi-key",
-            base_url="https://api.moonshot.cn/v1",
-            model="kimi-k2.5",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='kimi-key',
+                    base_url='https://api.moonshot.cn/v1',
+                    model='kimi-k2.5',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
         payloads: list[dict] = []
@@ -643,9 +696,16 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_kimi_k25_respects_explicit_stage_timeout(self) -> None:
         client = LLMClient(
-            api_key="kimi-key",
-            base_url="https://api.moonshot.cn/v1",
-            model="kimi-k2.5",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='kimi-key',
+                    base_url='https://api.moonshot.cn/v1',
+                    model='kimi-k2.5',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
         timeouts: list[float] = []
@@ -674,9 +734,16 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_minimax_payload_uses_current_openai_compatible_parameters(self) -> None:
         client = LLMClient(
-            api_key="minimax-key",
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='minimax-key',
+                    base_url='https://api.minimaxi.com/v1',
+                    model='MiniMax-M2.7',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
         payloads: list[dict] = []
@@ -728,9 +795,16 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_non_retryable_http_error_records_provider_body_preview(self) -> None:
         client = LLMClient(
-            api_key="test-key",
-            base_url="https://api.moonshot.cn/v1",
-            model="kimi-k2.5",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='test-key',
+                    base_url='https://api.moonshot.cn/v1',
+                    model='kimi-k2.5',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
 
@@ -761,355 +835,19 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertIn("invalid temperature", attempts[0]["error_message"])
         self.assertNotIn("test-key", attempts[0]["error_message"])
 
-    def test_critical_extraction_routes_to_spark_then_kimi_and_skips_minimax(self) -> None:
-        client = LLMClient(
-            api_key="minimax-key",
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            retry_attempts=1,
-            retry_initial_delay_seconds=0,
-            retry_max_delay_seconds=0,
-            fallback_profiles=[
-                {
-                    "id": "spark",
-                    "name": "GPT-5.3-Codex-Spark",
-                    "api_key": "spark-key",
-                    "base_url": "https://api.openai.com/v1",
-                    "model": "gpt-5.3-codex-spark",
-                },
-                {
-                    "id": "kimi",
-                    "name": "Kimi K2.5",
-                    "api_key": "kimi-key",
-                    "base_url": "https://api.moonshot.cn/v1",
-                    "model": "kimi-k2.5",
-                },
-            ],
-        )
-        calls: list[str] = []
-
-        def fake_post(url, **kwargs):  # noqa: ANN001
-            calls.append(kwargs["json"]["model"])
-            request = httpx.Request("POST", url)
-            if kwargs["json"]["model"] == "gpt-5.3-codex-spark":
-                return httpx.Response(529, json={"error": "overloaded"}, request=request)
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "{\"ok\": true}"}}]},
-                request=request,
-            )
-
-        try:
-            with patch.object(client.client, "post", side_effect=fake_post), patch(
-                "forwin.writer.llm.adapter.time.sleep",
-                return_value=None,
-            ):
-                result = client.chat(
-                    [{"role": "user", "content": "抽取 canon 事件"}],
-                    response_format={"type": "json_object"},
-                    task_family="writer",
-                    stage_key="chapter_delta_extraction",
-                )
-            attempts = client.drain_llm_attempt_events()
-        finally:
-            client.close()
-
-        self.assertEqual(result, "{\"ok\": true}")
-        self.assertEqual(calls, ["gpt-5.3-codex-spark", "kimi-k2.5"])
-        self.assertEqual([item["stage_key"] for item in attempts], ["chapter_delta_extraction", "chapter_delta_extraction"])
-        self.assertEqual(attempts[0]["llm_task_route"], "canon_extraction")
-
-    def test_feedback_analysis_routes_spark_then_kimi_then_minimax(self) -> None:
-        client = LLMClient(
-            api_key="kimi-key",
-            base_url="https://api.moonshot.cn/v1",
-            model="kimi-k2.5",
-            retry_attempts=1,
-            fallback_profiles=[
-                {
-                    "id": "minimax",
-                    "name": "MiniMax",
-                    "api_key": "minimax-key",
-                    "base_url": "https://api.minimaxi.com/v1",
-                    "model": "MiniMax-M2.7",
-                },
-                {
-                    "id": "spark",
-                    "name": "GPT-5.3-Codex-Spark",
-                    "api_key": "spark-key",
-                    "base_url": "https://api.openai.com/v1",
-                    "model": "gpt-5.3-codex-spark",
-                },
-            ],
-        )
-        calls: list[str] = []
-
-        def fake_post(url, **kwargs):  # noqa: ANN001
-            calls.append(kwargs["json"]["model"])
-            request = httpx.Request("POST", url)
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "{\"signals\": []}"}}]},
-                request=request,
-            )
-
-        try:
-            with patch.object(client.client, "post", side_effect=fake_post):
-                result = client.chat(
-                    [{"role": "user", "content": "分析评论信号"}],
-                    response_format={"type": "json_object"},
-                    task_family="phase4",
-                    stage_key="comment_analysis",
-                )
-            attempts = client.drain_llm_attempt_events()
-        finally:
-            client.close()
-
-        self.assertEqual(result, "{\"signals\": []}")
-        self.assertEqual(calls, ["gpt-5.3-codex-spark"])
-        self.assertEqual(attempts[0]["llm_task_route"], "feedback_analysis")
-        self.assertEqual(attempts[0]["candidate_chain"][0]["provider_kind"], "kimi")
-
-    def test_chapter_prose_routes_to_spark_then_kimi_and_skips_minimax(self) -> None:
-        client = LLMClient(
-            api_key="minimax-key",
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            retry_attempts=1,
-            retry_initial_delay_seconds=0,
-            retry_max_delay_seconds=0,
-            fallback_profiles=[
-                {
-                    "api_key": "kimi-key",
-                    "base_url": "https://api.moonshot.cn/v1",
-                    "model": "kimi-k2.5",
-                },
-                {
-                    "api_key": "spark-key",
-                    "base_url": "https://api.openai.com/v1",
-                    "model": "gpt-5.3-codex-spark",
-                },
-            ],
-        )
-        calls: list[str] = []
-
-        def fake_post(url, **kwargs):  # noqa: ANN001
-            calls.append(kwargs["json"]["model"])
-            request = httpx.Request("POST", url)
-            if kwargs["json"]["model"] == "gpt-5.3-codex-spark":
-                return httpx.Response(503, json={"error": "busy"}, request=request)
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "章节正文"}}]},
-                request=request,
-            )
-
-        try:
-            with patch.object(client.client, "post", side_effect=fake_post), patch(
-                "forwin.writer.llm.adapter.time.sleep",
-                return_value=None,
-            ):
-                result = client.chat(
-                    [{"role": "user", "content": "写第 1 章"}],
-                    task_family="writer",
-                    stage_key="chapter_draft",
-                )
-            attempts = client.drain_llm_attempt_events()
-        finally:
-            client.close()
-
-        self.assertEqual(result, "章节正文")
-        self.assertEqual(calls, ["gpt-5.3-codex-spark", "kimi-k2.5"])
-        self.assertEqual(attempts[0]["llm_task_route"], "prose_generation")
-
-    def test_chapter_prose_keeps_deepseek_as_fallback_when_kimi_is_rate_limited(self) -> None:
-        client = LLMClient(
-            api_key="minimax-key",
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            retry_attempts=1,
-            retry_initial_delay_seconds=0,
-            retry_max_delay_seconds=0,
-            fallback_profiles=[
-                {
-                    "id": "kimi",
-                    "name": "Kimi",
-                    "api_key": "kimi-key",
-                    "base_url": "https://api.moonshot.cn/v1",
-                    "model": "kimi-k2.5",
-                },
-                {
-                    "id": "deepseek",
-                    "name": "DeepSeek",
-                    "api_key": "deepseek-key",
-                    "base_url": "https://api.deepseek.com/v1",
-                    "model": "deepseek-chat",
-                },
-            ],
-        )
-        calls: list[str] = []
-
-        def fake_post(url, **kwargs):  # noqa: ANN001
-            calls.append(kwargs["json"]["model"])
-            request = httpx.Request("POST", url)
-            if kwargs["json"]["model"] == "kimi-k2.5":
-                return httpx.Response(429, json={"error": "rate limited"}, request=request)
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "DeepSeek 正文"}}]},
-                request=request,
-            )
-
-        try:
-            with patch.object(client.client, "post", side_effect=fake_post):
-                result = client.chat(
-                    [{"role": "user", "content": "写第 1 章"}],
-                    task_family="writer",
-                    stage_key="chapter_draft",
-                )
-            attempts = client.drain_llm_attempt_events()
-        finally:
-            client.close()
-
-        self.assertEqual(result, "DeepSeek 正文")
-        self.assertEqual(calls, ["kimi-k2.5", "deepseek-chat"])
-        self.assertEqual(attempts[0]["error_category"], "rate_limit")
-        self.assertEqual(attempts[1]["profile_id"], "deepseek")
-        skipped_reasons = [
-            item["reason"]
-            for attempt in attempts
-            for item in attempt["skipped_profiles"]
-        ]
-        self.assertNotIn("replaced_by_kimi", skipped_reasons)
-
-    def test_canon_extraction_keeps_deepseek_as_fallback_when_kimi_is_rate_limited(
-        self,
-    ) -> None:
-        client = LLMClient(
-            api_key="minimax-key",
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            retry_attempts=1,
-            retry_initial_delay_seconds=0,
-            retry_max_delay_seconds=0,
-            fallback_profiles=[
-                {
-                    "id": "kimi",
-                    "name": "Kimi",
-                    "api_key": "kimi-key",
-                    "base_url": "https://api.moonshot.cn/v1",
-                    "model": "kimi-k2.5",
-                },
-                {
-                    "id": "deepseek",
-                    "name": "DeepSeek",
-                    "api_key": "deepseek-key",
-                    "base_url": "https://api.deepseek.com/v1",
-                    "model": "deepseek-chat",
-                },
-            ],
-        )
-        calls: list[str] = []
-
-        def fake_post(url, **kwargs):  # noqa: ANN001
-            calls.append(kwargs["json"]["model"])
-            request = httpx.Request("POST", url)
-            if kwargs["json"]["model"] == "kimi-k2.5":
-                return httpx.Response(
-                    429,
-                    json={"error": "rate limited"},
-                    request=request,
-                )
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "{\"events\": []}"}}]},
-                request=request,
-            )
-
-        try:
-            with patch.object(client.client, "post", side_effect=fake_post):
-                result = client.chat(
-                    [{"role": "user", "content": "抽取 canon 事件"}],
-                    response_format={"type": "json_object"},
-                    task_family="writer",
-                    stage_key="chapter_delta_extraction",
-                )
-            attempts = client.drain_llm_attempt_events()
-        finally:
-            client.close()
-
-        self.assertEqual(result, "{\"events\": []}")
-        self.assertEqual(calls, ["kimi-k2.5", "deepseek-chat"])
-        self.assertEqual(attempts[0]["error_category"], "rate_limit")
-        self.assertEqual(attempts[1]["profile_id"], "deepseek")
-
-    def test_review_json_keeps_deepseek_after_preferred_providers_are_rate_limited(
-        self,
-    ) -> None:
-        client = LLMClient(
-            api_key="minimax-key",
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            retry_attempts=1,
-            retry_initial_delay_seconds=0,
-            retry_max_delay_seconds=0,
-            fallback_profiles=[
-                {
-                    "id": "kimi",
-                    "name": "Kimi",
-                    "api_key": "kimi-key",
-                    "base_url": "https://api.moonshot.cn/v1",
-                    "model": "kimi-k2.5",
-                },
-                {
-                    "id": "deepseek",
-                    "name": "DeepSeek",
-                    "api_key": "deepseek-key",
-                    "base_url": "https://api.deepseek.com/v1",
-                    "model": "deepseek-chat",
-                },
-            ],
-        )
-        calls: list[str] = []
-
-        def fake_post(url, **kwargs):  # noqa: ANN001
-            model = kwargs["json"]["model"]
-            calls.append(model)
-            request = httpx.Request("POST", url)
-            if model in {"kimi-k2.5", "MiniMax-M2.7"}:
-                return httpx.Response(
-                    429,
-                    json={"error": "rate limited"},
-                    request=request,
-                )
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "{\"verdict\": \"pass\"}"}}]},
-                request=request,
-            )
-
-        try:
-            with patch.object(client.client, "post", side_effect=fake_post):
-                result = client.chat(
-                    [{"role": "user", "content": "审核章节"}],
-                    response_format={"type": "json_object"},
-                    task_family="chapter_review_form",
-                    stage_key="chapter_review_form",
-                )
-            attempts = client.drain_llm_attempt_events()
-        finally:
-            client.close()
-
-        self.assertEqual(result, "{\"verdict\": \"pass\"}")
-        self.assertEqual(calls, ["kimi-k2.5", "MiniMax-M2.7", "deepseek-chat"])
-        self.assertEqual(attempts[-1]["profile_id"], "deepseek")
-        self.assertTrue(all(item["llm_task_route"] == "review_json" for item in attempts))
 
     def test_writer_preview_allows_minimax_as_low_risk_fallback(self) -> None:
         client = LLMClient(
-            api_key="minimax-key",
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='minimax-key',
+                    base_url='https://api.minimaxi.com/v1',
+                    model='MiniMax-M2.7',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
         calls: list[str] = []
@@ -1141,9 +879,16 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_chapter_review_form_routes_as_review_json_for_minimax_fallback(self) -> None:
         client = LLMClient(
-            api_key="minimax-key",
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='minimax-key',
+                    base_url='https://api.minimaxi.com/v1',
+                    model='MiniMax-M2.7',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
         try:
@@ -1153,8 +898,7 @@ class LLMClientRetryTests(unittest.TestCase):
                 response_format={"type": "json_object"},
                 output_schema={"type": "object"},
             )
-            routed = client._route_profiles(
-                client._request_profiles(),
+            routed = client._route_profiles_with_metadata(
                 task_family="chapter_review_form",
                 stage_key="chapter_review_form",
                 response_format={"type": "json_object"},
@@ -1164,13 +908,20 @@ class LLMClientRetryTests(unittest.TestCase):
             client.close()
 
         self.assertEqual(route, "review_json")
-        self.assertEqual(routed[0]["model"], "MiniMax-M2.7")
+        self.assertEqual(routed["profiles"][0]["model"], "MiniMax-M2.7")
 
     def test_entity_admission_routes_as_review_json_for_minimax_fallback(self) -> None:
         client = LLMClient(
-            api_key="minimax-key",
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='minimax-key',
+                    base_url='https://api.minimaxi.com/v1',
+                    model='MiniMax-M2.7',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
         try:
@@ -1179,8 +930,7 @@ class LLMClientRetryTests(unittest.TestCase):
                 stage_key="entity_registrar",
                 response_format={"type": "json_object"},
             )
-            routed = client._route_profiles(
-                client._request_profiles(),
+            routed = client._route_profiles_with_metadata(
                 task_family="entity_admission",
                 stage_key="entity_registrar",
                 response_format={"type": "json_object"},
@@ -1189,184 +939,26 @@ class LLMClientRetryTests(unittest.TestCase):
             client.close()
 
         self.assertEqual(route, "review_json")
-        self.assertEqual(routed[0]["model"], "MiniMax-M2.7")
+        self.assertEqual(routed["profiles"][0]["model"], "MiniMax-M2.7")
 
-    def test_minimax_only_canon_route_fails_without_call(self) -> None:
-        client = LLMClient(
-            api_key="minimax-key",
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            retry_attempts=1,
-        )
-        try:
-            with self.assertRaises(RuntimeError):
-                client.chat(
-                    [{"role": "user", "content": "抽 canon"}],
-                    response_format={"type": "json_object"},
-                    task_family="writer",
-                    stage_key="chapter_delta_extraction",
-                )
-            attempts = client.drain_llm_attempt_events()
-        finally:
-            client.close()
-
-        self.assertEqual(attempts[0]["error_category"], "no_usable_profile")
-        self.assertEqual(attempts[0]["skipped_profiles"][0]["reason"], "route_not_allowed")
-
-    def test_primary_deepseek_is_honored_even_when_kimi_fallback_exists(self) -> None:
-        client = LLMClient(
-            api_key="deepseek-key",
-            base_url="https://api.deepseek.com/v1",
-            model="deepseek-chat",
-            retry_attempts=1,
-            fallback_profiles=[
-                {
-                    "id": "gemini",
-                    "name": "Gemini",
-                    "api_key": "gemini-key",
-                    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-                    "model": "gemini-2.5-pro",
-                },
-                {
-                    "id": "kimi",
-                    "name": "Kimi",
-                    "api_key": "kimi-key",
-                    "base_url": "https://api.moonshot.cn/v1",
-                    "model": "kimi-k2.5",
-                },
-            ],
-        )
-        calls: list[str] = []
-
-        def fake_post(url, **kwargs):  # noqa: ANN001
-            calls.append(kwargs["json"]["model"])
-            request = httpx.Request("POST", url)
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "{\"ok\": true}"}}]},
-                request=request,
-            )
-
-        try:
-            with patch.object(client.client, "post", side_effect=fake_post):
-                client.chat(
-                    [{"role": "user", "content": "规划"}],
-                    response_format={"type": "json_object"},
-                    task_family="planning",
-                    stage_key="chapter_plan",
-                )
-            attempts = client.drain_llm_attempt_events()
-        finally:
-            client.close()
-
-        self.assertEqual(calls, ["deepseek-chat"])
-        skipped = attempts[0]["skipped_profiles"]
-        self.assertIn("replaced_by_deepseek", [item["reason"] for item in skipped])
-
-    def test_primary_deepseek_excludes_kimi_fallback(self) -> None:
-        client = LLMClient(
-            api_key="deepseek-key",
-            base_url="https://api.deepseek.com/v1",
-            model="deepseek-chat",
-            retry_attempts=1,
-            fallback_profiles=[
-                {
-                    "id": "kimi",
-                    "name": "Kimi",
-                    "api_key": "kimi-key",
-                    "base_url": "https://api.moonshot.cn/v1",
-                    "model": "kimi-k2.5",
-                },
-            ],
-        )
-        try:
-            route_result = client._route_profiles_with_metadata(
-                client._request_profiles(),
-                response_format={"type": "json_object"},
-                task_family="planning",
-                stage_key="chapter_plan",
-            )
-        finally:
-            client.close()
-
-        self.assertEqual([profile["model"] for profile in route_result["profiles"]], ["deepseek-chat"])
-        self.assertEqual(route_result["skipped_profiles"][0]["reason"], "primary_deepseek_no_kimi_fallback")
-
-    def test_repair_route_can_prefer_deepseek_over_spark(self) -> None:
-        client = LLMClient(
-            api_key="kimi-key",
-            base_url="https://api.moonshot.cn/v1",
-            model="kimi-k2.5",
-            retry_attempts=1,
-            fallback_profiles=[
-                {
-                    "id": "spark",
-                    "name": "Codex Spark",
-                    "api_key": "spark-key",
-                    "base_url": "https://api.openai.com/v1",
-                    "model": "gpt-5.3-codex-spark",
-                },
-                {
-                    "id": "deepseek",
-                    "name": "DeepSeek",
-                    "api_key": "deepseek-key",
-                    "base_url": "https://api.deepseek.com/v1",
-                    "model": "deepseek-reasoner",
-                },
-            ],
-        )
-        try:
-            route_result = client._route_profiles_with_metadata(
-                client._request_profiles(),
-                task_family="writer",
-                stage_key="chapter_rewrite",
-                preferred_provider_kind="deepseek",
-                preferred_model="deepseek-reasoner",
-            )
-        finally:
-            client.close()
-
-        self.assertEqual(route_result["profiles"][0]["model"], "deepseek-reasoner")
-
-    def test_repair_route_can_prefer_codex_spark_for_final_attempt(self) -> None:
-        client = LLMClient(
-            api_key="deepseek-key",
-            base_url="https://api.deepseek.com/v1",
-            model="deepseek-reasoner",
-            retry_attempts=1,
-            fallback_profiles=[
-                {
-                    "id": "spark",
-                    "name": "Codex Spark",
-                    "api_key": "spark-key",
-                    "base_url": "https://api.openai.com/v1",
-                    "model": "gpt-5.3-codex-spark",
-                },
-            ],
-        )
-        try:
-            route_result = client._route_profiles_with_metadata(
-                client._request_profiles(),
-                task_family="writer",
-                stage_key="chapter_rewrite",
-                preferred_provider_kind="spark",
-                preferred_model="gpt-5.3-codex-spark",
-            )
-        finally:
-            client.close()
-
-        self.assertEqual(route_result["profiles"][0]["model"], "gpt-5.3-codex-spark")
 
     def test_deepseek_timeout_is_long_enough_for_generation_calls(self) -> None:
         client = LLMClient(
-            api_key="deepseek-key",
-            base_url="https://api.deepseek.com/v1",
-            model="deepseek-chat",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='deepseek-key',
+                    base_url='https://api.deepseek.com/v1',
+                    model='deepseek-chat',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
         try:
             timeout = client._effective_timeout_for_profile(
-                client._request_profiles()[0],
+                client._chain_profiles("default")[0][0],
                 httpx.Timeout(45.0, connect=10.0),
             )
         finally:
@@ -1376,14 +968,21 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_deepseek_generation_respects_explicit_scene_timeout(self) -> None:
         client = LLMClient(
-            api_key="deepseek-key",
-            base_url="https://api.deepseek.com/v1",
-            model="deepseek-chat",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='deepseek-key',
+                    base_url='https://api.deepseek.com/v1',
+                    model='deepseek-chat',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
         try:
             timeout = client._effective_timeout_for_profile(
-                client._request_profiles()[0],
+                client._chain_profiles("default")[0][0],
                 httpx.Timeout(45.0, connect=10.0),
                 explicit_timeout=True,
             )
@@ -1394,14 +993,21 @@ class LLMClientRetryTests(unittest.TestCase):
 
     def test_deepseek_review_json_respects_explicit_short_timeout(self) -> None:
         client = LLMClient(
-            api_key="deepseek-key",
-            base_url="https://api.deepseek.com/v1",
-            model="deepseek-chat",
+            profiles={
+                'primary': ModelProfileConfig(
+                    id='primary',
+                    name='Primary',
+                    api_key='deepseek-key',
+                    base_url='https://api.deepseek.com/v1',
+                    model='deepseek-chat',
+                ),
+            },
+            chains={"default": ('primary',)},
             retry_attempts=1,
         )
         try:
             timeout = client._effective_timeout_for_profile(
-                client._request_profiles()[0],
+                client._chain_profiles("default")[0][0],
                 httpx.Timeout(30.0, connect=10.0),
                 explicit_timeout=True,
             )
@@ -1409,58 +1015,6 @@ class LLMClientRetryTests(unittest.TestCase):
             client.close()
 
         self.assertEqual(timeout.read, 30.0)
-
-    def test_kimi_primary_keeps_deepseek_as_lower_priority_fallback(self) -> None:
-        client = LLMClient(
-            api_key="kimi-key",
-            base_url="https://api.moonshot.cn/v1",
-            model="kimi-k2.5",
-            retry_attempts=1,
-            fallback_profiles=[
-                {
-                    "id": "deepseek",
-                    "name": "DeepSeek",
-                    "api_key": "deepseek-key",
-                    "base_url": "https://api.deepseek.com/v1",
-                    "model": "deepseek-chat",
-                },
-                {
-                    "id": "gemini",
-                    "name": "Gemini",
-                    "api_key": "gemini-key",
-                    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-                    "model": "gemini-2.5-pro",
-                },
-            ],
-        )
-        calls: list[str] = []
-
-        def fake_post(url, **kwargs):  # noqa: ANN001
-            calls.append(kwargs["json"]["model"])
-            request = httpx.Request("POST", url)
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "{\"ok\": true}"}}]},
-                request=request,
-            )
-
-        try:
-            with patch.object(client.client, "post", side_effect=fake_post):
-                client.chat(
-                    [{"role": "user", "content": "规划"}],
-                    response_format={"type": "json_object"},
-                    task_family="planning",
-                    stage_key="chapter_plan",
-                )
-            attempts = client.drain_llm_attempt_events()
-        finally:
-            client.close()
-
-        self.assertEqual(calls, ["kimi-k2.5"])
-        skipped = attempts[0]["skipped_profiles"]
-        skipped_reasons = [item["reason"] for item in skipped]
-        self.assertNotIn("replaced_by_kimi", skipped_reasons)
-        self.assertIn("replaced_by_deepseek", skipped_reasons)
 
 
 def jsonable(value):  # noqa: ANN001

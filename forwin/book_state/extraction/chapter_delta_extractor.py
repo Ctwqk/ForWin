@@ -15,6 +15,7 @@ from forwin.book_state.story_clock import (
 from forwin.observability.llm_trace import (
     RAW_REQUEST_KEY, RAW_RESPONSE_KEY, mark_latest_attempt_parse_failure,
     mark_latest_attempt_workflow,
+    served_model_profile,
 )
 from forwin.models.project import ChapterPlan
 from forwin.skills import serialize_prompt_layers
@@ -290,9 +291,7 @@ class ChapterDeltaExtractor:
                 "plan_fingerprint": plan_fingerprint,
                 "stage_key": _STAGE_KEY, "selected_skills": [],
             },
-            "model_profile": {key: getattr(self.llm_client, key, "") for key in (
-                "profile_id", "profile_name", "model", "base_url",
-            )},
+            "model_profile": served_model_profile(attempts, llm_client=self.llm_client),
             "attempts": attempts,
             "output_summary": {
                 "extraction_ok": extraction is not None, "issues": [issue.model_dump() for issue in issues],

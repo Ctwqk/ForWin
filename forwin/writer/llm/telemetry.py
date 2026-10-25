@@ -7,11 +7,9 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .routing import _LLM_ROUTE_POLICY_VERSION
 
 logger = logging.getLogger(__name__)
-_RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
-_LLM_ROUTE_POLICY_VERSION = "v4.0-capable-provider-fallbacks"
-_ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
 
 
 class TelemetryMixin:
@@ -65,8 +63,6 @@ class TelemetryMixin:
         response_text: str = "",
         candidate_chain: list[dict[str, str]] | None = None,
         skipped_profiles: list[dict[str, str]] | None = None,
-        preferred_provider_kind: str = "",
-        preferred_model: str = "",
     ) -> None:
         base_url = str(profile.get("base_url") or "")
         request_text = json.dumps(
@@ -121,8 +117,6 @@ class TelemetryMixin:
                 "task_family": str(task_family or ""),
                 "stage_key": str(stage_key or ""),
                 "llm_task_route": str(llm_task_route or ""),
-                "preferred_provider_kind": str(preferred_provider_kind or ""),
-                "preferred_model": str(preferred_model or ""),
                 "retry_after": retry_after,
                 "sleep_ms": int(sleep_ms or 0),
                 "error_class": error_class,

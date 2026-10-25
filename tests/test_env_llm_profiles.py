@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from forwin.config import InfrastructureConfig
+from forwin.api_schema.policy import runtime_catalog
 from tests.http_runtime_harness import HttpRuntimeHarness
 
 
@@ -66,13 +67,50 @@ def test_runtime_catalog_is_read_only_and_secret_free() -> None:
 
     assert response.bootstrap_policy.quality_profile == "standard"
     profiles = {profile.id: profile for profile in response.model_profiles}
-    assert response.default_model_profile_id == "env-minimax"
-    assert set(profiles) == {"env-minimax", "env-kimi"}
+    assert response.default_model_profile_id == ""
+    assert set(profiles) == {"env-minimax", "env-kimi", "env-deepseek"}
+    assert profiles["env-deepseek"].has_api_key is False
     assert profiles["env-minimax"].has_api_key is True
     assert profiles["env-kimi"].has_api_key is True
     assert not hasattr(profiles["env-minimax"], "api_key")
     assert "secret-kimi-env" not in response.model_dump_json()
     assert "secret-minimax-env" not in response.model_dump_json()
+
+
+def test_runtime_catalog_lists_unconfigured_profiles_with_real_key_state():
+    catalog = runtime_catalog(InfrastructureConfig(minimax_api_key="   "))
+    assert {profile.id: profile.has_api_key for profile in catalog.model_profiles} == {
+        "env-deepseek": False, "env-kimi": False, "env-minimax": False,
+    }
+    assert all(profile.model and profile.base_url for profile in catalog.model_profiles)
+
+
+def test_minimax_profile_comes_only_from_minimax_fields(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text("MINIMAX_API_KEY=env-key\nMINIMAX_MODEL=env-model\n")
+    monkeypatch.setenv("FORWIN_ENV_FILE", str(env_path))
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_MODEL", raising=False)
+    config = InfrastructureConfig.from_env()
+    assert all(item["id"] != "env-minimax" for item in config.llm_env_profiles)
+    assert config.llm_profiles["env-minimax"].api_key == "env-key"
+    assert config.llm_profiles["env-minimax"].model == "env-model"
+    override = config.model_copy(update={"minimax_api_key": "override-key", "minimax_model": "override-model"})
+    assert override.llm_profiles["env-minimax"].api_key == "override-key"
+    assert override.llm_profiles["env-minimax"].model == "override-model"
+    assert "env-minimax" not in config.model_copy(update={"minimax_api_key": ""}).llm_profiles
+
+
+def test_keyed_registry_preserves_env_profile_insertion_order():
+    config = InfrastructureConfig(
+        minimax_api_key="minimax-key",
+        llm_env_profiles=[
+            {"id": f"env-{name}", "name": name, "api_key": "key",
+             "base_url": f"https://{name}.example/v1", "model": f"{name}-model"}
+            for name in ("kimi", "deepseek")
+        ],
+    )
+    assert list(config.llm_profiles) == ["env-kimi", "env-deepseek", "env-minimax"]
 
 
 def test_explicit_env_minimax_profile_resolves_to_environment_default() -> None:

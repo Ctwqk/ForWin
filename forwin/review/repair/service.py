@@ -781,10 +781,6 @@ def _run_repair_loop_for_phase(
 
         attempt_no = len(cycle_attempts) + 1
         phase_attempt_no = len(phase_attempts) + 1
-        repair_model_preference = {
-            "preferred_provider_kind": "",
-            "preferred_model": "",
-        }
         repair_instruction = (
             current_review.repair_instruction
             or _default_repair_instruction(
@@ -816,7 +812,6 @@ def _run_repair_loop_for_phase(
             payload={
                 "attempt_no": attempt_no,
                 "repair_scope": repair_scope,
-                **repair_model_preference,
             },
             parent_event_id=str(current_review_event.id or ""),
         )
@@ -840,11 +835,6 @@ def _run_repair_loop_for_phase(
         )
         if world_conflict_ids:
             design_patch = {**design_patch, "world_conflict_ids": list(world_conflict_ids)}
-        if any(repair_model_preference.values()):
-            design_patch = {
-                **design_patch,
-                "repair_model_preference": repair_model_preference,
-            }
         if failure_reason:
             attempt_row = updater.save_chapter_rewrite_attempt(
                 project_id=project_id,
@@ -889,7 +879,6 @@ def _run_repair_loop_for_phase(
                 payload={
                     "attempt_no": attempt_no,
                     "repair_scope": repair_scope,
-                    **repair_model_preference,
                 },
                 parent_event_id=str(repair_started_event.id or ""),
             )
@@ -953,10 +942,6 @@ def _run_repair_loop_for_phase(
                     paused_chapters=[],
                     frozen_artifacts=[],
                     trace_stage_key="chapter_rewrite",
-                    llm_preferred_provider_kind=repair_model_preference[
-                        "preferred_provider_kind"
-                    ],
-                    llm_preferred_model=repair_model_preference["preferred_model"],
                 )
                 if self._pause_requested():
                     session.commit()
@@ -1005,7 +990,6 @@ def _run_repair_loop_for_phase(
                     payload={
                         "attempt_no": attempt_no,
                         "repair_scope": repair_scope,
-                        **repair_model_preference,
                     },
                     parent_event_id=str(repair_started_event.id or ""),
                 )
@@ -1055,7 +1039,6 @@ def _run_repair_loop_for_phase(
                 payload={
                     "attempt_no": attempt_no,
                     "repair_scope": repair_scope,
-                    **repair_model_preference,
                 },
                 parent_event_id=str(repair_started_event.id or ""),
             )

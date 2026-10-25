@@ -427,10 +427,9 @@ def start_project_writing(
         if project_has_active_generation_task(project_id, session=session):
             raise HTTPException(409, generation_task_conflict_message(project_id))
         policy_record = ProjectPolicyStore(session).load(project)
-        model_profile = infrastructure.resolve_model_profile(
-            policy_record.policy.model_profile_id
-        )
-        if not model_profile.api_key and not infrastructure.codex_enabled:
+        from forwin.runtime.container import llm_configured
+
+        if not llm_configured(infrastructure, policy_record.policy):
             raise HTTPException(400, "所选模型 profile 未配置 API Key。")
         revision = active_genesis_revision(session, project)
         if revision is None:

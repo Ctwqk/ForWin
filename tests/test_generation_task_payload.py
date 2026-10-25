@@ -12,7 +12,7 @@ from forwin.generation.task_payload import (
     execution_payload,
     payload_from_json,
 )
-from forwin.runtime.policy import RuntimePolicy
+from forwin.runtime.policy import DEFAULT_LLM_CHAINS, RuntimePolicy
 
 
 ENV_PROFILE = {
@@ -59,9 +59,7 @@ def test_legacy_policy_snapshot_loads_world_and_models_defaults(profile, actor_t
 
     assert restored.policy_snapshot.world.conflict_delegate == "codex"
     assert restored.policy_snapshot.world.max_actor_turns_per_tick == actor_turns
-    assert restored.policy_snapshot.models.role_preferences == {
-        "review.world_conflict": ("gpt-6-luna",),
-    }
+    assert restored.policy_snapshot.models.chains == DEFAULT_LLM_CHAINS
 
 
 def test_worker_context_resolves_credentials_without_mutating_policy() -> None:

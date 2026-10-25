@@ -91,8 +91,7 @@ def _load_environment_profiles() -> list[EvalProfile]:
     config = InfrastructureConfig.from_env()
     profiles: list[EvalProfile] = []
     items = [
-        config.resolve_model_profile("").model_dump(mode="python"),
-        *config.llm_env_profiles,
+        *(profile.model_dump(mode="python") for profile in config.llm_profiles.values()),
     ]
     for index, item in enumerate(items):
         if not isinstance(item, dict):

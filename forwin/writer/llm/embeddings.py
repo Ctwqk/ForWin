@@ -5,9 +5,6 @@ import logging
 
 
 logger = logging.getLogger(__name__)
-_RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
-_LLM_ROUTE_POLICY_VERSION = "v4.0-capable-provider-fallbacks"
-_ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
 
 
 class EmbeddingsMixin:
@@ -15,20 +12,28 @@ class EmbeddingsMixin:
         self,
         inputs: list[str],
         *,
-        model: str,
+        model: str = "",
         dimensions: int | None = None,
     ) -> list[list[float]]:
+        # Retrieval settings win; otherwise use the first configured registry entry,
+        # independently of the chat pin and route order.
+        profile = next((p for p in self.profiles.values() if p.api_key and p.base_url), None)
+        base_url = self.embedding_base_url or (profile.base_url if profile else "")
+        api_key = self.embedding_api_key if self.embedding_base_url else (profile.api_key if profile else "")
+        embedding_model = model or self.embedding_model or (profile.model if profile else "")
+        if not base_url or not embedding_model:
+            raise RuntimeError("no configured embedding endpoint or model")
         payload: dict[str, object] = {
-            "model": model,
+            "model": embedding_model,
             "input": inputs,
         }
         if dimensions is not None:
             payload["dimensions"] = dimensions
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        url = f"{self.base_url}/embeddings"
+        url = f"{base_url.rstrip('/')}/embeddings"
         response = self.client.post(url, json=payload, headers=headers)
         response.raise_for_status()
         data = response.json()

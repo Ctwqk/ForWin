@@ -26,7 +26,7 @@ from forwin.generation.gate_delegation import (
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.planning.goals import load_goals_json
 from forwin.planning.query import PlanningQuery
-from forwin.runtime.policy import RuntimePolicy, role_models
+from forwin.runtime.policy import RuntimePolicy
 from forwin.writer.prompt_core.world_engine import (
     CHAPTER_CONFLICT_REVIEW_INSTRUCTIONS,
     CONFLICT_REVIEW_INSTRUCTIONS,
@@ -188,8 +188,7 @@ class WorldConflictDelegate:
     ) -> WorldConflictDelegation:
         """Codex's choice among the conflict's options; it escalates on any failure and on amend_plan."""
         options = tuple(json.loads(conflict.options_json or "[]"))
-        preferred = role_models(policy, WORLD_CONFLICT_STAGE_KEY)
-        requested_model = preferred[0] if preferred else WORLD_CONFLICT_DEFAULT_MODEL
+        requested_model = WORLD_CONFLICT_DEFAULT_MODEL
         envelope = CodexCallEnvelope(
             project_id=conflict.project_id,
             chapter_number=conflict.detected_after_chapter,

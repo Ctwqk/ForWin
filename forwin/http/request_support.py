@@ -85,9 +85,6 @@ def _build_genesis_service(
     model_profile_id: str = "",
 ) -> BookGenesisService:
     resolved = infrastructure or runtime.config or InfrastructureConfig(minimax_api_key="")
-    resolved_profile = resolved.resolve_model_profile(model_profile_id).model_dump(
-        mode="python"
-    )
     shared_container = (
         infrastructure is None
         and not model_profile_id
@@ -109,8 +106,6 @@ def _build_genesis_service(
     )
     setattr(service, "_forwin_runtime_owned", True)
     setattr(service, "_forwin_runtime_shared", bool(shared_container))
-    setattr(service.llm_client, "profile_id", resolved_profile.get("id", ""))
-    setattr(service.llm_client, "profile_name", resolved_profile.get("name", ""))
     return service
 
 

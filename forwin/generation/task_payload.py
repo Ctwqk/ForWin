@@ -32,7 +32,7 @@ class GenerationTaskExecutionPayload(BaseModel):
 class GenerationExecutionContext:
     infrastructure: InfrastructureConfig
     policy: RuntimePolicy
-    model_profile: ModelProfileConfig
+    model_profile: ModelProfileConfig | None
     task_id: str
     root_event_id: str
 
@@ -87,7 +87,7 @@ def build_execution_context(
     return GenerationExecutionContext(
         infrastructure=infrastructure,
         policy=policy,
-        model_profile=infrastructure.resolve_model_profile(policy.model_profile_id),
+        model_profile=infrastructure.llm_profiles.get(policy.model_profile_id),
         task_id=str(task_id or ""),
         root_event_id=str(payload.root_event_id or ""),
     )

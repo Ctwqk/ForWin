@@ -1,234 +1,53 @@
 from __future__ import annotations
 
-import logging
 from urllib.parse import urlparse
 
-from forwin.config import DEFAULT_CODEX_MODELS
-from forwin.llm.codex_models import is_codex_model
+from forwin.config import is_configured
 
-
-logger = logging.getLogger(__name__)
-_RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
-_LLM_ROUTE_POLICY_VERSION = "v4.0-capable-provider-fallbacks"
-_ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
+_LLM_ROUTE_POLICY_VERSION = "v5.0-policy-chains"
 
 
 class RoutingMixin:
-    def _request_profiles(self) -> list[dict[str, str]]:
-        candidates = [
-            {
-                "id": str(self.profile_id or ""),
-                "name": str(self.profile_name or ""),
-                "api_key": self.api_key,
-                "base_url": self.base_url,
-                "model": self.model,
-                "max_output_tokens": getattr(self, "max_output_tokens", ""),
-            }
-        ]
-        candidates.extend(self.fallback_profiles)
-        profiles: list[dict[str, str]] = []
-        seen: dict[tuple[str, str, str], int] = {}
-        for item in candidates:
-            profile = {
-                "id": str(item.get("id", "")).strip(),
-                "name": str(item.get("name", "")).strip(),
-                "api_key": str(item.get("api_key", "")).strip(),
-                "base_url": str(item.get("base_url", "")).strip().rstrip("/"),
-                "model": str(item.get("model", "")).strip(),
-            }
-            raw_max_output_tokens = item.get("max_output_tokens")
-            if raw_max_output_tokens is not None:
-                profile["max_output_tokens"] = str(raw_max_output_tokens).strip()
-            if not profile["api_key"] or not profile["base_url"] or not profile["model"]:
-                continue
-            key = (profile["api_key"], profile["base_url"], profile["model"])
-            if key in seen:
-                existing = profiles[seen[key]]
-                if not existing.get("id") and profile.get("id"):
-                    existing["id"] = profile["id"]
-                if not existing.get("name") and profile.get("name"):
-                    existing["name"] = profile["name"]
-                if (
-                    not existing.get("max_output_tokens")
-                    and profile.get("max_output_tokens")
-                ):
-                    existing["max_output_tokens"] = profile["max_output_tokens"]
-                continue
-            seen[key] = len(profiles)
-            profiles.append(profile)
-        return profiles
+    def _chain_profile_ids(self, route: str) -> list[str]:
+        chain = self.chains.get(route, self.chains.get("default", ()))
+        return list(dict.fromkeys(
+            profile_id for profile_id in (self.pinned_profile_id, *chain) if profile_id
+        ))
 
-    @classmethod
-    def _route_profiles(
-        cls,
-        profiles: list[dict[str, str]],
-        *,
-        task_family: str = "",
-        stage_key: str = "",
-        response_format: dict | None = None,
-        output_schema: dict | None = None,
-        preferred_provider_kind: str = "",
-        preferred_model: str = "",
-        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
-    ) -> list[dict[str, str]]:
-        return cls._route_profiles_with_metadata(
-            profiles,
-            task_family=task_family,
-            stage_key=stage_key,
-            response_format=response_format,
-            output_schema=output_schema,
-            preferred_provider_kind=preferred_provider_kind,
-            preferred_model=preferred_model,
-            codex_models=codex_models,
-        )["profiles"]
+    def _chain_profiles(self, route: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        profiles = []
+        skipped = []
+        for profile_id in self._chain_profile_ids(route):
+            profile = self.profiles.get(profile_id)
+            if not is_configured(profile):
+                skipped.append({"profile_id": profile_id, "reason": "profile_unconfigured"})
+                continue
+            profiles.append(profile.model_dump())
+        return profiles, skipped
 
-    @classmethod
     def _route_profiles_with_metadata(
-        cls,
-        profiles: list[dict[str, str]],
+        self,
         *,
         task_family: str = "",
         stage_key: str = "",
         response_format: dict | None = None,
         output_schema: dict | None = None,
-        preferred_provider_kind: str = "",
-        preferred_model: str = "",
-        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
     ) -> dict[str, list[dict[str, str]]]:
-        route = cls._llm_task_route(
-            task_family=task_family,
-            stage_key=stage_key,
-            response_format=response_format,
-            output_schema=output_schema,
+        route = self._llm_task_route(
+            task_family=task_family, stage_key=stage_key,
+            response_format=response_format, output_schema=output_schema,
         )
+        profiles, skipped = self._chain_profiles(route)
         candidate_chain = [
-            cls._profile_public_info(profile, codex_models=codex_models)
-            for profile in profiles
+            self._profile_public_info(self.profiles[profile_id].model_dump())
+            if profile_id in self.profiles else {"profile_id": profile_id}
+            for profile_id in self._chain_profile_ids(route)
         ]
-        skipped_profiles: list[dict[str, str]] = []
-        kinds = {
-            cls._profile_kind(profile, codex_models=codex_models)
-            for profile in profiles
-        }
-        has_kimi = "kimi" in kinds
-        primary_kind = (
-            cls._profile_kind(profiles[0], codex_models=codex_models) if profiles else ""
-        )
-        has_deepseek_or_kimi = has_kimi or "deepseek" in kinds
-        indexed = list(enumerate(profiles))
-        replacement_filtered: list[tuple[int, dict[str, str]]] = []
-        for index, profile in indexed:
-            kind = cls._profile_kind(profile, codex_models=codex_models)
-            reason = ""
-            if kind == "kimi" and primary_kind == "deepseek":
-                reason = "primary_deepseek_no_kimi_fallback"
-            elif kind == "gemini" and has_deepseek_or_kimi:
-                reason = "replaced_by_deepseek" if "deepseek" in kinds else "replaced_by_kimi"
-            if reason:
-                skipped_profiles.append(
-                    {
-                        **cls._profile_public_info(profile, codex_models=codex_models),
-                        "reason": reason,
-                        "llm_task_route": route,
-                    }
-                )
-                continue
-            replacement_filtered.append((index, profile))
-        suitable = [
-            (index, profile)
-            for index, profile in replacement_filtered
-            if cls._profile_suitable_for_route(profile, route, codex_models=codex_models)
-        ]
-        for index, profile in replacement_filtered:
-            if (index, profile) not in suitable:
-                skipped_profiles.append(
-                    {
-                        **cls._profile_public_info(profile, codex_models=codex_models),
-                        "reason": "route_not_allowed",
-                        "llm_task_route": route,
-                    }
-                )
-        routed = suitable
-        preferred_kind = str(preferred_provider_kind or "").strip().lower()
-        preferred_model_text = str(preferred_model or "").strip().lower()
-        if preferred_kind or preferred_model_text:
-            preferred = [
-                item
-                for item in routed
-                if cls._profile_preference_rank(
-                    item[1],
-                    preferred_provider_kind=preferred_kind,
-                    preferred_model=preferred_model_text,
-                    codex_models=codex_models,
-                )
-                < 99
-            ]
-            if preferred:
-                routed.sort(
-                    key=lambda item: (
-                        cls._profile_preference_rank(
-                            item[1],
-                            preferred_provider_kind=preferred_kind,
-                            preferred_model=preferred_model_text,
-                            codex_models=codex_models,
-                        ),
-                        cls._profile_route_priority(
-                            item[1], route, codex_models=codex_models,
-                        ),
-                        item[0],
-                    )
-                )
-                return {
-                    "profiles": [profile for _index, profile in routed],
-                    "candidate_chain": candidate_chain,
-                    "skipped_profiles": skipped_profiles,
-                }
-        primary = (
-            next((item for item in routed if item[0] == 0), None)
-            if primary_kind == "deepseek"
-            else None
-        )
-        if primary is not None:
-            rest = [item for item in routed if item[0] != 0]
-            rest.sort(
-                key=lambda item: (
-                    cls._profile_route_priority(item[1], route, codex_models=codex_models),
-                    item[0],
-                )
-            )
-            routed = [primary, *rest]
-        else:
-            routed.sort(
-                key=lambda item: (
-                    cls._profile_route_priority(item[1], route, codex_models=codex_models),
-                    item[0],
-                )
-            )
         return {
-            "profiles": [profile for _index, profile in routed],
+            "profiles": profiles,
             "candidate_chain": candidate_chain,
-            "skipped_profiles": skipped_profiles,
+            "skipped_profiles": skipped,
         }
-
-    @classmethod
-    def _profile_preference_rank(
-        cls,
-        profile: dict[str, str],
-        *,
-        preferred_provider_kind: str = "",
-        preferred_model: str = "",
-        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
-    ) -> int:
-        model = str(profile.get("model") or "").strip().lower()
-        kind = cls._profile_kind(profile, codex_models=codex_models)
-        if preferred_model:
-            if model == preferred_model:
-                return 0
-            if preferred_model in model or model in preferred_model:
-                return 1
-        if preferred_provider_kind and kind == preferred_provider_kind:
-            return 2
-        return 99
 
     @classmethod
     def _llm_task_route(
@@ -288,129 +107,10 @@ class RoutingMixin:
             return "planning_json_general"
         return "general"
 
-    @classmethod
-    def _profile_suitable_for_route(
-        cls,
-        profile: dict[str, str],
-        route: str,
-        *,
-        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
-    ) -> bool:
-        kind = cls._profile_kind(profile, codex_models=codex_models)
-        if kind == "gemini":
-            return False
-        if kind == "minimax" and route in {
-            "prose_generation",
-            "repair_generation",
-            "canon_extraction",
-            "planning_json_general",
-            "general",
-        }:
-            return False
-        return True
-
-    @classmethod
-    def _profile_route_priority(
-        cls,
-        profile: dict[str, str],
-        route: str,
-        *,
-        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
-    ) -> int:
-        kind = cls._profile_kind(profile, codex_models=codex_models)
-        priorities = {
-            "prose_generation": {
-                "spark": 0,
-                "kimi": 1,
-                "openai": 2,
-                "other": 3,
-                "minimax": 99,
-            },
-            "repair_generation": {
-                "spark": 0,
-                "kimi": 1,
-                "openai": 2,
-                "other": 3,
-                "minimax": 99,
-            },
-            "canon_extraction": {
-                "spark": 0,
-                "kimi": 1,
-                "openai": 2,
-                "deepseek": 3,
-                "other": 4,
-                "minimax": 99,
-            },
-            "writer_preview": {
-                "spark": 0,
-                "kimi": 1,
-                "openai": 2,
-                "deepseek": 3,
-                "minimax": 4,
-                "other": 5,
-            },
-            "planning_json_low_risk": {
-                "spark": 0,
-                "kimi": 1,
-                "minimax": 2,
-                "openai": 3,
-                "deepseek": 4,
-                "other": 5,
-            },
-            "planning_json_general": {
-                "spark": 0,
-                "kimi": 1,
-                "openai": 2,
-                "deepseek": 3,
-                "other": 4,
-                "minimax": 99,
-            },
-            "planning_prose": {
-                "spark": 0,
-                "kimi": 1,
-                "openai": 2,
-                "deepseek": 3,
-                "other": 4,
-                "minimax": 99,
-            },
-            "review_json": {
-                "spark": 0,
-                "kimi": 1,
-                "minimax": 2,
-                "openai": 3,
-                "deepseek": 4,
-                "other": 5,
-            },
-            "feedback_analysis": {
-                "spark": 0,
-                "kimi": 1,
-                "minimax": 2,
-                "openai": 3,
-                "deepseek": 4,
-                "other": 5,
-            },
-        }
-        route_priorities = priorities.get(
-            route,
-            {
-                "spark": 0,
-                "kimi": 1,
-                "openai": 2,
-                "deepseek": 3,
-                "other": 4,
-                "minimax": 99,
-            },
-        )
-        return int(route_priorities.get(kind, route_priorities.get("other", 50)))
-
     @staticmethod
     def _profile_kind(
         profile: dict[str, str],
-        *,
-        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
     ) -> str:
-        if is_codex_model(str(profile.get("model") or ""), codex_models):
-            return "spark"
         text = " ".join(
             str(profile.get(key) or "").strip().lower()
             for key in ("id", "name", "base_url", "model")
@@ -431,8 +131,6 @@ class RoutingMixin:
     def _profile_public_info(
         cls,
         profile: dict[str, str],
-        *,
-        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
     ) -> dict[str, str]:
         base_url = str(profile.get("base_url") or "")
         return {
@@ -440,7 +138,7 @@ class RoutingMixin:
             "profile_name": str(profile.get("name") or ""),
             "model": str(profile.get("model") or ""),
             "base_url_host": urlparse(base_url).netloc or base_url,
-            "provider_kind": cls._profile_kind(profile, codex_models=codex_models),
+            "provider_kind": cls._profile_kind(profile),
         }
 
 

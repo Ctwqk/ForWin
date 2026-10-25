@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 QualityProfile = Literal["standard", "pulp"]
 GateDelegate = Literal["human", "spark"]
@@ -38,7 +40,6 @@ class ReviewPolicy(FrozenPolicyModel):
     repair_scopes: tuple[str, ...]
     max_rewrites: int = Field(ge=0, le=12)
     blocking_rewrites: int = Field(default=0, ge=0, le=12)
-    repair_models: tuple[str, ...]
     # Share of the shortest travel time a claimed movement may undercut before it is an error.
     travel_tolerance: float = Field(default=0.2, ge=0.0, le=1.0)
 
@@ -125,11 +126,42 @@ class WorldPolicy(FrozenPolicyModel):
         return cls()
 
 
+DEFAULT_LLM_CHAINS: dict[str, tuple[str, ...]] = {
+    "review_json": ("env-deepseek", "env-kimi", "env-minimax"),
+    "feedback_analysis": ("env-deepseek", "env-kimi", "env-minimax"),
+    "planning_json_low_risk": ("env-deepseek", "env-kimi", "env-minimax"),
+    "planning_prose": ("env-deepseek", "env-kimi", "env-minimax"),
+    "canon_extraction": ("env-deepseek", "env-kimi"),
+    "planning_json_general": ("env-deepseek", "env-kimi"),
+    "general": ("env-deepseek", "env-kimi"),
+    "default": ("env-deepseek", "env-kimi"),
+    "prose_generation": ("env-kimi", "env-deepseek"),
+    "repair_generation": ("env-kimi", "env-deepseek"),
+    "writer_preview": ("env-kimi", "env-deepseek", "env-minimax"),
+}
+
+
 class ModelsPolicy(FrozenPolicyModel):
-    # The dict field makes RuntimePolicy unhashable despite the frozen models.
-    role_preferences: dict[str, tuple[str, ...]] = Field(
-        default_factory=lambda: {"review.world_conflict": ("gpt-6-luna",)}
+    chains: Mapping[str, tuple[str, ...]] = Field(
+        default_factory=lambda: dict(DEFAULT_LLM_CHAINS), validate_default=True,
     )
+
+    @field_validator("chains")
+    @classmethod
+    def validate_chains(cls, chains: Mapping[str, tuple[str, ...]]) -> Mapping[str, tuple[str, ...]]:
+        if "default" not in chains:
+            raise ValueError("LLM chains must include a default route")
+        unknown = chains.keys() - DEFAULT_LLM_CHAINS.keys()
+        if unknown:
+            raise ValueError(f"Unknown LLM routes: {', '.join(sorted(unknown))}")
+        for route, chain in chains.items():
+            if not chain or any(not profile_id.strip() for profile_id in chain):
+                raise ValueError(f"LLM chain {route} must contain non-empty profile ids")
+        return MappingProxyType(dict(chains))
+
+    @field_serializer("chains")
+    def serialize_chains(self, chains: Mapping[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
+        return dict(chains)
 
 
 class RuntimePolicy(FrozenPolicyModel):
@@ -190,7 +222,6 @@ class RuntimePolicy(FrozenPolicyModel):
                     repair_scopes=(),
                     max_rewrites=0,
                     blocking_rewrites=1,
-                    repair_models=(),
                 ),
                 planning=PlanningPolicy.for_profile(profile),
                 canon=CanonPolicy(quality_gate="pulp_fatal"),
@@ -206,7 +237,6 @@ class RuntimePolicy(FrozenPolicyModel):
                 signals=("experience", "lint", "world_consistency", "personality", "canon_quality", "publisher"),
                 repair_scopes=("local", "chapter", "band", "arc", "book", "obligation"),
                 max_rewrites=3,
-                repair_models=("deepseek-reasoner", "deepseek-reasoner", "gpt-5.3-codex-spark"),
             ),
             planning=PlanningPolicy.for_profile(profile),
             canon=CanonPolicy(),
@@ -280,6 +310,3 @@ class RuntimePolicy(FrozenPolicyModel):
             }
         )
 
-
-def role_models(policy: RuntimePolicy, role: str) -> tuple[str, ...]:
-    return policy.models.role_preferences.get(role, ())

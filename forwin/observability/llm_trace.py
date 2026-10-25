@@ -67,6 +67,36 @@ _SAFE_PROMPT_ATTEMPT_KEYS = frozenset(
 )
 
 
+def served_model_profile(
+    attempts: list[dict[str, object]] | None = None,
+    *,
+    llm_client: object | None = None,
+) -> dict[str, str]:
+    """Identify the last served (or failed) attempt, never the configured pin.
+
+    Callers that drain telemetry must pass that call's attempts explicitly.
+    A pre-call/scaffold trace has no served model and returns an empty mapping.
+    """
+    if attempts is None:
+        attempts = getattr(llm_client, "llm_attempt_events", [])
+    if not isinstance(attempts, (list, tuple)):
+        return {}
+    for attempt in reversed(attempts):
+        if not isinstance(attempt, dict) or not (attempt.get("profile_id") or attempt.get("model")):
+            continue
+        identity = {
+            key: str(attempt[key]) for key in (
+                "profile_id", "profile_name", "model", "base_url_host", "provider", "provider_kind",
+            ) if attempt.get(key)
+        }
+        profiles = getattr(llm_client, "profiles", {})
+        profile = profiles.get(identity.get("profile_id", ""))
+        if profile is not None:
+            identity["base_url"] = profile.base_url
+        return identity
+    return {}
+
+
 def safe_prompt_trace_attempts(
     attempts: list[dict[str, object]],
     *,

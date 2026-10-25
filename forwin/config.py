@@ -62,6 +62,12 @@ class ModelProfileConfig(BaseModel):
     max_output_tokens: str = ""
 
 
+def is_configured(profile: ModelProfileConfig | None) -> bool:
+    return profile is not None and all(
+        getattr(profile, field).strip() for field in ("api_key", "base_url", "model")
+    )
+
+
 try:
     from pydantic_settings import BaseSettings as _ConfigBaseModel
 
@@ -488,25 +494,43 @@ class InfrastructureConfig(_InfrastructureFields, _ConfigBaseModel):  # type: ig
                 "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED=true"
             )
 
-    def resolve_model_profile(self, profile_id: str) -> ModelProfileConfig:
-        requested = str(profile_id or "").strip()
-        default_profile = ModelProfileConfig(
-            id="env-minimax",
-            name="MiniMax (.env)",
-            api_key=self.minimax_api_key,
-            base_url=self.minimax_base_url,
+    @property
+    def known_llm_profiles(self) -> dict[str, ModelProfileConfig]:
+        """Catalog includes unkeyed profiles; MiniMax has one source of truth."""
+        profiles = {
+            item["id"]: ModelProfileConfig.model_validate(item)
+            for item in self.llm_env_profiles if item["id"] != "env-minimax"
+        }
+        for profile_id, name, base_url, model in (
+            ("env-deepseek", "DeepSeek (.env)", DEFAULT_DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL),
+            ("env-kimi", "Kimi (.env)", DEFAULT_MOONSHOT_BASE_URL, DEFAULT_MOONSHOT_MODEL),
+        ):
+            profiles.setdefault(profile_id, ModelProfileConfig(
+                id=profile_id, name=name, api_key="", base_url=base_url, model=model,
+            ))
+        profiles["env-minimax"] = ModelProfileConfig(
+            id="env-minimax", name="MiniMax (.env)",
+            api_key=self.minimax_api_key, base_url=self.minimax_base_url,
             model=self.minimax_model,
             max_output_tokens=self.minimax_max_output_tokens,
         )
-        profiles = [
-            ModelProfileConfig.model_validate(item) for item in self.llm_env_profiles
-        ]
-        if not requested or requested == default_profile.id:
-            return default_profile
-        for profile in profiles:
-            if profile.id == requested:
-                return profile
-        raise ValueError(f"Unknown model profile: {requested}")
+        return profiles
+
+    @property
+    def llm_profiles(self) -> dict[str, ModelProfileConfig]:
+        return {
+            profile_id: profile for profile_id, profile in self.known_llm_profiles.items()
+            if profile.api_key.strip()
+        }
+
+    def resolve_model_profile(self, profile_id: str) -> ModelProfileConfig | None:
+        requested = str(profile_id or "").strip()
+        if not requested:
+            return None
+        profile = self.llm_profiles.get(requested)
+        if profile is None:
+            raise ValueError(f"Unknown model profile: {requested}")
+        return profile
 
     def writer_profile(self, policy: RuntimePolicy) -> WriterProfile:
         lengths = policy.chapter_length

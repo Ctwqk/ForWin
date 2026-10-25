@@ -592,8 +592,6 @@ class RoutedModelAdapter:
                 response_format=response_format,
                 timeout_seconds=timeout_seconds,
                 retry_on_timeout=retry_on_timeout,
-                preferred_provider_kind=preferred_provider_kind,
-                preferred_model=preferred_model,
             )
         finally:
             self.last_call_result = self.router.last_call_result

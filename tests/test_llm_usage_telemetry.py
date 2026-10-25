@@ -9,6 +9,8 @@ from unittest.mock import patch
 import httpx
 import pytest
 
+from forwin.config import ModelProfileConfig
+from forwin.writer.llm.errors import EmptyLLMResponse
 from forwin.llm.codex_client import CodexBridgeClient
 from forwin.llm.router import LLMCallIntent, LLMCallRouter, RoutedModelAdapter
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
@@ -102,9 +104,11 @@ class _BridgeHTTPClient:
 
 def _provider_attempt(response_payload: dict[str, object]) -> dict[str, object]:
     client = LLMClient(
-        api_key="test-key",
-        base_url="https://provider.example/v1",
-        model="provider-model",
+        profiles={"provider": ModelProfileConfig(
+            id="provider", name="Provider", api_key="test-key",
+            base_url="https://provider.example/v1", model="provider-model",
+        )},
+        chains={"default": ("provider",)},
         retry_attempts=1,
     )
 
@@ -175,11 +179,13 @@ def test_openai_compatible_attempt_marks_missing_provider_usage() -> None:
     assert attempt["usage_source"] == "missing"
 
 
-def test_openai_compatible_parse_failure_still_records_provider_usage() -> None:
+def test_openai_compatible_empty_response_still_records_provider_usage() -> None:
     client = LLMClient(
-        api_key="test-key",
-        base_url="https://provider.example/v1",
-        model="provider-model",
+        profiles={"provider": ModelProfileConfig(
+            id="provider", name="Provider", api_key="test-key",
+            base_url="https://provider.example/v1", model="provider-model",
+        )},
+        chains={"default": ("provider",)},
         retry_attempts=1,
     )
 
@@ -199,7 +205,7 @@ def test_openai_compatible_parse_failure_still_records_provider_usage() -> None:
 
     try:
         with patch.object(client.client, "post", side_effect=fake_post):
-            with pytest.raises(IndexError):
+            with pytest.raises(EmptyLLMResponse):
                 client.chat([{"role": "user", "content": "hello"}])
         attempt = client.drain_llm_attempt_events()[0]
     finally:

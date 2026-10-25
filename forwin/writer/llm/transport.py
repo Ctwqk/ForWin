@@ -9,9 +9,6 @@ import httpx
 
 
 logger = logging.getLogger(__name__)
-_RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
-_LLM_ROUTE_POLICY_VERSION = "v4.0-capable-provider-fallbacks"
-_ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
 
 
 class TransportMixin:

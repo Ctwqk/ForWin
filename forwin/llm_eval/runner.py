@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 import httpx
 
-from forwin.config import InfrastructureConfig
+from forwin.config import InfrastructureConfig, ModelProfileConfig
 from forwin.codex_bridge.runner import CodexExecRequest, CodexExecResult, CodexExecRunner
 from forwin.genesis import BookGenesisService
 from forwin.genesis.constants import GENESIS_STAGE_ORDER
@@ -331,19 +331,16 @@ class LLMReliabilityRunner:
 
     @staticmethod
     def _default_adapter_factory(profile: EvalProfile) -> Any:
-        if _is_codex_profile(profile):
-            return CodexCliEvalAdapter(profile)  # type: ignore[return-value]
         adapter = OpenAICompatibleAdapter(
-            api_key=profile.api_key,
-            base_url=profile.base_url,
-            model=profile.model,
+            profiles={profile.id: ModelProfileConfig(
+                id=profile.id, name=profile.name, api_key=profile.api_key,
+                base_url=profile.base_url, model=profile.model,
+                max_output_tokens=profile.max_output_tokens,
+            )},
+            chains={"default": (profile.id,)},
             timeout_seconds=profile.timeout_seconds,
             retry_attempts=1,
-            fallback_profiles=[],
-            max_output_tokens=profile.max_output_tokens,
         )
-        adapter.profile_id = profile.id
-        adapter.profile_name = profile.name
         return adapter
 
     def run(self, *, profiles: list[EvalProfile], cases: list[EvalCase]) -> dict[str, Any]:

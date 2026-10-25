@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 import logging
 import threading
 import time
@@ -7,23 +9,22 @@ import uuid
 
 import httpx
 
-from forwin.config import (
-    DEFAULT_CODEX_MODELS,
-    DEFAULT_MINIMAX_BASE_URL,
-    DEFAULT_MINIMAX_MODEL,
-)
+from forwin.config import ModelProfileConfig
 from forwin.model_adapter import ModelCapabilities
 from .embeddings import EmbeddingsMixin
-from .errors import ErrorsMixin
+from .errors import (
+    EmptyLLMResponse,
+    ErrorsMixin,
+    _ATTEMPT_RECORDED_ATTR,
+    _PARSE_ERROR_ATTR,
+    _RETRYABLE_HTTP_STATUS_CODES,
+)
 from .profile_options import ProfileOptionsMixin
 from .routing import RoutingMixin
 from .telemetry import TelemetryMixin
 from .transport import TransportMixin
 
 logger = logging.getLogger(__name__)
-_RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
-_LLM_ROUTE_POLICY_VERSION = "v4.0-capable-provider-fallbacks"
-_ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
 
 
 def _provider_token_usage(
@@ -64,6 +65,13 @@ def _provider_token_usage(
     return prompt_tokens, completion_tokens, total_tokens, source
 
 
+@dataclass(frozen=True)
+class LLMChatResult:
+    content: str
+    profile_id: str
+    model: str
+
+
 class OpenAICompatibleAdapter(
     TransportMixin,
     TelemetryMixin,
@@ -76,25 +84,30 @@ class OpenAICompatibleAdapter(
 
     def __init__(
         self,
-        api_key: str,
-        base_url: str = DEFAULT_MINIMAX_BASE_URL,
-        model: str = DEFAULT_MINIMAX_MODEL,
+        profiles: Mapping[str, ModelProfileConfig],
+        chains: Mapping[str, tuple[str, ...]],
+        pinned_profile_id: str = "",
+        *,
         timeout_seconds: float = 90.0,
         retry_attempts: int = 2,
         retry_initial_delay_seconds: float = 2.0,
         retry_max_delay_seconds: float = 15.0,
-        fallback_profiles: list[dict[str, str]] | None = None,
-        max_output_tokens: str = "",
-        codex_models: tuple[str, ...] = DEFAULT_CODEX_MODELS,
+        embedding_api_key: str = "",
+        embedding_base_url: str = "",
+        embedding_model: str = "",
     ) -> None:
         self.provider = "openai_compatible"
-        self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
-        self.model = model
-        self.codex_models = tuple(codex_models)
-        self.profile_id = ""
-        self.profile_name = ""
-        self.max_output_tokens = str(max_output_tokens or "").strip()
+        self.profiles = dict(profiles)
+        self.chains = {route: tuple(chain) for route, chain in chains.items()}
+        self.pinned_profile_id = str(pinned_profile_id or "").strip()
+        self.profile_id = self.pinned_profile_id
+        pinned = self.profiles.get(self.pinned_profile_id)
+        self.profile_name = pinned.name if pinned else ""
+        self.model = pinned.model if pinned else ""
+        self.base_url = pinned.base_url if pinned else ""
+        self.embedding_api_key = embedding_api_key
+        self.embedding_base_url = embedding_base_url.rstrip("/")
+        self.embedding_model = embedding_model
         self.capabilities = ModelCapabilities(
             supports_json_schema=False,
             supports_response_format=True,
@@ -108,7 +121,6 @@ class OpenAICompatibleAdapter(
             self.retry_initial_delay_seconds,
             float(retry_max_delay_seconds),
         )
-        self.fallback_profiles = list(fallback_profiles or [])
         self.model_fallback_events: list[dict[str, str]] = []
         self.llm_attempt_events: list[dict[str, object]] = []
         self._client_lock = threading.Lock()
@@ -125,15 +137,31 @@ class OpenAICompatibleAdapter(
         task_family: str = "",
         stage_key: str = "",
         output_schema: dict | None = None,
-        preferred_provider_kind: str = "",
-        preferred_model: str = "",
     ) -> str:
-        """Send a chat completion request and return the content string.
+        return self.chat_with_meta(
+            messages, temperature=temperature, max_tokens=max_tokens,
+            response_format=response_format, timeout_seconds=timeout_seconds,
+            retry_on_timeout=retry_on_timeout, task_family=task_family,
+            stage_key=stage_key, output_schema=output_schema,
+        ).content
 
-        Retry policy:
-        - 429/5xx/529 and other transient HTTP statuses: retry with bounded backoff.
-        - ReadTimeout / TimeoutException: retry with bounded backoff when retry_on_timeout is true.
-        - Any other HTTP error: raise immediately.
+    def chat_with_meta(
+        self,
+        messages: list[dict],
+        temperature: float = 0.85,
+        max_tokens: int = 16384,
+        response_format: dict | None = None,
+        timeout_seconds: float | None = None,
+        retry_on_timeout: bool = True,
+        task_family: str = "",
+        stage_key: str = "",
+        output_schema: dict | None = None,
+    ) -> LLMChatResult:
+        """Return the completion and the winning profile from the configured chain.
+
+        Transient failures retry within a profile before falling back. Authentication,
+        balance, missing-model and empty-response failures advance immediately.
+        Other HTTP and response parsing failures propagate to the caller.
         """
         request_timeout = httpx.Timeout(
             max(
@@ -165,14 +193,10 @@ class OpenAICompatibleAdapter(
             output_schema=output_schema,
         )
         route_result = self._route_profiles_with_metadata(
-            self._request_profiles(),
             task_family=task_family,
             stage_key=stage_key,
             response_format=response_format,
             output_schema=output_schema,
-            preferred_provider_kind=preferred_provider_kind,
-            preferred_model=preferred_model,
-            codex_models=self.codex_models,
         )
         profiles = route_result["profiles"]
         candidate_chain = route_result["candidate_chain"]
@@ -188,7 +212,7 @@ class OpenAICompatibleAdapter(
                 request_timeout=request_timeout,
                 attempt_no=0,
                 error_class="NoUsableLLMProfile",
-                error_message="no usable LLM profile after route policy filtering",
+                error_message=f"no configured LLM profile for route {llm_task_route}",
                 error_category="no_usable_profile",
                 retryable=False,
                 fallback_eligible=False,
@@ -206,14 +230,12 @@ class OpenAICompatibleAdapter(
                 },
                 candidate_chain=candidate_chain,
                 skipped_profiles=skipped_profiles,
-                preferred_provider_kind=preferred_provider_kind,
-                preferred_model=preferred_model,
             )
-            raise RuntimeError("OpenAICompatibleAdapter.chat: no usable LLM profile")
+            raise RuntimeError(f"no configured LLM profile for route {llm_task_route}")
         last_exc: Exception | None = None
         for profile_index, profile in enumerate(profiles):
             try:
-                return self._chat_with_profile(
+                content = self._chat_with_profile(
                     profile,
                     messages=messages,
                     temperature=temperature,
@@ -230,9 +252,8 @@ class OpenAICompatibleAdapter(
                     < len(profiles) - 1,
                     candidate_chain=candidate_chain,
                     skipped_profiles=skipped_profiles,
-                    preferred_provider_kind=preferred_provider_kind,
-                    preferred_model=preferred_model,
                 )
+                return LLMChatResult(content, profile["id"], profile["model"])
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 if (
@@ -271,7 +292,7 @@ class OpenAICompatibleAdapter(
 
         if last_exc is not None:
             raise last_exc
-        raise RuntimeError("OpenAICompatibleAdapter.chat: no usable LLM profile")
+        raise RuntimeError(f"no configured LLM profile for route {llm_task_route}")
 
     def _chat_with_profile(
         self,
@@ -291,21 +312,17 @@ class OpenAICompatibleAdapter(
         fallback_eligible_on_profile_failure: bool,
         candidate_chain: list[dict[str, str]],
         skipped_profiles: list[dict[str, str]],
-        preferred_provider_kind: str = "",
-        preferred_model: str = "",
     ) -> str:
         requested_temperature = float(temperature)
         effective_temperature = self._effective_temperature_for_profile(
             profile,
             requested_temperature,
-            codex_models=self.codex_models,
         )
         send_temperature = self._should_send_temperature(profile)
         requested_max_tokens = int(max_tokens)
         effective_max_tokens = self._effective_max_tokens_for_profile(
             profile,
             requested_max_tokens,
-            codex_models=self.codex_models,
         )
         effective_request_timeout = self._effective_timeout_for_profile(
             profile,
@@ -315,17 +332,16 @@ class OpenAICompatibleAdapter(
         effective_response_format = self._effective_response_format_for_profile(
             profile,
             response_format,
-            codex_models=self.codex_models,
         )
         effective_messages = self._effective_messages_for_profile(
-            profile, messages, codex_models=self.codex_models,
+            profile, messages,
         )
         payload = {
             "model": profile["model"],
             "messages": effective_messages,
         }
         max_tokens_key = self._max_tokens_payload_key_for_profile(
-            profile, codex_models=self.codex_models,
+            profile,
         )
         payload[max_tokens_key] = effective_max_tokens
         if send_temperature:
@@ -407,8 +423,6 @@ class OpenAICompatibleAdapter(
                         response_text=self._safe_response_text(response),
                         candidate_chain=candidate_chain,
                         skipped_profiles=skipped_profiles,
-                        preferred_provider_kind=preferred_provider_kind,
-                        preferred_model=preferred_model,
                     )
                     if attempt < self.retry_attempts - 1:
                         logger.warning(
@@ -437,7 +451,13 @@ class OpenAICompatibleAdapter(
                         total_tokens,
                         usage_source,
                     ) = _provider_token_usage(data)
-                    content: str = data["choices"][0]["message"]["content"]
+                    choices = data.get("choices") or []
+                    message = choices[0].get("message") or {} if choices else {}
+                    content = message.get("content")
+                    if content is None or (isinstance(content, str) and not content.strip()):
+                        raise EmptyLLMResponse("empty LLM completion")
+                    if not isinstance(content, str):
+                        raise ValueError("LLM completion content must be a string")
                 except Exception as exc:  # noqa: BLE001
                     self._record_llm_attempt(
                         attempt_group_id=attempt_group_id,
@@ -460,9 +480,9 @@ class OpenAICompatibleAdapter(
                         output_chars=len(response_text),
                         error_class=exc.__class__.__name__,
                         error_message=str(exc),
-                        error_category="parse_error",
-                        retryable=False,
-                        fallback_eligible=False,
+                        error_category="empty_response" if isinstance(exc, EmptyLLMResponse) else "parse_error",
+                        retryable=isinstance(exc, EmptyLLMResponse),
+                        fallback_eligible=(fallback_eligible_on_profile_failure and isinstance(exc, EmptyLLMResponse)),
                         final_failure=True,
                         requested_temperature=requested_temperature,
                         requested_max_tokens=requested_max_tokens,
@@ -473,10 +493,9 @@ class OpenAICompatibleAdapter(
                         response_text=response_text,
                         candidate_chain=candidate_chain,
                         skipped_profiles=skipped_profiles,
-                        preferred_provider_kind=preferred_provider_kind,
-                        preferred_model=preferred_model,
                     )
                     setattr(exc, _ATTEMPT_RECORDED_ATTR, True)
+                    setattr(exc, _PARSE_ERROR_ATTR, not isinstance(exc, EmptyLLMResponse))
                     raise
                 self._record_llm_attempt(
                     attempt_group_id=attempt_group_id,
@@ -506,8 +525,6 @@ class OpenAICompatibleAdapter(
                     response_text=response_text,
                     candidate_chain=candidate_chain,
                     skipped_profiles=skipped_profiles,
-                    preferred_provider_kind=preferred_provider_kind,
-                    preferred_model=preferred_model,
                 )
                 logger.debug(
                     "LLMClient.chat success: %d chars returned in %.2fs",
@@ -549,8 +566,6 @@ class OpenAICompatibleAdapter(
                     request_payload=payload,
                     candidate_chain=candidate_chain,
                     skipped_profiles=skipped_profiles,
-                    preferred_provider_kind=preferred_provider_kind,
-                    preferred_model=preferred_model,
                 )
                 if retry_on_timeout and attempt < self.retry_attempts - 1:
                     delay = self._retry_delay(attempt)
@@ -617,8 +632,6 @@ class OpenAICompatibleAdapter(
                     ),
                     candidate_chain=candidate_chain,
                     skipped_profiles=skipped_profiles,
-                    preferred_provider_kind=preferred_provider_kind,
-                    preferred_model=preferred_model,
                 )
                 raise
 
@@ -632,4 +645,4 @@ class LLMClient(OpenAICompatibleAdapter):
     pass
 
 
-__all__ = ["OpenAICompatibleAdapter", "LLMClient"]
+__all__ = ["OpenAICompatibleAdapter", "LLMClient", "LLMChatResult"]

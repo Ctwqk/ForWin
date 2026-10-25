@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from forwin.config import InfrastructureConfig, ModelProfileConfig
+from forwin.config import InfrastructureConfig
 from forwin.runtime.policy import (
     BandCheckpointAction,
     GateDelegate,
@@ -46,29 +46,19 @@ class RuntimeCatalogResponse(BaseModel):
 
 
 def runtime_catalog(config: InfrastructureConfig) -> RuntimeCatalogResponse:
-    resolved_profiles = [
-        config.resolve_model_profile(""),
-        *(
-            ModelProfileConfig.model_validate(item)
-            for item in config.llm_env_profiles
-        ),
-    ]
-    unique_profiles: dict[str, ModelProfileConfig] = {}
-    for profile in resolved_profiles:
-        unique_profiles.setdefault(profile.id, profile)
     profiles = [
         ModelProfile(
             id=profile.id,
             name=profile.name,
-            has_api_key=bool(profile.api_key),
+            has_api_key=bool(profile.api_key.strip()),
             base_url=profile.base_url,
             model=profile.model,
         )
-        for profile in unique_profiles.values()
+        for profile in config.known_llm_profiles.values()
     ]
     return RuntimeCatalogResponse(
         model_profiles=profiles,
-        default_model_profile_id="env-minimax",
+        default_model_profile_id="",
         bootstrap_policy=RuntimePolicy.for_profile("standard"),
     )
 

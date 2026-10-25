@@ -29,7 +29,7 @@ def test_runtime_container_imports_in_fresh_process() -> None:
     assert result.stdout.strip() == "RuntimeContainer"
 
 
-def test_runtime_container_routes_environment_profiles_after_default_minimax() -> None:
+def test_runtime_container_routes_environment_profiles_using_policy_chain() -> None:
     from forwin.runtime.container import RuntimeContainer
 
     infrastructure = InfrastructureConfig(
@@ -58,7 +58,6 @@ def test_runtime_container_routes_environment_profiles_after_default_minimax() -
 
     try:
         route = client._route_profiles_with_metadata(
-            client._request_profiles(),
             task_family="writer",
             stage_key="chapter_draft",
         )
@@ -178,7 +177,7 @@ def test_runtime_container_injects_policy_and_selected_model(monkeypatch) -> Non
     assert container.generation_services() is generation_services
     assert core_services.infrastructure is infrastructure
     assert core_services.policy is policy
-    assert generation_services.llm_client.api_key == "selected-secret"
+    assert generation_services.llm_client.profiles["env-kimi"].api_key == "selected-secret"
     assert generation_services.llm_client.model == "kimi-k2.5"
     assert core_services.engine is fake_engine
     assert core_services.session_factory is fake_session_factory

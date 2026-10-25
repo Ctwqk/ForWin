@@ -312,8 +312,6 @@ def run_codex_structured_call(
                 latency_class="sync",
                 codex_allowed=True,
                 permission_profile=SPARK_GATE_PERMISSION_PROFILE,
-                preferred_provider_kind=preferred_provider_kind,
-                preferred_model=requested_model,
             )
             or ""
         )
@@ -556,7 +554,6 @@ class SparkGateDelegate:
             trace_scope="gate_delegation",
             trace_stage_key=f"gate_{request.gate_kind}",
             template_id="spark_pause_gate",
-            preferred_provider_kind="spark",
         )
         parsed = _spark_decision(outcome)
         failure_reason = outcome.failure_reason

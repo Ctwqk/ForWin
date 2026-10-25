@@ -9,9 +9,9 @@ import httpx
 
 
 logger = logging.getLogger(__name__)
-_RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
-_LLM_ROUTE_POLICY_VERSION = "v4.0-capable-provider-fallbacks"
+_RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, *range(500, 600)}
 _ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
+_PARSE_ERROR_ATTR = "_forwin_llm_parse_error"
 _TRANSIENT_ERROR_TOKENS = (
     "http 529",
     "status code 529",
@@ -45,6 +45,10 @@ def is_transient_error_chain(exc: BaseException) -> bool:
             return True
         current = current.__cause__ or current.__context__
     return False
+
+
+class EmptyLLMResponse(ValueError):
+    pass
 
 
 class ErrorsMixin:
@@ -116,10 +120,12 @@ class ErrorsMixin:
     def _error_category_for_status(status_code: int) -> str:
         if status_code in {429}:
             return "rate_limit"
-        if status_code in {529, 500, 502, 503, 504}:
+        if 500 <= status_code < 600:
             return "provider_overload"
-        if status_code in {401, 403}:
-            return "auth"
+        if status_code in {401, 402, 403}:
+            return "auth_or_balance"
+        if status_code == 404:
+            return "model_not_found"
         if 400 <= status_code < 500:
             return "bad_request"
         if status_code:
@@ -138,11 +144,15 @@ class ErrorsMixin:
 
     @classmethod
     def _is_fallback_retryable(cls, exc: Exception) -> bool:
+        if getattr(exc, _PARSE_ERROR_ATTR, False):
+            return False
+        if isinstance(exc, EmptyLLMResponse):
+            return True
         if isinstance(exc, (httpx.ReadTimeout, httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError, httpx.NetworkError)):
             return True
         if isinstance(exc, httpx.HTTPStatusError):
             status_code = exc.response.status_code if exc.response is not None else 0
-            return status_code in _RETRYABLE_HTTP_STATUS_CODES
+            return status_code in _RETRYABLE_HTTP_STATUS_CODES or status_code in {401, 402, 403, 404}
         return is_transient_error_chain(exc)
 
     def _retry_delay(

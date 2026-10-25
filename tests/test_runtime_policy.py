@@ -3,7 +3,34 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from forwin.runtime.policy import CanonPolicy, PlanningPolicy, ReviewPolicy, RuntimePolicy, WorldPolicy, role_models
+from forwin.runtime.policy import CanonPolicy, ModelsPolicy, PlanningPolicy, ReviewPolicy, RuntimePolicy, WorldPolicy, DEFAULT_LLM_CHAINS
+
+
+@pytest.mark.parametrize("chains", [
+    {}, {"review_json": ("env-deepseek",)},
+    {"default": ("env-deepseek",), "reveiw_json": ("env-kimi",)},
+    {"default": ()}, {"default": "env-deepseek"},
+    {"default": (1,)}, {"default": (None,)},
+    {"default": ("",)}, {"default": ("   ",)},
+])
+def test_models_policy_rejects_invalid_chains(chains):
+    with pytest.raises(ValidationError):
+        ModelsPolicy(chains=chains)
+
+
+@pytest.mark.parametrize("use_defaults", [False, True])
+def test_models_policy_chains_are_immutable_and_serializable(use_defaults):
+    source = {"default": ["custom-profile"], "general": ["env-kimi"]}
+    models = ModelsPolicy() if use_defaults else ModelsPolicy(chains=source)
+    with pytest.raises(TypeError):
+        models.chains["default"] = ("changed",)
+    with pytest.raises(TypeError):
+        models.chains["default"][0] = "changed"
+    if not use_defaults:
+        source["default"].append("env-minimax")
+        assert models.chains["default"] == ("custom-profile",)
+    assert ModelsPolicy.model_validate_json(models.model_dump_json()) == models
+    assert ModelsPolicy.model_validate(models.model_dump(mode="python")) == models
 
 
 @pytest.mark.parametrize(
@@ -156,9 +183,7 @@ def test_world_and_models_defaults_per_profile(profile, actor_turns) -> None:
         "max_rerolls": 2,
         "conflict_delegate": "codex",
     }
-    assert policy.models.role_preferences == {"review.world_conflict": ("gpt-6-luna",)}
-    assert role_models(policy, "review.world_conflict") == ("gpt-6-luna",)
-    assert role_models(policy, "unknown.role") == ()
+    assert policy.models.chains == DEFAULT_LLM_CHAINS
 
 
 @pytest.mark.parametrize("profile, actor_turns", [("standard", 6), ("pulp", 3)])
@@ -170,7 +195,7 @@ def test_stored_policy_without_world_section_loads_defaults(profile, actor_turns
     assert policy.schema_version == 2
     assert policy.world.conflict_delegate == "codex"
     assert policy.world.max_actor_turns_per_tick == actor_turns
-    assert policy.models.role_preferences == {"review.world_conflict": ("gpt-6-luna",)}
+    assert policy.models.chains == DEFAULT_LLM_CHAINS
     saved = policy.with_user_settings(gate_delegate="spark").model_dump_json()
     assert RuntimePolicy.model_validate_json(saved).world.max_actor_turns_per_tick == actor_turns
 
@@ -178,19 +203,19 @@ def test_stored_policy_without_world_section_loads_defaults(profile, actor_turns
 @pytest.mark.parametrize(
     "profile, next_profile", [("standard", "pulp"), ("pulp", "standard")]
 )
-def test_custom_role_preferences_survive_profile_change(profile, next_profile) -> None:
+def test_custom_chains_survive_profile_change(profile, next_profile) -> None:
     stored = RuntimePolicy.for_profile(profile).model_dump(mode="python")
-    preferences = {
-        "review.world_conflict": ("custom-primary", "custom-fallback"),
-        "world.actor_turn": ("custom-actor",),
+    chains = {
+        "review_json": ("custom-primary", "custom-fallback"),
+        "default": ("custom-actor",),
     }
-    stored["models"]["role_preferences"] = preferences
+    stored["models"]["chains"] = chains
     policy = RuntimePolicy.model_validate(stored)
 
     updated = policy.with_user_settings(quality_profile=next_profile)
 
     assert updated.quality_profile == next_profile
-    assert updated.models.role_preferences == preferences
+    assert updated.models.chains == chains
 
 
 @pytest.mark.parametrize(
@@ -407,3 +432,11 @@ def test_new_actor_budget_profile_defaults_and_override(profile, limit):
     assert RuntimePolicy.model_validate(stored).world.max_new_actors_per_tick == 2
     with pytest.raises(ValidationError):
         WorldPolicy(max_new_actors_per_tick=-1)
+
+
+@pytest.mark.parametrize("section, field", [("models", "role_preferences"), ("review", "repair_models")])
+def test_removed_policy_fields_require_storage_migration(section, field):
+    stored = RuntimePolicy.for_profile("standard").model_dump(mode="python")
+    stored[section][field] = {} if section == "models" else ()
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        RuntimePolicy.model_validate(stored)

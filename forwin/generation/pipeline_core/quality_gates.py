@@ -22,7 +22,7 @@ from forwin.observability.payloads import (
     audit_payload,
     safe_error_summary,
 )
-from forwin.observability.llm_trace import safe_prompt_trace_attempts
+from forwin.observability.llm_trace import safe_prompt_trace_attempts, served_model_profile
 from forwin.models.phase import BandExperiencePlan
 from forwin.planning.band_plan_patcher import BandPlanPatcher
 from forwin.review.decision.rules.obligation_scope import BandScopeCandidate
@@ -830,10 +830,11 @@ def _latest_draft_and_review_for_chapter(
 class QualityDiagnosticsStage:
     """Owns the quality gates stage behavior."""
 
-    def _current_model_identity(self) -> tuple[str, str]:
+    def _current_model_identity(self, attempts: list[dict[str, object]] | None = None) -> tuple[str, str]:
+        identity = served_model_profile(attempts, llm_client=self.llm_client)
         return (
-            str(getattr(self.llm_client, "profile_id", "") or "").strip(),
-            str(getattr(self.llm_client, "model", "") or "").strip(),
+            identity.get("profile_id", ""),
+            identity.get("model", ""),
         )
 
     def _audit_operation_id(self) -> str:
@@ -885,7 +886,7 @@ class QualityDiagnosticsStage:
         error_category = self._error_category_from_attempts(safe_attempts, exc)
         selected_skills = summarize_skill_layers(skill_layers)
         operation_id = self._audit_operation_id()
-        model_profile_id, model_name = self._current_model_identity()
+        model_profile = served_model_profile(safe_attempts, llm_client=self.llm_client)
         trace_payload = {
             "trace_scope": "writer",
             "stage_key": stage_key,
@@ -901,11 +902,7 @@ class QualityDiagnosticsStage:
                 writer_mode=str(getattr(self.writer, "writer_mode", "") or ""),
                 selected_skills=selected_skills,
             ),
-            "model_profile": {
-                "profile_id": model_profile_id,
-                "model": model_name,
-                "base_url": str(getattr(self.llm_client, "base_url", "") or ""),
-            },
+            "model_profile": model_profile,
             "attempts": safe_attempts,
             "output_summary": audit_payload(
                 stage=stage_key,

@@ -161,6 +161,18 @@ class AdjudicationResult(_ContractModel):
     outcomes: list[AdjudicatedOutcome] = Field(default_factory=list)
 
 
+class DriftChange(_ContractModel):
+    variable_id: str
+    new_level: int = Field(strict=True)
+    trend: Literal["rising", "falling", "stable"]
+    summary: str
+    events: list[EffectEvent] = Field(default_factory=list)
+
+
+class DriftResult(_ContractModel):
+    changes: list[DriftChange] = Field(default_factory=list)
+
+
 class ProposedIntent(_ContractModel):
     agenda_ref: str
     action_type: ActionType
@@ -216,7 +228,7 @@ class TickCandidate(_ContractModel):
     candidate_id: str
     origin: Literal[
         "clock", "intent_interaction", "adjudication", "onstage", "propagation", "actor_turn",
-        "conflict_resolution",
+        "conflict_resolution", "drift",
     ]
     actor_id: str = ""
     intent_id: str = ""

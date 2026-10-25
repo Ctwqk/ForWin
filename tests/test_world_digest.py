@@ -19,7 +19,7 @@ from forwin.world_engine.types import NewsItem
 
 KEYS = [
     "protagonist", "actors", "news_in_transit", "offscreen_events", "secrets_progress",
-    "tensions", "clocks", "stalled_threads_obligations",
+    "tensions", "clocks", "world_conditions", "stalled_threads_obligations",
 ]
 
 
@@ -583,3 +583,17 @@ def test_digest_long_english_prose_keeps_core_sections(source, monkeypatch):
     assert [section.key for section in digest.sections[:4]] == KEYS[:4]
     assert len(_lines(digest, "actors")) == 8
     assert len(_lines(digest, "news_in_transit")) == len(_lines(digest, "offscreen_events")) == 3
+
+
+def test_digest_lists_world_conditions(source):
+    from tests.test_world_drift import variable
+
+    nodes = [variable(), variable("secret")]
+    nodes[1].profile.update(label="secret-condition", visibility="secret")
+    for node in nodes:
+        source.runtime.world.nodes_by_id[node.id] = node
+        source.runtime.world.states_by_node_id[node.id] = {**node.state, "level": 2}
+    digest = _build(source)
+    assert _lines(digest, "world_conditions") == [
+        "condition-label | level=high", "secret-condition | level=high",
+    ]

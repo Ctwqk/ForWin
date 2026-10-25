@@ -17,7 +17,7 @@ from forwin.protocol.book_state import WORLD_EDGE_TYPES, FactNode, MapNode, Worl
 from forwin.world_engine.constraints import ENDED_STATUSES, ConstraintIssue
 from forwin.world_engine.types import (
     AGENDA_PRIORITY_MAX, AGENDA_PRIORITY_MIN, NEW_AGENDA_REF, NEW_FACT_REF_PREFIX, ActorTurnBatch,
-    AdjudicationResult, TickContext,
+    AdjudicationResult, DriftResult, TickContext,
 )
 
 if TYPE_CHECKING:
@@ -30,6 +30,7 @@ MAX_ADJUDICATION_PROMPT_CHARS = 60000
 MAX_ADJUDICATION_EVENT_FACTS = 20
 MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT = 5
 MAX_ACTOR_TURN_PROMPT_CHARS = 60000
+MAX_DRIFT_PROMPT_CHARS = 60000
 MAX_CONFLICT_REVIEW_PROMPT_CHARS = 60000
 # What a chapter-plan goal keeps when the conflict review prompt is still over its guard.
 MAX_CONFLICT_REVIEW_GOAL_CHARS = 200
@@ -316,6 +317,60 @@ def build_adjudication_messages(
         payload.pop("world_node_index")
         payload.pop("map_node_index")
         user = json.dumps(payload, ensure_ascii=False) + suffix
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+DRIFT_INSTRUCTIONS = (
+    "你是世界状态的结算者。依据输入变量、范围内的公开事件、持有者与时钟，返回 JSON，不输出正文或 Markdown。",
+    "每个输入 variable_id 恰好返回一个 change。new_level 是 scale 的下标，每次最多升降一档，必须在范围内；"
+    "没有充分原因就保持原档。trend 只能是 rising、falling 或 stable；summary 简述原因。",
+    "只产生 events，不产生意图。事件参与者必须属于变量的 holder_refs、scope_refs 或位于范围内的行动者；"
+    "location_id 必须来自输入地图，at 是 window_start 到 now 之间的整数分钟。不得编造引用。",
+)
+
+
+def build_drift_messages(
+    *, context: TickContext, variables: Sequence[WorldNode], runtime: BookStateRuntime,
+    lexicon: BookLexicon, calendar: StoryCalendar | None,
+    feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
+    retry_feedback: Sequence[str] = (),
+) -> list[dict]:
+    """Author-side variable drift, scoped actors and recent public events; no cognition overlays."""
+    scope = {ref for variable in variables for ref in variable.profile.get("scope_refs", [])}
+    holders = {ref for variable in variables for ref in variable.profile.get("holder_refs", [])}
+    nodes = sorted(runtime.world.nodes_by_id.values(), key=lambda node: node.id)
+
+    def body(node: WorldNode) -> dict:
+        return {**node.model_dump(mode="json", exclude={"state"}, exclude_defaults=True),
+                "state": runtime.world.get_state(node.id)}
+
+    events = [node for node in nodes if node.node_type == "event" and node.is_active
+              and runtime.world.get_state(node.id).get("visibility_level") == "public"
+              and (node.profile.get("location_id") in scope
+                   or holders.intersection(runtime.world.get_state(node.id).get("participant_ids", [])))]
+    events.sort(key=lambda node: (-node.created_at_chapter, node.id))
+    payload = {
+        "context": context.model_dump(mode="json"),
+        "variables": [body(node) for node in variables],
+        "world_nodes": [body(node) for node in nodes if node.id in scope | holders or (
+            node.node_type in ACTOR_NODE_TYPES and resolve_world_node_location_id(runtime.world, node.id) in scope)],
+        "map_nodes": [node.model_dump(mode="json", exclude_defaults=True)
+                      for node in sorted(runtime.map.nodes_by_id.values(), key=lambda node: node.id)],
+        "recent_public_events": [body(node) for node in events[:20]],
+        "clocks": [body(node) for node in nodes if node.node_type == "clock" and node.is_active
+                   and runtime.world.get_state(node.id).get("status") == "running"],
+        "calendar": calendar_to_payload(calendar) if calendar is not None else None,
+        "lexicon": lexicon_to_payload(lexicon),
+    }
+    ids = {node.id for node in variables}
+    feedback_payload = {ref: [asdict(issue) for issue in issues] for ref, issues in (feedback or {}).items()
+                        if ref in ids and issues}
+    user = json.dumps(payload, ensure_ascii=False)
+    if feedback_payload:
+        user += "\n\nConstraint feedback by variable:\n" + json.dumps(feedback_payload, ensure_ascii=False)
+    if retry_feedback:
+        user += "\n\nRetry validation feedback:\n" + "\n".join(retry_feedback)
+    system = "\n".join(DRIFT_INSTRUCTIONS) + "\n" + json.dumps(DriftResult.model_json_schema(), ensure_ascii=False)
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 

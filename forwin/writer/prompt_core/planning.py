@@ -15,6 +15,7 @@ WORLD_DIGEST_TITLES = {
     "secrets_progress": "秘密揭示进度",
     "tensions": "冲突张力",
     "clocks": "运行时钟",
+    "world_conditions": "世界状态",
     "stalled_threads_obligations": "停滞剧情线与叙事义务",
 }
 

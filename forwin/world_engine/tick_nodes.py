@@ -1,4 +1,4 @@
-"""The world tick's LLM nodes: due offstage intents adjudicated, and due actors' turns.
+"""The world tick's LLM nodes: offstage intents, actor turns and variable drift.
 
 Each node settles into a tick candidate or fails with a reason. A failed node changes nothing, so its
 intent stays planned and its actor keeps its turn for a later tick.
@@ -22,6 +22,7 @@ from forwin.writer.prompt_core.world_engine import ACTOR_CONSTRAINT_FEEDBACK, AC
 from .actor_turns import ActorTurnRunner, ActorView, turn_to_candidate
 from .adjudicator import WorldAdjudicator
 from .constraints import ConstraintIssue
+from .drift import WorldDriftRunner, drift_candidate
 from .types import (
     INVALID_OUTPUT,
     LLM_UNAVAILABLE,
@@ -120,6 +121,31 @@ def adjudicate(
     return results
 
 
+def drift(
+    runner: WorldDriftRunner, *, context: TickContext, variables: Sequence[WorldNode],
+    runtime: BookStateRuntime, lexicon: BookLexicon, calendar: StoryCalendar | None,
+    save_trace: SaveTrace, feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
+) -> NodeResults:
+    """One candidate per settled variable; failures leave their cadence unchanged."""
+    if not variables:
+        return NodeResults()
+    call = runner.drift(context=context, variables=variables, runtime=runtime, lexicon=lexicon,
+                        calendar=calendar, feedback=feedback)
+    trace_id = save_trace(call.prompt_trace)
+    changes = {change.variable_id: change for change in call.result.changes} if call.result is not None else {}
+    results = NodeResults()
+    for variable in variables:
+        if variable.id in changes:
+            results.candidates.append(drift_candidate(variable, changes[variable.id], now=context.now))
+        else:
+            reason = call.failure_reason or INVALID_OUTPUT
+            results.failures.append(NodeFailure(
+                f"drift:{variable.id}", "drift", "", "", reason,
+                tuple(ConstraintIssue(reason, issue, variable.id) for issue in call.issues), trace_id,
+            ))
+    return results
+
+
 # actor turns
 
 
@@ -173,9 +199,11 @@ def too_large(intents: Sequence[WorldNode]) -> NodeResults:
     ])
 
 
-def unavailable(*, intents: Sequence[WorldNode] = (), actor_ids: Sequence[str] = ()) -> NodeResults:
+def unavailable(*, intents: Sequence[WorldNode] = (), actor_ids: Sequence[str] = (),
+                variables: Sequence[WorldNode] = ()) -> NodeResults:
     """Without a model, every node fails as unavailable and nothing is asked."""
     return NodeResults(failures=[
+        *(NodeFailure(f"drift:{node.id}", "drift", "", "", LLM_UNAVAILABLE, ()) for node in variables),
         *(NodeFailure(
             adjudication_candidate_id(intent.id), "adjudication", _owner(intent), intent.id, LLM_UNAVAILABLE, (),
         ) for intent in intents),
@@ -241,6 +269,7 @@ __all__ = [
     "actor_turn_candidate_id",
     "adjudicate",
     "adjudication_candidate_id",
+    "drift",
     "outcome_candidate",
     "protected_refs",
     "take_turns",

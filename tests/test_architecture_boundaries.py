@@ -1420,6 +1420,7 @@ LLM_STAGE_TRACE_OWNERS = {
     "chapter_delta_extraction": ("forwin/generation/pipeline_core/review_autofix.py", "self._save_prompt_trace_payload("),
     "world.adjudicate": ("forwin/world_engine/tick.py", "self.service.save_prompt_trace("),
     "world.actor_turn": ("forwin/world_engine/tick.py", "self.service.save_prompt_trace("),
+    "world.drift": ("forwin/world_engine/tick.py", "self.service.save_prompt_trace("),
     "plan.arc_beats": ("forwin/planning/beat_sheet/service.py", "self.save_trace("),
     "plan.band": ("forwin/planning/band_planner/service.py", "self.save_trace("),
 }

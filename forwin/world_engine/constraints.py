@@ -203,9 +203,12 @@ def classify_impact(
              and runtime.world.get_state(ref).get("actor_tier") in {"major", "minor"})
             or (kind in _ENDING_TYPES and not _ended(old) and _ended(new))
             or bool(changed & _MAJOR_STATE_FIELDS & fields)
+            or (kind == "world_variable" and before.get("profile", {}).get("holder_refs")
+                != after.get("profile", {}).get("holder_refs"))
         )
         moderate = (
             (kind in {"item", "resource"} and "holder_id" in changed)
+            or (kind == "world_variable" and "level" in changed)
             or "restraint" in changed
             or (kind == "character" and bool(changed - {"location_id", "next_turn_at"}))
         )
@@ -225,6 +228,10 @@ def classify_impact(
             continue
         if (node is not None and node.node_type == "event" and state.get("visibility_level") == "public"
                 and hidden.intersection(_refs(after))):
+            level = max(level, IMPACT_LEVELS.index("major"))
+    if candidate.origin == "drift" and any(event.visibility == "public" for event in candidate.effects.events):
+        variable = runtime.world.get_node(candidate.candidate_id.removeprefix("drift:"))
+        if variable is not None and variable.profile.get("visibility") == "secret":
             level = max(level, IMPACT_LEVELS.index("major"))
     if _exposes_secret(runtime, candidate):
         level = max(level, IMPACT_LEVELS.index("major"))
@@ -274,6 +281,38 @@ def _restraint(payload: dict[str, Any]) -> str:
     return str((restraint.get("state") if isinstance(restraint, dict) else None) or "free")
 
 
+def _drift_issues(runtime: BookStateRuntime, candidate: TickCandidate) -> list[ConstraintIssue]:
+    ref = candidate.candidate_id.removeprefix("drift:")
+    variable = runtime.world.get_node(ref)
+    if variable is None or variable.node_type != "world_variable":
+        return [ConstraintIssue("unknown_ref", "Drift must name a world variable", ref)]
+    issues = []
+    old_level = runtime.world.get_state(ref).get("level")
+    scale = variable.profile.get("scale", [])
+    for change in candidate.effects.entity_changes:
+        if change.ref != ref or change.field.removeprefix("state.") != "level":
+            continue
+        new_level = change.new_value
+        if type(new_level) is not int or not 0 <= new_level < len(scale):
+            issues.append(ConstraintIssue("drift_level_out_of_range", "Drift level must index the variable scale", ref))
+        if type(new_level) is int and type(old_level) is int and abs(new_level - old_level) > 1:
+            issues.append(ConstraintIssue("drift_step_too_large", "Drift may move at most one level", ref))
+    scope = set(variable.profile.get("scope_refs", []))
+    allowed = scope | set(variable.profile.get("holder_refs", []))
+    allowed.update(node.id for node in runtime.world.nodes_by_id.values()
+                   if node.node_type in ACTOR_NODE_TYPES
+                   and resolve_world_node_location_id(runtime.world, node.id) in scope)
+    for event in candidate.effects.events:
+        for participant in event.participant_refs:
+            if participant not in allowed:
+                issues.append(ConstraintIssue("drift_participant_out_of_scope",
+                                              "Drift event participant must be a holder or within scope", participant))
+        if event.location_id and event.location_id not in scope and event.location_id not in runtime.map.nodes_by_id:
+            issues.append(ConstraintIssue("unknown_ref", "Drift event location must be in scope or on the map",
+                                          event.location_id))
+    return issues
+
+
 def check_hard_rules(
     runtime: BookStateRuntime,
     lexicon: BookLexicon,
@@ -293,6 +332,9 @@ def check_hard_rules(
 
     def issue(code: str, ref: str, message: str) -> None:
         issues.append(ConstraintIssue(code, message, ref))
+
+    if candidate.origin == "drift":
+        issues.extend(_drift_issues(runtime, candidate))
 
     owner = _owner(runtime, candidate)
     actors = {owner} if candidate.new_intents else set()

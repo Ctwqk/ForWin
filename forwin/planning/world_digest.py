@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 DIGEST_SECTION_KEYS = (
     "protagonist", "actors", "news_in_transit", "offscreen_events", "secrets_progress",
-    "tensions", "clocks", "stalled_threads_obligations",
+    "tensions", "clocks", "world_conditions", "stalled_threads_obligations",
 )
 DIGEST_TOP_ACTORS = 8
 DIGEST_INTENTS_PER_ACTOR = 3
@@ -70,7 +70,7 @@ def build_world_digest(
     budget_chars: int,
     runtime: BookStateRuntime | None = None,
 ) -> WorldDigest:
-    """Build eight sections, then remove whole sections from the end to fit the budget.
+    """Build nine sections, then remove whole sections from the end to fit the budget.
 
     Hidden intents and objective secrets are included: this digest must never be supplied
     to the chapter writer. Equal relevance is resolved by node id, independent of row order.
@@ -152,6 +152,16 @@ def build_world_digest(
             lines["clocks"].append(_line(
                 _text_field(node.profile.get("label") or node.name or node.id),
                 remaining=_duration(calendar, remaining), scope=node.profile.get("scope"),
+            ))
+
+    for node in sorted(runtime.world.nodes_by_id.values(), key=lambda item: item.id):
+        if not node.is_active or node.node_type != "world_variable":
+            continue
+        state = runtime.world.get_state(node.id)
+        scale, level = node.profile.get("scale", []), state.get("level")
+        if state.get("status") == "active" and type(level) is int and 0 <= level < len(scale):
+            lines["world_conditions"].append(_line(
+                _text_field(node.profile.get("label") or node.name or node.id), level=_text_field(scale[level]),
             ))
 
     sampled = sample_active_threads(session=session, project_id=project_id, chapter_number=as_of_chapter,

@@ -63,7 +63,7 @@ from tests.test_world_tick_delta import _built, _commit_tick, _context
 ASTRA = "gpt-6-astra"
 POLICY = RuntimePolicy.for_profile("standard")
 DAY = 1440
-_STAGES = {"world.adjudicate": "adjudicate", "world.actor_turn": "actor_turn", "review.world_conflict": "review"}
+_STAGES = {"world.adjudicate": "adjudicate", "world.actor_turn": "actor_turn", "world.drift": "drift", "review.world_conflict": "review"}
 
 
 def _policy(**world: Any) -> RuntimePolicy:
@@ -2459,4 +2459,46 @@ def test_snapshot_order_is_monotonic_within_one_transaction(backend):
         session.add(WorldSnapshotRow(id="later-seq-earlier-chapter", project_id="snapshot-project", as_of_chapter=1))
         session.flush()
         assert repo.latest_world_snapshot_id("snapshot-project", 2) == "a-second"
+    engine.dispose()
+
+
+def test_drift_candidate_commits_in_tick(monkeypatch):
+    from tests.test_world_drift import variable
+    from forwin.world_engine.drift import WorldDriftRunner
+
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    node = variable().model_copy(update={"project_id": world.project_id})
+    node.profile.update(scope_refs=[world.loc(1)], holder_refs=[world.hero])
+    node.state["last_drift_at"] = OPENING
+    chapter = _delta(Session, world, 1, _time(4, "日"))
+    chapter = chapter.model_copy(update={"node_patches": [*chapter.node_patches, NodePatch(
+        node_id=node.id, node_type="world_variable", op="create",
+        new_value=node.model_dump(mode="json", exclude={"id", "node_type"}),
+    )]})
+    _commit(Session, world, chapter)
+    llm = _WorldLLM(drift=lambda payload, content: {"changes": [{
+        "variable_id": "condition", "new_level": 2, "trend": "rising", "summary": "drift-summary",
+    }]})
+    with Session.begin() as session:
+        service = _service(Session, llm)
+        service.drift_runner = WorldDriftRunner(llm)
+        result = service.run(session, _canon_commit(chapter), policy=_policy(
+            drift_every_story_minutes=DAY, max_actor_turns_per_tick=0))
+    assert "drift:condition" not in result.dropped_candidate_ids
+    assert _runtime(Session, world).world.get_state("condition") == {
+        "level": 2, "trend": "rising", "last_drift_at": OPENING + 4 * DAY, "status": "active",
+    }
+    with Session() as session:
+        from forwin.book_state.repository import BookStateRepository
+        deltas = BookStateRepository(session).list_graph_deltas(world.project_id, through_chapter=1)
+        patches = [p for d in deltas if d.source_type == WORLD_ENGINE_SOURCE_TYPE
+                   for p in d.node_patches if p.node_id == "condition"]
+        assert {p.field_path: p.old_value for p in patches} == {
+            "state.level": 1, "state.trend": "stable", "state.last_drift_at": OPENING,
+        }
+        traces = list(session.scalars(select(PromptTrace).where(PromptTrace.project_id == world.project_id)))
+        assert any(trace.stage_key == "world.drift" for trace in traces)
+    assert any(_payload(event).get("stage_key") == "world.drift"
+               for event in _events(Session, world, DecisionEventType.LLM_REQUEST_SUCCEEDED))
     engine.dispose()

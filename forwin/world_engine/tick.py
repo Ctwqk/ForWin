@@ -5,9 +5,9 @@ chapter's story minutes from its start (``window_start``) to its end (``now``):
 
 1. Collect candidates: the chapter's intent interactions, clocks that ran out, due intents (onstage
    ones go to planning, offstage ones are adjudicated; one whose prompt is over the guard even alone
-   waits for the next tick) and the due actors' turns.
+   waits for the next tick), due actors' turns and world-variable drift.
 2. Check each candidate against the hard rules and the world gate on its own delta. An adjudicated
-   outcome or an actor turn that fails is asked for again once, with the errors; whatever still fails
+   outcome, actor turn or drift that fails is asked for again once, with the errors; whatever still fails
    is dropped with a WORLD_TICK_CANDIDATE_DROPPED event.
 3. Classify impacts and keep major events within the tick's budget.
 4. Hold back for review whatever breaks a narrative boundary or is major or above (tick_conflicts).
@@ -57,6 +57,7 @@ from forwin.runtime.policy import RuntimePolicy
 from .actor_turns import ActorTurnRunner, ActorView, build_actor_view, rank_actors, recent_vetoes
 from .adjudicator import WorldAdjudicator
 from .clocks import expire_clocks
+from .drift import WorldDriftRunner, due_world_variables
 from .conflict_delegate import WorldConflictDelegate
 from .conflict_repository import WorldConflictRepository
 from .conflict_resolution import (
@@ -91,6 +92,7 @@ from .tick_nodes import (
     actor_safe_vetoes,
     adjudicate,
     adjudication_candidate_id,
+    drift,
     protected_refs,
     take_turns,
     too_large,
@@ -158,11 +160,13 @@ class WorldTickService:
         conflict_delegate: WorldConflictDelegate,
         audit_writer_factory: Callable[[], GateAuditWriter],
         save_prompt_trace: Callable[[Session, dict], str],
+        drift_runner: WorldDriftRunner | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.admission = admission
         self.adjudicator = adjudicator
         self.actor_runner = actor_runner
+        self.drift_runner = drift_runner
         self.conflict_delegate = conflict_delegate
         self.audit_writer_factory = audit_writer_factory
         self.save_prompt_trace = save_prompt_trace
@@ -319,7 +323,7 @@ class _Tick:
     # collection
 
     def _collect(self) -> list[TickCandidate]:
-        """The tick's candidates, event producers first: interactions, clocks, onstage bookkeeping, outcomes, turns."""
+        """The tick's candidates, event producers first: interactions, clocks, onstage bookkeeping, outcomes, turns, drift."""
         runtime, now = self.runtime, self.context.now
         interactions = _interactions(self.chapter)
         applied = apply_intent_interactions(runtime, interactions=interactions)
@@ -371,7 +375,11 @@ class _Tick:
         self.oversized = [self._deferred(failure) for failure in too_large(oversized).failures]
         adjudicated = self._settled(results)
         turns = self._settled(self._take_turns())
-        return [*applied, *released, *clocks, *onstage.candidates, *adjudicated, *turns]
+        drifted = self._settled(self._drift(due_world_variables(
+            runtime, now=now, every=self.policy.world.drift_every_story_minutes,
+            limit=self.policy.world.max_drift_variables_per_tick,
+        )))
+        return [*applied, *released, *clocks, *onstage.candidates, *adjudicated, *turns, *drifted]
 
     def _adjudicate_within_guard(
         self, intents: Sequence[WorldNode], *, limit: int,
@@ -451,6 +459,19 @@ class _Tick:
             lexicon=self.lexicon, calendar=self.calendar, save_trace=self._save_trace, feedback=feedback,
         )
 
+    def _drift(
+        self, variables: Sequence[WorldNode], feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
+    ) -> NodeResults:
+        if not variables:
+            return NodeResults()
+        if self.service.llm_client is None or self.service.drift_runner is None:
+            return unavailable(variables=variables)
+        self._check_snapshot()
+        return drift(
+            self.service.drift_runner, context=self.context, variables=variables, runtime=self.runtime,
+            lexicon=self.lexicon, calendar=self.calendar, save_trace=self._save_trace, feedback=feedback,
+        )
+
     def _take_turns(self) -> NodeResults:
         context = self.context
         actors = rank_actors(
@@ -505,11 +526,12 @@ class _Tick:
     # checks
 
     def _check(self, collected: Sequence[TickCandidate]) -> list[TickCandidate]:
-        """The candidates that pass their checks, in collection order; outcomes and turns get one retry."""
+        """The candidates that pass their checks, in collection order; outcomes, turns and drift get one retry."""
         order = {candidate.candidate_id: index for index, candidate in enumerate(collected)}
         passed: list[TickCandidate] = []
         outcome_issues: dict[str, list[ConstraintIssue]] = {}
         turn_issues: dict[str, list[ConstraintIssue]] = {}
+        drift_issues: dict[str, list[ConstraintIssue]] = {}
         for candidate in collected:
             issues = self._issues(candidate)
             if not issues:
@@ -520,6 +542,8 @@ class _Tick:
                     passed.append(staged)
             elif candidate.origin == "adjudication":
                 outcome_issues[candidate.intent_id] = issues
+            elif candidate.origin == "drift":
+                drift_issues[candidate.candidate_id.removeprefix("drift:")] = issues
             elif candidate.origin == "actor_turn":
                 turn_issues[candidate.actor_id] = issues
             else:
@@ -530,6 +554,9 @@ class _Tick:
         if turn_issues:
             views = [self.views[actor_id] for actor_id in turn_issues]
             passed.extend(self._recheck(self._turns(views, feedback=actor_safe_feedback(turn_issues, self.views))))
+        if drift_issues:
+            variables = [self.runtime.world.nodes_by_id[ref] for ref in drift_issues]
+            passed.extend(self._recheck(self._drift(variables, feedback=drift_issues)))
         return sorted(passed, key=lambda candidate: order[candidate.candidate_id])
 
     def _recheck(self, results: NodeResults) -> list[TickCandidate]:

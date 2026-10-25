@@ -1021,6 +1021,7 @@ def build_world_tick_service(
     from forwin.canon.admission import CanonAdmissionService
     from forwin.world_engine.actor_turns import ActorTurnRunner
     from forwin.world_engine.adjudicator import WorldAdjudicator
+    from forwin.world_engine.drift import WorldDriftRunner
     from forwin.world_engine.conflict_delegate import WorldConflictDelegate
     from forwin.world_engine.tick import WorldTickService
     from forwin.planning.plan_step import PlanStepService
@@ -1033,6 +1034,7 @@ def build_world_tick_service(
         admission=admission or CanonAdmissionService(session_factory=session_factory),
         adjudicator=WorldAdjudicator(llm_client),
         actor_runner=ActorTurnRunner(llm_client),
+        drift_runner=WorldDriftRunner(llm_client),
         # A failed Codex call escalates the conflict, so the delegate keeps the client either way.
         conflict_delegate=WorldConflictDelegate(llm_client),
         audit_writer_factory=own_transaction_audit_writer(session_factory),

@@ -8,8 +8,8 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from forwin.book_state.beat_sheet_read import active_beat_sheets_for_project, load_beat_sheet
 from forwin.models.planning_v6 import ArcBeatSheetRow
-from forwin.models.project import ArcPlanVersion
 from forwin.planning.beat_sheet.types import BEAT_SHEET_SOURCES, ArcBeatSheetData
 
 
@@ -26,16 +26,7 @@ class ArcBeatSheetRepository:
         )
 
     def active_for_project(self, project_id: str) -> list[ArcBeatSheetRow]:
-        """The active sheet of every arc that has one, in arc order; superseded arc plans have none."""
-        return list(self.session.scalars(
-            select(ArcBeatSheetRow)
-            .join(ArcPlanVersion, ArcPlanVersion.id == ArcBeatSheetRow.arc_plan_id)
-            .where(
-                ArcBeatSheetRow.project_id == project_id, ArcBeatSheetRow.status == "active",
-                ArcPlanVersion.status != "superseded",
-            )
-            .order_by(ArcPlanVersion.chapter_start, ArcBeatSheetRow.arc_plan_id)
-        ))
+        return active_beat_sheets_for_project(self.session, project_id)
 
     def create(
         self, project_id: str, arc_plan_id: str, data: ArcBeatSheetData, *, source: str, reason: str,
@@ -75,18 +66,7 @@ class ArcBeatSheetRepository:
         return row
 
     def load(self, row: ArcBeatSheetRow) -> ArcBeatSheetData:
-        return ArcBeatSheetData.model_validate({
-            "protagonist_ref": row.protagonist_ref,
-            "phases": json.loads(row.phases_json),
-            "milestones": json.loads(row.milestones_json),
-            "protections": json.loads(row.protections_json),
-            "reveal_targets": json.loads(row.reveal_targets_json),
-            "exit_state": json.loads(row.exit_state_json),
-            "band_breakdown": json.loads(row.band_breakdown_json),
-            "reader_promise": json.loads(row.reader_promise_json),
-            "arc_payoff_map": json.loads(row.arc_payoff_map_json),
-            "setting_brief": row.setting_brief,
-        })
+        return load_beat_sheet(row)
 
 
 def _dump(value: Any) -> str:

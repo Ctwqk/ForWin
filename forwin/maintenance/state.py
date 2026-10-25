@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from forwin.maintenance.events import ORDER_CONTROLS_KEY, POST_CANON_STEP_NAMES
+from forwin.maintenance.constants import ORDER_CONTROLS_KEY, POST_CANON_STEP_NAMES
 
 
 def post_canon_phase3_complete(rows: Iterable[Any]) -> bool:

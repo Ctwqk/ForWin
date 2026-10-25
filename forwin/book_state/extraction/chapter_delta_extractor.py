@@ -79,7 +79,7 @@ def ensure_chapter_delta(
     A changed body or plan is re-extracted. Without a usable LLM client the output comes back
     with no chapter_delta and an error issue, so a stale extraction never survives a change.
     """
-    from forwin.planning.band_planner.persistence import chapter_plan_fingerprint
+    from forwin.book_state.plan_fingerprint import chapter_plan_fingerprint
 
     plan = session.scalar(select(ChapterPlan).where(
         ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == chapter_number,

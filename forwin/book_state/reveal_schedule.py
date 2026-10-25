@@ -9,7 +9,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.book_state.knowledge import FACT_REF_PREFIX
+from forwin.book_state.beat_sheet_read import active_beat_sheets_for_project, load_beat_sheet
+from forwin.book_state.knowledge import FACT_REF_PREFIX, READER_OBSERVER
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import ArcPlanVersion, Project
 
@@ -19,10 +20,6 @@ logger = logging.getLogger(__name__)
 
 def earliest_reveal_chapters(session: Session, project_id: str) -> dict[str, int]:
     """Fact node id -> reader target start, otherwise the candidate's live arc start."""
-    # book_state must not import planning at module load (import cycle via book_state.narrative).
-    from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
-    from forwin.planning.beat_sheet.types import READER_OBSERVER
-
     # The seed committer imports the review gate, which reads this schedule.
     from forwin.genesis.handoff.world_seed_committer import seed_ref_id
 
@@ -50,9 +47,8 @@ def earliest_reveal_chapters(session: Session, project_id: str) -> dict[str, int
         node_id = seed_ref_id(project_id, "fact", fact_id)
         schedule[node_id] = min(schedule.get(node_id, start), start)
     reader_targets: dict[str, int] = {}
-    repo = ArcBeatSheetRepository(session)
-    for row in repo.active_for_project(project_id):
-        for target in repo.load(row).reveal_targets:
+    for row in active_beat_sheets_for_project(session, project_id):
+        for target in load_beat_sheet(row).reveal_targets:
             if target.observer == READER_OBSERVER:
                 ref, start = target.fact_ref.removeprefix(FACT_REF_PREFIX), target.range[0]
                 reader_targets[ref] = min(reader_targets.get(ref, start), start)

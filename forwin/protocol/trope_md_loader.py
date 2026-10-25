@@ -3,12 +3,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .trope_library import (
-    TropeTemplate,
-    expand_trope_template_payload,
-    validate_trope_template_payload,
-)
-
 
 _TEMPLATE_HEADING_RE = re.compile(r"^##\s+([A-Za-z0-9_-]+)\s+·\s+(.+?)\s*$")
 _H2_RE = re.compile(r"^##\s+")
@@ -107,6 +101,8 @@ def _parse_template_section(template_id: str, display_name: str, lines: list[str
 
 
 def load_trope_templates_from_md(path: str | Path) -> tuple[TropeTemplate, ...]:
+    from .trope_library import expand_trope_template_payload, validate_trope_template_payload
+
     markdown_path = Path(path)
     lines = markdown_path.read_text(encoding="utf-8").splitlines()
     payloads: list[dict[str, object]] = []
@@ -136,3 +132,11 @@ def load_trope_templates_from_md(path: str | Path) -> tuple[TropeTemplate, ...]:
     if expanded_errors:
         raise ValueError("; ".join(expanded_errors))
     return tuple(expanded_templates)
+
+
+# The library builds its default registry through this parser, so define the parser first.
+from .trope_library import (  # noqa: E402
+    TropeTemplate,
+    expand_trope_template_payload,
+    validate_trope_template_payload,
+)

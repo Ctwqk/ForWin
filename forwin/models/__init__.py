@@ -54,7 +54,7 @@ from .projection import ProjectionCheckpoint
 from .project import ArcPlanVersion, ChapterPlan, Project
 from .subworld import SubWorld
 from .task import GenerationTask
-from forwin.map.models import (
+from .map import (
     MapEdgeRow,
     MapGenerationRunRow,
     MapNodeRow,

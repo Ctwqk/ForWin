@@ -13,6 +13,7 @@ KNOWLEDGE_STATES = ("heard", "suspects", "believes", "knows", "disbelieves", "mi
 KNOWLEDGE_CHANNELS = ("witnessed", "told", "rumor", "document", "inferred", "seeded")
 HIDDEN_SENSITIVITY = frozenset({"hidden", "secret", "must_not_reveal"})
 FACT_REF_PREFIX = "fact:"
+READER_OBSERVER = "reader"
 
 
 def is_concealed(world: ObjectiveWorldGraph, node: WorldNode) -> bool:

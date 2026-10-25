@@ -20,7 +20,7 @@ from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord
 from forwin.models.maintenance import PostCanonMaintenanceRun
 from forwin.models.project import Project
-from forwin.maintenance.events import (
+from forwin.maintenance.constants import (
     ORDER_CONTROLS_KEY,
     POST_CANON_STEP_NAMES,
 )

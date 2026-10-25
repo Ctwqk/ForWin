@@ -638,14 +638,18 @@ class _ChapterExtractionChecks:
     def _shortest_minutes(self, lexicon: BookLexicon, mover: str, from_id: str, to_id: str,
                           *, runtime: BookStateRuntime | None = None) -> float | None:
         """The mover's shortest time over a route it knows; None once a missing route is reported."""
-        # Imported here: forwin.protocol's package init loads this module, and the travel module
-        # imports forwin.protocol, so a module-level import cycles when the travel module loads first.
-        from forwin.world_engine.travel import estimate_travel
+        from forwin.book_state.travel import estimate_route_travel
 
-        travel = estimate_travel(
+        def path(observer, allowed_edge_types):
+            return self.graph.shortest_path(
+                from_id, to_id, metric="travel_time", observer=observer,
+                allowed_edge_types=allowed_edge_types,
+            )
+
+        travel = estimate_route_travel(
             runtime if runtime is not None else self.runtime, lexicon,
-            mover_id=mover, from_location_id=from_id, to_location_id=to_id,
-            graph=self.graph,
+            mover_id=mover, path=path,
+            edge_types=frozenset(str(edge.edge_type) for edge in self.graph.edges_by_id.values()),
         )
         target = f"node:{mover}"
         if not travel.reachable:
@@ -785,7 +789,7 @@ class _ChapterExtractionChecks:
 
     @cached_property
     def _allowed_reader_reveals(self) -> dict[str, set[str]]:
-        from forwin.planning.beat_sheet.types import READER_OBSERVER
+        from forwin.book_state.knowledge import READER_OBSERVER
 
         allowed: dict[str, set[str]] = {}
         if self.delta.source_type != CHAPTER_EXTRACTION_SOURCE_TYPE:

@@ -10,9 +10,7 @@ from forwin.canon.outbox_events import (
 )
 from forwin.outbox.worker import OutboxClaim
 
-# The world tick goes first, so planning sees the world it moved on.
-POST_CANON_STEP_NAMES = ("world", "plan", "feedback")
-ORDER_CONTROLS_KEY = "order_controls"
+from forwin.maintenance.constants import ORDER_CONTROLS_KEY, POST_CANON_STEP_NAMES
 
 
 def build_post_canon_outbox_handlers(

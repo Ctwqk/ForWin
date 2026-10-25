@@ -1,50 +1,51 @@
+"""Every Python module is imported in its own isolated interpreter."""
+
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import subprocess
 import sys
 
-import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
+# No optional-dependency exclusions are currently required.
+OPTIONAL_DEPENDENCY_EXCLUSIONS: dict[str, str] = {}
 
 
-@pytest.mark.parametrize("module", [
-    "forwin.planning.beat_sheet",
-    "forwin.planning.beat_sheet.types",
-    "forwin.planning.beat_sheet.repository",
-    "forwin.planning.beat_sheet.service",
-    "forwin.planning.world_digest",
-    "forwin.world_view.types",
-    "forwin.world_view.builder",
-    "forwin.experience",
-    "forwin.planning.band_planner",
-    "forwin.planning.band_planner.service",
-    "forwin.book_state.reveal_schedule",
-    "forwin.canon.admission",
-    "forwin.world_engine.tick",
-    "forwin.llm_kb.compiler",
-    "forwin.llm_kb.vector_index",
-    "forwin.llm_kb.retriever",
-    "forwin.knowledge_system.canon_projection",
-    "forwin.knowledge_system.projection_jobs",
-    "forwin.outbox.handlers",
-    "forwin.retrieval",
-    "forwin.retrieval.broker_core.broker",
-    "forwin.map.models",
-    "forwin.map",
-    "forwin.models",
-    "forwin.models.base",
-    "forwin.world_studio.search_service",
-])
-def test_module_imports_in_a_fresh_interpreter(module: str) -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-I",
-            "-c",
-            f"import sys; sys.path.insert(0, {str(ROOT)!r}); import {module}",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
+def _modules() -> list[str]:
+    modules = set()
+    for path in (ROOT / 'forwin').rglob('*.py'):
+        parts = path.relative_to(ROOT).with_suffix('').parts
+        if parts[-1] == '__init__':
+            parts = parts[:-1]
+        modules.add('.'.join(parts))
+    return sorted(modules - OPTIONAL_DEPENDENCY_EXCLUSIONS.keys())
+
+
+def _cold_import(module: str) -> str:
+    setup = f'import sys; sys.path.insert(0, {str(ROOT)!r}); '
+    if module == 'forwin.migrations.env':
+        # Alembic's entry script needs its execution context, even for an offline import.
+        code = setup + '''
+import importlib
+import io
+from alembic.config import Config
+from alembic.runtime.environment import EnvironmentContext
+from alembic.script import ScriptDirectory
+config = Config()
+config.set_main_option('script_location', 'forwin/migrations')
+config.set_main_option('sqlalchemy.url', 'sqlite://')
+with EnvironmentContext(config, ScriptDirectory.from_config(config), as_sql=True,
+                        output_buffer=io.StringIO(), fn=lambda revision, context: []):
+    importlib.import_module('forwin.migrations.env')
+'''
+    else:
+        code = setup + f'import importlib; importlib.import_module({module!r})'
+    result = subprocess.run([sys.executable, '-I', '-c', code], cwd=ROOT,
+                            capture_output=True, text=True, timeout=60)
+    return f'{module}:\n{result.stderr}' if result.returncode else ''
+
+
+def test_modules_import_in_fresh_interpreters() -> None:
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        failures = [failure for failure in pool.map(_cold_import, _modules()) if failure]
+    assert not failures, '\n\n'.join(failures)

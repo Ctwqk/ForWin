@@ -51,6 +51,7 @@ def knowledge_event_to_patch(event: KnowledgeEvent) -> CognitionPatch:
         observer_id=event.observer_id,
         op="merge",
         field_path="knowledge_by_ref",
+        old_value={event.fact_ref: None},
         new_value={event.fact_ref: event.state},
         evidence_refs=[knowledge_evidence_ref(event)],
     )

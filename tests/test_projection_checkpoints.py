@@ -477,7 +477,8 @@ def test_same_microsecond_runs_still_fence_stale_failure(
 
     assert old_ticket is not None
     assert new_ticket is not None
-    assert new_ticket.started_at > old_ticket.started_at
+    assert new_ticket.started_at == old_ticket.started_at
+    assert new_ticket.run_seq > old_ticket.run_seq
     store.complete_component(new_ticket, source_digest="new-digest")
     store.fail_component(old_ticket, RuntimeError("stale failure"))
 

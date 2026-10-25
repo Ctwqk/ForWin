@@ -430,11 +430,9 @@ class _TickBuilder:
             # A node created by this delta takes the value in its create payload.
             apply_path_patch(created.new_value, field_path, value)
             return
-        if field_path.startswith("state."):
-            # State is snapshot-backed, so a field without a value yet needs no old_value.
-            leaf = ("set", field_path, _current_node_value(self.runtime, node_id, field_path), value)
-        else:
-            leaf = _leaf_patch(self.world.nodes_by_id[node_id].model_dump(mode="json"), field_path, value)
+        payload = self.world.nodes_by_id[node_id].model_dump(mode="json")
+        payload["state"] = self.world.get_state(node_id)
+        leaf = _leaf_patch(payload, field_path, value)
         if leaf is None:
             # Historical rewind restores non-state fields from old_value.
             self._issue("error", "missing_old_value", f"{node_id}:{field_path} has no current value or parent")

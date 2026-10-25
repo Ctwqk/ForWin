@@ -112,8 +112,7 @@ class BookStateQuery:
             )
             .order_by(
                 GraphDeltaRow.chapter_number.desc(),
-                GraphDeltaRow.created_at.desc(),
-                GraphDeltaRow.id.desc(),
+                GraphDeltaRow.seq.desc(),
             )
             .limit(1)
         )

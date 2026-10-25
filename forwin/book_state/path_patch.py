@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 
@@ -43,4 +44,31 @@ def apply_path_patch(
         cursor[key] = value
 
 
-__all__ = ["apply_path_patch"]
+def cas_patch_fields(
+    payload: dict[str, Any], field_path: str, new_value: Any, *, op: str = "set",
+) -> dict[str, Any]:
+    """Read a CAS value, or merge a first write into its existing parent."""
+    parts = field_path.split(".")
+    current: Any = payload
+    parents = []
+    for index, part in enumerate(parts):
+        if not isinstance(current, dict):
+            break
+        if index:
+            parents.append((".".join(parts[:index]), current))
+        current = current.get(part)
+    else:
+        if current is not None:
+            return dict(op=op, field_path=field_path, old_value=deepcopy(current), new_value=new_value)
+    if not parents:
+        raise ValueError(f"{field_path} has no current value or parent")
+    parent_path, parent = parents[-1]
+    updated = deepcopy(parent)
+    suffix = field_path[len(parent_path) + 1:]
+    apply_path_patch(updated, suffix, new_value, op=op)
+    leaf = suffix.split(".", 1)[0]
+    return dict(op="merge", field_path=parent_path, old_value=deepcopy(parent),
+                new_value={leaf: updated[leaf]} if leaf in updated else {})
+
+
+__all__ = ["apply_path_patch", "cas_patch_fields"]

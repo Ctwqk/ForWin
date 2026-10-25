@@ -1260,7 +1260,8 @@ def test_world_variable_gate_uses_stored_and_patched_scale(patches, accepted):
     before = deepcopy(variable.model_dump())
     delta = GraphDelta(id="change", project_id="p", chapter_number=4, source_type="manual", node_patches=[
         NodePatch(node_id="variable", node_type="world_variable", op="set", field_path=field,
-                  old_value=2 if field == "state.level" else None, new_value=value)
+                  old_value={"state.level": 2, "state": {"level": 2}, "profile": variable.profile,
+                             "profile.scale": variable.profile["scale"]}[field], new_value=value)
         for field, value in patches
     ])
     verdict = BookStateReviewGate(None).review(
@@ -1304,7 +1305,9 @@ def test_world_variable_gate_checks_result_of_collection_and_section_patches(op,
     runtime.world.states_by_node_id["variable"] = {"level": 2}
     delta = GraphDelta(id="patch", project_id="p", chapter_number=4, source_type="manual", node_patches=[
         NodePatch(node_id="variable", node_type="world_variable", op=op, field_path=path,
-                  old_value=2 if path == "state.level" else None, new_value=value)])
+                  old_value={"state.level": 2, "state": {"level": 2},
+                             "profile": runtime.world.nodes_by_id["variable"].profile,
+                             "profile.scale": ["low", "normal", "high"]}[path], new_value=value)])
     verdict = BookStateReviewGate(None).review(
         ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta]), base_chapter=3, runtime=runtime)
     assert verdict.accepted is accepted, verdict.issues
@@ -1400,3 +1403,56 @@ def test_world_variable_create_rejects_conflicting_identity(override, level):
     assert ("error", "invalid_node_create_patch") in _codes(verdict)
     assert runtime.world.snapshot() == before
     assert not validate_graph_delta(delta).ok
+
+
+@pytest.mark.parametrize("state, path, old, accepted", [
+    ({}, "state.health", {"old_value": None}, True),
+    ({"health": None}, "state.health", {"old_value": None}, True),
+    ({}, "state.restraint.state", {"old_value": None}, True),
+    ({}, "state.health", {}, False),
+    ({"health": "well"}, "state.health", {"old_value": None}, False),
+    ({"health": "well"}, "state.health", {}, False),
+    ({}, "profile.public_identity", {"old_value": None}, False),
+])
+def test_gate_first_state_set_exception_uses_snapshot(state, path, old, accepted):
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+    from forwin.protocol.book_state import WorldNode
+
+    runtime = BookStateRuntime(project_id="p", as_of_chapter=0, world=ObjectiveWorldGraph(nodes=[
+        WorldNode(id="actor", project_id="p", node_type="character"),
+    ]), map_graph=MapGraph())
+    runtime.world.states_by_node_id["actor"] = state
+    patch = NodePatch(node_id="actor", node_type="character", op="set", field_path=path,
+                      new_value="free" if path == "state.restraint.state" else "changed", **old)
+    verdict = BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=1, graph_deltas=[
+            GraphDelta(id="d", project_id="p", chapter_number=1, node_patches=[patch]),
+        ]), base_chapter=0, runtime=runtime)
+    assert verdict.accepted is accepted, verdict.issues
+    assert ("missing_old_value" in {issue.code for issue in verdict.issues}) is not accepted
+
+
+@pytest.mark.parametrize("payload, old, accepted", [
+    ({}, {"old_value": None}, True),
+    ({}, {}, False),
+    ({"beats": []}, {"old_value": None}, False),
+    ({"beats": []}, {"old_value": []}, True),
+])
+def test_gate_first_thread_beat_append_requires_absent_beats(payload, old, accepted):
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+    from forwin.protocol.book_state import NarrativeNode, NarrativePatch
+
+    runtime = BookStateRuntime(project_id="p", as_of_chapter=0,
+        world=ObjectiveWorldGraph(), map_graph=MapGraph())
+    runtime.narrative.nodes_by_id["thread"] = NarrativeNode(
+        id="thread", project_id="p", node_type="plot_thread", payload=payload)
+    patch = NarrativePatch(target_ref="plot_thread:thread", op="append", field_path="payload.beats",
+                           new_value={"description": "progress"}, **old)
+    verdict = BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=1, graph_deltas=[
+            GraphDelta(id="d", project_id="p", chapter_number=1, narrative_patches=[patch]),
+        ]), base_chapter=0, runtime=runtime)
+    assert verdict.accepted is accepted, verdict.issues
+    assert ("missing_old_value" in {issue.code for issue in verdict.issues}) is not accepted

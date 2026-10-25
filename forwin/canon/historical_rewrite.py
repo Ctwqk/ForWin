@@ -277,7 +277,7 @@ class HistoricalCanonRewriteRepository:
                 GraphDeltaRow.project_id == previous.project_id,
                 GraphDeltaRow.chapter_number == previous.chapter_number,
             )
-            .order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
+            .order_by(GraphDeltaRow.seq)
             .with_for_update()
         ).all()
         chapter_ids = [delta_id for delta_id, _ in chapter_rows]

@@ -423,7 +423,7 @@ def test_refs_before_trailing_punctuation_get_their_names() -> None:
 # applies only to world tick deltas, which never reach the writer; invalid variable values
 # can come from chapter extraction and need prose repairs.
 _DEFAULT_FIX_GATE_CODES = {
-    "delta_not_allowed_for_canon", "world_engine_reader_knowledge", "invalid_protection",
+    "delta_not_allowed_for_canon", "world_engine_reader_knowledge", "invalid_protection", "missing_old_value",
     "invalid_node_create_patch", "invalid_edge_create_patch", "invalid_fact_create_patch",
     "invalid_map_create_patch", "invalid_map_patch_target", "invalid_knowledge_patch",
     "invalid_knowledge_ref", "invalid_knowledge_state", "missing_required_field",

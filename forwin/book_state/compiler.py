@@ -142,6 +142,10 @@ class BookStateCompiler:
                     or f"book_state_compile_blocked_{approved_changes.project_id}_{approved_changes.chapter_number}",
                     committed=False,
                     blocked_reasons=blocked_reasons,
+                    cas_failed=bool(self.cas_mismatches(runtime, delta)) and not (
+                        str(delta.delta_type) in {"repair", "retcon_block"}
+                        and bool(approved_changes.forced_accept_reason)
+                    ),
                     forced_accept_reason=approved_changes.forced_accept_reason,
                 )
             self.projection.apply_delta_to_runtime(runtime, delta)

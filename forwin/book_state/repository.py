@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -98,8 +97,7 @@ _CANON_CHAPTER_COLUMNS = (
 
 _VERSION_RECENCY = (
     WorldNodeStateRow.as_of_chapter.desc(),
-    WorldNodeStateRow.created_at.desc(),
-    WorldNodeStateRow.id.desc(),
+    WorldNodeStateRow.seq.desc(),
 )
 
 
@@ -154,10 +152,6 @@ class BookStateRepository:
             state_json=_dump(version_state),
             source_delta_id=source_delta_id,
         )
-        if latest is not None and latest.as_of_chapter == chapter:
-            # created_at defaults to the transaction timestamp, so versions written
-            # in one transaction would tie; keep same-chapter versions in write order.
-            version.created_at = latest.created_at + timedelta(microseconds=1)
         self.session.add(version)
         self.session.flush()
         return row
@@ -604,7 +598,7 @@ class BookStateRepository:
                     GraphDeltaRow.chapter_number > after_chapter,
                     GraphDeltaRow.chapter_number <= through_chapter,
                 )
-                .order_by(GraphDeltaRow.chapter_number.asc(), GraphDeltaRow.created_at.asc(), GraphDeltaRow.id.asc())
+                .order_by(GraphDeltaRow.chapter_number.asc(), GraphDeltaRow.seq.asc())
             )
             .scalars()
             .all()
@@ -764,7 +758,7 @@ class BookStateRepository:
                     GraphDeltaRow.chapter_number == chapter_number,
                     GraphDeltaRow.id.in_(delta_ids),
                 )
-                .order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
+                .order_by(GraphDeltaRow.seq)
             )
         )
         if len(set(delta_ids)) != len(delta_ids) or set(existing_ids) != set(delta_ids):
@@ -1245,7 +1239,7 @@ class BookStateRepository:
                 MapSnapshotRow.project_id == project_id,
                 MapSnapshotRow.as_of_chapter <= as_of_chapter,
             )
-            .order_by(MapSnapshotRow.as_of_chapter.desc(), MapSnapshotRow.built_at.desc(), MapSnapshotRow.id.desc())
+            .order_by(MapSnapshotRow.as_of_chapter.desc(), MapSnapshotRow.seq.desc())
             .limit(1)
         ).scalar_one_or_none()
         return _map_snapshot_from_row(row) if row else None

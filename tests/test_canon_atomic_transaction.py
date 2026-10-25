@@ -730,7 +730,7 @@ def _world_snapshot(
                 WorldSnapshotRow.project_id == project_id,
                 WorldSnapshotRow.as_of_chapter == chapter_number,
             )
-            .order_by(WorldSnapshotRow.built_at.desc(), WorldSnapshotRow.id.desc())
+            .order_by(WorldSnapshotRow.seq.desc())
         )
         assert snapshot is not None
         return snapshot.world_node_state_index_json

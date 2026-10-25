@@ -43,7 +43,7 @@ def latest_news_in_transit(session: Session, project_id: str) -> list[NewsItem]:
     raw = session.scalar(
         select(GraphDeltaRow.metadata_json)
         .where(GraphDeltaRow.project_id == project_id, GraphDeltaRow.source_type == WORLD_ENGINE_SOURCE_TYPE)
-        .order_by(GraphDeltaRow.chapter_number.desc(), GraphDeltaRow.created_at.desc(), GraphDeltaRow.id.desc())
+        .order_by(GraphDeltaRow.chapter_number.desc(), GraphDeltaRow.seq.desc())
         .limit(1)
     )
     metadata = json.loads(raw or "{}")

@@ -4,7 +4,7 @@ import json
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
 
 from forwin.api_schema import PersonalityLoadoutUpdateRequest
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
@@ -13,7 +13,7 @@ from forwin.canon import CanonAdmissionService, CanonStaleVersion
 from forwin.characters.creation import CharacterCreationHelper
 from forwin.characters.models import CharacterCreationRequest
 from forwin.http.adapters.api_book_state_routes import build_handlers
-from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.base import Base, get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow, WorldNodeStateRow
 from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.proposals import proposal_review
@@ -37,9 +37,13 @@ _LOADOUT_A = {"dominant": {"skill": "trait-loyal-protector", "weight": 0.72}}
 _LOADOUT_B = {"dominant": {"skill": "trait-cold-strategist", "weight": 0.64}}
 
 
-def _session_factory():
-    engine = get_engine(postgres_test_url())
-    init_db(engine)
+def _session_factory(backend="postgresql"):
+    if backend == "sqlite":
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine)
+    else:
+        engine = get_engine(postgres_test_url())
+        init_db(engine)
     return engine, get_session_factory(engine)
 
 
@@ -644,8 +648,9 @@ def _propose(Session, project_id: str, operation: dict, *, chapter: int | None =
         return row.id
 
 
-def test_world_edit_proposal_compiles_at_latest_canon_chapter() -> None:
-    engine, Session = _session_factory()
+@pytest.mark.parametrize("backend", ["sqlite", "postgresql"])
+def test_world_edit_proposal_compiles_at_latest_canon_chapter(backend) -> None:
+    engine, Session = _session_factory(backend)
     with Session.begin() as session:
         project_id = _create_project(session)
         _compile(session, project_id, 0, node_patches=[_create_character(project_id, "char_a", name="A0")])
@@ -681,8 +686,9 @@ def test_world_edit_proposal_compiles_at_latest_canon_chapter() -> None:
     engine.dispose()
 
 
-def test_world_edit_after_zero_delta_chapter_lands_in_that_chapter() -> None:
-    engine, Session = _session_factory()
+@pytest.mark.parametrize("backend", ["sqlite", "postgresql"])
+def test_world_edit_after_zero_delta_chapter_lands_in_that_chapter(backend) -> None:
+    engine, Session = _session_factory(backend)
     with Session.begin() as session:
         project_id = _create_project(session)
         _compile(session, project_id, 0, node_patches=[_create_character(project_id, "char_a", state={"status": "idle"})])
@@ -707,8 +713,9 @@ def test_world_edit_after_zero_delta_chapter_lands_in_that_chapter() -> None:
     engine.dispose()
 
 
-def test_future_chapter_world_edit_clamps_down() -> None:
-    engine, Session = _session_factory()
+@pytest.mark.parametrize("backend", ["sqlite", "postgresql"])
+def test_future_chapter_world_edit_clamps_down(backend) -> None:
+    engine, Session = _session_factory(backend)
     with Session.begin() as session:
         project_id = _create_project(session)
         _compile(session, project_id, 0, node_patches=[_create_character(project_id, "char_a", state={"status": "idle"})])
@@ -800,7 +807,7 @@ def _node_versions(session, node_id: str) -> list[tuple[int, str]]:
     rows = session.execute(
         select(WorldNodeStateRow)
         .where(WorldNodeStateRow.node_id == node_id)
-        .order_by(WorldNodeStateRow.as_of_chapter, WorldNodeStateRow.created_at)
+        .order_by(WorldNodeStateRow.as_of_chapter, WorldNodeStateRow.seq)
     ).scalars()
     return [(row.as_of_chapter, row.source_delta_id) for row in rows]
 
@@ -902,4 +909,33 @@ def test_world_edit_behind_latest_canon_chapter_is_stale(monkeypatch) -> None:
     with Session() as session:
         assert session.get(KnowledgeEditProposalRow, proposal_id).status == "pending"
         assert session.query(GraphDeltaRow).filter_by(project_id=project_id).count() == 1
+    engine.dispose()
+
+
+def test_world_edit_http_fills_current_state_and_keeps_supplied_cas() -> None:
+    from forwin.http.adapters.api_proposal_routes import build_handlers as proposal_handlers
+
+    engine, Session = _session_factory("sqlite")
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        _compile(session, project_id, 0, node_patches=[_create_character(
+            project_id, "char_a", state={"status": "idle"})])
+        _compile(session, project_id, 1, node_patches=[NodePatch(node_id="char_a", node_type="character",
+            op="set", field_path="state.status", old_value="idle", new_value="awake")])
+    operation = {"op": "set_node_field", "node_id": "char_a", "field_path": "state.status", "new_value": "busy"}
+    proposal_id = _propose(Session, project_id, operation)
+    handler = proposal_handlers(get_session=Session)["approve_project_proposal"]
+    approved = handler(project_id, proposal_id)
+    assert approved.status == "accepted"
+    with Session() as session:
+        delta = BookStateRepository(session).list_graph_deltas(project_id, through_chapter=1)[-1]
+        assert delta.node_patches[0].old_value == "awake"
+        assert _load(session, project_id, 1).world.get_state("char_a")["status"] == "busy"
+    stale = _propose(Session, project_id, {**operation, "old_value": "awake", "new_value": "idle"})
+    with pytest.raises(HTTPException) as error:
+        handler(project_id, stale)
+    assert error.value.status_code == 409
+    with Session() as session:
+        assert session.get(KnowledgeEditProposalRow, stale).status == "pending"
+        assert _load(session, project_id, 1).world.get_state("char_a")["status"] == "busy"
     engine.dispose()

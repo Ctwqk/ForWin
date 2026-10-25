@@ -482,6 +482,7 @@ class BookStateCompileResult(_BookStateModel):
     map_snapshot_id: str = ""
     cognition_snapshot_ids: list[str] = Field(default_factory=list)
     blocked_reasons: list[str] = Field(default_factory=list)
+    cas_failed: bool = False
     forced_accept_reason: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
 

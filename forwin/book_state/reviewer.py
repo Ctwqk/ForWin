@@ -31,6 +31,7 @@ from forwin.models.project import ChapterPlan
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
     GraphDelta,
+    NarrativePatch,
     NodePatch,
     ObserverType,
     WorldNode,
@@ -107,6 +108,7 @@ class BookStateReviewGate:
         for delta in changes.graph_deltas:
             issues.extend(_canon_permission_issues(delta))
             issues.extend(_schema_issues(delta))
+            issues.extend(_missing_old_value_issues(runtime, delta))
             issues.extend(_immutable_rule_definition_issues(runtime, delta))
             if delta.source_type == WORLD_ENGINE_SOURCE_TYPE:
                 issues.extend(_reader_knowledge_issues(delta))
@@ -130,6 +132,56 @@ class BookStateReviewGate:
             issues=issues,
             approved_changes=changes if accepted else None,
         )
+
+
+def _missing_old_value_issues(runtime: BookStateRuntime, delta: GraphDelta) -> list[BookStateReviewIssue]:
+    targets = []
+    for patches, nodes, key in (
+        (delta.node_patches, runtime.world.nodes_by_id, "node_id"),
+        (delta.edge_patches, runtime.world.edges_by_id, "edge_id"),
+        (delta.fact_patches, runtime.world.facts_by_id, "fact_id"),
+    ):
+        targets.extend((patch, getattr(patch, key), nodes.get(getattr(patch, key))) for patch in patches)
+    for patch in delta.map_patches:
+        nodes = runtime.map.nodes_by_id if patch.target_type == "map_node" else runtime.map.edges_by_id
+        targets.append((patch, patch.target_id, nodes.get(patch.target_id)))
+    for patch in delta.cognition_patches:
+        key = (str(patch.observer_type), patch.observer_id)
+        targets.append((patch, f"cognition:{key[0]}:{key[1]}", runtime.cognition_by_observer.get(key)))
+    for patch in delta.narrative_patches:
+        kind, _, ref = patch.target_ref.partition(":")
+        nodes = runtime.narrative.edges_by_id if kind == "narrative_edge" else runtime.narrative.nodes_by_id
+        targets.append((patch, patch.target_ref, nodes.get(ref or kind)))
+    issues = []
+    for patch, ref, target in targets:
+        if str(patch.op) == "create" or target is None or patch.old_value is not None:
+            continue
+        # P2 R8 keeps first node-state writes as leaf sets; state is snapshot-backed.
+        if (isinstance(patch, NodePatch) and str(patch.op) == "set"
+                and patch.field_path.startswith("state.") and "old_value" in patch.model_fields_set):
+            current = runtime.world.get_state(patch.node_id)
+            for part in patch.field_path.removeprefix("state.").split("."):
+                current = current.get(part) if isinstance(current, dict) else None
+            if current is None:
+                continue
+        # An existing thread may receive its first beat without changing the append shape.
+        if (isinstance(patch, NarrativePatch) and getattr(target, "node_type", "") == "plot_thread"
+                and str(patch.op) == "append" and patch.field_path == "payload.beats"
+                and "old_value" in patch.model_fields_set and "beats" not in target.payload):
+            continue
+        # An omitted protection status is active; its release records an explicit null.
+        if (getattr(target, "node_type", "") == "review_constraint"
+                and patch.field_path == PROTECTION_STATUS_PATH
+                and str(patch.op) in {"set", "replace"}
+                and patch.new_value == RELEASED_PROTECTION_STATUS
+                and "old_value" in patch.model_fields_set
+                and target.payload.get("status") is None):
+            continue
+        issues.append(BookStateReviewIssue(
+            severity="error", code="missing_old_value", target_ref=ref,
+            message="Non-create patches on existing targets require old_value.",
+        ))
+    return issues
 
 
 def _plan_constraint_issues(runtime: BookStateRuntime, delta: GraphDelta) -> list[BookStateReviewIssue]:

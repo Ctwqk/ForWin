@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
@@ -24,7 +24,7 @@ from forwin.candidate_drafts import (
     candidate_writer_output_admission_fingerprint,
 )
 from forwin.models.base import new_id
-from forwin.models.book_state import GraphDeltaRow, WorldSnapshotRow
+from forwin.models.book_state import GraphDeltaRow
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.audit import DecisionEvent
@@ -48,8 +48,6 @@ from .types import CanonAdmissionOutcome, CanonWorldEditOutcome, CanonWorldTickO
 logger = logging.getLogger(__name__)
 
 GENESIS_SEED_SOURCE_TYPE = "genesis_seed"
-# How BookStateCompiler reports a patch whose old_value no longer matches: a failed CAS.
-_COMPILER_CAS_MISMATCH = "old_value mismatch"
 
 
 class CanonStaleVersion(RuntimeError):
@@ -628,7 +626,7 @@ class CanonAdmissionService:
         existing = tuple(session.scalars(select(GraphDeltaRow.id).where(
             GraphDeltaRow.project_id == project_id, GraphDeltaRow.source_type == PLAN_CONSTRAINT_SOURCE_TYPE,
             GraphDeltaRow.beat_sheet_id == constraint_set_id,
-        ).order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)))
+        ).order_by(GraphDeltaRow.seq)))
         if existing:
             return CanonPlanConstraintOutcome(existing, True)
         chapter = BookStateRepository(session).latest_canon_chapter(project_id) or 0
@@ -674,16 +672,6 @@ class CanonAdmissionService:
         )
         if not result.committed:
             raise CanonWriteFailure("; ".join(result.blocked_reasons))
-        # PostgreSQL now() is transaction-stable. Preserve order after the seed and after any
-        # earlier sheet in this transaction, both in the ledger and the narrative snapshot.
-        last_delta_time = session.scalar(select(func.max(GraphDeltaRow.created_at)).where(
-            GraphDeltaRow.project_id == project_id, GraphDeltaRow.chapter_number == chapter,
-        ))
-        session.get(GraphDeltaRow, delta.id).created_at = last_delta_time + timedelta(microseconds=1)
-        last_snapshot_time = session.scalar(select(func.max(WorldSnapshotRow.built_at)).where(
-            WorldSnapshotRow.project_id == project_id, WorldSnapshotRow.as_of_chapter == chapter,
-        ))
-        session.get(WorldSnapshotRow, result.world_snapshot_id).built_at = last_snapshot_time + timedelta(microseconds=1)
         session.flush()
         session.add(DecisionEvent(
             id=new_id(), project_id=project_id, chapter_number=chapter, scope="chapter",
@@ -748,7 +736,7 @@ class CanonAdmissionService:
         )
         if not compile_result.committed:
             reasons = "; ".join(compile_result.blocked_reasons) or "BookState compiler rejected the world tick"
-            if any(_COMPILER_CAS_MISMATCH in reason for reason in compile_result.blocked_reasons):
+            if compile_result.cas_failed:
                 raise CanonStaleVersion(reasons)
             raise CanonWriteFailure(reasons)
         if compile_result.metadata.get("idempotent"):
@@ -873,7 +861,7 @@ def _world_tick_delta_ids(session: Session, project_id: str, tick_id: str) -> tu
             GraphDeltaRow.project_id == project_id,
             GraphDeltaRow.source_type == WORLD_ENGINE_SOURCE_TYPE,
             GraphDeltaRow.tick_id == tick_id,
-        ).order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
+        ).order_by(GraphDeltaRow.seq)
     ))
 
 

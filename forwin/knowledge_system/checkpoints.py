@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import re
 from typing import Any, Iterator
 
@@ -50,6 +50,7 @@ class ProjectionRunTicket:
     target_chapter_number: int
     event_id: str
     started_at: datetime
+    run_seq: int
 
 
 def validate_projection_component(projection_kind: str) -> str:
@@ -209,7 +210,8 @@ class ProjectionCheckpointStore:
                     ):
                         return None
 
-                    started_at = _next_started_at(row.started_at)
+                    started_at = _utcnow()
+                    row.run_seq += 1
                     row.status = "running"
                     row.started_at = started_at
                     row.completed_at = None
@@ -220,6 +222,7 @@ class ProjectionCheckpointStore:
                         target_chapter_number=target.chapter_number,
                         event_id=str(event_id or ""),
                         started_at=started_at,
+                        run_seq=row.run_seq,
                     )
             except IntegrityError:
                 if attempt:
@@ -368,19 +371,12 @@ def _ticket_is_current(
     return (
         int(row.target_chapter_number or 0) == ticket.target_chapter_number
         and row.target_canon_commit_id == ticket.target_canon_commit_id
-        and row.started_at == ticket.started_at
+        and row.run_seq == ticket.run_seq
     )
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-def _next_started_at(previous: datetime | None) -> datetime:
-    current = _utcnow()
-    if previous is not None and current <= previous:
-        return previous + timedelta(microseconds=1)
-    return current
 
 
 __all__ = [

@@ -1330,3 +1330,71 @@ def test_ambiguous_name_does_not_fall_back_to_existing_generated_id(kind):
     assert any(issue.code == "ambiguous_name" for issue in result.issues)
     assert result.delta is None
     assert any(issue.code == "unresolved_ref" for issue in result.issues)
+
+
+@pytest.mark.parametrize("state, old_value", [({}, None), ({"health": "well"}, "well")])
+def test_state_changes_keep_leaf_paths_and_snapshot_old_values_without_database(state, old_value):
+    from forwin.book_state.extraction.translator import _DeltaBuilder
+    from forwin.book_state.lexicon import BookLexicon
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.reviewer import BookStateReviewGate
+    from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+    from forwin.protocol.book_state import WorldNode
+
+    runtime = BookStateRuntime(project_id="p", as_of_chapter=0, world=ObjectiveWorldGraph(nodes=[
+        WorldNode(id="hero", project_id="p", node_type="character"),
+        WorldNode(id="rival", project_id="p", node_type="character", state={"alive_status": "alive"}),
+    ]), map_graph=MapGraph())
+    runtime.world.states_by_node_id["hero"] = state
+    builder = _DeltaBuilder(project_id="p", chapter_number=1, runtime=runtime,
+        calendar=None, lexicon=BookLexicon(), start=0,
+        admission_plan=EntityAdmissionPlan(project_id="p", chapter_number=1, candidate_fingerprint="f"))
+    result = builder.build(_extraction(1, {"entity_changes": [
+        {"ref": "rival", "field": "alive_status", "new_value": "dead", "evidence": "past", "flashback": True},
+        {"ref": "hero", "field": "health", "new_value": "wounded", "evidence": "present"},
+    ]}), chapter_summary="", review_verdict_id="")
+    assert result.delta is not None and result.issues == ()
+    (patch,) = result.delta.node_patches
+    assert (patch.node_id, patch.op, patch.field_path, patch.old_value, patch.new_value) == (
+        "hero", "set", "state.health", old_value, "wounded",
+    )
+    assert "old_value" in patch.model_fields_set
+    verdict = BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=1, graph_deltas=[result.delta]),
+        base_chapter=0, runtime=runtime)
+    assert verdict.accepted, verdict.issues
+    runtime.world.apply_delta(result.delta)
+    assert runtime.world.get_state("hero")["health"] == "wounded"
+    assert runtime.world.get_state("rival")["alive_status"] == "alive"
+
+
+def test_existing_thread_without_beats_keeps_append_paths():
+    from forwin.book_state.extraction.translator import _DeltaBuilder
+    from forwin.book_state.lexicon import BookLexicon
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.reviewer import BookStateReviewGate
+    from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+    from forwin.protocol.book_state import NarrativeNode
+
+    runtime = BookStateRuntime(project_id="p", as_of_chapter=0,
+        world=ObjectiveWorldGraph(), map_graph=MapGraph())
+    runtime.narrative.nodes_by_id["thread"] = NarrativeNode(
+        id="thread", project_id="p", node_type="plot_thread", payload={"priority": 5})
+    builder = _DeltaBuilder(project_id="p", chapter_number=1, runtime=runtime,
+        calendar=None, lexicon=BookLexicon(), start=0,
+        admission_plan=EntityAdmissionPlan(project_id="p", chapter_number=1, candidate_fingerprint="f"))
+    result = builder.build(_extraction(1, {"thread_beats": [
+        {"thread_ref": "plot_thread:thread", "beat_type": "advance", "evidence": "progress"},
+        {"thread_ref": "plot_thread:thread", "beat_type": "resolution", "evidence": "resolved"},
+    ]}), chapter_summary="", review_verdict_id="")
+    assert result.delta is not None
+    assert [(patch.op, patch.field_path, patch.old_value) for patch in result.delta.narrative_patches[:2]] == [
+        ("append", "payload.beats", None), ("append", "payload.beats", None),
+    ]
+    verdict = BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=1, graph_deltas=[result.delta]),
+        base_chapter=0, runtime=runtime)
+    assert verdict.accepted, verdict.issues
+    for patch in result.delta.narrative_patches:
+        runtime.narrative.apply_narrative_patch(patch, project_id="p")
+    assert [beat["description"] for beat in runtime.narrative.nodes_by_id["thread"].payload["beats"]] == ["progress", "resolved"]

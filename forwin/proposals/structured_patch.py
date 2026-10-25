@@ -12,7 +12,7 @@ from forwin.book_state.narrative import (
     promise_node_payload,
     reader_promise_from_node,
 )
-from forwin.book_state.path_patch import apply_path_patch
+from forwin.book_state.path_patch import apply_path_patch, cas_patch_fields
 from forwin.book_state.projection import BookStateProjection
 from forwin.models.base import new_id
 from forwin.models.knowledge import KnowledgeEditProposalRow
@@ -47,8 +47,8 @@ def proposal_to_graph_delta(
     """Build the proposal's delta for ``chapter_number`` (default: the proposal's chapter).
 
     Creates are stamped with that chapter, so they exist from where the delta
-    compiles. Old values are read as of the proposal's own chapter: a value
-    changed since the proposal was written then fails the compiler check.
+    compiles. Omitted old values come from the runtime at that chapter; supplied
+    old values remain unchanged for the compiler compare-and-swap check.
     """
     chapter = proposal_chapter(row) if chapter_number is None else int(chapter_number)
     payload = load_json(row.proposed_patch_json, {})
@@ -57,7 +57,7 @@ def proposal_to_graph_delta(
         return audit_delta_from_proposal(row, reason=reason, chapter_number=chapter)
     runtime = BookStateProjection(session).load_runtime_as_of(
         row.project_id,
-        as_of_chapter=max(proposal_chapter(row), 0),
+        as_of_chapter=max(chapter, 0),
     )
     source_refs = _source_refs(row)
     node_patches: list[NodePatch] = []
@@ -339,15 +339,12 @@ def _node_patch(
         new_value = operation.get("text", operation.get("new_value"))
     if not field_path:
         raise ValueError(f"{op} requires field_path")
+    payload = node.model_dump(mode="json")
+    payload["state"] = runtime.world.get_state(node_id)
     return NodePatch(
         node_id=node_id,
         node_type=node.node_type,
-        op=patch_op,
-        field_path=field_path,
-        old_value=operation.get(
-            "old_value", _get_path(node.model_dump(mode="json"), field_path)
-        ),
-        new_value=new_value,
+        **_operator_patch_fields(operation, payload, field_path, new_value, op=patch_op),
         reason=reason or str(operation.get("reason") or row.reason or ""),
         visibility_default=str(
             operation.get("visibility_default")
@@ -413,7 +410,8 @@ def _edge_patch(
             target_id=edge.target_id,
             edge_type=edge.edge_type,
             edge_family=edge.edge_family,
-            old_value=operation.get("old_value"),
+            field_path="is_active",
+            old_value=operation.get("old_value", edge.is_active),
             reason=reason or str(operation.get("reason") or row.reason or ""),
         )
     field_path = str(operation.get("field_path") or "")
@@ -421,16 +419,11 @@ def _edge_patch(
         raise ValueError("set_edge_field requires field_path")
     return EdgePatch(
         edge_id=edge_id,
-        op="set",
         source_id=edge.source_id,
         target_id=edge.target_id,
         edge_type=edge.edge_type,
         edge_family=edge.edge_family,
-        field_path=field_path,
-        old_value=operation.get(
-            "old_value", _get_path(edge.model_dump(mode="json"), field_path)
-        ),
-        new_value=operation.get("new_value"),
+        **_operator_patch_fields(operation, edge.model_dump(mode="json"), field_path, operation.get("new_value")),
         reason=reason or str(operation.get("reason") or row.reason or ""),
     )
 
@@ -530,7 +523,8 @@ def _map_patch(
             target_type=target_type,
             target_id=target_id,
             op="deactivate",
-            old_value=operation.get("old_value"),
+            field_path="status",
+            old_value=operation.get("old_value", current.status),
             reason=reason or str(operation.get("reason") or row.reason or ""),
         )
     field_path = str(operation.get("field_path") or "")
@@ -539,12 +533,7 @@ def _map_patch(
     return MapPatch(
         target_type=target_type,
         target_id=target_id,
-        op="set",
-        field_path=field_path,
-        old_value=operation.get(
-            "old_value", _get_path(current.model_dump(mode="json"), field_path)
-        ),
-        new_value=operation.get("new_value"),
+        **_operator_patch_fields(operation, current.model_dump(mode="json"), field_path, operation.get("new_value")),
         reason=reason or str(operation.get("reason") or row.reason or ""),
         visibility_default=str(
             operation.get("visibility_default")
@@ -603,12 +592,7 @@ def _fact_patch(
         raise ValueError("set_fact_field requires field_path")
     return FactPatch(
         fact_id=fact_id,
-        op="set",
-        field_path=field_path,
-        old_value=operation.get(
-            "old_value", _get_path(fact.model_dump(mode="json"), field_path)
-        ),
-        new_value=operation.get("new_value"),
+        **_operator_patch_fields(operation, fact.model_dump(mode="json"), field_path, operation.get("new_value")),
         reason=reason or str(operation.get("reason") or row.reason or ""),
         proposition=fact.proposition,
         truth_value=fact.truth_value,
@@ -708,12 +692,10 @@ def _promise_narrative_patches(
         edits = [
             (
                 "status",
-                operation.get("old_value", current["status"]),
                 operation.get("new_value", "resolved"),
             ),
             (
                 "current_debt_level",
-                current["current_debt_level"],
                 operation.get("current_debt_level", 0),
             ),
         ]
@@ -724,30 +706,29 @@ def _promise_narrative_patches(
         edits = [
             (
                 field_path,
-                operation.get("old_value", _get_path(current, field_path)),
                 operation.get("new_value"),
             )
         ]
-    node_paths = [_promise_field_path(field) for field, _, _ in edits]
+    node_paths = [_promise_field_path(field) for field, _ in edits]
     # Nothing validates narrative patch values downstream, so a mistyped edit
     # would enter canon and make every promise read fail; check it here.
     edited = deepcopy(current)
-    for field, _, new_value in edits:
+    for field, new_value in edits:
         apply_path_patch(edited, field, new_value)
     try:
         validated = ReaderPromise.model_validate(edited).model_dump(mode="json")
     except ValidationError as exc:
         raise ValueError(f"invalid reader promise edit for {promise_id}: {exc}") from exc
     patches: list[NarrativePatch] = []
-    for node_path, (field, old_value, new_value) in zip(node_paths, edits):
+    for node_path, (field, new_value) in zip(node_paths, edits):
         patches.append(
             NarrativePatch(
                 target_ref=target_ref,
-                op="set",
-                field_path=node_path,
-                old_value=old_value,
-                # A top-level field is stored in its validated type ("4" -> 4).
-                new_value=new_value if "." in field else validated[field],
+                **_operator_patch_fields(
+                    operation if op != "resolve_reader_promise" or field == "status" else {},
+                    node.model_dump(mode="json"), node_path,
+                    new_value if "." in field else validated[field],
+                ),
                 reason=patch_reason,
                 evidence_refs=evidence_refs,
             )
@@ -828,3 +809,12 @@ def _cognition_current(
     }:
         return sorted(getattr(view, field_path))
     return getattr(view, field_path, None)
+
+
+def _operator_patch_fields(
+    operation: dict[str, Any], payload: dict[str, Any], field_path: str,
+    new_value: Any, *, op: str = "set",
+) -> dict[str, Any]:
+    if "old_value" in operation:
+        return dict(op=op, field_path=field_path, old_value=operation["old_value"], new_value=new_value)
+    return cas_patch_fields(payload, field_path, new_value, op=op)

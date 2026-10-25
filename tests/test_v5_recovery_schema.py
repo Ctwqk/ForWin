@@ -33,8 +33,11 @@ TABLES_ADDED_AFTER_BASELINE = {
     "arc_beat_sheets", "band_plans", "world_conflict_result_refs",
 }
 COLUMNS_ADDED_AFTER_BASELINE = {
-    "graph_deltas": {"story_time_start", "story_time_end", "tick_id", "beat_sheet_id"},
-    "world_node_states": {"name", "aliases_json", "profile_json", "is_active"},
+    "graph_deltas": {"story_time_start", "story_time_end", "tick_id", "beat_sheet_id", "seq"},
+    "world_node_states": {"name", "aliases_json", "profile_json", "is_active", "seq"},
+    "map_snapshots": {"seq"},
+    "book_cognition_snapshots": {"seq"},
+    "projection_checkpoints": {"run_seq"},
     "cognition_overlays": {"knowledge_by_ref_json"},
     "world_snapshots": {"narrative_node_index_json", "narrative_edge_index_json", "seq"},
     "arc_plan_versions": {"title", "goal", "stakes", "payoff_direction"},
@@ -243,6 +246,7 @@ def test_projection_checkpoint_contract() -> None:
         "last_event_id",
         "source_digest",
         "last_error",
+        "run_seq",
         "started_at",
         "completed_at",
         "created_at",

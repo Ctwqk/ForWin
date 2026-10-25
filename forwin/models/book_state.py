@@ -23,6 +23,23 @@ from sqlalchemy.sql import func
 from .base import Base, new_id
 
 
+def _row_sequence(table_name):
+    def next_value(context):
+        connection = context.connection
+        if connection.dialect.name == "postgresql":
+            return connection.scalar(select(func.nextval(func.pg_get_serial_sequence(table_name, "seq"))))
+        # SQLite serializes writers; reserve each default in this INSERT batch as well.
+        counters = getattr(context, "_book_state_sequences", None)
+        if counters is None:
+            counters = context._book_state_sequences = {}
+        if table_name not in counters:
+            table = Base.metadata.tables[table_name]
+            counters[table_name] = connection.scalar(select(func.coalesce(func.max(table.c.seq), 0)))
+        counters[table_name] += 1
+        return counters[table_name]
+    return next_value
+
+
 class WorldNodeRow(Base):
     __tablename__ = "world_nodes"
     __table_args__ = (
@@ -62,6 +79,7 @@ class WorldNodeStateRow(Base):
         Index("ix_world_node_states_project_type", "project_id", "node_type"),
     )
 
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(), default=_row_sequence("world_node_states"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     node_id: Mapped[str] = mapped_column(String, nullable=False)
@@ -175,6 +193,7 @@ class GraphDeltaRow(Base):
         Index("ix_graph_deltas_project_beat_sheet", "project_id", "beat_sheet_id"),
     )
 
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(), default=_row_sequence("graph_deltas"))
     id: Mapped[str] = mapped_column(String, primary_key=True)
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     chapter_number: Mapped[int] = mapped_column(Integer, default=0)
@@ -275,21 +294,13 @@ class CognitionOverlayPatchRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
-def _next_world_snapshot_seq(context):
-    connection = context.connection
-    if connection.dialect.name == "postgresql":
-        return connection.scalar(select(func.nextval(func.pg_get_serial_sequence("world_snapshots", "seq"))))
-    # SQLite has no sequences; its single-writer inserts use the next stored value.
-    return connection.scalar(select(func.coalesce(func.max(WorldSnapshotRow.seq), 0) + 1))
-
-
 class WorldSnapshotRow(Base):
     __tablename__ = "world_snapshots"
     __table_args__ = (
         Index("ix_world_snapshots_project_chapter", "project_id", "as_of_chapter"),
     )
 
-    seq: Mapped[int] = mapped_column(BigInteger, Identity(), default=_next_world_snapshot_seq)
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(), default=_row_sequence("world_snapshots"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     as_of_chapter: Mapped[int] = mapped_column(Integer, default=0)
@@ -324,6 +335,7 @@ class MapSnapshotRow(Base):
         Index("ix_map_snapshots_project_chapter", "project_id", "as_of_chapter"),
     )
 
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(), default=_row_sequence("map_snapshots"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     as_of_chapter: Mapped[int] = mapped_column(Integer, default=0)
@@ -341,6 +353,7 @@ class BookCognitionSnapshotRow(Base):
         Index("ix_book_cognition_snapshots_project_observer", "project_id", "observer_type", "observer_id", "as_of_chapter"),
     )
 
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(), default=_row_sequence("book_cognition_snapshots"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     observer_type: Mapped[str] = mapped_column(String, nullable=False)

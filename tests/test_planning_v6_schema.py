@@ -80,11 +80,15 @@ def _assert_planning_schema(engine: sa.Engine) -> None:
     assert PLANNING_COLUMNS <= {c["name"] for c in inspector.get_columns("chapter_plans")}
     for table_name in ("chapter_plans", "band_experience_plans"):
         assert "task_contract_json" not in {c["name"] for c in inspector.get_columns(table_name)}
-    snapshot_columns = {c["name"]: c for c in inspector.get_columns("world_snapshots")}
-    assert snapshot_columns["seq"]["nullable"] is False
-    assert isinstance(snapshot_columns["seq"]["type"], sa.BigInteger)
-    if engine.dialect.name == "postgresql":
-        assert snapshot_columns["seq"]["identity"]["always"] is False
+    for table_name in ("world_snapshots", "map_snapshots", "book_cognition_snapshots", "world_node_states", "graph_deltas"):
+        columns = {c["name"]: c for c in inspector.get_columns(table_name)}
+        assert columns["seq"]["nullable"] is False
+        assert isinstance(columns["seq"]["type"], sa.BigInteger)
+        if engine.dialect.name == "postgresql":
+            assert columns["seq"]["identity"]["always"] is False
+    checkpoint_columns = {c["name"]: c for c in inspector.get_columns("projection_checkpoints")}
+    assert checkpoint_columns["run_seq"]["nullable"] is False
+    assert str(checkpoint_columns["run_seq"]["default"]).split("::")[0].strip("'") == "0"
     conflict_columns = {c["name"]: c for c in inspector.get_columns("world_plan_conflicts")}
     assert {"origin_key", "decision_option", "superseded_by_delta"} <= conflict_columns.keys()
     assert conflict_columns["origin_key"]["nullable"] is False
@@ -563,35 +567,44 @@ def test_0006_subworld_character_downgrade_definitions_match_baseline() -> None:
     assert definitions(migration._restore_subworld_character_paths) == expected
 
 
-def test_0006_snapshot_sequence_backfills_and_round_trips(legacy_database):
+@pytest.mark.parametrize("table_name, chapter_column, timestamp_column", [
+    ("world_snapshots", "as_of_chapter", "built_at"),
+    ("map_snapshots", "as_of_chapter", "built_at"),
+    ("book_cognition_snapshots", "as_of_chapter", "built_at"),
+    ("world_node_states", "as_of_chapter", "created_at"),
+    ("graph_deltas", "chapter_number", "created_at"),
+])
+def test_0006_snapshot_sequence_backfills_and_round_trips(legacy_database, table_name, chapter_column, timestamp_column):
     config, engine = legacy_database
     stamp = datetime(2026, 10, 22)
     with Session(engine) as session, session.begin():
         session.add(models.Project(id="snapshot-project", title="title", premise="premise", genre="test"))
         session.flush()
-        table = sa.Table("world_snapshots", sa.MetaData(), autoload_with=session.connection())
+        table = sa.Table(table_name, sa.MetaData(), autoload_with=session.connection())
         values = {column.name: (stamp if isinstance(column.type, sa.DateTime)
+                               else False if isinstance(column.type, sa.Boolean)
                                else 0 if isinstance(column.type, sa.Integer) else "") for column in table.columns}
         values["project_id"] = "snapshot-project"
         for row_id, chapter, built_at in (("z", 2, stamp), ("b", 1, stamp), ("a", 1, stamp),
                                           ("older", 1, datetime(2026, 10, 21))):
-            session.execute(table.insert().values(**dict(values, id=row_id, as_of_chapter=chapter, built_at=built_at)))
+            session.execute(table.insert().values(**dict(values, id=row_id, **{chapter_column: chapter, timestamp_column: built_at})))
     command.upgrade(config, "0006_planning_v6")
     with engine.begin() as connection:
-        assert connection.execute(sa.text("SELECT id, seq FROM world_snapshots ORDER BY seq")).all() == [
+        assert connection.execute(sa.text(f"SELECT id, seq FROM {table_name} ORDER BY seq")).all() == [
             ("older", 1), ("a", 2), ("b", 3), ("z", 4),
         ]
-        table = sa.Table("world_snapshots", sa.MetaData(), autoload_with=connection)
-        connection.execute(table.insert().values(**dict(values, id="next", as_of_chapter=2, built_at=stamp)))
-        assert connection.execute(sa.text("SELECT seq FROM world_snapshots WHERE id = 'next'")).scalar_one() == 5
-        sequence = connection.execute(sa.text("SELECT pg_get_serial_sequence('world_snapshots', 'seq')")).scalar_one()
+        table = sa.Table(table_name, sa.MetaData(), autoload_with=connection)
+        connection.execute(table.insert().values(**dict(values, id="next", **{chapter_column: 2, timestamp_column: stamp})))
+        assert connection.execute(sa.text(f"SELECT seq FROM {table_name} WHERE id = 'next'")).scalar_one() == 5
+        sequence = connection.execute(sa.text("SELECT pg_get_serial_sequence(:table, 'seq')"), {"table": table_name}).scalar_one()
+        assert sequence
     command.downgrade(config, "0005_world_plan_conflicts")
-    assert "seq" not in {column["name"] for column in sa.inspect(engine).get_columns("world_snapshots")}
+    assert "seq" not in {column["name"] for column in sa.inspect(engine).get_columns(table_name)}
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT to_regclass(:sequence)"), {"sequence": sequence}).scalar_one() is None
     command.upgrade(config, "0006_planning_v6")
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT count(DISTINCT seq) FROM world_snapshots")).scalar_one() == 5
+        assert connection.execute(sa.text(f"SELECT count(DISTINCT seq) FROM {table_name}")).scalar_one() == 5
 
 
 def _seed_conflict_lookup_backfill(connection):
@@ -669,3 +682,23 @@ def test_0006_typed_conflict_backfills_and_round_trips(legacy_database):
                 session.flush()
         session.add(models.BandPlanRow(**dict(values, version=2)))
         session.add(models.BandPlanRow(**dict(values, band_index=1)))
+
+
+def test_0006_projection_run_sequence_backfills_and_round_trips(legacy_database):
+    config, engine = legacy_database
+    with engine.begin() as connection:
+        # The ORM supplies the project's NOT NULL defaults, as _seed_legacy_chapter does.
+        with Session(bind=connection) as session:
+            session.add(models.Project(id="p", title="test", premise="test", genre="test"))
+            session.flush()
+        table = sa.Table("projection_checkpoints", sa.MetaData(), autoload_with=connection)
+        connection.execute(table.insert().values(id="checkpoint", project_id="p", projection_kind="obsidian",
+                                                created_at=datetime(2026, 10, 22), updated_at=datetime(2026, 10, 22)))
+    for _ in range(2):
+        command.upgrade(config, "0006_planning_v6")
+        with engine.begin() as connection:
+            assert connection.execute(sa.text("SELECT run_seq FROM projection_checkpoints")).scalar_one() == 0
+            connection.execute(sa.text("UPDATE projection_checkpoints SET run_seq = run_seq + 1"))
+            assert connection.execute(sa.text("SELECT run_seq FROM projection_checkpoints")).scalar_one() == 1
+        command.downgrade(config, "0005_world_plan_conflicts")
+        assert "run_seq" not in {c["name"] for c in sa.inspect(engine).get_columns("projection_checkpoints")}

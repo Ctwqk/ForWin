@@ -85,8 +85,8 @@ def _world_edit_chapter(session, project_id: str, row: KnowledgeEditProposalRow)
 
     A past-chapter compile would not reach later snapshots; retroactive edits
     belong to historical rewrite. A future-chapter compile would put canon ahead
-    of the accepted chapters. The patches keep old values read as of the
-    proposal's chapter, so a value changed since then fails the compiler check.
+    of the accepted chapters. Missing old values are read at the compile
+    chapter; operator-supplied values retain their compare-and-swap semantics.
     """
     latest = BookStateRepository(session).latest_canon_chapter(project_id)
     return proposal_chapter(row) if latest is None else latest

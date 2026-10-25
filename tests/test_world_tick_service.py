@@ -799,28 +799,36 @@ def test_llm_outage_skips_world_nodes_and_commits_the_deterministic_rest(monkeyp
     engine.dispose()
 
 
-def test_news_leaves_out_what_a_protection_forbids_an_observer_to_know() -> None:
+def test_forbidden_delivery_is_requeued_not_dropped() -> None:
     engine, Session = _session_factory()
     world = _seed_world(Session)
-    # The hero does something in public at loc 1, where the faction also is.
+    # The hero does something in public at loc 1, where the faction also is; chapter 2 lifts the protection.
     chapter = _delta(Session, world, 1, {
         **_time(1, "日"), "events": [_event([world.hero], location_ref=world.loc(1))],
     })
     [(_event_item, deed)] = chapter_events(chapter)
     chapter = _protecting(chapter, [("hide-deed", {
         "ref": world.faction, "kind": "must_not_know", "observer_ref": world.faction, "fact_ref": deed,
-        "until_chapter": 0, "source": "human",
+        "until_chapter": 2, "source": "human",
     })])
     _commit(Session, world, chapter)
 
     _tick(Session, _WorldLLM(actor_turn=_quiet_turns), chapter)
 
-    # The faction would have witnessed the deed; the rival, two hours away, still hears of it after the chapter.
+    # The faction would have witnessed the deed: its news waits for the next tick instead of being lost. The
+    # rival, two hours away, still hears of it after the chapter.
     assert _knows(_runtime(Session, world), world.faction, deed) is None
     [delta] = _tick_deltas(Session, world)
     assert json.loads(delta.metadata_json)["news_in_transit"] == [
+        {"fact_ref": deed, "observer_ref": world.faction, "arrive_at": chapter.story_time_end + 1},
         {"fact_ref": deed, "observer_ref": world.rival, "arrive_at": chapter.story_time_end + 120},
     ]
+
+    later = _chapter(Session, world, 2, days=1)
+    _tick(Session, _WorldLLM(actor_turn=_quiet_turns), later)
+
+    runtime = _runtime(Session, world, 2)
+    assert (_knows(runtime, world.faction, deed), _knows(runtime, world.rival, deed)) == ("heard", "heard")
     engine.dispose()
 
 
@@ -1192,6 +1200,69 @@ def test_canon_written_during_the_tick_makes_it_stale_and_a_retry_commits(monkey
     engine.dispose()
 
 
+@pytest.mark.parametrize(("racing", "skipped"), [
+    ("adjudicate", "world.actor_turn"), ("actor_turn", "review.world_conflict"),
+], ids=["before_turns", "before_codex"])
+def test_stale_snapshot_stops_before_llm_phase(monkeypatch, racing: str, skipped: str) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _chapter(Session, world, 1)
+    handlers: dict[str, Handler] = {
+        "adjudicate": _outcomes(_ambush(world, chapter)), "actor_turn": _quiet_turns, "review": _review("veto_world"),
+    }
+    answer = handlers[racing]
+
+    def racing_answer(payload: dict[str, Any], content: str) -> dict[str, Any] | str:
+        # While this phase thinks, another writer changes the canon the tick reasoned on.
+        _disrupt_the_later_intent(Session, world, chapter)
+        return answer(payload, content)
+
+    llm = _WorldLLM(**{**handlers, racing: racing_answer})
+
+    with pytest.raises(CanonStaleVersion):
+        _tick(Session, llm, chapter)
+
+    # The next LLM phase never ran: the stale tick paid for no more calls.
+    assert skipped not in llm.stages()
+    assert [row.source_id for row in _tick_deltas(Session, world)] == ["conflict-race"]
+    assert _conflicts(Session, world) == []
+    engine.dispose()
+
+
+def test_a_conflict_only_tick_on_moved_canon_is_stale(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _chapter(Session, world, 1)
+    # An earlier tick settled the onstage intent and the clock and put every actor's next turn past the chapter,
+    # so the ambush, held for review, is all this tick does.
+    far = chapter.story_time_end + 10 * DAY
+    _commit_tick(Session, world, _built(Session, _context(world, chapter), [TickCandidate(
+        candidate_id="setup", origin="actor_turn", summary="setup",
+        effects=WorldEffects(entity_changes=[{"ref": world.node("clock", "clock-1"), "field": "status",
+                                              "new_value": "expired"}]),
+        intent_status_changes={_onstage(world): "disrupted"},
+        next_turn_at={world.hero: far, world.rival: far, world.faction: far},
+    )], tick_id="setup"), tick_id="setup")
+    raced: list[bool] = []
+
+    def review(payload: dict[str, Any], content: str) -> dict[str, Any]:
+        # While Codex reviews, another writer changes the canon the tick reasoned on; Codex then hands the
+        # conflict to a human, so the tick commits nothing but the conflict.
+        raced.append(True)
+        _disrupt_the_later_intent(Session, world, chapter)
+        return _review("amend_plan")(payload, content)
+
+    llm = _WorldLLM(adjudicate=_outcomes(_ambush(world, chapter)), review=review)
+
+    with pytest.raises(CanonStaleVersion):
+        _tick(Session, llm, chapter)
+
+    assert raced == [True]
+    assert _conflicts(Session, world) == []
+    assert [row.source_id for row in _tick_deltas(Session, world)] == ["setup", "conflict-race"]
+    engine.dispose()
+
+
 def _failing_build(monkeypatch: pytest.MonkeyPatch, candidate_prefix: str | None) -> None:
     """The tick's whole build reports an error on the first candidate whose id starts with ``candidate_prefix``;
     with None, an error of the tick as a whole. The running-state checks' builds are left alone."""
@@ -1339,11 +1410,14 @@ class _GuardedAdjudicator:
         self.inner = inner
         self.limit = limit
         self.oversized = set(oversized)
-        self.batches: list[int] = []
+        self.batches: list[list[str]] = []
+
+    def fits(self, *, intents, **_kwargs) -> bool:  # noqa: ANN001, ANN003
+        return len(intents) <= self.limit and not self.oversized & {intent.id for intent in intents}
 
     def adjudicate(self, *, context, intents, **kwargs):  # noqa: ANN001, ANN003
-        self.batches.append(len(intents))
-        if len(intents) <= self.limit and not self.oversized & {intent.id for intent in intents}:
+        self.batches.append([intent.id for intent in intents])
+        if self.fits(intents=intents):
             return self.inner.adjudicate(context=context, intents=intents, **kwargs)
         trace = {"trace_scope": "world_engine", "stage_key": "world.adjudicate",
                  "input_snapshot": context.model_dump(mode="json")}
@@ -1351,7 +1425,7 @@ class _GuardedAdjudicator:
         return AdjudicationCall(None, trace, ["prompt_too_large"], ids, "prompt_too_large")
 
 
-def test_oversized_adjudication_falls_back_to_one_intent_per_call(monkeypatch) -> None:
+def test_oversized_adjudication_packs_the_intents_that_fit_into_one_call(monkeypatch) -> None:
     engine, Session = _session_factory()
     world = _seed_tick_world(Session, monkeypatch, errands=24)
     chapter = _chapter(Session, world, 1)
@@ -1361,19 +1435,19 @@ def test_oversized_adjudication_falls_back_to_one_intent_per_call(monkeypatch) -
     with Session.begin() as session:
         result = _service(Session, llm, adjudicator=adjudicator).run(session, _canon_commit(chapter), policy=POLICY)
 
-    # Twenty are over the guard together, so each of the twenty earliest is asked alone.
-    assert adjudicator.batches == [20, *[1] * 20]
+    # Twenty are over the guard together, so one call takes the ten earliest that fit; no intent is asked alone.
     errands = _errands(world, 24)
+    assert adjudicator.batches == [errands[:10]]
     runtime = _runtime(Session, world)
-    assert {runtime.world.get_state(ref)["status"] for ref in errands[:20]} == {"disrupted"}
-    waiting = [*errands[20:], _later(world)]
+    assert {runtime.world.get_state(ref)["status"] for ref in errands[:10]} == {"disrupted"}
+    waiting = [*errands[10:], _later(world)]
     assert {runtime.world.get_state(ref)["status"] for ref in waiting} == {"planned"}
     assert result.dropped_candidate_ids == []
     assert result.postponed_candidate_ids == [f"adjudication:{ref}" for ref in waiting]
     engine.dispose()
 
 
-def test_an_intent_too_large_alone_gives_its_slot_to_the_next_due_intent(monkeypatch) -> None:
+def test_oversized_intent_is_deferred_not_repeated_every_tick(monkeypatch) -> None:
     engine, Session = _session_factory()
     world = _seed_tick_world(Session, monkeypatch, errands=24)
     chapter = _chapter(Session, world, 1)
@@ -1385,15 +1459,28 @@ def test_an_intent_too_large_alone_gives_its_slot_to_the_next_due_intent(monkeyp
     with Session.begin() as session:
         result = _service(Session, llm, adjudicator=adjudicator).run(session, _canon_commit(chapter), policy=POLICY)
 
-    assert adjudicator.batches == [20, *[1] * 21]
+    # One call takes the twenty errands after it; the oversized one is never asked, alone or with the others.
+    assert adjudicator.batches == [errands[1:21]]
     runtime = _runtime(Session, world)
     assert {runtime.world.get_state(ref)["status"] for ref in errands[1:21]} == {"disrupted"}
+    # It waits for the next tick instead of staying the earliest due intent of every tick.
     assert runtime.world.get_state(errands[0])["status"] == "planned"
+    assert runtime.world.get_state(errands[0])["scheduled_at"] == chapter.story_time_end + 1
     assert result.dropped_candidate_ids == [f"adjudication:{errands[0]}"]
     [dropped] = _events(Session, world, DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED)
-    assert _payload(dropped)["reason"] == "prompt_too_large"
+    assert (_payload(dropped)["reason"], _payload(dropped)["issues"][0]["code"]) == (
+        "prompt_too_large_deferred", "prompt_too_large",
+    )
     waiting = [*errands[21:], _later(world)]
     assert result.postponed_candidate_ids == [f"adjudication:{ref}" for ref in waiting]
+
+    # A tick that ends at the same story minute comes before its new time: it asks only the intents still due.
+    same_minute = _chapter(Session, world, 2, days=0)
+    with Session.begin() as session:
+        _service(Session, llm, adjudicator=adjudicator).run(session, _canon_commit(same_minute), policy=POLICY)
+
+    assert adjudicator.batches[1:] == [waiting]
+    assert len(_events(Session, world, DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED)) == 1
     engine.dispose()
 
 
@@ -1644,7 +1731,9 @@ def test_resolving_a_held_change_that_canon_has_since_ruled_out_is_stale(monkeyp
 
 
 def test_a_long_history_keeps_adjudication_under_the_prompt_guard(monkeypatch) -> None:
-    from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_EVENT_FACTS, MAX_ADJUDICATION_PROMPT_CHARS
+    from forwin.writer.prompt_core.world_engine import (
+        MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT, MAX_ADJUDICATION_PROMPT_CHARS,
+    )
 
     engine, Session = _session_factory()
     world = _seed_tick_world(Session, monkeypatch)
@@ -1669,7 +1758,9 @@ def test_a_long_history_keeps_adjudication_under_the_prompt_guard(monkeypatch) -
     assert len(content) < MAX_ADJUDICATION_PROMPT_CHARS
     payload = json.JSONDecoder().raw_decode(content)[0]
     assert {node["node_type"] for node in payload["world_nodes"]}.isdisjoint({"event", "intent"})
-    assert len([fact for fact in payload["facts"] if fact.get("fact_type") == "event"]) == MAX_ADJUDICATION_EVENT_FACTS
+    assert len([fact for fact in payload["facts"] if fact.get("fact_type") == "event"]) == (
+        MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT
+    )
     assert result.dropped_candidate_ids == []
     assert _runtime(Session, world).world.get_state(_later(world))["status"] == "resolved"
     engine.dispose()

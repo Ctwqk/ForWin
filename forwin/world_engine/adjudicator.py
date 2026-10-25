@@ -35,7 +35,8 @@ class AdjudicationCall:
     issues: list[str]
     missing_intent_ids: tuple[str, ...] = ()
     # Why the missing intents are missing: LLM_UNAVAILABLE when no call returned an answer,
-    # INVALID_OUTPUT when the answers never covered them validly, PROMPT_TOO_LARGE; empty when none is.
+    # INVALID_OUTPUT when the answers never covered them validly, PROMPT_TOO_LARGE when the prompt, or the
+    # retry asking for them again, was over the guard; empty when none is.
     failure_reason: str = ""
 
 
@@ -70,6 +71,17 @@ class WorldAdjudicator:
         self.max_tokens = max_tokens
         self._chat_parameters = inspect.signature(llm_client.chat).parameters
 
+    def fits(
+        self, *, context: TickContext, intents: Sequence[WorldNode], runtime: BookStateRuntime,
+        lexicon: BookLexicon, calendar: StoryCalendar | None,
+        feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
+    ) -> bool:
+        """Whether one call can ask about ``intents``: its first prompt is within the guard. No model is called."""
+        messages = build_adjudication_messages(
+            context=context, intents=intents, runtime=runtime, lexicon=lexicon, calendar=calendar, feedback=feedback,
+        )
+        return len(messages[-1]["content"]) <= MAX_ADJUDICATION_PROMPT_CHARS
+
     def adjudicate(
         self, *, context: TickContext, intents: Sequence[WorldNode], runtime: BookStateRuntime,
         lexicon: BookLexicon, calendar: StoryCalendar | None,
@@ -83,6 +95,8 @@ class WorldAdjudicator:
         issues: list[str] = []
         # Whether any call returned an answer, valid or not.
         answered = False
+        # Whether a retry's prompt was over the guard after an earlier attempt settled some intents.
+        too_large = False
         intent_ids = {intent.id for intent in intents}
         if not intents:
             result = AdjudicationResult()
@@ -97,6 +111,11 @@ class WorldAdjudicator:
                 feedback=feedback, retry_feedback=retry_feedback,
             )
             if len(messages[-1]["content"]) > MAX_ADJUDICATION_PROMPT_CHARS:
+                if result is not None:
+                    # The retry's feedback put it over the guard: keep what the earlier attempt settled.
+                    too_large = True
+                    issues.append("prompt_too_large")
+                    break
                 issues = ["prompt_too_large"]
                 prompt_trace = self._build_prompt_trace(
                     messages=messages, context=context, intent_ids=sorted(intent_ids), attempts=attempts,
@@ -164,9 +183,12 @@ class WorldAdjudicator:
         prompt_trace = self._build_prompt_trace(
             messages=messages, context=context, intent_ids=sorted(intent_ids), attempts=attempts,
             business_retries=business_retries, result=result, issues=issues,
+            failure_reason="prompt_too_large" if too_large else "",
         )
         missing = intent_ids - {outcome.intent_id for outcome in result.outcomes} if result is not None else intent_ids
-        failure_reason = (INVALID_OUTPUT if answered else LLM_UNAVAILABLE) if missing else ""
+        failure_reason = (
+            (PROMPT_TOO_LARGE if too_large else INVALID_OUTPUT if answered else LLM_UNAVAILABLE) if missing else ""
+        )
         return AdjudicationCall(result, prompt_trace, issues, tuple(sorted(missing)), failure_reason)
 
     def _call_chat(self, messages: list[dict]) -> str:

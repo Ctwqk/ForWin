@@ -25,8 +25,10 @@ if TYPE_CHECKING:
 
 
 MAX_ADJUDICATION_PROMPT_CHARS = 60000
-# The newest event facts an adjudication shows; older events stay in canon but out of the prompt.
+# The event facts an adjudication shows: each due intent's newest few, up to this many in all; older events
+# stay in canon but out of the prompt.
 MAX_ADJUDICATION_EVENT_FACTS = 20
+MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT = 5
 MAX_ACTOR_TURN_PROMPT_CHARS = 60000
 MAX_CONFLICT_REVIEW_PROMPT_CHARS = 60000
 # What a chapter-plan goal keeps when the conflict review prompt is still over its guard.
@@ -143,14 +145,33 @@ def _fact_references(value: Any, *, is_ref: bool = False) -> set[str]:
     return set()
 
 
+def _round_robin(queues: Sequence[Sequence[str]], *, per_queue: int, total: int) -> list[str]:
+    """Round by round, each queue's first entry not taken yet: at most ``per_queue`` from each, ``total`` in all."""
+    taken: list[str] = []
+    remaining = [iter(queue) for queue in queues]
+    for _round in range(per_queue):
+        for queue in remaining:
+            if len(taken) >= total:
+                return taken
+            ref = next((ref for ref in queue if ref not in taken), None)
+            if ref is not None:
+                taken.append(ref)
+    return taken
+
+
 def build_adjudication_messages(
     *, context: TickContext, intents: Sequence[WorldNode], runtime: BookStateRuntime,
     lexicon: BookLexicon, calendar: StoryCalendar | None,
     feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
     retry_feedback: Sequence[str] = (),
 ) -> list[dict]:
+    node_locations: dict[str, str] = {}
+
     def location_id(node: WorldNode) -> str:
-        return resolve_world_node_location_id(runtime.world, node.id) or node.profile.get("location_id", "")
+        if node.id not in node_locations:
+            node_locations[node.id] = (resolve_world_node_location_id(runtime.world, node.id)
+                                       or node.profile.get("location_id", ""))
+        return node_locations[node.id]
 
     def node_payload(node: WorldNode) -> dict:
         return _without_empty({
@@ -163,20 +184,28 @@ def build_adjudication_messages(
         """An event, or an intent other than the due ones: what happened or was planned, not who is there."""
         return str(node.node_type) in _RECORD_TYPES and node.id not in intent_ids
 
+    def scope(group: Sequence[WorldNode]) -> tuple[set[str], set[str]]:
+        """The full bodies and the locations a call about ``group`` shows.
+
+        Full bodies: the intents, their owners and targets, what those hold and the live entities beside
+        them. Past events and other intents grow with the book, so they never get a full body (Ruling P28).
+        """
+        actor_refs = {ref for intent in group
+                      for ref in [intent.profile.get("owner_ref"), *intent.profile.get("target_refs", [])] if ref}
+        locations = {location_id(node) for node in [*group, *[node for node in nodes if node.id in actor_refs]]}
+        locations.update(actor_refs & runtime.map.nodes_by_id.keys())
+        locations.discard("")
+        bodies = {node.id for node in group} | {node.id for node in nodes if not record(node) and (
+            node.id in actor_refs
+            or (node.is_active and str(node.node_type) in _COLOCATED_TYPES and location_id(node) in locations)
+            or (node.node_type in {"item", "resource"}
+                and runtime.world.get_state(node.id).get("holder_id") in actor_refs)
+        )}
+        return bodies, locations
+
     nodes = sorted(runtime.world.nodes_by_id.values(), key=lambda node: node.id)
     intent_ids = {node.id for node in intents}
-    actor_refs = {ref for intent in intents
-                  for ref in [intent.profile.get("owner_ref"), *intent.profile.get("target_refs", [])] if ref}
-    locations = {location_id(node) for node in [*intents, *[node for node in nodes if node.id in actor_refs]]}
-    locations.update(actor_refs & runtime.map.nodes_by_id.keys())
-    locations.discard("")
-    # Full bodies: the due intents, their owners and targets, what those hold and the live entities beside
-    # them. Past events and other intents grow with the book, so they never get a full body (Ruling P28).
-    full_ids = intent_ids | {node.id for node in nodes if not record(node) and (
-        node.id in actor_refs
-        or (node.is_active and str(node.node_type) in _COLOCATED_TYPES and location_id(node) in locations)
-        or (node.node_type in {"item", "resource"} and runtime.world.get_state(node.id).get("holder_id") in actor_refs)
-    )}
+    full_ids, locations = scope(intents)
 
     def indexed(node: WorldNode) -> bool:
         """Every other live node, and the intents still to happen; events and settled intents stay out."""
@@ -226,10 +255,22 @@ def build_adjudication_messages(
         fact_payloads[ref] = {"ref": f"{FACT_REF_PREFIX}{ref}", **facts[ref].model_dump(mode="json", exclude_defaults=True)}
         pending.update(_fact_references(fact_payloads[ref]) - fact_payloads.keys())
     # Every scoped standing fact, and only the newest scoped event facts: the book's events keep growing.
+    # Each due intent shows its own newest ones, so one busy intent's history never crowds out another's.
     events = sorted((ref for ref in fact_payloads if facts[ref].fact_type == EVENT_FACT_TYPE),
                     key=lambda ref: (-facts[ref].created_at_chapter, ref))
+    # A lone intent's full bodies are the call's own; with several, each intent's are worked out only when
+    # there are events to share out.
+    bodies_by_intent = ([full_ids] if len(intents) == 1 or not events
+                        else [scope([intent])[0] for intent in intents])
+    by_intent = [[ref for ref in events if bodies.intersection(facts[ref].related_node_refs)]
+                 for bodies in bodies_by_intent]
+    picked = _round_robin(by_intent, per_queue=MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT,
+                          total=MAX_ADJUDICATION_EVENT_FACTS)
+    # Room left goes to the newest scoped events no intent's own bodies take part in.
+    attributed = {ref for queue in by_intent for ref in queue}
+    picked.extend([ref for ref in events if ref not in attributed][:MAX_ADJUDICATION_EVENT_FACTS - len(picked)])
     shown = {ref for ref in fact_payloads if facts[ref].fact_type != EVENT_FACT_TYPE}
-    shown.update(events[:MAX_ADJUDICATION_EVENT_FACTS])
+    shown.update(picked)
     payload["facts"] = [fact_payloads[ref] for ref in sorted(shown)]
     # Objective truth is sufficient for adjudication; no cognition overlay is serialized.
     allowed = {

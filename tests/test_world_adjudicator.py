@@ -195,6 +195,52 @@ def test_bounded_retry_keeps_best_candidate(last, better_first):
     assert any("intent-2" in issue for issue in call.issues)
 
 
+def test_retry_over_the_guard_keeps_the_first_attempts_outcomes(monkeypatch):
+    from forwin.world_engine import adjudicator
+    from forwin.world_engine.types import PROMPT_TOO_LARGE
+    from forwin.writer.prompt_core.world_engine import build_adjudication_messages
+
+    runtime = _runtime()
+    intents = [runtime.world.get_node(ref) for ref in ("intent-1", "intent-2")]
+    first = build_adjudication_messages(
+        context=CONTEXT, intents=intents, runtime=runtime, lexicon=LEXICON, calendar=CALENDAR,
+    )
+    # The first prompt just fits; the retry's feedback for the missing intent puts it over the guard.
+    monkeypatch.setattr(adjudicator, "MAX_ADJUDICATION_PROMPT_CHARS", len(first[-1]["content"]))
+    client = StubLLM({"outcomes": [_outcome()]})
+
+    call = _adjudicate(client, refs=("intent-1", "intent-2"), runtime=runtime)
+
+    assert len(client.calls) == 1
+    assert [item.intent_id for item in call.result.outcomes] == ["intent-1"]
+    assert (call.missing_intent_ids, call.failure_reason) == (("intent-2",), PROMPT_TOO_LARGE)
+    assert "prompt_too_large" in call.issues
+    assert call.prompt_trace["output_summary"]["failure_reason"] == "prompt_too_large"
+    assert call.prompt_trace["output_summary"]["outcome_count"] == 1
+
+
+def test_fits_measures_the_first_prompt_against_the_guard(monkeypatch):
+    from forwin.world_engine import adjudicator
+    from forwin.writer.prompt_core.world_engine import build_adjudication_messages
+
+    runtime = _runtime()
+    intents = [runtime.world.get_node(ref) for ref in ("intent-1", "intent-2")]
+    size = len(build_adjudication_messages(
+        context=CONTEXT, intents=intents[:1], runtime=runtime, lexicon=LEXICON, calendar=CALENDAR,
+    )[-1]["content"])
+    monkeypatch.setattr(adjudicator, "MAX_ADJUDICATION_PROMPT_CHARS", size)
+    client = StubLLM()
+
+    def fits(refs):
+        return adjudicator.WorldAdjudicator(client).fits(
+            context=CONTEXT, intents=[runtime.world.get_node(ref) for ref in refs], runtime=runtime,
+            lexicon=LEXICON, calendar=CALENDAR,
+        )
+
+    assert fits(["intent-1"]) and not fits(["intent-1", "intent-2"])
+    assert client.calls == []
+
+
 def test_transport_error_never_becomes_model_feedback():
     client = StubLLM(TimeoutError("https://private.invalid/?token=secret"), {"outcomes": [_outcome()]})
     call = _adjudicate(client)
@@ -422,10 +468,10 @@ def test_prompt_leaves_past_events_and_settled_intents_out_of_full_bodies_and_th
 
 
 def test_prompt_shows_every_standing_fact_and_only_the_newest_event_facts():
-    from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_EVENT_FACTS
+    from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT
 
     runtime = _runtime()
-    for index in range(MAX_ADJUDICATION_EVENT_FACTS + 5):
+    for index in range(25):
         runtime.world.add_fact(FactNode(id=f"event-fact-{index:02d}", project_id="p", proposition="event-truth",
                                         fact_type="event", related_node_refs=["owner"], created_at_chapter=index))
     runtime.world.add_fact(FactNode(id="old-standing", project_id="p", proposition="standing-truth",
@@ -434,5 +480,72 @@ def test_prompt_shows_every_standing_fact_and_only_the_newest_event_facts():
     ids = {fact["id"] for fact in payload["facts"]}
     assert {"hidden", "old-standing"} <= ids
     assert sorted(ref for ref in ids if ref.startswith("event-fact-")) == [
-        f"event-fact-{index:02d}" for index in range(5, MAX_ADJUDICATION_EVENT_FACTS + 5)
+        f"event-fact-{index:02d}" for index in range(25 - MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT, 25)
     ]
+
+
+def _loner_intents(runtime, count: int) -> list[str]:
+    """``count`` more due intents, each of its own owner standing alone at its own place."""
+    refs = []
+    for index in range(count):
+        owner, intent = f"loner-{index}", f"loner-intent-{index}"
+        runtime.world.add_node(_node(owner, location_id=f"far-{index}"))
+        runtime.world.add_node(_node(intent, "intent", profile={
+            "owner_ref": owner, "action_type": "negotiate", "summary": "loner-summary",
+        }, status="due", scheduled_at=90, location_id=f"far-{index}"))
+        refs.append(intent)
+    return refs
+
+
+def _event_facts(runtime, actor: str, count: int, *, newest: int) -> None:
+    for index in range(count):
+        runtime.world.add_fact(FactNode(
+            id=f"event-{actor}-{index:02d}", project_id="p", proposition="event-truth", fact_type="event",
+            related_node_refs=[actor], created_at_chapter=newest - index,
+        ))
+
+
+def _shown_events(runtime, refs) -> list[str]:
+    from forwin.writer.prompt_core.world_engine import build_adjudication_messages
+    messages = build_adjudication_messages(
+        context=CONTEXT, intents=[runtime.world.get_node(ref) for ref in refs], runtime=runtime,
+        lexicon=LEXICON, calendar=CALENDAR,
+    )
+    payload = json.loads(messages[-1]["content"].split("\n\n")[0])
+    return sorted(fact["id"] for fact in payload["facts"] if fact.get("fact_type") == "event")
+
+
+def test_a_busy_intent_does_not_crowd_out_another_intents_event_facts():
+    from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT
+
+    runtime = _runtime()
+    [loner] = _loner_intents(runtime, 1)
+    # The owner's recent history is long; the loner's is short and old.
+    _event_facts(runtime, "owner", 25, newest=30)
+    _event_facts(runtime, "loner-0", 3, newest=1)
+
+    shown = _shown_events(runtime, ["intent-1", loner])
+
+    assert shown == sorted([
+        *(f"event-owner-{index:02d}" for index in range(MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT)),
+        *(f"event-loner-0-{index:02d}" for index in range(3)),
+    ])
+
+
+def test_event_facts_are_shared_out_within_the_total_cap():
+    from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_EVENT_FACTS
+
+    runtime = _runtime()
+    loners = _loner_intents(runtime, 6)
+    # Each loner's history is older than the one before it.
+    for index in range(6):
+        _event_facts(runtime, f"loner-{index}", 5, newest=30 - 5 * index)
+
+    shown = _shown_events(runtime, loners)
+
+    # Six intents of five events each would show thirty; each shows its newest few, round by round, so the
+    # intents with the oldest history still show theirs.
+    assert len(shown) == MAX_ADJUDICATION_EVENT_FACTS
+    per_intent = [sum(ref.startswith(f"event-loner-{index}-") for ref in shown) for index in range(6)]
+    assert sorted(per_intent) == [3, 3, 3, 3, 4, 4]
+    assert all(f"event-loner-{index}-00" in shown for index in range(6))

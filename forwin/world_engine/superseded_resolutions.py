@@ -37,7 +37,8 @@ def supersede_resolutions(
 ) -> SupersededResolutions:
     """Undo the side effects of the conflicts whose resolution committed through ``graph_delta_id``.
 
-    Those are the resolved conflicts whose result_refs list the delta; they stay resolved. The open
+    Those are the resolved conflicts whose result_refs list the delta; they stay resolved, with the delta
+    recorded as ``superseded_by_delta`` so that a superseded veto no longer counts as one. The open
     obligations referenced by the resolution or its patches are cancelled with ``reason``; pending
     responses are retired. A patch on a plan still to
     write is reverted and the revert recorded as a ``plan_patch_revert`` patch; a patch on a plan
@@ -61,11 +62,13 @@ def supersede_resolutions(
     superseded_ids = {row.id for row in rows}
     cancelled: list[str] = []
     reverted: list[str] = []
+    repo = WorldConflictRepository(session)
     for row in rows:
         refs = _result_refs(row)
         # The canon range rewind already removed the hold's status patch. Retire the
         # response even when a planner attached a patch, so it can never be rebound.
-        WorldConflictRepository(session).clear_pending_plan_response(row)
+        repo.clear_pending_plan_response(row)
+        repo.mark_superseded(row, graph_delta_id=graph_delta_id)
         for ref in refs:
             if ledger.cancel_obligation(ref, reason=reason) is not None:
                 cancelled.append(ref)

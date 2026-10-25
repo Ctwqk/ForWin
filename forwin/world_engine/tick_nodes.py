@@ -161,6 +161,18 @@ def take_turns(
     return results
 
 
+def too_large(intents: Sequence[WorldNode]) -> NodeResults:
+    """Intents whose adjudication prompt is over the guard even alone: each fails unasked."""
+    return NodeResults(failures=[
+        NodeFailure(
+            adjudication_candidate_id(intent.id), "adjudication", _owner(intent), intent.id, PROMPT_TOO_LARGE,
+            (ConstraintIssue(PROMPT_TOO_LARGE, "The adjudication prompt is over the guard for this intent alone.",
+                             intent.id),),
+        )
+        for intent in intents
+    ])
+
+
 def unavailable(*, intents: Sequence[WorldNode] = (), actor_ids: Sequence[str] = ()) -> NodeResults:
     """Without a model, every node fails as unavailable and nothing is asked."""
     return NodeResults(failures=[
@@ -239,5 +251,6 @@ __all__ = [
     "outcome_candidate",
     "protected_refs",
     "take_turns",
+    "too_large",
     "unavailable",
 ]

@@ -16,6 +16,8 @@ from .conflict_types import ConflictDecider, ConflictDecision, ConflictDraft, Co
 
 # The result_refs prefix of a plan patch a band plan wrote for a resolution; P3 resolutions list bare patch ids.
 PLAN_PATCH_REF_PREFIX = "plan_patch:"
+# The decision key naming the delta a historical rewrite dropped from under a resolution; the row stays resolved.
+SUPERSEDED_BY_DELTA_KEY = "superseded_by_delta"
 
 
 def serialize_conflict_decision(payload: dict) -> str:
@@ -153,6 +155,13 @@ class WorldConflictRepository:
         row.status = "resolved"
         self.session.flush()
 
+    def mark_superseded(self, row: WorldPlanConflictRow, *, graph_delta_id: str) -> None:
+        """Record that canon dropped the delta the resolution committed through; it stays resolved."""
+        payload = json.loads(row.decision_json or "{}")
+        payload[SUPERSEDED_BY_DELTA_KEY] = graph_delta_id
+        row.decision_json = serialize_conflict_decision(payload)
+        self.session.flush()
+
     def clear_pending_plan_response(self, row: WorldPlanConflictRow) -> None:
         """Retire response work, retaining the once-per-intent resolution history."""
         payload = json.loads(row.decision_json or "{}")
@@ -226,7 +235,10 @@ class WorldConflictRepository:
         return any(json.loads(decision or "{}").get("option") == "plot_responds" for decision in decisions)
 
     def reroll_count(self, project_id: str, *, actor_ref: str, since_chapter: int = 0) -> int:
-        """The actor's veto_world resolutions on conflicts whose detected_after_chapter >= ``since_chapter``."""
+        """The actor's veto_world resolutions on conflicts whose detected_after_chapter >= ``since_chapter``.
+
+        A veto a historical rewrite superseded no longer counts.
+        """
         decisions = self.session.scalars(
             select(WorldPlanConflictRow.decision_json).where(
                 WorldPlanConflictRow.project_id == project_id,
@@ -235,7 +247,11 @@ class WorldConflictRepository:
                 WorldPlanConflictRow.detected_after_chapter >= since_chapter,
             )
         )
-        return sum(json.loads(decision).get("option") == "veto_world" for decision in decisions)
+        return sum(
+            (decision := json.loads(payload)).get("option") == "veto_world"
+            and not decision.get(SUPERSEDED_BY_DELTA_KEY)
+            for payload in decisions
+        )
 
 
 def conflict_result_refs(row: WorldPlanConflictRow) -> list[str]:

@@ -4,7 +4,8 @@
 chapter's story minutes from its start (``window_start``) to its end (``now``):
 
 1. Collect candidates: the chapter's intent interactions, clocks that ran out, due intents (onstage
-   ones go to planning, offstage ones are adjudicated) and the due actors' turns.
+   ones go to planning, offstage ones are adjudicated; one whose prompt is over the guard even alone
+   waits for the next tick) and the due actors' turns.
 2. Check each candidate against the hard rules and the world gate on its own delta. An adjudicated
    outcome or an actor turn that fails is asked for again once, with the errors; whatever still fails
    is dropped with a WORLD_TICK_CANDIDATE_DROPPED event.
@@ -14,9 +15,12 @@ chapter's story minutes from its start (``window_start``) to its end (``now``):
    resolutions, each against the ones accepted before it (running_state): a candidate that contradicts
    an earlier one is dropped, a resolution whose change no longer holds goes to a human.
 6. Spread the news of what will commit, build one world_engine delta, and commit it through canon
-   admission together with the side effects of the conflicts decided in the tick.
+   admission together with the side effects of the conflicts decided in the tick. News an active
+   protection forbids waits in the queue for the next tick.
 
-An LLM outage never fails the tick: the node is skipped and the deterministic rest still commits.
+An LLM outage never fails the tick: the node is skipped and the deterministic rest still commits. Canon
+that moved under the tick ends it with CanonStaleVersion: before each LLM phase, at the commit, and for
+a tick that commits nothing (Ruling P27).
 """
 
 from __future__ import annotations
@@ -31,7 +35,6 @@ from sqlalchemy.orm import Session
 
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
-from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
@@ -50,9 +53,11 @@ from .adjudicator import WorldAdjudicator
 from .clocks import expire_clocks
 from .conflict_delegate import WorldConflictDelegate
 from .conflict_repository import WorldConflictRepository
-from .conflict_resolution import PropagatedNews, propagation_candidate, reconcile_plot_responses
+from .conflict_resolution import (
+    PropagatedNews, next_tick_minute, propagation_candidate, reconcile_plot_responses, unprotected_news,
+)
 from .conflict_types import ConflictDraft
-from .constraints import ConstraintIssue, apply_budgets, check_narrative_boundaries, classify_impact
+from .constraints import ConstraintIssue, apply_budgets, classify_impact
 from .delta_builder import WorldTickDeltaBuilder
 from .intents import (
     apply_intent_interactions, due_onstage_intents, onstage_bookkeeping, release_held_intents, select_due_intents,
@@ -69,7 +74,7 @@ from .tick_conflicts import (
     review_draft,
 )
 from .tick_nodes import (
-    PROMPT_TOO_LARGE,
+    NodeFailure,
     NodeResults,
     actor_safe_feedback,
     actor_safe_vetoes,
@@ -77,9 +82,12 @@ from .tick_nodes import (
     adjudication_candidate_id,
     protected_refs,
     take_turns,
+    too_large,
     unavailable,
 )
-from .types import WORLD_ENGINE_SOURCE_TYPE, NewsItem, TickCandidate, TickContext, WorldEffects, tick_seed
+from .types import (
+    WORLD_ENGINE_SOURCE_TYPE, EffectEntityChange, NewsItem, TickCandidate, TickContext, WorldEffects, tick_seed,
+)
 
 
 # A world step's tick id: the prefix and the chapter's canon commit id. A direct resolve uses "conflict-".
@@ -92,6 +100,8 @@ MAX_ADJUDICATION_INTENTS_PER_TICK = 20
 # Why a checked candidate left the tick: it broke a check, or an open conflict already holds such a change.
 CONSTRAINT_VIOLATION = "constraint_violation"
 ALREADY_HELD = "already_held"
+# Why a due intent left the tick unasked: its prompt is over the guard even alone, so it waits for the next tick.
+PROMPT_TOO_LARGE_DEFERRED = "prompt_too_large_deferred"
 
 
 @dataclass(frozen=True)
@@ -211,6 +221,8 @@ class _Tick:
         self.dropped: list[str] = []
         # Due offstage intents the tick did not ask about: beyond the cap, they wait for a later tick.
         self.unasked: list[str] = []
+        # Bookkeeping for the due intents over the prompt guard even alone: each waits for the next tick.
+        self.oversized: list[TickCandidate] = []
         self.responses = WorldConflictRepository(session).active_plot_responses(project_id)
         self.book_complete = False
 
@@ -271,7 +283,8 @@ class _Tick:
             postponed.get(candidate.candidate_id, candidate) for candidate in classified
             if candidate.candidate_id not in held and candidate.candidate_id not in deferred
         ]
-        graph_delta_ids, warnings = self._commit(base)
+        # The oversized intents' bookkeeping goes last, after any clock that brought one of them forward.
+        graph_delta_ids, warnings = self._commit([*base, *self.oversized])
         return WorldTickResult(
             tick_id=self.tick_id,
             graph_delta_ids=graph_delta_ids,
@@ -331,8 +344,9 @@ class _Tick:
             return (at if type(at) is int and node.id not in named_ids else now, node.id)
 
         offstage = sorted(_unique([*due.offstage, *offstage_named], excluded=touched), key=scheduled)
-        results, unasked = self._adjudicate_within_guard(offstage, limit=MAX_ADJUDICATION_INTENTS_PER_TICK)
+        results, unasked, oversized = self._adjudicate_within_guard(offstage, limit=MAX_ADJUDICATION_INTENTS_PER_TICK)
         self.unasked = [adjudication_candidate_id(intent.id) for intent in unasked]
+        self.oversized = [self._deferred(failure) for failure in too_large(oversized).failures]
         adjudicated = self._settled(results)
         turns = self._settled(self._take_turns())
         return [*applied, *released, *clocks, *onstage.candidates, *adjudicated, *turns]
@@ -340,25 +354,67 @@ class _Tick:
     def _adjudicate_within_guard(
         self, intents: Sequence[WorldNode], *, limit: int,
         feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
-    ) -> tuple[NodeResults, list[WorldNode]]:
-        """Up to ``limit`` of ``intents``, in order, in one call, and the intents left unasked.
+    ) -> tuple[NodeResults, list[WorldNode], list[WorldNode]]:
+        """Up to ``limit`` of ``intents``, in order, in one call; the intents left unasked; and the intents
+        over the prompt guard even alone, which are never asked.
 
-        When that call is over the prompt guard each intent is asked alone, so none holds up the others:
-        one still over the guard fails as PROMPT_TOO_LARGE and the next intent takes its place.
+        When the first ``limit`` are over the guard together, the call takes intents in order while its prompt
+        stays within the guard: one that does not fit beside the others waits for a later call, and the next
+        intent may take its place.
         """
         batch = list(intents[:limit])
-        results = self._adjudicate(batch, feedback=feedback)
-        if len(batch) < 2 or not any(failure.reason == PROMPT_TOO_LARGE for failure in results.failures):
-            return results, list(intents[limit:])
-        results, asked = NodeResults(), 0
-        for index, intent in enumerate(intents):
-            if asked == limit:
-                return results, list(intents[index:])
-            single = self._adjudicate([intent], feedback=feedback)
-            results.candidates.extend(single.candidates)
-            results.failures.extend(single.failures)
-            asked += not any(failure.reason == PROMPT_TOO_LARGE for failure in single.failures)
-        return results, []
+        # Without a model nothing is asked, so nothing needs to fit.
+        if not batch or self.service.llm_client is None or self._fits(batch, feedback):
+            return self._adjudicate(batch, feedback=feedback), list(intents[limit:]), []
+        packed: list[WorldNode] = []
+        unasked: list[WorldNode] = []
+        oversized: list[WorldNode] = []
+        for intent in intents:
+            if len(packed) == limit:
+                unasked.append(intent)
+            elif self._fits([*packed, intent], feedback):
+                packed.append(intent)
+            elif packed and self._fits([intent], feedback):
+                unasked.append(intent)
+            else:
+                oversized.append(intent)
+        return self._adjudicate(packed, feedback=feedback), unasked, oversized
+
+    def _adjudicate_all(
+        self, intents: Sequence[WorldNode], feedback: Mapping[str, Sequence[ConstraintIssue]],
+    ) -> NodeResults:
+        """Every one of ``intents``, in as few calls as the prompt guard allows; one over it alone fails."""
+        results, pending = NodeResults(), list(intents)
+        while pending:
+            asked, pending, oversized = self._adjudicate_within_guard(pending, limit=len(pending), feedback=feedback)
+            results.candidates.extend(asked.candidates)
+            results.failures.extend([*asked.failures, *too_large(oversized).failures])
+        return results
+
+    def _fits(self, intents: Sequence[WorldNode], feedback: Mapping[str, Sequence[ConstraintIssue]] | None) -> bool:
+        return self.service.adjudicator.fits(
+            context=self.context, intents=intents, runtime=self.runtime, lexicon=self.lexicon,
+            calendar=self.calendar, feedback=feedback,
+        )
+
+    def _deferred(self, failure: NodeFailure) -> TickCandidate:
+        """Drop an intent over the prompt guard even alone from this tick, and the bookkeeping that moves its
+        scheduled_at past now: it is due again at the next tick, not asked again in this one.
+
+        Like an intent the event budget postpones, the bookkeeping is no world change: it is neither classified
+        nor reviewed, only checked against the running state with the rest.
+        """
+        self._drop(
+            failure.candidate_id, origin=failure.origin, actor_id=failure.actor_id, intent_id=failure.intent_id,
+            reason=PROMPT_TOO_LARGE_DEFERRED, issues=failure.issues,
+        )
+        return TickCandidate(
+            candidate_id=failure.candidate_id, origin="adjudication", actor_id=failure.actor_id,
+            intent_id=failure.intent_id, summary="Intent deferred: its adjudication prompt is over the guard",
+            effects=WorldEffects(entity_changes=[EffectEntityChange(
+                ref=failure.intent_id, field="scheduled_at", new_value=next_tick_minute(self.context.now),
+            )]),
+        )
 
     def _adjudicate(
         self, intents: Sequence[WorldNode], feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
@@ -367,6 +423,7 @@ class _Tick:
             return NodeResults()
         if self.service.llm_client is None:
             return unavailable(intents=intents)
+        self._check_snapshot()
         return adjudicate(
             self.service.adjudicator, context=self.context, intents=intents, runtime=self.runtime,
             lexicon=self.lexicon, calendar=self.calendar, save_trace=self._save_trace, feedback=feedback,
@@ -396,6 +453,8 @@ class _Tick:
     def _turns(
         self, views: Sequence[ActorView], feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
     ) -> NodeResults:
+        if views:
+            self._check_snapshot()
         return take_turns(
             self.service.actor_runner, context=self.context, views=views, policy=self.policy.world,
             calendar=self.calendar, lexicon=self.lexicon, save_trace=self._save_trace, feedback=feedback,
@@ -413,6 +472,8 @@ class _Tick:
         return self.service.save_prompt_trace(self.session, prompt_trace)
 
     def _hold(self, candidate: TickCandidate, draft: ConflictDraft, *, extra: Mapping[str, Any]) -> None:
+        # A Codex review may decide the conflict: a stale tick ends before it pays for one.
+        self._check_snapshot()
         holder = self.conflicts.hold(draft, extra=extra)
         if holder:
             self._drop_candidate(candidate, ALREADY_HELD, [ConstraintIssue(
@@ -443,8 +504,7 @@ class _Tick:
                 self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
         if outcome_issues:
             intents = [self.runtime.world.nodes_by_id[intent_id] for intent_id in outcome_issues]
-            retried, _unasked = self._adjudicate_within_guard(intents, limit=len(intents), feedback=outcome_issues)
-            passed.extend(self._recheck(retried))
+            passed.extend(self._recheck(self._adjudicate_all(intents, outcome_issues)))
         if turn_issues:
             views = [self.views[actor_id] for actor_id in turn_issues]
             passed.extend(self._recheck(self._turns(views, feedback=actor_safe_feedback(turn_issues, self.views))))
@@ -562,7 +622,9 @@ class _Tick:
                 delta.narrative_patches,
             ))
             if not changes and not self.conflicts.resolutions and not self.responses:
-                # A quiet tick takes no lock and holds none through the rest of the world step.
+                # A quiet tick takes no lock and holds none through the rest of the world step, but the conflicts
+                # it raised still rest on the canon it read (Ruling P27).
+                self._check_snapshot()
                 return [], warnings
             # Lifecycle rows follow the same conflict-before-project lock order as decisions.
             repo = WorldConflictRepository(self.session)
@@ -594,10 +656,17 @@ class _Tick:
 
         From here on no other canon writer can commit; the lock comes after the conflict rows' locks.
         """
-        context = self.context
         self.session.execute(
-            select(Project.id).where(Project.id == context.project_id).with_for_update(key_share=True)
+            select(Project.id).where(Project.id == self.context.project_id).with_for_update(key_share=True)
         )
+        self._check_snapshot()
+
+    def _check_snapshot(self) -> None:
+        """Raise CanonStaleVersion once canon moved since the tick read it (Ruling P27); no lock is taken.
+
+        Before each LLM phase it ends a stale tick before it pays for more calls.
+        """
+        context = self.context
         if BookStateRepository(self.session).latest_world_snapshot_id(
             context.project_id, context.chapter_number,
         ) != self.snapshot_id:
@@ -615,22 +684,7 @@ class _Tick:
             ],
             in_transit=queue, now=context.now, candidate_id=NEWS_CANDIDATE_ID, summary="",
         )
-        return PropagatedNews(candidate=self._unprotected(news.candidate), in_transit=news.in_transit)
-
-    def _unprotected(self, news: TickCandidate | None) -> TickCandidate | None:
-        """The news without what an active protection forbids an observer to know."""
-        if news is None:
-            return None
-        violations = check_narrative_boundaries(self.runtime, news, next_chapter=self.context.chapter_number + 1)
-        forbidden = set()
-        for violation in violations:
-            payload = self.runtime.narrative.nodes_by_id[violation.constraint_node_id].payload
-            fact = str(payload.get("fact_ref") or "")
-            forbidden.add((payload.get("observer_ref"), f"{FACT_REF_PREFIX}{fact.removeprefix(FACT_REF_PREFIX)}"))
-        knowledge = [item for item in news.effects.knowledge if (item.observer_ref, item.fact_ref) not in forbidden]
-        if not knowledge:
-            return None
-        return news.model_copy(update={"effects": WorldEffects(knowledge=knowledge)})
+        return unprotected_news(self.runtime, news, now=context.now)
 
     def _commit_delta(self, delta: GraphDelta) -> tuple[str, ...]:
         context = self.context
@@ -782,6 +836,7 @@ __all__ = [
     "CONSTRAINT_VIOLATION",
     "MAX_ADJUDICATION_INTENTS_PER_TICK",
     "NEWS_CANDIDATE_ID",
+    "PROMPT_TOO_LARGE_DEFERRED",
     "TICK_ID_PREFIX",
     "WorldTickResult",
     "WorldTickService",

@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
+from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
@@ -129,7 +130,7 @@ def option_candidates(
     """The world changes that carry out the decision; none when the option changes nothing in the world.
 
     ``runtime`` is the latest canon chapter's. veto_world stops the conflict's intent and, while
-    ``reroll_count`` is under ``world.max_rerolls``, has its actor act again at ``now``. A plot
+    ``reroll_count`` is under ``world.max_rerolls``, has its living actor act again at ``now``. A plot
     response holds only its intent; accept and amend commit the proposed change. amend_plan
     also ends the protections it breaks with that chapter; the other options refuse a change
     that still breaks one (ConflictOptionUnavailable). A held
@@ -179,9 +180,11 @@ def _veto_candidate(
         and world.get_state(intent_ref).get("status") not in _SETTLED_INTENT_STATUSES
         else {}
     )
+    # A dead or inactive actor takes no more turns.
     turns = (
         {actor_ref: now}
-        if actor is not None and str(actor.node_type) in ACTOR_NODE_TYPES and reroll_count < policy.world.max_rerolls
+        if actor is not None and str(actor.node_type) in ACTOR_NODE_TYPES and actor.is_active
+        and world.get_state(actor_ref).get("alive_status") != "dead" and reroll_count < policy.world.max_rerolls
         else {}
     )
     if not statuses and not turns:
@@ -277,6 +280,40 @@ def propagation_candidate(
         if news.knowledge else None
     )
     return PropagatedNews(candidate=candidate, in_transit=news.in_transit)
+
+
+def next_tick_minute(now: int) -> int:
+    """The first story minute after a tick or resolution at ``now``: what waits for the next tick is due then."""
+    return now + 1
+
+
+def unprotected_news(runtime: BookStateRuntime, news: PropagatedNews, *, now: int) -> PropagatedNews:
+    """The news without what an active protection forbids an observer to know; those deliveries wait in the queue.
+
+    ``runtime`` is the latest canon chapter's, so the protections are the ones in force in the chapter after it.
+    A forbidden delivery is queued again to arrive at the next tick, which checks it against its own protections.
+    """
+    if news.candidate is None:
+        return news
+    forbidden = set()
+    for violation in check_narrative_boundaries(runtime, news.candidate, next_chapter=runtime.as_of_chapter + 1):
+        payload = runtime.narrative.nodes_by_id[violation.constraint_node_id].payload
+        fact = str(payload.get("fact_ref") or "")
+        forbidden.add((payload.get("observer_ref"), f"{FACT_REF_PREFIX}{fact.removeprefix(FACT_REF_PREFIX)}"))
+    knowledge = news.candidate.effects.knowledge
+    waiting = [
+        NewsItem(fact_ref=item.fact_ref, observer_ref=item.observer_ref, arrive_at=next_tick_minute(now))
+        for item in knowledge if (item.observer_ref, item.fact_ref) in forbidden
+    ]
+    if not waiting:
+        return news
+    delivered = [item for item in knowledge if (item.observer_ref, item.fact_ref) not in forbidden]
+    return PropagatedNews(
+        candidate=(news.candidate.model_copy(update={"effects": WorldEffects(knowledge=delivered)})
+                   if delivered else None),
+        in_transit=sorted([*news.in_transit, *waiting],
+                          key=lambda item: (item.arrive_at, item.fact_ref, item.observer_ref)),
+    )
 
 
 def record_option_side_effects(
@@ -745,11 +782,11 @@ class ConflictResolutionService:
         # Read under the project lock, so no other writer's queue is lost.
         queue = latest_news_in_transit(self.session, project_id)
         news = (PropagatedNews(candidate=None, in_transit=queue) if decision.option == "plot_responds" else
-                propagation_candidate(
+                unprotected_news(runtime, propagation_candidate(
                     runtime, BookLexiconRepository(self.session).get(project_id),
                     events=tick_events(project_id, tick_id, candidates), in_transit=queue, now=context.now,
                     candidate_id=f"conflict:{conflict.id}:news", summary=conflict.summary,
-                ))
+                ), now=context.now))
         build = WorldTickDeltaBuilder(self.session).build(
             context=context,
             candidates=[*candidates, news.candidate] if news.candidate is not None else candidates,
@@ -813,9 +850,11 @@ __all__ = [
     "OptionSideEffects",
     "PropagatedNews",
     "conflict_resolved_event",
+    "next_tick_minute",
     "option_candidates",
     "propagation_candidate",
     "record_option_side_effects",
     "record_plot_response_patch",
+    "unprotected_news",
     "writer_response_text",
 ]

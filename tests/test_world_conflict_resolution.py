@@ -2404,3 +2404,87 @@ def test_final_tick_retires_settled_response_without_patching_it(pending_side_ef
     assert result.skipped_reason == "book_complete" and deltas == []
     assert repo.pending_plot_responses(row.project_id) == []
     assert json.loads(row.decision_json)["response_retired"] is True
+
+
+# P4b quick wins: protected news, dead actors and superseded vetoes.
+
+
+def test_direct_resolve_requeues_news_a_protection_forbids(monkeypatch) -> None:
+    from forwin.planning.beat_sheet.types import ProtectionSpec
+
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    faction = book.world.faction
+    conflict_id = _conflict(Session, book, proposed_change=_held(book).model_dump(mode="json"))
+    # The faction stands where the held event happens, but may not know of it yet.
+    deed = tick_event_fact_ref(book.project_id, f"conflict-{conflict_id}", "adjudication:held", 0)
+    with Session.begin() as session:
+        CanonAdmissionService().commit_plan_constraints(
+            session=session, project_id=book.project_id, beat_sheet_id="sheet-hide-deed",
+            creates=[ProtectionSpec(ref=faction, kind="must_not_know", until_chapter=0, observer_ref=faction,
+                                    fact_ref=deed)],
+            releases=[],
+        )
+
+    _resolve(Session, book, conflict_id, "accept_with_obligation")
+
+    runtime = _runtime(Session, book)
+
+    def knows(observer: str) -> str | None:
+        views = [view for (_kind, observer_id), view in runtime.cognition_by_observer.items()
+                 if observer_id == observer]
+        return views[0].knowledge_by_ref.get(deed) if views else None
+
+    # The hero took part; the faction's delivery waits in the queue for the next tick instead.
+    assert (knows(book.world.hero), knows(faction)) == ("knows", None)
+    [delta] = _resolution_deltas(Session, book, conflict_id)
+    assert {"fact_ref": deed, "observer_ref": faction, "arrive_at": book.now + 1} in delta.metadata["news_in_transit"]
+    engine.dispose()
+
+
+def test_veto_does_not_reschedule_a_dead_actor(pending_side_effect_session):
+    from tests.test_world_tick_steps import _actor, _intent, _runtime as _steps_runtime
+
+    _, row = pending_side_effect_session
+    row.intent_ref, row.actor_ref = "intent-1", "actor-1"
+
+    def veto(alive_status: str) -> list[tuple[dict, dict]]:
+        runtime = _steps_runtime(_actor("actor-1", alive_status=alive_status), _intent("intent-1", "actor-1", at=50))
+        return [
+            (item.intent_status_changes, item.next_turn_at)
+            for item in option_candidates(row, _decision("veto_world"), runtime=runtime, policy=POLICY,
+                                          reroll_count=0, now=100)
+        ]
+
+    assert veto("alive") == [({"intent-1": "vetoed"}, {"actor-1": 100})]
+    # A dead actor takes no more turns, so the veto only stops its intent.
+    assert veto("dead") == [({"intent-1": "vetoed"}, {})]
+
+
+def test_superseded_veto_does_not_cap_rerolls(pending_side_effect_session):
+    from forwin.world_engine.actor_turns import recent_vetoes
+    from forwin.world_engine.superseded_resolutions import supersede_resolutions
+
+    session, retired = pending_side_effect_session
+    repo = WorldConflictRepository(session)
+    kept = repo.create(ConflictDraft(
+        project_id=retired.project_id, source="world_tick", detected_after_chapter=1, story_time=50,
+        involved_refs=[], violated="impact_review", impact_level="moderate", summary="kept", proposed_change={},
+        actor_ref="actor", blocks_from_chapter=2,
+    ), required_decider="human", options=ALL_OPTIONS)
+    retired.actor_ref = "actor"
+    repo.mark_resolved(retired, decision=_decision("veto_world"), result_refs=["retired-delta"])
+    repo.mark_resolved(kept, decision=_decision("veto_world"), result_refs=["kept-delta"])
+    assert repo.reroll_count(retired.project_id, actor_ref="actor") == 2
+
+    supersede_resolutions(session, project_id=retired.project_id, graph_delta_id="retired-delta",
+                          reason="historical rewrite")
+
+    # The rewrite dropped the delta the veto committed through: the row stays resolved and names that delta,
+    # but neither caps the actor's rerolls nor shows in its view any more.
+    decision = json.loads(retired.decision_json)
+    assert (retired.status, decision["option"], decision["superseded_by_delta"]) == (
+        "resolved", "veto_world", "retired-delta",
+    )
+    assert repo.reroll_count(retired.project_id, actor_ref="actor") == 1
+    assert recent_vetoes(session, retired.project_id, actor_ids=["actor"])["actor"] == [kept]

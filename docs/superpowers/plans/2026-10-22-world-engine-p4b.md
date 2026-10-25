@@ -615,7 +615,7 @@
 - 审查门新增 error `missing_old_value`：对已存在目标的非 create 补丁缺少 `old_value` 时拒绝（保留 P2 R8 的合并例外与 protection 状态特例）。
 - 用类型化列取代 JSON 文本匹配：`world_plan_conflicts.decision_option`（索引）、tick id 列（索引）、结果引用的关联表或数组列；删除 `actor_turns` 的 LIKE、`superseded_resolutions` 的 contains、`admission` 的 metadata contains。CAS 失败按异常类型判断，不再匹配消息文本。
 - `band_plans` 增加唯一约束 `(arc_plan_id, band_index, version)`。
-- 去掉 `+1µs` 时间戳规避（与 Task 2 的 W16 `seq` 列一起）；排查三条 flake（`test_accepting_a_change_to_a_settled_intent_is_stale`、`test_tick_after_chapter_one…[urban_mystery]`、`test_an_intent_too_large_alone_gives_its_slot_to_the_next_due_intent`）在并发负载下的原因并修复。
+- 去掉 `+1µs` 时间戳规避（与 Task 2 的 W16 `seq` 列一起）；排查四条 flake（`test_accepting_a_change_to_a_settled_intent_is_stale`、`test_tick_after_chapter_one…[urban_mystery]`、`test_an_intent_too_large_alone_gives_its_slot_to_the_next_due_intent`、`test_releasing_an_open_protection_rewinds_to_open`）在并发负载下的原因并修复。
 
 ### Task 17: 分层与去重复（B4、B7）
 

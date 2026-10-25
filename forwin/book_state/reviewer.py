@@ -376,6 +376,7 @@ class _ChapterExtractionChecks:
         self._dead_entity_issues()
         self._item_holder_issues()
         self._knowledge_issues()
+        self._rule_issues()
         # A world tick's delta is checked against protections before it is built.
         if self.delta.source_type == CHAPTER_EXTRACTION_SOURCE_TYPE:
             self._protection_issues()
@@ -387,6 +388,25 @@ class _ChapterExtractionChecks:
         self.issues.append(BookStateReviewIssue(
             severity=severity, code=code, target_ref=target_ref, message=message, detail=detail or {},
         ))
+
+    def _rule_issues(self) -> None:
+        from forwin.book_state.rule_predicates import (
+            RULE_PREDICATE_KINDS, active_rule_predicates, changes_from_delta, evaluate_rules,
+        )
+
+        for node in self.runtime.world.nodes_by_id.values():
+            payload = node.profile.get("checkable")
+            if (node.node_type == "rule" and node.is_active
+                    and self.runtime.world.get_state(node.id).get("status") == "active"
+                    and isinstance(payload, dict) and payload.get("kind") not in RULE_PREDICATE_KINDS):
+                self._issue("warning", "unknown_rule_predicate", f"rule:{node.id}",
+                            f"rule {node.id} has an unknown predicate kind")
+        rule_runtime = copy(self.runtime)
+        rule_runtime.map = self.graph
+        for violation in evaluate_rules(rule_runtime, active_rule_predicates(self.runtime),
+                                        changes_from_delta(self.runtime, self.delta)):
+            self._issue("error" if violation.hard else "warning", "rule_violated",
+                        f"rule:{violation.rule_id}", violation.message)
 
     # movements
 
@@ -423,6 +443,14 @@ class _ChapterExtractionChecks:
         ]
         if unrecorded:
             self.issues.extend(_location_patch_issues(self.graph, unrecorded))
+            from forwin.book_state.rule_predicates import active_rule_predicates
+
+            if any(p.hard and p.kind == "requires_travel_mode" for p in active_rule_predicates(self.runtime)):
+                lexicon = BookLexiconRepository(self.session).get(self.delta.project_id)
+                for patch in unrecorded:
+                    if (patch.old_value and patch.new_value and patch.old_value != patch.new_value
+                            and self.graph.shortest_path(str(patch.old_value), str(patch.new_value)).reachable):
+                        self._shortest_minutes(lexicon, patch.node_id, str(patch.old_value), str(patch.new_value))
         if not self.movements:
             return
         lexicon = BookLexiconRepository(self.session).get(self.delta.project_id)
@@ -524,8 +552,10 @@ class _ChapterExtractionChecks:
         target = f"node:{mover}"
         if not travel.reachable:
             self._issue(
-                "error", "movement_unreachable", target,
-                f"no objective map path for {mover} moving {from_id} -> {to_id}: {travel.blocked_reason}",
+                "error", "movement_rule_blocked" if travel.blocked_by_rule else "movement_unreachable", target,
+                (f"{mover} moving {from_id} -> {to_id} is blocked by rule {travel.blocked_by_rule}"
+                 if travel.blocked_by_rule else
+                 f"no objective map path for {mover} moving {from_id} -> {to_id}: {travel.blocked_reason}"),
             )
             return None
         if not travel.route_known:

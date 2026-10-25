@@ -1017,3 +1017,64 @@ def test_review_pass_reuses_real_loader_with_memory_repository(monkeypatch):
     independent = run()
     assert independent == reused
     assert loads == [2, 2, 2]
+
+
+@pytest.mark.parametrize("hard,severity", [(True, "error"), (False, "warning")])
+def test_gate_flags_rule_violation_hard_and_soft(monkeypatch, hard, severity):
+    from tests.test_rule_predicates import rule
+    from tests.test_world_constraints import _runtime
+    runtime = _runtime(rule("actor_cannot_enter", hard=hard, location_ref="l2"))
+    gate = BookStateReviewGate(None)
+    monkeypatch.setattr(gate.projection, "load_runtime_as_of", lambda *a, **kw: runtime)
+    delta = GraphDelta(id="d", project_id="p", chapter_number=4, source_type="chapter_extraction",
+        node_patches=[NodePatch(node_id="a", node_type="character", op="set", field_path="state.location_id", old_value="l1", new_value="l2")])
+    verdict = gate.review(ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta]), base_chapter=3)
+    assert _codes(verdict) == [(severity, "rule_violated")]
+    assert verdict.issues[0].target_ref == "rule:r"
+    assert verdict.accepted is (not hard)
+
+
+def test_unknown_rule_kind_warns(monkeypatch):
+    from tests.test_rule_predicates import rule
+    from tests.test_world_constraints import _runtime
+    gate = BookStateReviewGate(None)
+    monkeypatch.setattr(gate.projection, "load_runtime_as_of", lambda *a, **kw: _runtime(rule("future_kind")))
+    delta = GraphDelta(id="d", project_id="p", chapter_number=4, source_type="world_engine")
+    verdict = gate.review(ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta]), base_chapter=3)
+    assert _codes(verdict) == [("warning", "unknown_rule_predicate")]
+    assert verdict.accepted
+
+
+@pytest.mark.parametrize("recorded", [True, False])
+def test_gate_reports_movement_rule_blocked(monkeypatch, recorded):
+    from tests.test_rule_predicates import rule
+    from tests.test_world_constraints import _runtime, LEXICON
+    gate = BookStateReviewGate(None)
+    runtime = _runtime(rule("requires_travel_mode", edge_types=["road"], mode_ids=["m"]))
+    monkeypatch.setattr(gate.projection, "load_runtime_as_of", lambda *a, **kw: runtime)
+    monkeypatch.setattr("forwin.book_state.reviewer.BookLexiconRepository.get", lambda *a: LEXICON)
+    delta = GraphDelta(id="d", project_id="p", chapter_number=4, source_type="world_engine",
+        story_time_start=600, story_time_end=1200,
+        node_patches=[NodePatch(node_id="a", node_type="character", op="set", field_path="state.location_id",
+                               old_value="l1", new_value="l2")],
+        metadata={"movements": [{"entity_id": "a", "from_id": "l1", "to_id": "l2"}]} if recorded else {})
+    verdict = gate.review(ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta]), base_chapter=3)
+    assert ("error", "movement_rule_blocked") in _codes(verdict)
+    assert ("error", "movement_unreachable") not in _codes(verdict)
+
+
+@pytest.mark.parametrize("hard", [True, False])
+def test_gate_rule_predicate_postgres(hard):
+    from forwin.protocol.book_state import WorldNode
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    with Session.begin() as session:
+        BookStateRepository(session).create_world_node(WorldNode(
+            id=f"entry-rule-{world.project_id}", project_id=world.project_id, node_type="rule", name="r",
+            profile={"hardness": "hard" if hard else "soft", "checkable": {
+                "kind": "actor_cannot_enter", "location_ref": world.loc(2),
+            }}, state={"status": "active"}), version_chapter=0, version_state={"status": "active"})
+    verdict = _review(Session, world, _delta(Session, world, 1, _day_of_moves(_move(world.hero, world.loc(1), world.loc(2)))))
+    assert ("error" if hard else "warning", "rule_violated") in _codes(verdict)
+    assert verdict.accepted is (not hard)
+    engine.dispose()

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from forwin.book_state.lexicon import BookLexicon, TravelMode
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.runtime import BookStateRuntime
+from forwin.book_state.rule_predicates import active_rule_predicates, blocked_edge_types
 from forwin.protocol.book_state import ObserverType, PathResult
 
 
@@ -26,6 +27,7 @@ class TravelEstimate(BaseModel):
     # The mover knows a route: its cognition overlay's, or the objective one when it has none.
     route_known: bool
     blocked_reason: str
+    blocked_by_rule: str = ""
 
 
 def estimate_travel(
@@ -54,7 +56,8 @@ def estimate_travel(
             allowed_edge_types=allowed_edge_types,
         )
 
-    return _estimate_travel(runtime, lexicon, mover_id=mover_id, path=path)
+    return _estimate_travel(runtime, lexicon, mover_id=mover_id, path=path,
+                            edge_types=frozenset(str(edge.edge_type) for edge in graph.edges_by_id.values()))
 
 
 def _estimate_travel(
@@ -63,8 +66,32 @@ def _estimate_travel(
     *,
     mover_id: str | None,
     path: Callable[[tuple[str, str] | None, frozenset[str] | None], PathResult],
+    edge_types: frozenset[str] | None = None,
 ) -> TravelEstimate:
+    predicates = active_rule_predicates(runtime)
+    blocked = blocked_edge_types(runtime, predicates, mover_id=mover_id)
+    all_types = edge_types if edge_types is not None else frozenset(
+        str(edge.edge_type) for edge in runtime.map.edges_by_id.values()
+    )
+    allowed = all_types - blocked if blocked else None
+    unfiltered_path = path
+
+    def filtered_path(observer, edge_types):
+        types = allowed if edge_types is None else edge_types - blocked
+        return unfiltered_path(observer, types)
+
+    path = filtered_path
     objective = path(None, None)
+    if not objective.reachable and blocked and unfiltered_path(None, None).reachable:
+        # Name a rule that removes an edge of the otherwise usable route.
+        relevant = next((p.rule_id for p in predicates
+                         if blocked_edge_types(runtime, [p], mover_id=mover_id)
+                         and not unfiltered_path(None, all_types - blocked_edge_types(runtime, [p], mover_id=mover_id)).reachable), "")
+        if not relevant:
+            relevant = next(p.rule_id for p in predicates
+                            if all_types & blocked_edge_types(runtime, [p], mover_id=mover_id))
+        return TravelEstimate(reachable=False, minutes=None, route_known=False,
+                              blocked_reason=f"rule:{relevant} requires travel mode", blocked_by_rule=relevant)
     if not objective.reachable:
         return TravelEstimate(
             reachable=False, minutes=None, route_known=False, blocked_reason=objective.blocked_reason,
@@ -100,6 +127,15 @@ def estimate_travel_from(
         (None, None), (observer, None),
         *((observer, frozenset(mode.allowed_edge_types)) for mode in _mover_modes(runtime, lexicon, mover_id)),
     ]))
+    blocked = blocked_edge_types(runtime, active_rule_predicates(runtime), mover_id=mover_id)
+    if blocked:
+        all_types = frozenset(str(edge.edge_type) for edge in runtime.map.edges_by_id.values())
+        profiles.extend((observer, all_types - blocked if allowed is None else allowed - blocked)
+                        for observer, allowed in list(profiles))
+        profiles.extend((None, all_types - blocked_edge_types(runtime, [p], mover_id=mover_id))
+                        for p in active_rule_predicates(runtime)
+                        if blocked_edge_types(runtime, [p], mover_id=mover_id))
+        profiles = list(dict.fromkeys(profiles))
     paths = dict(zip(profiles, runtime.map.single_source_travel_paths(from_location_id, profiles=profiles)))
     return {
         target: _estimate_travel(

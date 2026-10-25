@@ -161,3 +161,46 @@ def test_world_engine_modules_import_first(module: str) -> None:
     result = subprocess.run([sys.executable, "-c", f"import {module}"], capture_output=True, text=True)
 
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("reroute", [True, False])
+def test_requires_travel_mode_blocks_or_reroutes(reroute):
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.lexicon import BookLexicon, TravelMode
+    from forwin.protocol.book_state import MapEdge
+    from forwin.world_engine.travel import estimate_travel_from
+    from tests.test_world_constraints import _runtime
+    from tests.test_rule_predicates import rule
+    runtime = _runtime(rule("requires_travel_mode", edge_types=["road"], mode_ids=["m"]))
+    edges = list(runtime.map.edges_by_id.values())
+    if reroute:
+        edges.append(MapEdge(id="alt", project_id="p", from_node_id="l1", to_node_id="l2",
+                             edge_type="path", travel_time=4))
+    runtime.map = MapGraph(nodes=list(runtime.map.nodes_by_id.values()), edges=edges)
+    lexicon = BookLexicon(travel_modes=(TravelMode("m", "", 2, ("road",)),))
+    def estimate():
+        value = estimate_travel(runtime, lexicon, mover_id="a", from_location_id="l1", to_location_id="l2")
+        assert estimate_travel_from(runtime, lexicon, mover_id="a", from_location_id="l1")["l2"] == value
+        return value
+    value = estimate()
+    assert value.reachable is reroute
+    assert value.minutes == (240 if reroute else None)
+    assert value.blocked_by_rule == ("" if reroute else "r")
+    runtime.world.states_by_node_id["a"]["travel_mode_ids"] = ["m"]
+    assert estimate().minutes == 60
+
+
+def test_travel_rule_filter_preserves_unrelated_graph_edge_types_and_objective_news():
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.lexicon import BookLexicon
+    from forwin.protocol.book_state import MapEdge
+    from forwin.world_engine.travel import estimate_travel_from
+    from tests.test_world_constraints import _runtime
+    from tests.test_rule_predicates import rule
+    runtime = _runtime(rule("requires_travel_mode", edge_types=["road"], mode_ids=["m"]))
+    alternate = MapEdge(id="alt", project_id="p", from_node_id="l1", to_node_id="l2",
+                        edge_type="path", travel_time=3)
+    graph = MapGraph(nodes=list(runtime.map.nodes_by_id.values()), edges=[alternate])
+    assert estimate_travel(runtime, BookLexicon(), mover_id="a", from_location_id="l1", to_location_id="l2",
+                           graph=graph).minutes == 180
+    assert estimate_travel_from(runtime, BookLexicon(), mover_id=None, from_location_id="l1")["l2"].minutes == 120

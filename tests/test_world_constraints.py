@@ -764,3 +764,34 @@ def test_must_exist_ignores_a_status_that_does_not_end_the_ref(checks):
     protection = _protection("must_exist", "f")
     assert checks.check_narrative_boundaries(_runtime(protections=[protection]),
         _candidate(_change("f", "status", "besieged")), next_chapter=4) == []
+
+
+@pytest.mark.parametrize("hard", [True, False])
+def test_new_intent_into_forbidden_location_retries(checks, hard):
+    from tests.test_rule_predicates import rule
+    from forwin.world_engine.tick_nodes import actor_safe_feedback
+    candidate = _candidate(actor_id="a", new_intents=[_intent()])
+    issues = checks.check_hard_rules(_runtime(rule("actor_cannot_enter", hard=hard, location_ref="l2")),
+        LEXICON, candidate, now=NOW, calendar=CALENDAR, window_start=800)
+    assert [issue.code for issue in issues] == (["rule_violated"] if hard else [])
+    from types import SimpleNamespace
+    from forwin.world_engine.tick import _Tick
+    view = SimpleNamespace(references=lambda: {"a"})
+    actor_candidate = candidate.model_copy(update={"origin": "actor_turn"})
+    repaired = actor_candidate.model_copy(update={"new_intents": []})
+    feedback_seen = []
+
+    def retry(views, *, feedback):
+        feedback_seen.append(feedback)
+        return [repaired]
+
+    tick = SimpleNamespace(
+        views={"a": view}, _issues=lambda candidate: issues if candidate.new_intents else [],
+        _turns=retry, _recheck=lambda results: results,
+    )
+    assert _Tick._check(tick, [actor_candidate]) == ([repaired] if hard else [actor_candidate])
+    assert bool(feedback_seen) is hard
+    if hard:
+        assert feedback_seen[0] == actor_safe_feedback({"a": issues}, {"a": view})
+        assert "rule_violated" in feedback_seen[0]["a"][0].message
+        assert "l2" not in feedback_seen[0]["a"][0].message

@@ -18,7 +18,7 @@
 completed_phase = "P4"
 
 [story_id_literal]
-allowed_values = ["main", "fact_type", "fact_id", "thread_id", "world_line_id", "fact_refs",
+allowed_values = ["main", "fact_ref", "fact_type", "fact_id", "thread_id", "world_line_id", "fact_refs",
   "fact_conflict", "thread_keep_open", "thread_already_closed",
   "thread_drift", "thread_time_extraction", "fact_nodes", "gap_between_public_and_actual",
   # protocol field / enum / ref-namespace names (not story content); "fact_" is the bare
@@ -974,7 +974,7 @@ path = "forwin/writer/prompt_core/world_repair.py"
 checks = ["cjk_collection"]
 category = "prompt_text"
 justification = "世界审查门、叙事保护与计划绑定写给 writer 的修复模板；保护只填实体名与秘密话题（不含 proposition），绑定只列位置与 kind，不含作者视角的 how 或 ref，不参与判定"
-max_literals = 24
+max_literals = 26
 
 [[entry]]
 path = "forwin/writer/prompt_core/world_view.py"
@@ -991,3 +991,10 @@ checks = ["cjk_collection"]
 category = "prompt_text"
 justification = "Extraction prompt label identifying writer-declared scene locations as non-evidence."
 max_literals = 1
+
+[[entry]]
+path = "forwin/writer/prompt_core/rule_predicates.py"
+checks = ["cjk_collection"]
+category = "prompt_text"
+justification = "Structural predicate descriptions for world_seed; no story-specific vocabulary."
+max_literals = 5

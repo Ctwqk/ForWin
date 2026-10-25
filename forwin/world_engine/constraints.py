@@ -13,6 +13,7 @@ from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.protections import (
     ENDED_STATUSES, active_protections, breaks_protection, guarded_path, paths_overlap, value_at, world_field_path,
 )
+from forwin.book_state.rule_predicates import active_rule_predicates, changes_from_new_intents, evaluate_rules
 from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph, resolve_world_node_location_id
 from forwin.book_state.schema import ACTOR_NODE_TYPES, ACTOR_TIERS, IMPACT_LEVELS, WORLD_NODE_FIELDS
 from forwin.protocol.book_state import WorldNode
@@ -364,6 +365,9 @@ def check_hard_rules(
                   f"{transfer.item_ref} is held by {current}, not {transfer.from_ref}")
         holders[transfer.item_ref] = transfer.to_ref
 
+    for violation in evaluate_rules(runtime, active_rule_predicates(runtime), changes_from_new_intents(runtime, candidate)):
+        if violation.hard:
+            issue("rule_violated", violation.ref, violation.message)
     for intent in candidate.new_intents:
         try:
             delay = duration_to_minutes(calendar, lexicon,

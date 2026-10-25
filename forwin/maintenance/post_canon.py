@@ -1035,7 +1035,7 @@ def build_world_tick_service(
         adjudicator=WorldAdjudicator(llm_client),
         actor_runner=ActorTurnRunner(llm_client),
         drift_runner=WorldDriftRunner(llm_client),
-        # A failed Codex call escalates the conflict, so the delegate keeps the client either way.
+        # A failed LLM call escalates the conflict, so the delegate keeps the client either way.
         conflict_delegate=WorldConflictDelegate(llm_client),
         audit_writer_factory=own_transaction_audit_writer(session_factory),
         save_prompt_trace=save_prompt_trace,

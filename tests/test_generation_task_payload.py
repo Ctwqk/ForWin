@@ -27,7 +27,7 @@ ENV_PROFILE = {
 def test_execution_payload_serializes_exact_non_secret_policy() -> None:
     policy = RuntimePolicy.for_profile(
         "standard", model_profile_id="env-kimi"
-    ).with_user_settings(gate_delegate="spark")
+    ).with_user_settings(gate_delegate="llm")
 
     payload = execution_payload(
         mode="continue",
@@ -39,7 +39,7 @@ def test_execution_payload_serializes_exact_non_secret_policy() -> None:
     raw = payload.model_dump(mode="json")
 
     assert raw["policy_version"] == 3
-    assert raw["policy_snapshot"]["pause"]["gate_delegate"] == "spark"
+    assert raw["policy_snapshot"]["pause"]["gate_delegate"] == "llm"
     assert "runtime_overrides" not in raw
     assert "api_key" not in json.dumps(raw)
 
@@ -57,7 +57,7 @@ def test_legacy_policy_snapshot_loads_world_and_models_defaults(profile, actor_t
 
     restored = payload_from_json(json.dumps(payload))
 
-    assert restored.policy_snapshot.world.conflict_delegate == "codex"
+    assert restored.policy_snapshot.world.conflict_delegate == "llm"
     assert restored.policy_snapshot.world.max_actor_turns_per_tick == actor_turns
     assert restored.policy_snapshot.models.chains == DEFAULT_LLM_CHAINS
 

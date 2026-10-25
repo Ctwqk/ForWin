@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
@@ -21,6 +24,20 @@ def _dimension(report, dimension: str, value: str):
         for item in report.dimensions
         if item.dimension == dimension and item.value == value
     )
+
+
+@pytest.mark.parametrize("stage, family, expected", [
+    ("pause_gate", "review", "delegate"),
+    ("review.world_conflict", "review", "delegate"),
+    ("gate_chapter_review_interval", "review", "delegate"),
+    ("", "delegate", "delegate"),
+    ("chapter_review", "review", "reviewer"),
+    ("world.adjudicate", "world_engine", "world_engine"),
+])
+def test_delegate_cost_role(stage, family, expected) -> None:
+    from forwin.observability.cost_ledger import _record_role
+
+    assert _record_role(SimpleNamespace(stage_key=stage, task_family=family)) == expected
 
 
 def test_review_acceptance_propagates_transport_actor_taxonomy() -> None:

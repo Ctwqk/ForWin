@@ -52,27 +52,16 @@ Useful checks:
 | MCP health/upstream API connectivity | Confirms `forwin-mcp-swarm` can reach `forwin-app-swarm` |
 | publisher browser heartbeat | Confirms browser automation is logged in and connected |
 
-## Codex Bridge Runtime
+## LLM Runtime
 
-The production Codex Bridge runs on 150 and exposes the ForWin bridge API on
-port `8895`:
+Generation and review use the per-route fallback chains in
+`RuntimePolicy.models.chains`. Profiles come from `DEEPSEEK_*`,
+`KIMI_*` / `MOONSHOT_*`, and `MINIMAX_*` environment settings. The pause gate
+and world-conflict reviewer use the review chain and record the profile and
+model that answered.
 
-```bash
-curl http://10.0.0.150:8895/health
-curl http://10.0.0.150:8895/openapi.json
-```
-
-ForWin app, generation-worker, and MCP services that enable Codex routing must
-use:
-
-```bash
-FORWIN_CODEX_BRIDGE_URL=http://10.0.0.150:8895
-FORWIN_CODEX_DEFAULT_MODEL=gpt-5.3-codex-spark
-```
-
-Do not point ForWin at `10.0.0.150:8897` for Codex. That port is reserved by a
-separate browser-management service in the shared production environment and
-does not expose `/v1/codex/chat`.
+The former bridge was archived on infra-150 on 2026-10-25 and is no longer a
+ForWin runtime dependency.
 
 For a one-shot production publisher baseline check:
 
@@ -202,7 +191,7 @@ must treat that document as the publish gate. In short:
 For recurring two-hour Codex/operator intervention checks, install the
 read-only supervisor on 150 from a source checkout or deployed copy. It checks
 GitHub PRs/issues, publisher upload jobs, MCP generation task state, publisher
-browser login/heartbeat state, and Codex Bridge health. It writes one redacted
+browser login/heartbeat state. It writes one redacted
 JSON object per run and exits non-zero when follow-up is required.
 Historical upload or generation failures that have already been superseded by
 a newer successful platform/project run remain visible in the JSON report but

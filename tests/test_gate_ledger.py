@@ -237,7 +237,7 @@ class TestGateLedger:
                     band_id="band-1",
                     fired=True,
                     decision="approve",
-                    overridden_by="spark",
+                    overridden_by="llm",
                 ),
                 band_id="band-1",
                 parent_event_id=request_id,

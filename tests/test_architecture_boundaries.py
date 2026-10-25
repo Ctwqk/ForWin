@@ -24,7 +24,6 @@ from forwin.http.routes import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.xfail(strict=True, reason="delegates move in Task 3")
 def test_no_codex_llm_backend_remains() -> None:
     forbidden = re.compile(
         r"codex_bridge|CodexBridge|codex_models|FORWIN_CODEX|codex_usage_attempts|"
@@ -1048,7 +1047,7 @@ def test_v5_runtime_policy_is_the_only_generation_policy_surface() -> None:
     assert "policy_snapshot: RuntimePolicy" in task_payload_source
     assert "runtime_overrides" not in task_payload_source
     assert 'QualityProfile = Literal["standard", "pulp"]' in policy_source
-    assert 'GateDelegate = Literal["human", "spark"]' in policy_source
+    assert 'GateDelegate = Literal["human", "llm"]' in policy_source
 
     forbidden_import = "from forwin.config import Config"
     offenders = [
@@ -1496,8 +1495,8 @@ LLM_STAGE_TRACE_OWNERS = {
     "chapter_review_json_repair": ("forwin/review/repair/service.py", "self._save_prompt_trace_payload("),
     "repair_verification": ("forwin/review/repair/service.py", "self._save_prompt_trace_payload("),
     "comment_analysis": ("forwin/maintenance/post_canon.py", "save_world_prompt_trace("),
-    "spark_pause_gate": ("forwin/generation/gate_delegation.py", "audit_writer.save_prompt_trace("),
-    "review.world_conflict": ("forwin/generation/gate_delegation.py", "audit_writer.save_prompt_trace("),
+    "pause_gate": ("forwin/llm/structured_call.py", "recorder.save_prompt_trace("),
+    "review.world_conflict": ("forwin/llm/structured_call.py", "recorder.save_prompt_trace("),
     "chapter_delta_extraction": ("forwin/generation/pipeline_core/review_autofix.py", "save_trace(extraction.prompt_trace)"),
     "world.adjudicate": ("forwin/world_engine/tick.py", "self.service.save_prompt_trace("),
     "world.actor_turn": ("forwin/world_engine/tick.py", "self.service.save_prompt_trace("),

@@ -199,11 +199,11 @@ def _resolve_in_tick(
                     summary=f"world change {chapter} {option}", proposed_change={}, blocks_from_chapter=chapter + 1,
                     intent_ref=intent_ref,
                 ),
-                required_decider="codex",
+                required_decider="llm",
                 options=(option,),
             )
             decision = ConflictDecision(
-                option=option, decided_by="codex", rationale="decided in tick", decided_at=datetime.now(UTC),
+                option=option, decided_by="llm", rationale="decided in tick", decided_at=datetime.now(UTC),
             )
             effects = record_option_side_effects(session, row, decision, latest_chapter=chapter)
             refs = [delta_id, effects.obligation_id, effects.plan_patch_id]

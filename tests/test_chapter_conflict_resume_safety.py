@@ -93,7 +93,7 @@ def test_conflict_card_never_falls_back_to_raw_evidence(monkeypatch):
     assert PROPOSITION not in rendered and SHADOW_NAME not in rendered
 
 
-@pytest.mark.parametrize("first_decider", ["codex", "human"])
+@pytest.mark.parametrize("first_decider", ["llm", "human"])
 def test_new_human_rewrite_gets_budget_over_saved_draft(monkeypatch, first_decider):
     attempts, writes, patches, histories = [], [], [], []
     saved = _writer_output("Saved draft body.")

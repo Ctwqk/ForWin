@@ -7,14 +7,14 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import func, select
 
+from forwin.writer.llm.adapter import LLMChatResult
 from forwin.audit.gate_outcome import parse_gate_outcome
 from forwin.generation.gate_delegation import (
     GateDelegationRequest,
     GateDelegationService,
     GateAuditWriter,
     GateResolution,
-    SPARK_GATE_MODEL,
-    SparkGateDelegate,
+    LLMGateDelegate,
 )
 from forwin.generation.pipeline_core.gate_delegation import GateDelegationStage
 from forwin.models.audit import DecisionEvent
@@ -25,7 +25,7 @@ from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
 
 
-class SpySparkDelegate:
+class SpyLLMDelegate:
     def __init__(self) -> None:
         self.calls: list[tuple[object, GateDelegationRequest]] = []
 
@@ -35,14 +35,14 @@ class SpySparkDelegate:
             resolved=True,
             approved=True,
             decision="approve",
-            delegate="spark",
+            delegate="llm",
             reason="approved",
         )
 
 
-def test_human_gate_policy_never_calls_spark() -> None:
-    spark = SpySparkDelegate()
-    service = GateDelegationService(spark_delegate=spark)
+def test_human_gate_policy_never_calls_llm() -> None:
+    llm = SpyLLMDelegate()
+    service = GateDelegationService(llm_delegate=llm)
     request = GateDelegationRequest(
         project_id="project-1",
         task_id="task-1",
@@ -59,14 +59,14 @@ def test_human_gate_policy_never_calls_spark() -> None:
     assert outcome.delegate == "human"
     assert outcome.resolved is False
     assert outcome.approved is False
-    assert spark.calls == []
+    assert llm.calls == []
 
 
-def test_spark_gate_policy_calls_exact_delegate() -> None:
-    spark = SpySparkDelegate()
-    service = GateDelegationService(spark_delegate=spark)
+def test_llm_gate_policy_calls_exact_delegate() -> None:
+    llm = SpyLLMDelegate()
+    service = GateDelegationService(llm_delegate=llm)
     policy = RuntimePolicy.for_profile("standard").with_user_settings(
-        gate_delegate="spark"
+        gate_delegate="llm"
     )
     audit_writer = GateAuditWriter(
         save_decision_event=lambda _event: None,
@@ -87,7 +87,7 @@ def test_spark_gate_policy_calls_exact_delegate() -> None:
     )
 
     assert outcome.approved is True
-    assert spark.calls == [(audit_writer, request)]
+    assert llm.calls == [(audit_writer, request)]
     assert not hasattr(audit_writer, "session")
     assert not hasattr(audit_writer, "mark_chapter_status")
 
@@ -116,52 +116,33 @@ def _recording_writer(updater: RecordingUpdater) -> GateAuditWriter:
     )
 
 
-class FakeSparkLLM:
+class FakeLLM:
     def __init__(
-        self,
-        content: str,
-        *,
-        actual_model: str = SPARK_GATE_MODEL,
-        backend: str = "codex_bridge",
-        error: Exception | None = None,
-        prove_actual_model: bool = True,
+        self, content: str, *, model: str = "deepseek-chat",
+        profile_id: str = "env-deepseek", error: Exception | None = None,
     ) -> None:
         self.content = content
-        self.actual_model = actual_model
-        self.backend = backend
+        self.model = model
+        self.profile_id = profile_id
         self.error = error
-        self.prove_actual_model = prove_actual_model
-        self.last_call_result = None
         self.calls: list[dict[str, object]] = []
         self._attempts: list[dict[str, object]] = []
 
-    def chat(self, messages, **kwargs):
+    def chat_with_meta(self, messages, **kwargs):
         self.calls.append({"messages": messages, **kwargs})
-        self._attempts = [
-            {
-                "attempt_group_id": "attempt-1",
-                "model": self.actual_model,
-                "_raw_request_payload": {
-                    "messages": messages,
-                    "authorization": "Bearer must-not-leak",
-                },
-                "_raw_response_text": self.content,
-            }
-        ]
-        trace = {
-            "backend": self.backend,
-            "raw_events": [{"type": "turn.completed", "content": self.content}],
-        }
-        if self.prove_actual_model:
-            trace["actual_model"] = self.actual_model
-        self.last_call_result = SimpleNamespace(
-            backend=self.backend,
-            fallback_used=False,
-            trace=trace,
-        )
+        self._attempts = [{
+            "attempt_group_id": "attempt-1",
+            "profile_id": self.profile_id,
+            "model": self.model,
+            "_raw_request_payload": {
+                "messages": messages,
+                "authorization": "Bearer must-not-leak",
+            },
+            "_raw_response_text": self.content,
+        }]
         if self.error is not None:
             raise self.error
-        return self.content
+        return LLMChatResult(self.content, self.profile_id, self.model)
 
     def drain_llm_attempt_events(self):
         attempts = list(self._attempts)
@@ -196,19 +177,19 @@ def _delegation_request() -> GateDelegationRequest:
     )
 
 
-def test_spark_delegate_proves_model_and_persists_complete_sanitized_trace() -> None:
+def test_llm_delegate_records_served_model_and_complete_sanitized_trace() -> None:
     updater = RecordingUpdater()
-    llm = FakeSparkLLM(_approval_json())
+    llm = FakeLLM(_approval_json())
 
-    outcome = SparkGateDelegate(llm_client=llm).resolve(
+    outcome = LLMGateDelegate(llm_client=llm).resolve(
         audit_writer=_recording_writer(updater),
         request=_delegation_request(),
     )
 
     assert outcome.resolved is True
     assert outcome.approved is True
-    assert outcome.actual_model == SPARK_GATE_MODEL
-    assert llm.calls[0]["stage_key"] == "spark_pause_gate"
+    assert outcome.model == "deepseek-chat"
+    assert llm.calls[0]["stage_key"] == "pause_gate"
     trace = updater.traces[0]
     assert trace["trace_scope"] == "gate_delegation"
     assert "complete chapter body" in str(trace["input_snapshot_json"])
@@ -217,7 +198,6 @@ def test_spark_delegate_proves_model_and_persists_complete_sanitized_trace() -> 
     assert "must-not-leak" not in str(trace["attempts_json"])
     assert "_raw_request_payload" in str(trace["attempts_json"])
     assert "_raw_response_text" in str(trace["attempts_json"])
-    assert "turn.completed" in str(trace["attempts_json"])
     assert {event.event_type for event in updater.events} == {
         "gate_delegation_requested",
         "prompt_trace_recorded",
@@ -234,55 +214,36 @@ def test_spark_delegate_proves_model_and_persists_complete_sanitized_trace() -> 
     assert requested.evaluated is False
     assert decided is not None
     assert decided.decision == "approve"
-    assert decided.overridden_by == "spark"
+    assert decided.overridden_by == "llm"
     assert decided.trace_ids == ["trace-1"]
     assert approved == decided
 
 
-def test_spark_delegate_uses_configured_codex_model() -> None:
+@pytest.mark.parametrize("profile_id, model", [("env-deepseek", "deepseek-chat"), ("env-kimi", "kimi-k2.5")])
+def test_llm_delegate_accepts_served_chain_model(profile_id: str, model: str) -> None:
     updater = RecordingUpdater()
-    configured_model = "gpt-5.6-sol"
-    llm = FakeSparkLLM(_approval_json(), actual_model=configured_model)
+    llm = FakeLLM(_approval_json(), model=model, profile_id=profile_id)
 
-    outcome = SparkGateDelegate(
-        llm_client=llm,
-        requested_model=configured_model,
-    ).resolve(
-        audit_writer=_recording_writer(updater),
-        request=_delegation_request(),
+    outcome = LLMGateDelegate(llm_client=llm).resolve(
+        audit_writer=_recording_writer(updater), request=_delegation_request(),
     )
 
     assert outcome.resolved is True
     assert outcome.approved is True
-    assert outcome.requested_model == configured_model
-    assert outcome.actual_model == configured_model
-    assert llm.calls[0]["preferred_model"] == configured_model
-    assert configured_model in str(updater.traces[0]["model_profile_json"])
+    assert (outcome.profile_id, outcome.model) == (profile_id, model)
+    assert "preferred_model" not in llm.calls[0]
+    assert "permission_profile" not in llm.calls[0]
+    assert json.loads(updater.traces[0]["model_profile_json"])["model"] == model
 
 
-def test_unproven_actual_model_fails_closed() -> None:
+def test_failed_route_persists_complete_attempt_trace() -> None:
     updater = RecordingUpdater()
-    llm = FakeSparkLLM(_approval_json(), prove_actual_model=False)
-
-    outcome = SparkGateDelegate(llm_client=llm).resolve(
-        audit_writer=_recording_writer(updater),
-        request=_delegation_request(),
-    )
-
-    assert outcome.resolved is False
-    assert outcome.approved is False
-    assert outcome.failure_reason == "model_mismatch"
-    assert outcome.actual_model == ""
-
-
-def test_failed_route_persists_complete_bridge_trace() -> None:
-    updater = RecordingUpdater()
-    llm = FakeSparkLLM(
-        "partial Spark response",
+    llm = FakeLLM(
+        "partial LLM response",
         error=RuntimeError("provider timeout"),
     )
 
-    outcome = SparkGateDelegate(llm_client=llm).resolve(
+    outcome = LLMGateDelegate(llm_client=llm).resolve(
         audit_writer=_recording_writer(updater),
         request=_delegation_request(),
     )
@@ -290,40 +251,39 @@ def test_failed_route_persists_complete_bridge_trace() -> None:
     assert outcome.approved is False
     assert outcome.failure_reason == "llm_call_failed"
     trace = updater.traces[0]
-    assert "partial Spark response" in str(trace["attempts_json"])
+    assert "partial LLM response" in str(trace["attempts_json"])
     assert "provider timeout" in str(trace["output_summary_json"])
 
 
 @pytest.mark.parametrize(
-    ("content", "actual_model", "error", "expected_failure"),
+    ("content", "model", "error", "expected_failure"),
     [
-        ("not-json", SPARK_GATE_MODEL, None, "parse_or_schema"),
-        ('{"decision":"approve"}', SPARK_GATE_MODEL, None, "parse_or_schema"),
+        ("not-json", "deepseek-chat", None, "parse_or_schema"),
+        ('{"decision":"approve"}', "deepseek-chat", None, "parse_or_schema"),
         (
             '{"decision":"approve","reason":"looks fine"}',
-            SPARK_GATE_MODEL,
+            "deepseek-chat",
             None,
             "parse_or_schema",
         ),
-        (_approval_json(), "gpt-5.6-sol", None, "model_mismatch"),
         (
             "partial response",
-            SPARK_GATE_MODEL,
+            "deepseek-chat",
             TimeoutError("timed out"),
             "llm_call_failed",
         ),
     ],
 )
-def test_spark_failure_modes_reject_with_trace_and_failure_event(
+def test_llm_failure_modes_reject_with_trace_and_failure_event(
     content: str,
-    actual_model: str,
+    model: str,
     error: Exception | None,
     expected_failure: str,
 ) -> None:
     updater = RecordingUpdater()
-    llm = FakeSparkLLM(content, actual_model=actual_model, error=error)
+    llm = FakeLLM(content, model=model, error=error)
 
-    outcome = SparkGateDelegate(llm_client=llm).resolve(
+    outcome = LLMGateDelegate(llm_client=llm).resolve(
         audit_writer=_recording_writer(updater),
         request=_delegation_request(),
     )
@@ -352,7 +312,7 @@ def test_spark_failure_modes_reject_with_trace_and_failure_event(
 
 
 @pytest.mark.parametrize("status", ["pending", "fail", "error", "overridden"])
-def test_noneligible_checkpoint_never_reaches_spark(status: str) -> None:
+def test_noneligible_checkpoint_never_reaches_llm(status: str) -> None:
     calls: list[dict[str, object]] = []
 
     def resolve_gate(**kwargs):
@@ -361,14 +321,14 @@ def test_noneligible_checkpoint_never_reaches_spark(status: str) -> None:
             resolved=True,
             approved=True,
             decision="approve",
-            delegate="spark",
+            delegate="llm",
         )
 
     stage = SimpleNamespace(
         _resolve_gate_delegation=resolve_gate,
         _audit_task_id="task-1",
         policy=RuntimePolicy.for_profile("standard").with_user_settings(
-            gate_delegate="spark"
+            gate_delegate="llm"
         ),
     )
     checkpoint = SimpleNamespace(
@@ -452,7 +412,7 @@ def test_delegation_audit_failure_rolls_back_dedicated_transaction() -> None:
             _audit_task_id="task-1",
             _audit_root_event_id="root-1",
             policy=RuntimePolicy.for_profile("standard").with_user_settings(
-                gate_delegate="spark"
+                gate_delegate="llm"
             ),
             gate_delegation=FailingDelegation(),
             _SessionFactory=Session,
@@ -482,7 +442,7 @@ def test_delegation_audit_failure_rolls_back_dedicated_transaction() -> None:
         engine.dispose()
 
 
-def test_successful_spark_audit_survives_outer_transaction_rollback() -> None:
+def test_successful_llm_audit_survives_outer_transaction_rollback() -> None:
     database_url = postgres_test_url("gate-delegation-durable-audit")
     engine = get_engine(database_url)
     init_db(engine)
@@ -491,7 +451,7 @@ def test_successful_spark_audit_survives_outer_transaction_rollback() -> None:
         with Session.begin() as session:
             project = StateUpdater(session).create_project(
                 title="Durable delegation audit",
-                premise="Spark evidence must survive chapter rollback.",
+                premise="LLM evidence must survive chapter rollback.",
                 genre="test",
                 runtime_policy=RuntimePolicy.for_profile("standard"),
             )
@@ -500,11 +460,11 @@ def test_successful_spark_audit_survives_outer_transaction_rollback() -> None:
             _audit_task_id="task-1",
             _audit_root_event_id="root-1",
             policy=RuntimePolicy.for_profile("standard").with_user_settings(
-                gate_delegate="spark"
+                gate_delegate="llm"
             ),
             gate_delegation=GateDelegationService(
-                spark_delegate=SparkGateDelegate(
-                    llm_client=FakeSparkLLM(_approval_json())
+                llm_delegate=LLMGateDelegate(
+                    llm_client=FakeLLM(_approval_json())
                 )
             ),
             _SessionFactory=Session,
@@ -549,7 +509,7 @@ def test_successful_spark_audit_survives_outer_transaction_rollback() -> None:
         engine.dispose()
 
 
-def test_spark_delegate_module_has_no_authoritative_canon_write_surface() -> None:
+def test_llm_delegate_module_has_no_authoritative_canon_write_surface() -> None:
     source = Path("forwin/generation/gate_delegation.py").read_text()
 
     for forbidden in (

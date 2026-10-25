@@ -242,7 +242,7 @@ def test_resolved_conflict_lets_continue_proceed(runtime, monkeypatch):
             decision=ConflictDecision(option="veto_world", decided_by="human", actor_id="reviewer", rationale="Keep the plan.", decided_at=datetime.now(UTC)),
             result_refs=[],
         )
-        _conflict(session, required_decider="codex")
+        _conflict(session, required_decider="llm")
         _conflict(session, required_decider="auto")
         _conflict(session, blocks_from_chapter=5)
         session.commit()
@@ -339,7 +339,7 @@ def test_world_conflict_read_model_loads_only_open_human_rows(monkeypatch):
     repository.list.return_value = [
         SimpleNamespace(id=decider, blocks_from_chapter=3, summary="Conflict", required_decider=decider,
                         created_at=datetime(2026, 1, 1), source="chapter_extraction")
-        for decider in ("human", "codex", "auto")
+        for decider in ("human", "llm", "auto")
     ]
     monkeypatch.setattr(generation, "WorldConflictRepository", lambda _session: repository)
     conflicts = generation.load_open_world_conflicts(Mock(), "project")
@@ -445,7 +445,7 @@ def test_batched_world_conflicts_filter_projects_and_match_run_gate(runtime):
         oldest.created_at = datetime(2026, 1, 1)
         newer = _conflict(session)
         newer.created_at = oldest.created_at + timedelta(days=1)
-        _conflict(session, required_decider="codex")
+        _conflict(session, required_decider="llm")
         _conflict(session, required_decider="auto")
         resolved = _conflict(session)
         resolved.status = "resolved"

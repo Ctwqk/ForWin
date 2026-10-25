@@ -44,6 +44,7 @@ from forwin.world_engine.propagation import chapter_events
 from forwin.world_engine.tick import WorldTickResult, WorldTickService
 from forwin.world_engine.tick_nodes import outcome_candidate
 from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE, AdjudicatedOutcome, TickCandidate, WorldEffects
+from forwin.writer.llm.adapter import LLMChatResult
 from forwin.writer.prompt_core.world_engine import ACTOR_CONSTRAINT_FEEDBACK, plot_response_goal
 from tests import world_gate_helpers
 from tests.test_canon_atomic_transaction import _prepare_chapter_candidate
@@ -61,7 +62,6 @@ from tests.test_world_gate_v6 import (
 from tests.test_world_tick_delta import _built, _commit_tick, _context
 
 
-ASTRA = "gpt-6-luna"
 POLICY = RuntimePolicy.for_profile("standard")
 DAY = 1440
 _STAGES = {"world.adjudicate": "adjudicate", "world.actor_turn": "actor_turn", "world.drift": "drift", "review.world_conflict": "review"}
@@ -86,18 +86,11 @@ class _WorldLLM:
         self.handlers = handlers
         self.calls: list[tuple[str, str]] = []
         self.llm_attempt_events: list[dict[str, Any]] = []
-        self.last_call_result = None
 
     def chat(self, messages, **kwargs):  # noqa: ANN001, ANN003
         stage = str(kwargs.get("stage_key") or "")
         content = messages[-1]["content"]
         self.calls.append((stage, content))
-        codex = stage == "review.world_conflict"
-        model = ASTRA if codex else self.model
-        backend = "codex_bridge" if codex else "stub"
-        self.last_call_result = SimpleNamespace(
-            backend=backend, fallback_used=False, actual_model=model, trace={"backend": backend, "actual_model": model},
-        )
         handler = self.handlers.get(_STAGES[stage])
         if handler is None:
             raise ConnectionError(f"{stage} is unavailable")
@@ -105,9 +98,12 @@ class _WorldLLM:
         reply = handler(json.JSONDecoder().raw_decode(content)[0], content)
         answer = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
         self.llm_attempt_events.append({
-            "attempt_no": 1, "stage_key": stage, "model": model, "output_chars": len(answer),
+            "attempt_no": 1, "stage_key": stage, "profile_id": "test-world", "model": self.model, "output_chars": len(answer),
         })
         return answer
+
+    def chat_with_meta(self, messages, **kwargs):
+        return LLMChatResult(self.chat(messages, **kwargs), "test-world", self.model)
 
     def drain_llm_attempt_events(self):
         events, self.llm_attempt_events = self.llm_attempt_events, []
@@ -495,7 +491,7 @@ def _ambush(world: _World, chapter: GraphDelta) -> dict[str, Any]:
 
 
 def _ambushing(world: _World, chapter: GraphDelta, option: str) -> _WorldLLM:
-    """The ambush is adjudicated, every actor waits a day, and Codex answers ``option``."""
+    """The ambush is adjudicated, every actor waits a day, and LLM answers ``option``."""
     return _WorldLLM(adjudicate=_outcomes(_ambush(world, chapter)), actor_turn=_quiet_turns, review=_review(option))
 
 
@@ -689,7 +685,7 @@ def test_invalid_actor_intent_retries_then_drops_and_tick_commits_rest() -> None
     engine.dispose()
 
 
-def test_major_impact_goes_to_codex_and_veto_is_applied_in_tick(monkeypatch) -> None:
+def test_major_impact_goes_to_llm_and_veto_is_applied_in_tick(monkeypatch) -> None:
     engine, Session = _session_factory()
     world = _seed_tick_world(Session, monkeypatch)
     chapter = _chapter(Session, world, 1)
@@ -702,12 +698,12 @@ def test_major_impact_goes_to_codex_and_veto_is_applied_in_tick(monkeypatch) -> 
     assert result.graph_delta_ids == [_delta_id(chapter)]
     assert llm.stages().count("review.world_conflict") == 1
     assert (conflict.source, conflict.violated, conflict.impact_level, conflict.required_decider, conflict.status) == (
-        "world_tick", "impact_review", "major", "codex", "resolved",
+        "world_tick", "impact_review", "major", "llm", "resolved",
     )
     held = TickCandidate.model_validate(json.loads(conflict.proposed_change_json))
     assert (held.candidate_id, held.impact_level) == (f"adjudication:{_later(world)}", "major")
     decision = json.loads(conflict.decision_json)
-    assert (decision["option"], decision["decided_by"], decision["reason"]) == ("veto_world", "codex", "")
+    assert (decision["option"], decision["decided_by"], decision["reason"]) == ("veto_world", "llm", "")
     [resolved] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_RESOLVED)
     payload = _payload(resolved)
     assert payload["trace_id"] and payload["tick_id"] == _tick_id(chapter)
@@ -728,7 +724,7 @@ def test_escalated_conflict_holds_change_and_blocks_next_chapter(monkeypatch) ->
     engine, Session = _session_factory()
     world = _seed_tick_world(Session, monkeypatch)
     chapter = _chapter(Session, world, 1)
-    # Codex may not amend the plan; choosing it hands the conflict to a human.
+    # LLM may not amend the plan; choosing it hands the conflict to a human.
     llm = _ambushing(world, chapter, "amend_plan")
 
     result = _tick(Session, llm, chapter)
@@ -822,7 +818,7 @@ def test_tick_saves_prompt_traces_with_stage_keys(monkeypatch) -> None:
     world_traces = {trace.id for trace in traces if trace.stage_key.startswith("world.")}
     traced = {event.related_object_id for event in succeeded if event.related_object_type == "prompt_trace"}
     assert traced >= world_traces
-    # The resolution names the Codex review that chose it.
+    # The resolution names the LLM review that chose it.
     [resolved] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_RESOLVED)
     [review] = [trace for trace in traces if trace.stage_key == "review.world_conflict"]
     assert _payload(resolved)["trace_id"] == review.id
@@ -1108,7 +1104,7 @@ def test_plot_responds_holds_the_intent_and_commits_no_world_change(monkeypatch)
     # Only the hold commits; a later band plan will supply its response.
     world, _chapter_one = ambushed(plan=False)
     [conflict] = _conflicts(Session, world)
-    assert (conflict.status, conflict.required_decider) == ("resolved", "codex")
+    assert (conflict.status, conflict.required_decider) == ("resolved", "llm")
     assert json.loads(conflict.decision_json)["pending_plan_response"] is True
     assert _events(Session, world, DecisionEventType.WORLD_CONFLICT_ESCALATED) == []
     assert _runtime(Session, world).world.get_state(world.rival)["alive_status"] == "alive"
@@ -1524,7 +1520,7 @@ def test_canon_written_during_the_tick_makes_it_stale_and_a_retry_commits(monkey
 
 @pytest.mark.parametrize(("racing", "skipped"), [
     ("adjudicate", "world.actor_turn"), ("actor_turn", "review.world_conflict"),
-], ids=["before_turns", "before_codex"])
+], ids=["before_turns", "before_llm"])
 def test_stale_snapshot_stops_before_llm_phase(monkeypatch, racing: str, skipped: str) -> None:
     engine, Session = _session_factory()
     world = _seed_tick_world(Session, monkeypatch)
@@ -1568,7 +1564,7 @@ def test_a_conflict_only_tick_on_moved_canon_is_stale(monkeypatch) -> None:
     raced: list[bool] = []
 
     def review(payload: dict[str, Any], content: str) -> dict[str, Any]:
-        # While Codex reviews, another writer changes the canon the tick reasoned on; Codex then hands the
+        # While LLM reviews, another writer changes the canon the tick reasoned on; LLM then hands the
         # conflict to a human, so the tick commits nothing but the conflict.
         raced.append(True)
         _disrupt_the_later_intent(Session, world, chapter)

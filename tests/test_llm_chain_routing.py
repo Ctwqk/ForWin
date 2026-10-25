@@ -63,6 +63,113 @@ def test_review_route_tries_deepseek_then_kimi_then_minimax(make_client):
     assert [event["profile_id"] for event in client.llm_attempt_events] == ["env-deepseek", "env-kimi"]
 
 
+def test_gate_resolves_on_whichever_chain_profile_answers(make_client):
+    from forwin.generation.gate_delegation import LLMGateDelegate
+    from tests.test_gate_delegation import (
+        RecordingUpdater, _approval_json, _delegation_request, _recording_writer,
+    )
+
+    client, calls = make_client({"deepseek": (503, "unavailable"), "kimi": (200, _approval_json())})
+    client.profiles["env-kimi"] = client.profiles["env-kimi"].model_copy(update={"model": "kimi-k2.5"})
+    updater = RecordingUpdater()
+    outcome = LLMGateDelegate(llm_client=client).resolve(
+        request=_delegation_request(), audit_writer=_recording_writer(updater),
+    )
+    assert outcome.approved
+    assert calls == ["deepseek", "kimi"]
+    decided = next(event for event in updater.events if event.event_type == "gate_delegation_decided")
+    assert decided.payload["profile_id"] == "env-kimi"
+    assert decided.payload["model"] == "kimi-k2.5"
+    trace = updater.traces[0]
+    assert trace["stage_key"] == trace["template_id"] == "pause_gate"
+    assert trace["fallback_used"] is True
+    assert "permission_profile" not in trace
+    assert "codex_job_id" not in trace
+
+
+@pytest.mark.parametrize("content", ["not-json", '{"decision":"approve"}'])
+def test_gate_parse_failure_pauses_for_human(make_client, content):
+    from forwin.generation.gate_delegation import LLMGateDelegate
+    from tests.test_gate_delegation import RecordingUpdater, _delegation_request, _recording_writer
+
+    client, calls = make_client({"deepseek": (200, content)})
+    updater = RecordingUpdater()
+    outcome = LLMGateDelegate(llm_client=client).resolve(
+        request=_delegation_request(), audit_writer=_recording_writer(updater),
+    )
+    assert not outcome.resolved and not outcome.approved
+    assert outcome.failure_reason == "parse_or_schema"
+    assert calls == ["deepseek"]
+    assert updater.events[-1].event_type == "gate_delegation_failed"
+    attempts = json.loads(updater.traces[0]["attempts_json"])
+    assert attempts[-1]["parse_ok"] is False
+
+
+@pytest.mark.parametrize("option, escalates", [("veto_world", False), ("amend_plan", True)])
+def test_world_conflict_review_uses_chain_fallback(make_client, option, escalates):
+    from forwin.models.world_conflict import WorldPlanConflictRow
+    from forwin.world_engine.conflict_delegate import WorldConflictDelegate
+    from tests.test_world_conflict_delegate import RecordingUpdater, _answer
+
+    client, calls = make_client({"deepseek": (503, "unavailable"), "kimi": (200, _answer(option))})
+    conflict = WorldPlanConflictRow(
+        id="conflict-1", project_id="project-1", source="world_tick", detected_after_chapter=3,
+        options_json='["veto_world", "amend_plan"]',
+    )
+    updater = RecordingUpdater()
+    outcome = WorldConflictDelegate(client).decide(
+        conflict=conflict, context_snapshot={}, policy=runtime_policy.RuntimePolicy.for_profile("standard"),
+        audit_writer=updater.writer(),
+    )
+    assert outcome.option == option
+    assert outcome.escalate is escalates
+    assert calls == ["deepseek", "kimi"]
+    assert updater.events[0].payload["profile_id"] == "env-kimi"
+    assert updater.events[0].payload["model"] == "kimi-model"
+    if escalates:
+        assert updater.events[-1].event_type == "world_conflict_escalated"
+        assert updater.events[-1].payload["profile_id"] == "env-kimi"
+
+
+def test_attempt_annotations_stay_with_the_calling_thread(make_client):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from forwin.observability.llm_trace import (
+        mark_latest_attempt_parse_failure, mark_latest_attempt_workflow,
+    )
+
+    client, _ = make_client()
+    first_done, second_done = Event(), Event()
+
+    def first():
+        client.chat([], task_family="review", stage_key="same_stage")
+        first_done.set()
+        assert second_done.wait(5)
+        mark_latest_attempt_parse_failure(client, parser_name="first", stage_key="same_stage", error="invalid")
+        mark_latest_attempt_workflow(client, attempt_no=2, stage_key="same_stage")
+        return client.llm_attempt_group_id
+
+    def second():
+        assert first_done.wait(5)
+        client.chat([], task_family="review", stage_key="same_stage")
+        second_done.set()
+        return client.llm_attempt_group_id
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future, second_future = pool.submit(first), pool.submit(second)
+        first_group, second_group = first_future.result(), second_future.result()
+    assert first_group != second_group
+    assert client.llm_attempt_group_id == ""
+    first_attempt, second_attempt = client.llm_attempt_events
+    assert first_attempt["attempt_group_id"] == first_group
+    assert first_attempt["parse_ok"] is False
+    assert first_attempt["workflow_attempt_no"] == 2
+    assert second_attempt["attempt_group_id"] == second_group
+    assert "parse_ok" not in second_attempt
+    assert "workflow_attempt_no" not in second_attempt
+
+
 def test_prose_route_starts_with_kimi_and_never_uses_minimax(make_client):
     client, _ = make_client()
     client.chat([], stage_key="chapter_draft")

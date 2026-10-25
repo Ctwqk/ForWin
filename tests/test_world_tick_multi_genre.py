@@ -2,14 +2,14 @@
 
 Each ``tests/fixtures/world_seed/<genre>.json`` carries a ``world_tick`` section beside ``chapter_1``:
 the stubbed answers of the tick's three model roles, in their output schemas (``adjudicate`` an
-AdjudicationResult, ``actor_turn`` an ActorTurnBatch, ``conflict_review`` the Codex review answer),
+AdjudicationResult, ``actor_turn`` an ActorTurnBatch, ``conflict_review`` the LLM review answer),
 and a short ``chapter_2``. The answers name BookState nodes ``@node:<name>`` and book map sites
 ``@site:<name>`` as the chapter-one section does, and give story minutes as ``{"before_now": <duration>}``
 in the book's own units; the stub resolves both against the prompt it is asked, as a model reads its input.
 
 After the real chapter-one commit, the pipeline's post-acceptance pass runs with the world tick's
 roles on that stub. Its tick settles two due offstage intents: one into a public event whose news
-travels the generated book map, one into a named character's death that Codex vetoes. One actor's
+travels the generated book map, one into a named character's death that LLM vetoes. One actor's
 turn plans a new intent; every other actor waits. Only the LLM is stubbed.
 
 Chapter one's planning step puts its pacing goal ahead of chapter two's own goal, so the stubbed
@@ -22,13 +22,13 @@ import json
 import math
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
 
+from forwin.writer.llm.adapter import LLMChatResult
 from forwin.audit.events import DecisionEventType
 from forwin.book_state import BookStateProjection
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
@@ -94,7 +94,7 @@ _MINUTE_EPSILON = 1e-6
 class _WorldClient:
     """Stub LLM for the world tick's roles, answering from the book's ``world_tick`` section.
 
-    The Codex review proves on the bridge that it is the model the delegate asked for.
+    Review metadata identifies the profile that served the chain response.
     """
 
     model = "stub-world-model"
@@ -103,13 +103,11 @@ class _WorldClient:
         self.answers = answers
         self.refs = refs
         self.stage_keys: list[str] = []
-        self.last_call_result = None
 
     def chat(self, messages, **kwargs):  # noqa: ANN001, ANN003
         stage_key = str(kwargs.get("stage_key") or "")
         self.stage_keys.append(stage_key)
         prompt = json.JSONDecoder().raw_decode(messages[-1]["content"])[0]
-        backend, model = "stub", self.model
         if stage_key == "world.adjudicate":
             asked = {intent["id"] for intent in prompt["intents"]}
             outcomes = self._answer("adjudicate", prompt)["outcomes"]
@@ -123,15 +121,13 @@ class _WorldClient:
                 {"turns": [turn for turn in turns if turn["actor_id"] in asked]},
             ).model_dump(mode="json")
         elif stage_key == "review.world_conflict":
-            backend, model = "codex_bridge", str(kwargs["preferred_model"])
             answer = self._answer("conflict_review", prompt)
         else:
             raise AssertionError(f"unexpected LLM stage {stage_key!r}")
-        self.last_call_result = SimpleNamespace(
-            backend=backend, fallback_used=False, actual_model=model,
-            trace={"backend": backend, "actual_model": model},
-        )
         return json.dumps(answer, ensure_ascii=False)
+
+    def chat_with_meta(self, messages, **kwargs):
+        return LLMChatResult(self.chat(messages, **kwargs), "test-world", self.model)
 
     def _answer(self, role: str, prompt: dict[str, Any]) -> Any:
         return _story_minutes(_resolved(self.answers[role], self.refs), prompt)
@@ -456,7 +452,7 @@ def test_tick_after_chapter_one_commits_world_delta_and_keeps_reader_unchanged(
 
 
 @pytest.mark.parametrize("genre", GENRES)
-def test_major_change_becomes_conflict_and_codex_veto_is_applied(pipeline, genre: str) -> None:
+def test_major_change_becomes_conflict_and_llm_veto_is_applied(pipeline, genre: str) -> None:
     ticked = _ticked(pipeline, genre)
     project_id = ticked.book.project_id
     outcome = ticked.outcome(kills=True)
@@ -475,21 +471,21 @@ def test_major_change_becomes_conflict_and_codex_veto_is_applied(pipeline, genre
         )).all()
         after = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=1)
 
-    # The death is major: the tick held it back as a conflict for Codex instead of committing it.
+    # The death is major: the tick held it back as a conflict for LLM instead of committing it.
     assert ticked.step["conflict_ids"] == [conflict.id]
     assert (conflict.source, conflict.violated, conflict.impact_level, conflict.required_decider) == (
-        "world_tick", "impact_review", "major", "codex",
+        "world_tick", "impact_review", "major", "llm",
     )
     held = TickCandidate.model_validate_json(conflict.proposed_change_json)
     assert held.candidate_id == adjudication_candidate_id(outcome["intent_id"])
     assert [change.model_dump(mode="json") for change in held.effects.entity_changes] == [death]
 
-    # Codex answered on the bridge as the model it was asked for, and chose veto_world.
+    # The chain response records its served model and chooses veto_world.
     assert ticked.client.stage_keys.count("review.world_conflict") == 1
     profile = json.loads(review.model_profile_json)
-    assert (review.backend, profile["actual_model"]) == ("codex_bridge", profile["requested_model"])
+    assert (review.backend, profile["profile_id"], profile["model"]) == ("openai_compatible", "test-world", "stub-world-model")
     decision = json.loads(conflict.decision_json)
-    assert (conflict.status, decision["option"], decision["decided_by"]) == ("resolved", "veto_world", "codex")
+    assert (conflict.status, decision["option"], decision["decided_by"]) == ("resolved", "veto_world", "llm")
     assert json.loads(resolved.payload_json)["trace_id"] == review.id
 
     # The veto landed in the tick's own delta: the character lives, the intent is vetoed and its owner acts again.

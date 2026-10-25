@@ -1151,8 +1151,8 @@ class CostLedgerService:
 
 def _record_role(record: _CostRecord) -> str:
     stage, family = record.stage_key, record.task_family
-    if stage in {"review.world_conflict", "spark_pause_gate"} or stage.startswith("gate_") or family == "codex_delegate":
-        return "codex_delegate"
+    if stage in {"review.world_conflict", "pause_gate"} or stage.startswith("gate_") or family == "delegate":
+        return "delegate"
     if stage.startswith("world.") or family == "world_engine":
         return "world_engine"
     if stage.startswith("plan.") or family in {"planner", "planning", "arc_planning", "chapter_plan_materialization"}:

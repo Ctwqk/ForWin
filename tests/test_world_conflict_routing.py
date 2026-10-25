@@ -27,18 +27,18 @@ def _policy(delegate: str) -> RuntimePolicy:
     return RuntimePolicy.for_profile("standard").with_user_settings(world_conflict_delegate=delegate)
 
 
-@pytest.mark.parametrize("delegate", ["codex", "human"])
+@pytest.mark.parametrize("delegate", ["llm", "human"])
 @pytest.mark.parametrize(
     ("source", "impact_level", "expected"),
     [
-        ("world_tick", "minor", {"codex": "auto", "human": "auto"}),
-        ("world_tick", "moderate", {"codex": "codex", "human": "human"}),
-        ("world_tick", "major", {"codex": "codex", "human": "human"}),
-        ("world_tick", "critical", {"codex": "human", "human": "human"}),
-        ("historical_rewrite", "minor", {"codex": "human", "human": "human"}),
-        ("historical_rewrite", "moderate", {"codex": "human", "human": "human"}),
-        ("historical_rewrite", "major", {"codex": "human", "human": "human"}),
-        ("historical_rewrite", "critical", {"codex": "human", "human": "human"}),
+        ("world_tick", "minor", {"llm": "auto", "human": "auto"}),
+        ("world_tick", "moderate", {"llm": "llm", "human": "human"}),
+        ("world_tick", "major", {"llm": "llm", "human": "human"}),
+        ("world_tick", "critical", {"llm": "human", "human": "human"}),
+        ("historical_rewrite", "minor", {"llm": "human", "human": "human"}),
+        ("historical_rewrite", "moderate", {"llm": "human", "human": "human"}),
+        ("historical_rewrite", "major", {"llm": "human", "human": "human"}),
+        ("historical_rewrite", "critical", {"llm": "human", "human": "human"}),
     ],
 )
 def test_route_table(source: str, impact_level: str, expected: dict[str, str], delegate: str) -> None:
@@ -51,6 +51,10 @@ def test_auto_route_defaults_to_veto() -> None:
     draft = _draft(impact_level="minor")
     assert auto_option(draft) == "veto_world"
     assert auto_option(draft) in available_options(draft)
+
+
+def test_moderate_conflict_routes_to_llm_when_policy_delegates() -> None:
+    assert route_conflict(_draft(impact_level="moderate"), policy=_policy("llm")) == "llm"
 
 
 @pytest.mark.parametrize(
@@ -67,14 +71,14 @@ def test_auto_option_by_source(source: str, expected: str | None) -> None:
     assert auto_option(_draft(source=source, violated="protection")) == expected
 
 
-@pytest.mark.parametrize("delegate", ["codex", "human"])
+@pytest.mark.parametrize("delegate", ["llm", "human"])
 @pytest.mark.parametrize(
     ("impact_level", "expected"),
     [
-        ("minor", {"codex": "codex", "human": "human"}),
-        ("moderate", {"codex": "codex", "human": "human"}),
-        ("major", {"codex": "codex", "human": "human"}),
-        ("critical", {"codex": "human", "human": "human"}),
+        ("minor", {"llm": "llm", "human": "human"}),
+        ("moderate", {"llm": "llm", "human": "human"}),
+        ("major", {"llm": "llm", "human": "human"}),
+        ("critical", {"llm": "human", "human": "human"}),
     ],
 )
 @pytest.mark.parametrize("violated", ["protection", "milestone"])
@@ -124,7 +128,7 @@ def test_other_violations_keep_the_impact_options(violated: str) -> None:
 
 
 @pytest.mark.parametrize("impact_level", ["minor", "moderate", "major", "critical"])
-@pytest.mark.parametrize("delegate", ["codex", "human"])
+@pytest.mark.parametrize("delegate", ["llm", "human"])
 def test_historical_rewrite_routing_matches_replay_cas(impact_level: str, delegate: str) -> None:
     from forwin.world_engine.conflict_events import REPLAY_CAS_DECIDER, REPLAY_CAS_OPTIONS
 
@@ -136,7 +140,7 @@ def test_historical_rewrite_routing_matches_replay_cas(impact_level: str, delega
 @pytest.mark.parametrize("source", ["plan_feasibility", "band_planning"])
 @pytest.mark.parametrize("violated", ["feasibility", "milestone", "reveal_schedule", "protection"])
 @pytest.mark.parametrize("impact_level", ["minor", "moderate", "major", "critical"])
-@pytest.mark.parametrize("delegate", ["codex", "human"])
+@pytest.mark.parametrize("delegate", ["llm", "human"])
 def test_plan_conflict_offers_only_amend_and_routes_human(
     source: str, violated: str, impact_level: str, delegate: str,
 ) -> None:
@@ -177,5 +181,5 @@ def test_band_planner_conflicts_agree_with_routing(monkeypatch) -> None:
     ((draft, decider, options),) = created
     assert draft.source == "band_planning"
     assert available_options(draft) == options
-    for delegate in ("codex", "human"):
+    for delegate in ("llm", "human"):
         assert route_conflict(draft, policy=_policy(delegate)) == decider

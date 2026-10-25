@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Callable, Literal, cast
 from forwin.application.generation import GenerationApplicationService
 from forwin.canon import CanonAdmissionService, CanonPreparationService
 from forwin.config import InfrastructureConfig, is_configured
-from forwin.generation.gate_delegation import GateDelegationService, SparkGateDelegate
+from forwin.generation.gate_delegation import GateDelegationService, LLMGateDelegate
 from forwin.genesis import BookGenesisService
 from forwin.models.base import get_engine, get_session_factory, require_v5_schema
 from forwin.observability.service import ObservabilityService
@@ -439,7 +439,7 @@ class RuntimeContainer:
                     session_factory=core.session_factory
                 ),
                 gate_delegation=GateDelegationService(
-                    spark_delegate=SparkGateDelegate(
+                    llm_delegate=LLMGateDelegate(
                         llm_client=llm_client,
                     )
                 ),

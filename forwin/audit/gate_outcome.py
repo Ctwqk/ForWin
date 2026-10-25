@@ -32,7 +32,7 @@ class GateOutcome(BaseModel):
         "error",
     ]
     blocked: bool = False
-    overridden_by: Literal["", "manual", "spark", "force_accept"] = ""
+    overridden_by: Literal["", "manual", "llm", "force_accept"] = ""
     issue_keys: list[str] = Field(default_factory=list)
     issue_groups: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)

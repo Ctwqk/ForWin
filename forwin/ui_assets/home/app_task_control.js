@@ -608,7 +608,7 @@
       manualCheckpointWrap.appendChild(document.createTextNode('允许 Manual Checkpoint'));
       form.appendChild(manualCheckpointWrap);
 
-      let gateDelegate = pausePolicy.gate_delegate === 'spark' ? 'spark' : 'human';
+      let gateDelegate = pausePolicy.gate_delegate === 'llm' ? 'llm' : 'human';
       const gateControl = createNode('div', '', 'pill-switch');
       const gateButtons = {};
       const syncGateDelegate = () => {
@@ -620,7 +620,7 @@
       };
       [
         ['human', '人工'],
-        ['spark', 'Spark'],
+        ['llm', 'LLM'],
       ].forEach(([value, label]) => {
         const button = createButton(label, () => {
           gateDelegate = value;
@@ -634,7 +634,7 @@
       syncGateDelegate();
       form.appendChild(createLabeledField('Gate 委托', gateControl));
 
-      let worldConflictDelegate = policy.world?.conflict_delegate === 'human' ? 'human' : 'codex';
+      let worldConflictDelegate = policy.world?.conflict_delegate === 'human' ? 'human' : 'llm';
       const worldConflictControl = createNode('div', '', 'pill-switch');
       const worldConflictButtons = {};
       const syncWorldConflictDelegate = () => {
@@ -645,7 +645,7 @@
         });
       };
       [
-        ['codex', 'Codex'],
+        ['llm', 'LLM'],
         ['human', '人工'],
       ].forEach(([value, label]) => {
         const button = createButton(label, () => {

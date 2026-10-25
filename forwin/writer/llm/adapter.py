@@ -123,8 +123,13 @@ class OpenAICompatibleAdapter(
         )
         self.model_fallback_events: list[dict[str, str]] = []
         self.llm_attempt_events: list[dict[str, object]] = []
+        self._attempt_context = threading.local()
         self._client_lock = threading.Lock()
         self.client = self._build_http_client()
+
+    @property
+    def llm_attempt_group_id(self) -> str:
+        return getattr(self._attempt_context, "group_id", "")
 
     def chat(
         self,
@@ -163,6 +168,8 @@ class OpenAICompatibleAdapter(
         balance, missing-model and empty-response failures advance immediately.
         Other HTTP and response parsing failures propagate to the caller.
         """
+        attempt_group_id = uuid.uuid4().hex
+        self._attempt_context.group_id = attempt_group_id
         request_timeout = httpx.Timeout(
             max(
                 5.0,
@@ -185,7 +192,6 @@ class OpenAICompatibleAdapter(
             ),
         )
 
-        attempt_group_id = uuid.uuid4().hex
         llm_task_route = self._llm_task_route(
             task_family=task_family,
             stage_key=stage_key,

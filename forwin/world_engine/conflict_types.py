@@ -18,7 +18,7 @@ ConflictViolation = Literal[
 ConflictOption = Literal[
     "veto_world", "rewrite_chapter", "amend_plan", "plot_responds", "accept_with_obligation"
 ]
-ConflictDecider = Literal["auto", "codex", "human"]
+ConflictDecider = Literal["auto", "llm", "human"]
 
 
 class ConflictDraft(BaseModel):
@@ -49,6 +49,6 @@ class ConflictDecision(BaseModel):
     decided_by: ConflictDecider
     actor_id: str = ""
     rationale: str
-    # Why the decider chose it, as the operator states it; empty for codex and auto decisions.
+    # Why the decider chose it, as the operator states it; empty for llm and auto decisions.
     reason: str = ""
     decided_at: datetime

@@ -94,7 +94,7 @@ def _service(
 def test_enqueue_snapshots_project_policy_and_creates_one_task(
     session_factory: sessionmaker,
 ) -> None:
-    policy = RuntimePolicy.for_profile("pulp").with_user_settings(gate_delegate="spark")
+    policy = RuntimePolicy.for_profile("pulp").with_user_settings(gate_delegate="llm")
     project = _create_project(session_factory, policy=policy)
 
     handle = _service(session_factory).enqueue(_command(project.id))

@@ -136,13 +136,13 @@ class ForWinAPIClientUnitTests(unittest.TestCase):
             ("GET", "/api/projects/p1/world-model/conflicts", {}),
         ])
 
-    def test_mcp_set_world_conflict_delegate(self) -> None:
+    def test_mcp_set_world_conflict_delegate_accepts_llm_and_human_only(self) -> None:
         policy = RuntimePolicy.for_profile(
             "standard", model_profile_id="env-kimi"
         ).with_user_settings(
             min_chars=2400, target_chars=2700, max_chars=3000,
             review_interval_chapters=4, manual_checkpoints=False,
-            band_checkpoint_action="pause_always", gate_delegate="spark",
+            band_checkpoint_action="pause_always", gate_delegate="llm",
         ).model_dump(mode="json")
         calls = []
         version = 7
@@ -163,8 +163,8 @@ class ForWinAPIClientUnitTests(unittest.TestCase):
                         "review_interval_chapters": 4,
                         "manual_checkpoints": False,
                         "band_checkpoint_action": "pause_always",
-                        "gate_delegate": "spark",
-                        "world_conflict_delegate": "human" if version == 7 else "codex",
+                        "gate_delegate": "llm",
+                        "world_conflict_delegate": "human" if version == 7 else "llm",
                         "reason": "choose reviewer",
                     })
                     policy["world"]["conflict_delegate"] = payload["world_conflict_delegate"]
@@ -182,19 +182,24 @@ class ForWinAPIClientUnitTests(unittest.TestCase):
 
         async def run():
             async with Client(server) as client:
-                for delegate in ("human", "codex"):
+                for delegate in ("human", "llm"):
                     result = await client.call_tool("project_set_world_conflict_delegate", {
                         "project_id": "p1", "delegate": delegate, "reason": " choose reviewer ",
                     })
                     mutation = ForWinMCPIntegrationTests._load_model(MutationResult, result)
                     self.assertTrue(mutation.ok)
                     self.assertEqual(mutation.project.world_conflict_delegate, delegate)
-                    self.assertEqual(mutation.project.gate_delegate, "spark")
+                    self.assertEqual(mutation.project.gate_delegate, "llm")
                     self.assertEqual(mutation.project.runtime_policy_version, version)
                 tools = await client.list_tools()
                 tool = next(t for t in tools if t.name == "project_set_world_conflict_delegate")
                 self.assertIn("Use this when", tool.description)
-                self.assertEqual(tool.inputSchema["properties"]["delegate"]["enum"], ["codex", "human"])
+                self.assertEqual(tool.inputSchema["properties"]["delegate"]["enum"], ["llm", "human"])
+                for legacy in ("codex", "spark"):
+                    with self.assertRaises(ToolError):
+                        await client.call_tool("project_set_world_conflict_delegate", {
+                            "project_id": "p1", "delegate": legacy, "reason": "legacy reviewer",
+                        })
 
         asyncio.run(run())
         self.assertEqual(calls, [
@@ -932,14 +937,14 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 "project_set_gate_delegate",
                 {
                     "project_id": project_id,
-                    "delegate": "spark",
-                    "reason": "delegate review gates to Spark",
+                    "delegate": "llm",
+                    "reason": "delegate review gates to LLM",
                 },
             ),
         )
 
         self.assertIsNotNone(delegated.project)
-        self.assertEqual(delegated.project.gate_delegate, "spark")
+        self.assertEqual(delegated.project.gate_delegate, "llm")
         restored = self._load_model(
             MutationResult,
             self._call_tool(

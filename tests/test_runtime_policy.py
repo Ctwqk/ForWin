@@ -181,7 +181,7 @@ def test_world_and_models_defaults_per_profile(profile, actor_turns) -> None:
         "max_major_events_per_tick": 1,
         "max_onstage_slips": 2,
         "max_rerolls": 2,
-        "conflict_delegate": "codex",
+        "conflict_delegate": "llm",
     }
     assert policy.models.chains == DEFAULT_LLM_CHAINS
 
@@ -193,10 +193,10 @@ def test_stored_policy_without_world_section_loads_defaults(profile, actor_turns
     stored.pop("models", None)
     policy = RuntimePolicy.model_validate_json(json.dumps(stored))
     assert policy.schema_version == 2
-    assert policy.world.conflict_delegate == "codex"
+    assert policy.world.conflict_delegate == "llm"
     assert policy.world.max_actor_turns_per_tick == actor_turns
     assert policy.models.chains == DEFAULT_LLM_CHAINS
-    saved = policy.with_user_settings(gate_delegate="spark").model_dump_json()
+    saved = policy.with_user_settings(gate_delegate="llm").model_dump_json()
     assert RuntimePolicy.model_validate_json(saved).world.max_actor_turns_per_tick == actor_turns
 
 
@@ -253,15 +253,15 @@ def test_world_conflict_delegate_survives_other_settings_and_profile_changes() -
     policy = RuntimePolicy.for_profile("standard").with_user_settings(
         world_conflict_delegate="human"
     )
-    policy = policy.with_user_settings(gate_delegate="spark")
+    policy = policy.with_user_settings(gate_delegate="llm")
     assert policy.world.conflict_delegate == "human"
     policy = policy.with_user_settings(quality_profile="pulp")
     assert policy.world.conflict_delegate == "human"
     assert policy.world.max_actor_turns_per_tick == 3
     policy = policy.with_user_settings(
-        quality_profile="standard", world_conflict_delegate="codex"
+        quality_profile="standard", world_conflict_delegate="llm"
     )
-    assert policy.world.conflict_delegate == "codex"
+    assert policy.world.conflict_delegate == "llm"
     assert policy.world.max_actor_turns_per_tick == 6
     with pytest.raises(ValidationError):
         policy.with_user_settings(world_conflict_delegate="spark")
@@ -440,3 +440,12 @@ def test_removed_policy_fields_require_storage_migration(section, field):
     stored[section][field] = {} if section == "models" else ()
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         RuntimePolicy.model_validate(stored)
+
+
+@pytest.mark.parametrize("legacy", ["codex", "spark"])
+@pytest.mark.parametrize("section, field", [("world", "conflict_delegate"), ("pause", "gate_delegate")])
+def test_policy_rejects_legacy_codex_and_spark_literals(legacy, section, field) -> None:
+    payload = RuntimePolicy.for_profile("standard").model_dump(mode="json")
+    payload[section][field] = legacy
+    with pytest.raises(ValidationError):
+        RuntimePolicy.model_validate(payload)

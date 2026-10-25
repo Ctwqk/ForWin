@@ -36,13 +36,13 @@ def test_project_policy_store_round_trips_and_increments_version(session: Sessio
     created = store.initialize(project, RuntimePolicy.for_profile("standard"))
     updated = store.save(
         project,
-        created.policy.with_user_settings(gate_delegate="spark"),
+        created.policy.with_user_settings(gate_delegate="llm"),
         expected_version=1,
     )
 
     assert created.version == 1
     assert updated.version == 2
-    assert store.load(project).policy.pause.gate_delegate == "spark"
+    assert store.load(project).policy.pause.gate_delegate == "llm"
 
 
 def test_project_policy_store_rejects_stale_and_missing_policy(session: Session) -> None:

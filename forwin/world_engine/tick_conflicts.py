@@ -1,4 +1,4 @@
-"""World tick conflicts: held candidates become conflicts, and auto or Codex decisions run inside the tick.
+"""World tick conflicts: held candidates become conflicts, and auto or LLM decisions run inside the tick.
 
 A decided conflict's option candidates join the tick's own delta; its side effects, its closing and its
 RESOLVED event land with the tick's commit in one SAVEPOINT (``TickConflicts.close_resolutions``).
@@ -40,7 +40,7 @@ from .constraints import check_narrative_boundaries, milestone_change_references
 from .types import TickCandidate, TickContext
 
 
-# What an auto decision gives as its rationale; auto and Codex decisions leave the operator's reason empty.
+# What an auto decision gives as its rationale; auto and LLM decisions leave the operator's reason empty.
 AUTO_RATIONALE = "A minor conflict: the world gives way."
 # Why the tick handed a decided conflict to a human.
 OPTION_UNAVAILABLE = "option_unavailable"
@@ -63,7 +63,7 @@ class InTickResolution:
     actor_ref: str
     decision: ConflictDecision
     candidates: list[TickCandidate]
-    # The Codex review that chose the option; empty for an auto decision.
+    # The LLM review that chose the option; empty for an auto decision.
     trace_id: str = ""
 
 
@@ -161,7 +161,7 @@ class TickConflicts:
         }
 
     def hold(self, draft: ConflictDraft, *, extra: Mapping[str, Any]) -> str:
-        """Store the conflict and route it: auto and Codex decisions run in this tick, the rest wait for a human.
+        """Store the conflict and route it: auto and LLM decisions run in this tick, the rest wait for a human.
 
         Returns the id of the open conflict that already holds such a change for the same intent, in which
         case nothing is stored; otherwise "".
@@ -188,7 +188,7 @@ class TickConflicts:
             self._decide(row.id, ConflictDecision(
                 option=auto_option(draft), decided_by="auto", rationale=AUTO_RATIONALE, decided_at=_utcnow(),
             ))
-        elif decider == "codex":
+        elif decider == "llm":
             snapshot = build_conflict_context_snapshot(self.session, conflict=row)
             if self.before_llm is not None:
                 self.before_llm()
@@ -203,7 +203,7 @@ class TickConflicts:
                 self._hand_to_human(self._locked(row.id))
             else:
                 self._decide(row.id, ConflictDecision(
-                    option=delegation.option, decided_by="codex", rationale=delegation.rationale,
+                    option=delegation.option, decided_by="llm", rationale=delegation.rationale,
                     decided_at=_utcnow(),
                 ), trace_id=delegation.trace_id)
         return ""

@@ -610,7 +610,7 @@ def test_amend_plan_releases_protections_and_requires_human(monkeypatch) -> None
         options=["veto_world", "plot_responds", "amend_plan"], violated="protection", impact="major", actor_ref=hero,
     )
 
-    _resolve_failing(Session, book, conflict_id, "amend_plan", ValueError, decided_by="codex")
+    _resolve_failing(Session, book, conflict_id, "amend_plan", ValueError, decided_by="llm")
     assert [
         (item.candidate_id, item.protection_releases) for item in _candidates(Session, book, conflict_id, "amend_plan")
     ] == [("adjudication:kill", []), (f"conflict:{conflict_id}:release", ["protect-rival"])]
@@ -1242,7 +1242,7 @@ def test_amend_plan_on_plan_conflict_needs_a_human_and_an_amender() -> None:
             _service(session).resolve(project_id=world.project_id, conflict_id=conflict_id,
                                       decision=_decision("amend_plan"))
     with pytest.raises(ValueError, match="Only a human"):
-        _amend(Session, world.project_id, conflict_id, _amender(StubLLM(), StubLLM()), decided_by="codex")
+        _amend(Session, world.project_id, conflict_id, _amender(StubLLM(), StubLLM()), decided_by="llm")
     with Session() as session:
         with pytest.raises(ValueError, match="offers"):
             _service(session).resolve(project_id=world.project_id, conflict_id=conflict_id,
@@ -1390,7 +1390,7 @@ def pending_side_effect_session():
             project_id="pending-project", source="world_tick", detected_after_chapter=1,
             story_time=100, involved_refs=[], violated="impact_review", impact_level="moderate",
             summary="held", proposed_change={}, blocks_from_chapter=2,
-        ), required_decider="codex", options=ALL_OPTIONS)
+        ), required_decider="llm", options=ALL_OPTIONS)
         yield session, row
     engine.dispose()
 
@@ -2554,7 +2554,7 @@ def test_chapter_conflict_waits_for_its_paused_chapter(monkeypatch) -> None:
         session.get(ChapterPlan, book.plans[2]).status = "needs_review"
         session.add(GenerationTask(id=f"task-{book.project_id}", project_id=book.project_id, status="running"))
     _resolve_failing(Session, book, conflict_id, "rewrite_chapter", ChapterNotAwaitingConflict, match="generation task")
-    _resolve_failing(Session, book, conflict_id, "amend_plan", ValueError, decided_by="codex")
+    _resolve_failing(Session, book, conflict_id, "amend_plan", ValueError, decided_by="llm")
     with Session.begin() as session:
         session.get(GenerationTask, f"task-{book.project_id}").status = "paused"
 

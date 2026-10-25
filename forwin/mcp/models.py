@@ -283,7 +283,7 @@ class ProjectView(BaseModel):
     accepted_chapter_count: int = 0
     needs_review_chapter_count: int = 0
     gate_delegate: str = "human"
-    world_conflict_delegate: str = "codex"
+    world_conflict_delegate: str = "llm"
     runtime_policy_version: int = 0
     latest_stage: str = ""
     next_gate: str = ""

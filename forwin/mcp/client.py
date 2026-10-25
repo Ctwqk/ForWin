@@ -353,14 +353,14 @@ class ForWinAPIClient:
         self,
         *,
         project_id: str,
-        delegate: Literal["human", "spark"],
+        delegate: Literal["human", "llm"],
         reason: str,
     ) -> MutationResult:
         normalized_reason = str(reason or "").strip()
         if not normalized_reason:
             raise ValueError("reason is required")
-        if delegate not in {"human", "spark"}:
-            raise ValueError("delegate must be human or spark")
+        if delegate not in {"human", "llm"}:
+            raise ValueError("delegate must be human or llm")
         current = await self._request_json(
             "GET",
             f"/api/projects/{project_id}/policy",
@@ -405,14 +405,14 @@ class ForWinAPIClient:
         self,
         *,
         project_id: str,
-        delegate: Literal["codex", "human"],
+        delegate: Literal["llm", "human"],
         reason: str,
     ) -> MutationResult:
         normalized_reason = str(reason or "").strip()
         if not normalized_reason:
             raise ValueError("reason is required")
-        if delegate not in {"codex", "human"}:
-            raise ValueError("delegate must be codex or human")
+        if delegate not in {"llm", "human"}:
+            raise ValueError("delegate must be llm or human")
         current = await self._request_json(
             "GET",
             f"/api/projects/{project_id}/policy",
@@ -801,7 +801,7 @@ class ForWinAPIClient:
             accepted_chapter_count=int(raw.get("accepted_chapter_count", 0) or 0),
             needs_review_chapter_count=int(raw.get("needs_review_chapter_count", 0) or 0),
             gate_delegate=str(pause_policy.get("gate_delegate", "human") or "human"),
-            world_conflict_delegate=str(world_policy.get("conflict_delegate", "codex") or "codex"),
+            world_conflict_delegate=str(world_policy.get("conflict_delegate", "llm") or "llm"),
             runtime_policy_version=int(raw.get("runtime_policy_version", 0) or 0),
             latest_stage=str(raw.get("latest_stage", "")),
             next_gate=str(raw.get("next_gate", "")),

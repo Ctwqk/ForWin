@@ -69,7 +69,7 @@ PROPOSITION = "PROPOSITION-OF-THE-SECRET"
 PROTECTION = "protection-hero"
 PLAN_ID = f"chapter-conflict-plan-{CHAPTER}"
 HUMAN = RuntimePolicy.for_profile("standard").with_user_settings(world_conflict_delegate="human")
-CODEX = RuntimePolicy.for_profile("standard").with_user_settings(world_conflict_delegate="codex")
+LLM = RuntimePolicy.for_profile("standard").with_user_settings(world_conflict_delegate="llm")
 
 
 @pytest.fixture
@@ -147,7 +147,7 @@ class FakeDelegate:
         self.calls.append(conflict.id)
         assert context_snapshot["conflict"]["id"] == conflict.id
         return WorldConflictDelegation(
-            option=self.option, rationale="Codex rationale.", trace_id="trace-1", escalate=self.escalate,
+            option=self.option, rationale="LLM rationale.", trace_id="trace-1", escalate=self.escalate,
         )
 
 
@@ -275,7 +275,7 @@ def test_residual_conflict_reuses_its_open_row(factory) -> None:
     ("moderate", HUMAN, "human"),
     ("major", HUMAN, "human"),
     ("critical", HUMAN, "human"),
-    ("critical", CODEX, "human"),
+    ("critical", LLM, "human"),
 ])
 def test_recorder_keeps_residual_conflicts_from_auto(factory, impact_level, policy, decider) -> None:
     delegate = FakeDelegate()
@@ -289,14 +289,14 @@ def test_recorder_keeps_residual_conflicts_from_auto(factory, impact_level, poli
 
     assert (row.status, row.required_decider) == ("open", decider)
     assert outcome.blocking_conflict_id == row.id
-    assert outcome.codex_rewrite_ids == ()
+    assert outcome.llm_rewrite_ids == ()
     assert delegate.calls == []
 
 
-def test_codex_amend_plan_hands_the_conflict_to_a_human(factory) -> None:
+def test_llm_amend_plan_hands_the_conflict_to_a_human(factory) -> None:
     delegate = FakeDelegate("amend_plan", escalate=True)
     with factory() as session:
-        outcome = _recorder(session, policy=CODEX, delegate=delegate).record(
+        outcome = _recorder(session, policy=LLM, delegate=delegate).record(
             project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-1", violations=[_violation()],
         )
         session.commit()
@@ -305,7 +305,7 @@ def test_codex_amend_plan_hands_the_conflict_to_a_human(factory) -> None:
     assert delegate.calls == [row.id]
     assert (row.status, row.required_decider) == ("open", "human")
     assert outcome.blocking_conflict_id == row.id
-    assert outcome.codex_rewrite_ids == ()
+    assert outcome.llm_rewrite_ids == ()
 
 
 def test_open_row_no_longer_violated_resolves_as_auto_rewrite(factory) -> None:
@@ -536,34 +536,34 @@ def test_residual_violation_creates_one_conflict_and_pauses_mid_chapter(factory,
 
 
 @pytest.mark.parametrize("fixed", [False, True], ids=["still_residual", "fixed_by_extra_pass"])
-def test_codex_rewrite_gets_one_more_pass_then_human(factory, monkeypatch, fixed) -> None:
+def test_llm_rewrite_gets_one_more_pass_then_human(factory, monkeypatch, fixed) -> None:
     violation = _violation(impact_level="moderate")
     repair = FakeRepair(_failing(violation), after_extra_pass=PASSING if fixed else _failing(violation))
     delegate = FakeDelegate("rewrite_chapter")
 
-    run = _run(factory, monkeypatch, repair=repair, policy=CODEX, delegate=delegate)
+    run = _run(factory, monkeypatch, repair=repair, policy=LLM, delegate=delegate)
 
     with factory() as session:
         rows = _rows(session)
         repaired = CandidateDraftRepository(session).latest_for_chapter(project_id=PROJECT_ID, chapter_number=CHAPTER)
         pending = WorldConflictRepository(session).pending_chapter_resumes(PROJECT_ID, chapter_number=CHAPTER)
-    codex_row = rows[0]
-    assert delegate.calls == [codex_row.id]
-    assert repair.extra_passes == [[codex_row.id]]
-    decision = json.loads(codex_row.decision_json)
-    assert (codex_row.status, decision["option"], decision["decided_by"]) == ("resolved", "rewrite_chapter", "codex")
+    llm_row = rows[0]
+    assert delegate.calls == [llm_row.id]
+    assert repair.extra_passes == [[llm_row.id]]
+    decision = json.loads(llm_row.decision_json)
+    assert (llm_row.status, decision["option"], decision["decided_by"]) == ("resolved", "rewrite_chapter", "llm")
     # The extra pass ran on the repaired candidate, so the decision is no pending resume.
-    assert json.loads(codex_row.result_refs_json) == ["trace-1", f"candidate:{repaired.id}"]
+    assert json.loads(llm_row.result_refs_json) == ["trace-1", f"candidate:{repaired.id}"]
     assert pending == []
     if fixed:
         assert len(rows) == 1
         assert run.result.completed_chapters == [CHAPTER]
         assert run.status == "accepted"
         return
-    # Codex decides once per boundary: the still-residual violation goes straight to a human.
+    # LLM decides once per boundary: the still-residual violation goes straight to a human.
     human_row = rows[1]
     assert len(rows) == 2
-    assert human_row.origin_key == codex_row.origin_key
+    assert human_row.origin_key == llm_row.origin_key
     assert (human_row.status, human_row.required_decider) == ("open", "human")
     assert run.result.pause_reason == "world_conflict"
     assert run.paused == [{"reason": "world_conflict", "conflict_id": human_row.id}]
@@ -576,11 +576,11 @@ def test_boundary_first_seen_after_the_extra_pass_goes_to_a_human(factory, monke
     delegate = FakeDelegate("rewrite_chapter")
     repair = FakeRepair(_failing(first), after_extra_pass=_failing(second))
 
-    run = _run(factory, monkeypatch, repair=repair, policy=CODEX, delegate=delegate)
+    run = _run(factory, monkeypatch, repair=repair, policy=LLM, delegate=delegate)
 
     with factory() as session:
         rows = {row.origin_key.rsplit(":", 1)[-1]: row for row in _rows(session)}
-    # Codex decides once per chapter pass: the repaired draft's new boundary goes straight to a human.
+    # LLM decides once per chapter pass: the repaired draft's new boundary goes straight to a human.
     assert delegate.calls == [rows[PROTECTION].id]
     assert repair.extra_passes == [[rows[PROTECTION].id]]
     assert (rows["protection-two"].status, rows["protection-two"].required_decider) == ("open", "human")
@@ -615,7 +615,7 @@ def _gate(*violations: DeltaBoundaryViolation) -> BookStateReviewVerdict:
     ])
 
 
-@pytest.mark.parametrize("blocks", ["pass_then_critical", "critical_beside_codex"])
+@pytest.mark.parametrize("blocks", ["pass_then_critical", "critical_beside_llm"])
 def test_gate_violation_stays_open_after_the_extra_pass(factory, monkeypatch, blocks) -> None:
     critical = _violation(impact_level="critical")
     moderate = _violation(protection_node_id="protection-two", impact_level="moderate")
@@ -624,14 +624,14 @@ def test_gate_violation_stays_open_after_the_extra_pass(factory, monkeypatch, bl
     delegate = FakeDelegate("rewrite_chapter")
     repair = FakeRepair(PASSING, after_extra_pass=PASSING)
 
-    run = _run(factory, monkeypatch, repair=repair, policy=CODEX, delegate=delegate, canon_preparation=preparation)
+    run = _run(factory, monkeypatch, repair=repair, policy=LLM, delegate=delegate, canon_preparation=preparation)
 
     with factory() as session:
         rows = _rows(session)
         pending = WorldConflictRepository(session).pending_chapter_resumes(PROJECT_ID, chapter_number=CHAPTER)
     decided_by = [json.loads(row.decision_json or "{}").get("decided_by") for row in rows]
     (critical_row,) = [row for row in rows if row.origin_key.endswith(f":{PROTECTION}")]
-    (codex_row,) = [row for row in rows if row.required_decider == "codex"]
+    (llm_row,) = [row for row in rows if row.required_decider == "llm"]
     # A residual gate conflict is never auto: the critical boundary the chapter still breaks stays open.
     assert "auto" not in decided_by
     assert (critical_row.status, critical_row.required_decider) == ("open", "human")
@@ -639,19 +639,19 @@ def test_gate_violation_stays_open_after_the_extra_pass(factory, monkeypatch, bl
     assert run.result.pause_reason == "world_conflict"
     assert run.paused == [{"reason": "world_conflict", "conflict_id": critical_row.id}]
     assert run.status == "needs_review"
-    assert delegate.calls == [codex_row.id]
+    assert delegate.calls == [llm_row.id]
     if blocks == "pass_then_critical":
         # The pass ran on the first block; the gate, not the repaired draft's verdict, judged the result.
         assert preparation.calls == 2
-        assert repair.extra_passes == [[codex_row.id]]
+        assert repair.extra_passes == [[llm_row.id]]
         assert pending == []
-        (repeat,) = [row for row in rows if row.origin_key == codex_row.origin_key and row.id != codex_row.id]
+        (repeat,) = [row for row in rows if row.origin_key == llm_row.origin_key and row.id != llm_row.id]
         assert (repeat.status, repeat.required_decider) == ("open", "human")
     else:
-        # A human conflict already blocks the chapter: no pass, and Codex's decision waits as a pending resume.
+        # A human conflict already blocks the chapter: no pass, and LLM's decision waits as a pending resume.
         assert preparation.calls == 1
         assert repair.extra_passes == []
-        assert [row.id for row in pending] == [codex_row.id]
+        assert [row.id for row in pending] == [llm_row.id]
         assert len(rows) == 2
 
 
@@ -663,7 +663,7 @@ def test_gate_pass_records_the_repaired_drafts_own_violations(factory, monkeypat
     delegate = FakeDelegate("rewrite_chapter")
     repair = FakeRepair(PASSING, after_extra_pass=_failing(new_in_draft))
 
-    run = _run(factory, monkeypatch, repair=repair, policy=CODEX, delegate=delegate, canon_preparation=preparation)
+    run = _run(factory, monkeypatch, repair=repair, policy=LLM, delegate=delegate, canon_preparation=preparation)
 
     with factory() as session:
         rows = {row.origin_key.rsplit(":", 1)[-1]: row for row in _rows(session)}
@@ -676,9 +676,9 @@ def test_gate_pass_records_the_repaired_drafts_own_violations(factory, monkeypat
     assert run.result.pause_reason == "world_conflict"
     assert run.paused == [{"reason": "world_conflict", "conflict_id": draft_row.id}]
     assert (run.status, preparation.calls, delegate.calls) == ("needs_review", 1, [gate_row.id])
-    # The gate row keeps Codex's decision and the pass's candidate; the draft verdict never closes it.
+    # The gate row keeps LLM's decision and the pass's candidate; the draft verdict never closes it.
     decision = json.loads(gate_row.decision_json)
-    assert (gate_row.status, decision["decided_by"], decision["option"]) == ("resolved", "codex", "rewrite_chapter")
+    assert (gate_row.status, decision["decided_by"], decision["option"]) == ("resolved", "llm", "rewrite_chapter")
     assert json.loads(gate_row.result_refs_json) == ["trace-1", f"candidate:{repaired.id}"]
     assert json.loads(gate_row.proposed_change_json)["detected_by"] == "canon_gate"
 
@@ -691,7 +691,7 @@ def test_gate_pass_without_draft_boundary_prepares_again(factory, monkeypatch, a
     preparation = SequencedPreparation(_gate(_violation(impact_level="moderate")))
     repair = FakeRepair(PASSING, after_extra_pass=verdict)
 
-    run = _run(factory, monkeypatch, repair=repair, policy=CODEX, delegate=FakeDelegate("rewrite_chapter"),
+    run = _run(factory, monkeypatch, repair=repair, policy=LLM, delegate=FakeDelegate("rewrite_chapter"),
                canon_preparation=preparation)
 
     with factory() as session:
@@ -702,11 +702,11 @@ def test_gate_pass_without_draft_boundary_prepares_again(factory, monkeypatch, a
     if after_extra_pass == "passes":
         # The gate still blocks the repaired draft: that recording follows the pass, so a human decides.
         assert run.result.pause_reason == "world_conflict"
-        assert [(row.status, row.required_decider) for row in rows] == [("resolved", "codex"), ("open", "human")]
+        assert [(row.status, row.required_decider) for row in rows] == [("resolved", "llm"), ("open", "human")]
     else:
         # Canon preparation refuses the failing draft before its gate runs, and nothing is recorded from it.
         assert run.result.pause_reason == ""
-        assert [(row.status, row.required_decider) for row in rows] == [("resolved", "codex")]
+        assert [(row.status, row.required_decider) for row in rows] == [("resolved", "llm")]
 
 
 def test_canon_preparation_outcome_carries_the_gate_verdict(factory) -> None:
@@ -937,7 +937,7 @@ class _LockOrder:
         event.remove(self.engine, "rollback", self.end)
 
 
-@pytest.mark.parametrize("path", ["codex_pass", "resume"])
+@pytest.mark.parametrize("path", ["llm_pass", "resume"])
 def test_conflict_rows_are_locked_only_after_the_chapter_plan_write_commits(factory, monkeypatch, path) -> None:
     """Lock order: a conflict row comes before the chapter plan, so each write of the plan commits first."""
     violation = _violation(impact_level="moderate")
@@ -946,9 +946,9 @@ def test_conflict_rows_are_locked_only_after_the_chapter_plan_write_commits(fact
         _resolve(factory, conflict_id, "rewrite_chapter")
     order = _LockOrder(factory.kw["bind"])
     try:
-        if path == "codex_pass":
+        if path == "llm_pass":
             repair = FakeRepair(_failing(violation), after_extra_pass=_failing(violation))
-            _run(factory, monkeypatch, repair=repair, policy=CODEX, delegate=FakeDelegate("rewrite_chapter"))
+            _run(factory, monkeypatch, repair=repair, policy=LLM, delegate=FakeDelegate("rewrite_chapter"))
             assert len(repair.extra_passes) == 1
         else:
             repair = FakeRepair(_failing(violation), after_extra_pass=_failing(violation))

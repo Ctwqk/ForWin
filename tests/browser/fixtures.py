@@ -1051,7 +1051,7 @@ def sample_runtime_policy() -> dict[str, Any]:
             "max_major_events_per_tick": 1,
             "max_onstage_slips": 2,
             "max_rerolls": 2,
-            "conflict_delegate": "codex",
+            "conflict_delegate": "llm",
         },
         "models": {"role_preferences": {"review.world_conflict": ["gpt-6-luna"]}},
     }

@@ -13,7 +13,8 @@ from forwin.generation.gate_delegation import GateAuditWriter
 from forwin.models import Base, Project
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.protocol.book_state import FactNode, MapNode, WorldNode
-from forwin.runtime.policy import ModelsPolicy, RuntimePolicy
+from forwin.runtime.policy import RuntimePolicy
+from forwin.writer.llm.adapter import LLMChatResult
 from forwin.world_engine import conflict_delegate, conflict_routing
 from forwin.world_engine.conflict_delegate import WorldConflictDelegate, build_conflict_context_snapshot
 from forwin.world_engine.conflict_repository import WorldConflictRepository
@@ -24,7 +25,7 @@ from forwin.writer.prompt_core.world_engine import build_conflict_review_message
 
 
 PROJECT_ID = "project-1"
-ASTRA = "gpt-6-luna"
+SERVED_MODEL = "deepseek-chat"
 
 
 @pytest.fixture
@@ -61,11 +62,8 @@ def _draft(**overrides) -> ConflictDraft:
     })
 
 
-def _policy(**role_preferences) -> RuntimePolicy:
-    policy = RuntimePolicy.for_profile("standard")
-    if not role_preferences:
-        return policy
-    return policy.model_copy(update={"models": ModelsPolicy(role_preferences=role_preferences)})
+def _policy() -> RuntimePolicy:
+    return RuntimePolicy.for_profile("standard")
 
 
 def _conflict(session: Session, **overrides):
@@ -104,32 +102,26 @@ class RecordingUpdater:
         return [event.event_type for event in self.events]
 
 
-class FakeCodexLLM:
+class FakeLLM:
     def __init__(
         self,
         content: str,
         *,
-        actual_model: str = ASTRA,
-        backend: str = "codex_bridge",
+        model: str = SERVED_MODEL,
+        profile_id: str = "env-deepseek",
         error: Exception | None = None,
     ) -> None:
         self.content = content
-        self.actual_model = actual_model
-        self.backend = backend
+        self.model = model
+        self.profile_id = profile_id
         self.error = error
-        self.last_call_result = None
         self.calls: list[dict[str, object]] = []
 
-    def chat(self, messages, **kwargs):
+    def chat_with_meta(self, messages, **kwargs):
         self.calls.append({"messages": messages, **kwargs})
-        self.last_call_result = SimpleNamespace(
-            backend=self.backend,
-            fallback_used=False,
-            trace={"backend": self.backend, "actual_model": self.actual_model},
-        )
         if self.error is not None:
             raise self.error
-        return self.content
+        return LLMChatResult(self.content, self.profile_id, self.model)
 
     def drain_llm_attempt_events(self):
         return []
@@ -161,7 +153,7 @@ def _snapshot(conflict) -> dict:
     }
 
 
-def _decide(session: Session, llm: FakeCodexLLM, updater: RecordingUpdater, *, policy=None, **overrides):
+def _decide(session: Session, llm: FakeLLM, updater: RecordingUpdater, *, policy=None, **overrides):
     conflict = _conflict(session, **overrides)
     delegation = WorldConflictDelegate(llm).decide(
         conflict=conflict,
@@ -172,9 +164,9 @@ def _decide(session: Session, llm: FakeCodexLLM, updater: RecordingUpdater, *, p
     return conflict, delegation
 
 
-def test_delegate_returns_option_from_codex(session: Session) -> None:
+def test_world_conflict_delegate_records_llm_decider_and_served_model(session: Session) -> None:
     updater = RecordingUpdater()
-    llm = FakeCodexLLM(_answer("plot_responds"))
+    llm = FakeLLM(_answer("plot_responds"))
 
     conflict, delegation = _decide(session, llm, updater, impact_level="moderate")
 
@@ -184,46 +176,45 @@ def test_delegate_returns_option_from_codex(session: Session) -> None:
     assert delegation.rationale.startswith("The volume goal")
     assert delegation.trace_id == "trace-1"
     call = llm.calls[0]
-    assert call["preferred_provider_kind"] == "codex"
-    assert call["preferred_model"] == ASTRA
+    assert "preferred_provider_kind" not in call
+    assert "preferred_model" not in call
     assert call["stage_key"] == "review.world_conflict"
     assert call["task_family"] == "review"
-    assert call["permission_profile"] == "prompt_only_readonly"
+    assert "permission_profile" not in call
     assert call["output_schema"]["properties"]["option"]["enum"] == json.loads(conflict.options_json)
     trace = updater.traces[0]
     assert trace["stage_key"] == "review.world_conflict"
     assert trace["trace_scope"] == "world_engine"
+    assert "permission_profile" not in trace
+    assert "codex_job_id" not in trace
+    assert json.loads(trace["model_profile_json"])["model"] == SERVED_MODEL
+    assert updater.events[0].payload["profile_id"] == "env-deepseek"
+    assert updater.events[0].payload["model"] == SERVED_MODEL
     assert conflict.id in str(trace["input_snapshot_json"])
     assert updater.event_types() == ["prompt_trace_recorded"]
     assert updater.events[0].related_object_id == "trace-1"
     session.refresh(conflict)
     assert conflict.status == "open"
-    assert conflict.required_decider == "codex"
+    assert conflict.required_decider == "llm"
 
 
-@pytest.mark.parametrize(
-    ("role_preferences", "expected_model"),
-    [({"review.world_conflict": ("gpt-5.6-sol",)}, "gpt-5.6-sol"), ({"review.world_conflict": ()}, ASTRA)],
-)
-def test_delegate_model_comes_from_role_preferences(
-    session: Session, role_preferences: dict, expected_model: str
-) -> None:
+@pytest.mark.parametrize("profile_id, model", [("env-deepseek", "deepseek-chat"), ("env-kimi", "kimi-k2.5")])
+def test_delegate_accepts_served_chain_profile(session: Session, profile_id: str, model: str) -> None:
     updater = RecordingUpdater()
-    llm = FakeCodexLLM(_answer("veto_world"), actual_model=expected_model)
+    llm = FakeLLM(_answer("veto_world"), model=model, profile_id=profile_id)
 
-    _conflict_row, delegation = _decide(session, llm, updater, policy=_policy(**role_preferences))
+    _, delegation = _decide(session, llm, updater)
 
-    assert llm.calls[0]["preferred_model"] == expected_model
     assert delegation.option == "veto_world"
     assert delegation.escalate is False
+    profile = json.loads(updater.traces[0]["model_profile_json"])
+    assert (profile["profile_id"], profile["model"]) == (profile_id, model)
 
 
 @pytest.mark.parametrize(
     ("llm_kwargs", "expected_failure"),
     [
         ({"content": "partial", "error": RuntimeError("provider timeout")}, "llm_call_failed"),
-        ({"content": _answer("veto_world"), "actual_model": "gpt-5.6-sol"}, "model_mismatch"),
-        ({"content": _answer("veto_world"), "backend": "openai_compatible"}, "model_mismatch"),
         # A major conflict never offers accept_with_obligation, and P3 never offers rewrite_chapter.
         ({"content": _answer("accept_with_obligation")}, "parse_or_schema"),
         ({"content": _answer("rewrite_chapter")}, "parse_or_schema"),
@@ -235,7 +226,7 @@ def test_delegate_failures_escalate_without_applying(
     session: Session, llm_kwargs: dict, expected_failure: str
 ) -> None:
     updater = RecordingUpdater()
-    llm = FakeCodexLLM(**llm_kwargs)
+    llm = FakeLLM(**llm_kwargs)
 
     conflict, delegation = _decide(session, llm, updater)
 
@@ -255,13 +246,13 @@ def test_delegate_failures_escalate_without_applying(
     session.expire_all()
     stored = WorldConflictRepository(session).get(PROJECT_ID, conflict.id)
     assert stored.status == "open"
-    assert stored.required_decider == "codex"
+    assert stored.required_decider == "llm"
     assert stored.decision_json == "{}"
 
 
-def test_amend_plan_choice_escalates(session: Session) -> None:
+def test_world_conflict_amend_plan_still_escalates_to_human(session: Session) -> None:
     updater = RecordingUpdater()
-    llm = FakeCodexLLM(_answer("amend_plan", risk_level="high"))
+    llm = FakeLLM(_answer("amend_plan", risk_level="high"))
 
     conflict, delegation = _decide(session, llm, updater)
 
@@ -292,7 +283,7 @@ def test_review_instructions_follow_the_conflict_source(
 ) -> None:
     updater = RecordingUpdater()
     option = "rewrite_chapter" if source == "chapter_extraction" else "veto_world"
-    llm = FakeCodexLLM(_answer(option))
+    llm = FakeLLM(_answer(option))
     overrides = (
         {"source": source, "violated": "protection", "intent_ref": "", "actor_ref": ""}
         if source == "chapter_extraction" else {}
@@ -303,13 +294,13 @@ def test_review_instructions_follow_the_conflict_source(
     system = llm.calls[0]["messages"][0]["content"]
     assert system.startswith("\n".join(instructions))
     assert updater.traces[0]["template_id"] == template_id
-    # Codex rewriting the chapter needs no user; only amend_plan escalates.
+    # LLM rewriting the chapter needs no user; only amend_plan escalates.
     assert (delegation.option, delegation.escalate) == (option, False)
 
 
 def test_chapter_conflict_amend_plan_escalates(session: Session) -> None:
     updater = RecordingUpdater()
-    llm = FakeCodexLLM(_answer("amend_plan"))
+    llm = FakeLLM(_answer("amend_plan"))
 
     _conflict_row, delegation = _decide(
         session, llm, updater, source="chapter_extraction", violated="protection", intent_ref="", actor_ref="",
@@ -319,9 +310,9 @@ def test_chapter_conflict_amend_plan_escalates(session: Session) -> None:
     assert updater.event_types() == ["prompt_trace_recorded", "world_conflict_escalated"]
 
 
-def test_prompt_too_large_escalates_without_calling_codex(session: Session) -> None:
+def test_prompt_too_large_escalates_without_calling_llm(session: Session) -> None:
     updater = RecordingUpdater()
-    llm = FakeCodexLLM(_answer("veto_world"))
+    llm = FakeLLM(_answer("veto_world"))
     conflict = _conflict(session)
     snapshot = _snapshot(conflict)
     # Neither a default-valued field nor a goal: no reduction step can drop it.
@@ -343,9 +334,9 @@ def test_prompt_too_large_escalates_without_calling_codex(session: Session) -> N
 
 
 @pytest.mark.parametrize("options_json", ["[]", ""], ids=["empty_list", "empty_string"])
-def test_empty_options_escalate_without_calling_codex(session: Session, options_json: str) -> None:
+def test_empty_options_escalate_without_calling_llm(session: Session, options_json: str) -> None:
     updater = RecordingUpdater()
-    llm = FakeCodexLLM(_answer("veto_world"))
+    llm = FakeLLM(_answer("veto_world"))
     conflict = _conflict(session)
     conflict.options_json = options_json
 
@@ -362,7 +353,7 @@ def test_empty_options_escalate_without_calling_codex(session: Session, options_
     assert updater.events[0].payload["failure_reason"] == "no_options"
     assert updater.events[0].related_object_id == conflict.id
     assert conflict.status == "open"
-    assert conflict.required_decider == "codex"
+    assert conflict.required_decider == "llm"
 
 
 def test_review_prompt_drops_default_fields_then_truncates_goals(monkeypatch) -> None:

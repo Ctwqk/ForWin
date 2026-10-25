@@ -150,7 +150,7 @@ class WorldTickService:
     without an enclosing ``begin()`` context; direct transactional callers may leave it disabled.
 
     ``llm_client`` is None when no model is configured: the LLM nodes are then skipped as unavailable.
-    ``audit_writer_factory`` gives the Codex review a writer that commits on its own, so its audit trail
+    ``audit_writer_factory`` gives the LLM review a writer that commits on its own, so its audit trail
     survives a tick that rolls back; ``save_prompt_trace`` must also commit each role's trace independently.
     """
 
@@ -546,7 +546,7 @@ class _Tick:
         return self.service.save_prompt_trace(self.session, prompt_trace)
 
     def _hold(self, candidate: TickCandidate, draft: ConflictDraft, *, extra: Mapping[str, Any]) -> None:
-        # A Codex review may decide the conflict: a stale tick ends before it pays for one.
+        # A LLM review may decide the conflict: a stale tick ends before it pays for one.
         self._check_snapshot()
         holder = self.conflicts.hold(draft, extra=extra)
         if holder:

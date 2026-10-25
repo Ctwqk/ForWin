@@ -70,7 +70,7 @@ PLOT_RESPONSE_PATCH_TYPE = "world_conflict_response"
 REPLAN_FAILED = "replan_failed"
 # A veto stops an open intent; one the story already settled keeps its status.
 _SETTLED_INTENT_STATUSES = frozenset({"resolved", "disrupted", "vetoed"})
-_EVENT_ACTOR_TYPES = {"human": "manual_ui", "codex": "worker", "auto": "system"}
+_EVENT_ACTOR_TYPES = {"human": "manual_ui", "llm": "worker", "auto": "system"}
 _ONSTAGE_SLIP = "onstage_slip"
 
 

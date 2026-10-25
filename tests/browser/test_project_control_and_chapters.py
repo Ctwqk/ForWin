@@ -19,11 +19,11 @@ def test_runtime_policy_world_conflict_switch_saves(
     goto_home(page, browser_test_base_url, backend)
     switch_home_tab(page, "task")
     page.get_by_role("button", name="查看详情").first.click()
-    expect(page.locator("#runtime_policy_world_conflict_codex")).to_have_attribute(
+    expect(page.locator("#runtime_policy_world_conflict_llm")).to_have_attribute(
         "aria-pressed", "true"
     )
     page.locator("#runtime_policy_world_conflict_human").click()
-    expect(page.locator("#runtime_policy_world_conflict_codex")).to_have_attribute(
+    expect(page.locator("#runtime_policy_world_conflict_llm")).to_have_attribute(
         "aria-pressed", "false"
     )
     expect(page.locator("#runtime_policy_world_conflict_human")).to_have_attribute(
@@ -60,7 +60,7 @@ def test_project_control_actions_review_and_chapter_operations(
     ).to_have_count(0)
     page.locator("#runtime_policy_quality_profile").select_option("pulp")
     page.locator("#runtime_policy_target_chapter_chars").fill("2900")
-    page.locator("#runtime_policy_gate_spark").click()
+    page.locator("#runtime_policy_gate_llm").click()
 
     page.get_by_role("button", name="保存运行策略").click()
     page.locator("#project_control_action_modal_submit").click()
@@ -76,7 +76,7 @@ def test_project_control_actions_review_and_chapter_operations(
     assert policy_payload["expected_version"] == 1
     assert policy_payload["quality_profile"] == "pulp"
     assert policy_payload["target_chapter_chars"] == 2900
-    assert policy_payload["gate_delegate"] == "spark"
+    assert policy_payload["gate_delegate"] == "llm"
     assert "generation_audit_" + "interval" not in policy_payload
     assert "generation_audit_" + "pauses" not in policy_payload
 

@@ -66,7 +66,7 @@ class GateDelegationStage:
         except Exception as exc:  # noqa: BLE001
             logger.exception("Gate delegation transaction failed for %s.", gate_kind)
             return GateResolution(
-                delegate="spark",
+                delegate="llm",
                 reason=f"{exc.__class__.__name__}: {exc}",
                 failure_reason="delegation_transaction_failed",
             )

@@ -2,7 +2,7 @@
 
 A violation the draft repair loop fixes never gets here: that loop is the automatic rewrite_chapter. What the
 loop leaves, or what canon preparation's review gate finds, is stored once per chapter and boundary and routed:
-critical conflicts go to a human, the rest to Codex when the policy delegates to it. Codex decides once per boundary;
+critical conflicts go to a human, the rest to LLM when the policy delegates to it. LLM decides once per boundary;
 its rewrite_chapter buys the chapter one more repair pass, and whatever is found after that pass goes to a human.
 
 Conflict summaries name entities, never a fact's proposition; concealed entities get the neutral label.
@@ -196,8 +196,8 @@ class ChapterConflictOutcome:
     conflict_ids: tuple[str, ...]
     # An open conflict a human decides; it blocks the chapter. "" when none.
     blocking_conflict_id: str
-    # The conflicts Codex decided rewrite_chapter for: the chapter gets one more repair pass.
-    codex_rewrite_ids: tuple[str, ...]
+    # The conflicts LLM decided rewrite_chapter for: the chapter gets one more repair pass.
+    llm_rewrite_ids: tuple[str, ...]
 
 
 def _utcnow() -> datetime:
@@ -205,7 +205,7 @@ def _utcnow() -> datetime:
 
 
 class ChapterConflictRecorder:
-    """Stores a candidate's residual boundary violations as chapter conflicts and lets Codex decide its share.
+    """Stores a candidate's residual boundary violations as chapter conflicts and lets LLM decide its share.
 
     The chapter stage holds the generation lease, so the open row of a boundary is the only one to reuse.
     """
@@ -232,34 +232,34 @@ class ChapterConflictRecorder:
         candidate_id: str,
         violations: Sequence[DeltaBoundaryViolation],
         detected_by: str = DRAFT_REVIEW_DETECTION,
-        allow_codex: bool = True,
+        allow_llm: bool = True,
     ) -> ChapterConflictOutcome:
         """Record ``candidate_id``'s violations of chapter ``chapter_number`` that ``detected_by`` found.
 
         Each boundary reuses the open conflict this check found earlier, or gets a new one with its DETECTED event:
         a conflict the other check found stays that check's to close. Open conflicts the same
         check found earlier, whose boundary the candidate no longer breaks, are resolved as an automatic
-        rewrite_chapter. Without ``allow_codex`` every conflict goes to a human. Codex reviews each conflict routed
+        rewrite_chapter. Without ``allow_llm`` every conflict goes to a human. LLM reviews each conflict routed
         to it after a commit, so no conflict row stays locked across the model call; the caller commits the rest.
         """
         drafts = self._drafts(project_id, chapter_number, candidate_id, violations, detected_by=detected_by)
         rows = [
-            self._open_or_create(draft, chapter_number=chapter_number, allow_codex=allow_codex) for draft in drafts
+            self._open_or_create(draft, chapter_number=chapter_number, allow_llm=allow_llm) for draft in drafts
         ]
         self._resolve_no_longer_violated(
             project_id, chapter_number, candidate_id, kept={draft.origin_key for draft in drafts},
             detected_by=detected_by,
         )
-        for_codex = [row.id for row in rows if row.status == "open" and row.required_decider == "codex"]
-        codex_rewrite_ids = tuple(
-            row_id for row_id in for_codex if self._codex_rewrites(project_id, row_id, chapter_number=chapter_number)
+        for_llm = [row.id for row in rows if row.status == "open" and row.required_decider == "llm"]
+        llm_rewrite_ids = tuple(
+            row_id for row_id in for_llm if self._llm_rewrites(project_id, row_id, chapter_number=chapter_number)
         )
         return ChapterConflictOutcome(
             conflict_ids=tuple(row.id for row in rows),
             blocking_conflict_id=next(
                 (row.id for row in rows if row.status == "open" and row.required_decider == "human"), "",
             ),
-            codex_rewrite_ids=codex_rewrite_ids,
+            llm_rewrite_ids=llm_rewrite_ids,
         )
 
     def _drafts(
@@ -282,32 +282,32 @@ class ChapterConflictRecorder:
         return list(drafts.values())
 
     def _open_or_create(
-        self, draft: ConflictDraft, *, chapter_number: int, allow_codex: bool,
+        self, draft: ConflictDraft, *, chapter_number: int, allow_llm: bool,
     ) -> WorldPlanConflictRow:
         # Only the check that found a row may find its boundary gone, so a row is reused by that check alone.
         found_by = draft.proposed_change["detected_by"]
         row = next((row for row in self.repo.open_by_origin(draft.project_id, [draft.origin_key])
                     if conflict_detected_by(row) == found_by), None)
         if row is not None:
-            if not allow_codex and row.required_decider == "codex":
+            if not allow_llm and row.required_decider == "llm":
                 self.repo.escalate(row)
             return row
         decider: ConflictDecider = (
-            "human" if not allow_codex or self._codex_decided(draft.project_id, draft.origin_key)
+            "human" if not allow_llm or self._llm_decided(draft.project_id, draft.origin_key)
             else route_conflict(draft, policy=self.policy)
         )
         row = self.repo.create(draft, required_decider=decider, options=available_options(draft))
         self.session.add(conflict_detected_event(row, chapter_number=chapter_number))
         return row
 
-    def _codex_decided(self, project_id: str, origin_key: str) -> bool:
-        """Whether Codex already decided a conflict of this boundary: it decides once per boundary."""
+    def _llm_decided(self, project_id: str, origin_key: str) -> bool:
+        """Whether LLM already decided a conflict of this boundary: it decides once per boundary."""
         decisions = self.session.scalars(select(WorldPlanConflictRow.decision_json).where(
             WorldPlanConflictRow.project_id == project_id,
             WorldPlanConflictRow.origin_key == origin_key,
             WorldPlanConflictRow.status == "resolved",
         ))
-        return any(json.loads(decision or "{}").get("decided_by") == "codex" for decision in decisions)
+        return any(json.loads(decision or "{}").get("decided_by") == "llm" for decision in decisions)
 
     def _resolve_no_longer_violated(
         self, project_id: str, chapter_number: int, candidate_id: str, *, kept: set[str], detected_by: str,
@@ -332,10 +332,10 @@ class ChapterConflictRecorder:
                 "candidate_id": candidate_id,
             }))
 
-    def _codex_rewrites(self, project_id: str, conflict_id: str, *, chapter_number: int) -> bool:
-        """Codex's decision on one conflict: rewrite_chapter resolves it, anything else hands it to a human.
+    def _llm_rewrites(self, project_id: str, conflict_id: str, *, chapter_number: int) -> bool:
+        """LLM's decision on one conflict: rewrite_chapter resolves it, anything else hands it to a human.
 
-        Returns whether Codex chose rewrite_chapter.
+        Returns whether LLM chose rewrite_chapter.
         """
         self.session.commit()
         row = self.repo.get(project_id, conflict_id)
@@ -355,7 +355,7 @@ class ChapterConflictRecorder:
             self.repo.escalate(row)
             return False
         self.repo.mark_resolved(row, decision=ConflictDecision(
-            option=delegation.option, decided_by="codex", rationale=delegation.rationale, decided_at=_utcnow(),
+            option=delegation.option, decided_by="llm", rationale=delegation.rationale, decided_at=_utcnow(),
         ), result_refs=[delegation.trace_id] if delegation.trace_id else [])
         self.session.add(conflict_resolved_event(row, chapter_number=chapter_number, extra={
             "trace_id": delegation.trace_id,

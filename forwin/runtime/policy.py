@@ -7,8 +7,8 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 QualityProfile = Literal["standard", "pulp"]
-GateDelegate = Literal["human", "spark"]
-WorldConflictDelegate = Literal["codex", "human"]
+GateDelegate = Literal["human", "llm"]
+WorldConflictDelegate = Literal["llm", "human"]
 BandCheckpointAction = Literal["continue", "pause_on_warn", "pause_always"]
 
 
@@ -117,7 +117,7 @@ class WorldPolicy(FrozenPolicyModel):
     max_major_events_per_tick: int = Field(default=1, ge=1)
     max_onstage_slips: int = Field(default=2, ge=0)
     max_rerolls: int = Field(default=2, ge=0)
-    conflict_delegate: WorldConflictDelegate = "codex"
+    conflict_delegate: WorldConflictDelegate = "llm"
 
     @classmethod
     def for_profile(cls, quality_profile: str) -> WorldPolicy:

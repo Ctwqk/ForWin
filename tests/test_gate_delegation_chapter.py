@@ -57,14 +57,14 @@ class ApprovingDelegate:
             resolved=True,
             approved=True,
             decision="approve",
-            delegate="spark",
+            delegate="llm",
         )
 
 
 def test_fail_verdict_never_reaches_gate_delegation() -> None:
     delegate = SpyDelegate()
     policy = RuntimePolicy.for_profile("standard").with_user_settings(
-        gate_delegate="spark"
+        gate_delegate="llm"
     )
     verdict = ReviewVerdict(
         verdict="fail",
@@ -131,7 +131,7 @@ def test_canon_ineligible_pass_or_warn_never_reaches_gate_delegation(
 ) -> None:
     delegate = SpyDelegate()
     policy = RuntimePolicy.for_profile("standard").with_user_settings(
-        gate_delegate="spark"
+        gate_delegate="llm"
     )
 
     outcome = evaluate_candidate_gate(
@@ -146,10 +146,10 @@ def test_canon_ineligible_pass_or_warn_never_reaches_gate_delegation(
 
 
 @pytest.mark.parametrize("verdict", ["pass", "warn"])
-def test_spark_only_approves_canon_eligible_review_opportunities(verdict: str) -> None:
+def test_llm_only_approves_canon_eligible_review_opportunities(verdict: str) -> None:
     delegate = ApprovingDelegate()
     policy = RuntimePolicy.for_profile("standard").with_user_settings(
-        gate_delegate="spark"
+        gate_delegate="llm"
     )
 
     outcome = evaluate_candidate_gate(
@@ -164,15 +164,15 @@ def test_spark_only_approves_canon_eligible_review_opportunities(verdict: str) -
     assert outcome.should_apply_canon is True
 
 
-def test_spark_approval_runs_real_chapter_pipeline_through_canon(
+def test_llm_approval_runs_real_chapter_pipeline_through_canon(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_url = postgres_test_url("spark-gate-real-canon-flow")
+    database_url = postgres_test_url("llm-gate-real-canon-flow")
     engine = get_engine(database_url)
     init_db(engine)
     Session = get_session_factory(engine)
     policy = RuntimePolicy.for_profile("standard").with_user_settings(
-        gate_delegate="spark",
+        gate_delegate="llm",
         review_interval_chapters=1,
         manual_checkpoints=False,
         band_checkpoint_action="continue",
@@ -184,7 +184,7 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
         with Session.begin() as session:
             updater = StateUpdater(session)
             project = updater.create_project(
-                title="Spark Canon Flow",
+                title="LLM Canon Flow",
                 premise="Delegation may approve a pause, never Canon itself.",
                 genre="test",
                 target_total_chapters=2,
@@ -327,7 +327,7 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
                     resolved=True,
                     approved=True,
                     decision="approve",
-                    delegate="spark",
+                    delegate="llm",
                 )
             ),
             _emit_progress=lambda *_args, **_kwargs: None,

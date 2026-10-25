@@ -45,7 +45,7 @@ def test_chapter_cost_and_autonomy(session):
                             attempts_json='[{"attempt_no": 1, "total_tokens": 999}]'))
     stages = {"writer": "chapter_draft", "reviewer": "chapter_review",
               "extraction": "chapter_delta_extraction", "world_engine": "world.actor_turn",
-              "planner": "plan.band", "codex_delegate": "review.world_conflict"}
+              "planner": "plan.band", "delegate": "review.world_conflict"}
     for role, stage in stages.items():
         session.add(PromptTrace(
             id=role, project_id=project.id, stage_key=stage,
@@ -70,7 +70,7 @@ def test_chapter_cost_and_autonomy(session):
     for chapter in (2, 3, 3):
         event(E.WORLD_TICK_CANDIDATE_DROPPED, {"intent_id": "intent-1", "reason": "prompt_too_large_deferred"}, chapter)
     event(E.WORLD_TICK_CANDIDATE_DROPPED, {"intent_id": "intent-2", "reason": "constraint_violation"})
-    for status, decider in [("resolved", "human"), ("resolved", "codex"), ("open", "")]:
+    for status, decider in [("resolved", "human"), ("resolved", "llm"), ("open", "")]:
         session.add(WorldPlanConflictRow(project_id=project.id, source="world_tick", detected_after_chapter=3,
             story_time=0, violated="protection", impact_level="major", required_decider="human",
             blocks_from_chapter=4, status=status, summary="s",
@@ -98,7 +98,7 @@ def test_chapter_cost_and_autonomy(session):
     assert service.report(project_id=project.id, chapter_number=3).model_dump() == report.model_dump()
     from forwin.mcp.models import CostLedgerReportView
     assert CostLedgerReportView.model_validate(report.model_dump()).model_dump() == report.model_dump()
-    assert "codex_delegate" in render_cost_ledger_markdown(report)
+    assert "delegate" in render_cost_ledger_markdown(report)
     assert "clock_unanswered" in render_cost_ledger_markdown(report)
     assert service.report(project_id=project.id, chapter_number=99).chapters == []
     assert service.report(project_id=project.id, candidate_id="missing").chapters == []
@@ -131,7 +131,7 @@ def test_missing_cost_and_autonomy_data(session):
     pytest.param("open", "", '{}', id="human-routed"),
     pytest.param("open", "veto_world", '{"decided_by":"human"}', id="open-human-decision"),
     pytest.param("resolved", "veto_world", '{"decided_by":"auto"}', id="auto-decision"),
-    pytest.param("resolved", "veto_world", '{"decided_by":"codex"}', id="codex-decision"),
+    pytest.param("resolved", "veto_world", '{"decided_by":"llm"}', id="llm-decision"),
     pytest.param("resolved", "veto_world", '{}', id="missing-decider"),
     pytest.param("resolved", "veto_world", 'bad', id="malformed-decision"),
 ])

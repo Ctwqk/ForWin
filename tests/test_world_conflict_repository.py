@@ -98,11 +98,11 @@ def test_create_list_and_open_blocking(session):
     assert repo.list("project-1", status="resolved") == []
 
 
-def test_open_blocking_ignores_auto_codex_and_later_chapters(session):
+def test_open_blocking_ignores_auto_llm_and_later_chapters(session):
     from forwin.world_engine.conflict_repository import WorldConflictRepository
 
     repo = WorldConflictRepository(session)
-    for decider in ("auto", "codex"):
+    for decider in ("auto", "llm"):
         repo.create(_draft(blocks_from_chapter=1), required_decider=decider, options=["veto_world"])
     later = repo.create(_draft(blocks_from_chapter=8), required_decider="human", options=["veto_world"])
     closed = repo.create(_draft(blocks_from_chapter=1), required_decider="human", options=["veto_world"])
@@ -321,7 +321,7 @@ def test_escalate_persists_and_repository_leaves_commit_to_caller(session):
     from forwin.world_engine.conflict_repository import WorldConflictRepository
 
     repo = WorldConflictRepository(session)
-    row = repo.create(_draft(), required_decider="codex", options=["veto_world"])
+    row = repo.create(_draft(), required_decider="llm", options=["veto_world"])
     row_id = row.id
     repo.escalate(row)
     session.commit()

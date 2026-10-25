@@ -1,4 +1,4 @@
-"""Codex chooses one option for a world-plan conflict; the caller applies the choice or escalates.
+"""LLM chooses one option for a world-plan conflict; the caller applies the choice or escalates.
 
 The delegate only records its audit trail: it never writes the conflict, BookState or plans.
 """
@@ -15,13 +15,13 @@ from forwin.audit.events import DecisionEventInfo, DecisionEventType
 from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.runtime import BookStateRuntime
-from forwin.generation.gate_delegation import (
-    CodexCallEnvelope,
-    CodexCallEventTypes,
-    CodexCallOutcome,
-    CodexCallVerdict,
+from forwin.llm.structured_call import (
+    StructuredCallEnvelope,
+    StructuredCallEventTypes,
+    StructuredCallOutcome,
+    StructuredCallVerdict,
     GateAuditWriter,
-    run_codex_structured_call,
+    run_structured_llm_call,
 )
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.planning.goals import load_goals_json
@@ -38,10 +38,9 @@ from .conflict_types import ConflictOption
 
 
 WORLD_CONFLICT_STAGE_KEY = "review.world_conflict"
-WORLD_CONFLICT_DEFAULT_MODEL = "gpt-6-luna"
 UPCOMING_CHAPTER_LIMIT = 3
 _GATE_KIND = "world_conflict"
-# Only the user amends the plan, so Codex choosing it hands the conflict to a human.
+# Only the user amends the plan, so LLM choosing it hands the conflict to a human.
 _ESCALATING_OPTIONS = frozenset({"amend_plan"})
 # The review instructions and template id by conflict source; the rest are reviewed as world-tick conflicts.
 _REVIEW_PROMPTS: dict[str, tuple[tuple[str, ...], str]] = {
@@ -49,7 +48,7 @@ _REVIEW_PROMPTS: dict[str, tuple[tuple[str, ...], str]] = {
 }
 _DEFAULT_REVIEW_PROMPT = (CONFLICT_REVIEW_INSTRUCTIONS, "world_engine:conflict_review")
 # The review records no requested or completed event; a failed call escalates.
-_EVENT_TYPES = CodexCallEventTypes(
+_EVENT_TYPES = StructuredCallEventTypes(
     requested="", completed="", failed=DecisionEventType.WORLD_CONFLICT_ESCALATED,
 )
 
@@ -106,9 +105,9 @@ def _escalation_payload(
     *,
     failure_reason: str,
     answer: _ConflictReviewAnswer | None,
-    requested_model: str,
+    profile_id: str = "",
     trace_id: str = "",
-    actual_model: str = "",
+    model: str = "",
     backend: str = "",
     **extra: Any,
 ) -> dict[str, Any]:
@@ -120,35 +119,35 @@ def _escalation_payload(
         "risk_level": answer.risk_level if answer is not None else "",
         "evidence": answer.evidence if answer is not None else [],
         "trace_id": trace_id,
-        "requested_model": requested_model,
-        "actual_model": actual_model,
+        "profile_id": profile_id,
+        "model": model,
         "backend": backend,
         **extra,
     }
 
 
-def _escalation_verdict(conflict: WorldPlanConflictRow, outcome: CodexCallOutcome) -> CodexCallVerdict:
-    answer = cast(_ConflictReviewAnswer | None, outcome.parsed)
+def _escalation_verdict(conflict: WorldPlanConflictRow, outcome: StructuredCallOutcome) -> StructuredCallVerdict:
+    answer = _ConflictReviewAnswer.model_validate(outcome.payload) if outcome.payload is not None else None
     cause = outcome.failure_reason or (answer.option if answer is not None else "")
-    return CodexCallVerdict(
+    return StructuredCallVerdict(
         summary=f"World conflict {conflict.id} escalated to a human: {cause}.",
         reason=answer.rationale if answer is not None else outcome.failure_detail,
-        actor_id=outcome.actual_model or "world-conflict-router",
+        actor_id=outcome.model or "world-conflict-router",
         payload=_escalation_payload(
             conflict,
-            failure_reason=outcome.failure_reason,
+            failure_reason=outcome.failure_reason or "",
             answer=answer,
-            requested_model=outcome.requested_model,
+            profile_id=outcome.profile_id,
             trace_id=outcome.trace_id,
-            actual_model=outcome.actual_model,
+            model=outcome.model,
             backend=outcome.backend,
         ),
     )
 
 
 def _escalation_event(
-    envelope: CodexCallEnvelope,
-    wording: CodexCallVerdict,
+    envelope: StructuredCallEnvelope,
+    wording: StructuredCallVerdict,
     *,
     actor_type: Literal["system", "worker"],
     related_object_type: str,
@@ -186,10 +185,9 @@ class WorldConflictDelegate:
         policy: RuntimePolicy,
         audit_writer: GateAuditWriter,
     ) -> WorldConflictDelegation:
-        """Codex's choice among the conflict's options; it escalates on any failure and on amend_plan."""
+        """LLM's choice among the conflict's options; it escalates on any failure and on amend_plan."""
         options = tuple(json.loads(conflict.options_json or "[]"))
-        requested_model = WORLD_CONFLICT_DEFAULT_MODEL
-        envelope = CodexCallEnvelope(
+        envelope = StructuredCallEnvelope(
             project_id=conflict.project_id,
             chapter_number=conflict.detected_after_chapter,
             scope="chapter",
@@ -201,13 +199,12 @@ class WorldConflictDelegate:
             audit_writer.save_decision_event(
                 _escalation_event(
                     envelope,
-                    CodexCallVerdict(
+                    StructuredCallVerdict(
                         summary=f"World conflict {conflict.id} escalated to a human: no_options.",
                         reason=rationale,
                         actor_id="",
                         payload=_escalation_payload(
                             conflict, failure_reason="no_options", answer=None,
-                            requested_model=requested_model,
                         ),
                     ),
                     actor_type="system",
@@ -231,7 +228,7 @@ class WorldConflictDelegate:
             audit_writer.save_decision_event(
                 _escalation_event(
                     envelope,
-                    CodexCallVerdict(
+                    StructuredCallVerdict(
                         summary=f"World conflict {conflict.id} escalated to a human: prompt_too_large.",
                         reason=rationale,
                         actor_id="",
@@ -239,7 +236,6 @@ class WorldConflictDelegate:
                             conflict,
                             failure_reason="prompt_too_large",
                             answer=None,
-                            requested_model=requested_model,
                             prompt_chars=prompt_chars,
                         ),
                     ),
@@ -250,12 +246,11 @@ class WorldConflictDelegate:
             )
             return WorldConflictDelegation(rationale=rationale, failure_reason="prompt_too_large")
 
-        outcome = run_codex_structured_call(
-            self.llm_client,
-            audit_writer=audit_writer,
+        outcome = run_structured_llm_call(
+            llm_client=self.llm_client,
+            recorder=audit_writer,
             gate_kind=_GATE_KIND,
             stage_key=WORLD_CONFLICT_STAGE_KEY,
-            requested_model=requested_model,
             messages=messages,
             output_model=_answer_model(options),
             output_schema=output_schema,
@@ -266,13 +261,13 @@ class WorldConflictDelegate:
             verdict=lambda result: _escalation_verdict(conflict, result),
             trace_scope="world_engine",
             template_id=template_id,
-            label="Codex review",
+            label="LLM review",
         )
-        answer = cast(_ConflictReviewAnswer | None, outcome.parsed)
+        answer = _ConflictReviewAnswer.model_validate(outcome.payload) if outcome.payload is not None else None
         if answer is None:
             return WorldConflictDelegation(
                 rationale=outcome.failure_detail,
-                failure_reason=outcome.failure_reason,
+                failure_reason=outcome.failure_reason or "",
                 trace_id=outcome.trace_id,
             )
         escalate = answer.option in _ESCALATING_OPTIONS
@@ -371,7 +366,6 @@ def build_conflict_context_snapshot(session: Session, *, conflict: WorldPlanConf
 
 __all__ = [
     "UPCOMING_CHAPTER_LIMIT",
-    "WORLD_CONFLICT_DEFAULT_MODEL",
     "WORLD_CONFLICT_STAGE_KEY",
     "WorldConflictDelegate",
     "WorldConflictDelegation",

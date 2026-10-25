@@ -259,11 +259,11 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
 
     @register_write_tool(
         "project_set_gate_delegate",
-        "Choose whether project pause gates wait for a human or delegate to Codex 5.3 Spark with complete traces. Use this when the user wants to change who resolves optional project pause gates.",
+        "Choose whether project pause gates wait for a human or delegate to the LLM chain with complete traces. Use this when the user wants to change who resolves optional project pause gates.",
     )
     async def project_set_gate_delegate(
         project_id: str,
-        delegate: Literal["human", "spark"],
+        delegate: Literal["human", "llm"],
         reason: str,
     ) -> MutationResult:
         return await client.project_set_gate_delegate(
@@ -274,11 +274,11 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
 
     @register_write_tool(
         "project_set_world_conflict_delegate",
-        "Choose whether world conflicts are reviewed by Codex or a human. Use this when the user wants to change who resolves world engine conflicts.",
+        "Choose whether world conflicts are reviewed by LLM or a human. Use this when the user wants to change who resolves world engine conflicts.",
     )
     async def project_set_world_conflict_delegate(
         project_id: str,
-        delegate: Literal["codex", "human"],
+        delegate: Literal["llm", "human"],
         reason: str,
     ) -> MutationResult:
         return await client.project_set_world_conflict_delegate(

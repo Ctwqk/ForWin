@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
-from collections.abc import Callable
-from dataclasses import dataclass, replace
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,10 +10,17 @@ from forwin.audit.events import (
 )
 from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.runtime.policy import GateDelegate, RuntimePolicy
+from forwin.llm.structured_call import (
+    GateAuditWriter,
+    StructuredCallEnvelope,
+    StructuredCallEventTypes,
+    StructuredCallOutcome,
+    StructuredCallVerdict,
+    _json_dump,
+    _sanitize_complete_log,
+    run_structured_llm_call,
+)
 
-
-SPARK_GATE_MODEL = "gpt-6-luna"
-SPARK_GATE_PERMISSION_PROFILE = "prompt_only_readonly"
 
 _SYSTEM_PROMPT = """You are ForWin's delegated reviewer for one pause gate.
 You replace a human approval decision for exactly one supplied gate.
@@ -39,29 +43,6 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_SENSITIVE_LOG_KEYS = {
-    "api_key",
-    "apikey",
-    "authorization",
-    "browser_session",
-    "access_token",
-    "bearer_token",
-    "client_secret",
-    "codex_bridge_token",
-    "cookie",
-    "cookies",
-    "minimax_api_key",
-    "password",
-    "private_key",
-    "publisher_session_secret",
-    "raw_browser_session",
-    "refresh_token",
-    "secret_key",
-    "session_secret",
-    "session_token",
-    "token",
-}
-
 
 class GateDelegationRequest(BaseModel):
     project_id: str
@@ -77,7 +58,7 @@ class GateDelegationRequest(BaseModel):
     input_snapshot: dict[str, Any] = Field(default_factory=dict)
 
 
-class SparkGateDecision(BaseModel):
+class LLMGateDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     decision: Literal["approve", "reject"]
@@ -97,53 +78,11 @@ class GateResolution(BaseModel):
     findings: list[str] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
     failure_reason: str = ""
-    requested_model: str = SPARK_GATE_MODEL
-    actual_model: str = ""
+    profile_id: str = ""
+    model: str = ""
     backend: str = ""
     trace_id: str = ""
     decision_event_id: str = ""
-
-
-class GateAuditWriter:
-    """The only persistence capability available to delegated gate code."""
-
-    __slots__ = ("_save_decision_event", "_save_prompt_trace")
-
-    def __init__(
-        self,
-        *,
-        save_decision_event: Callable[[DecisionEventInfo], Any],
-        save_prompt_trace: Callable[..., Any],
-    ) -> None:
-        self._save_decision_event = save_decision_event
-        self._save_prompt_trace = save_prompt_trace
-
-    def save_decision_event(self, event: DecisionEventInfo) -> Any:
-        return self._save_decision_event(event)
-
-    def save_prompt_trace(self, **payload: Any) -> Any:
-        return self._save_prompt_trace(**payload)
-
-
-def _sanitize_complete_log(value: Any) -> Any:
-    if isinstance(value, dict):
-        result: dict[str, Any] = {}
-        for key, item in value.items():
-            normalized = str(key or "").strip().lower()
-            is_sensitive = normalized in _SENSITIVE_LOG_KEYS or normalized.endswith(
-                ("_api_key", "_password", "_cookie", "_token")
-            )
-            result[str(key)] = (
-                "[REDACTED]" if is_sensitive else _sanitize_complete_log(item)
-            )
-        return result
-    if isinstance(value, (list, tuple)):
-        return [_sanitize_complete_log(item) for item in value]
-    return value
-
-
-def _json_dump(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, default=str)
 
 
 def _delegation_gate_outcome(
@@ -176,320 +115,20 @@ def _delegation_gate_outcome(
     )
 
 
-@dataclass(frozen=True)
-class CodexCallEventTypes:
-    """The decision event types one Codex call records; an empty type records no event for that step."""
-
-    requested: str
-    completed: str
-    failed: str
-
-
-@dataclass(frozen=True)
-class CodexCallEnvelope:
-    """Where a Codex call's decision events attach."""
-
-    project_id: str
-    task_id: str = ""
-    band_id: str = ""
-    chapter_number: int = 0
-    scope: str = "project"
-    related_object_type: str = ""
-    related_object_id: str = ""
-    parent_event_id: str = ""
-    causal_root_id: str = ""
-
-
-@dataclass(frozen=True)
-class CodexCallVerdict:
-    """The caller's wording of a call's completed or failed event."""
-
-    summary: str
-    reason: str
-    actor_id: str
-    payload: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class CodexCallOutcome:
-    parsed: BaseModel | None
-    failure_reason: str
-    trace_id: str
-    # The completed or failed event, or the trace event when the caller records neither.
-    decision_event_id: str
-    failure_detail: str = ""
-    requested_model: str = ""
-    actual_model: str = ""
-    backend: str = ""
-    causal_root_id: str = ""
-
-
-def _drain_attempts(llm_client: Any) -> list[dict[str, Any]]:
-    drain = getattr(llm_client, "drain_llm_attempt_events", None)
-    if not callable(drain):
-        return []
-    try:
-        attempts = drain()
-    except Exception:  # noqa: BLE001
-        return []
-    if not isinstance(attempts, list):
-        return []
-    return [dict(item) for item in attempts if isinstance(item, dict)]
-
-
-def _codex_actual_model(*, backend: str, router_trace: dict[str, Any]) -> str:
-    """Only the Codex bridge proves which model answered."""
-    if backend != "codex_bridge":
-        return ""
-    return str(router_trace.get("actual_model") or "").strip()
-
-
-def run_codex_structured_call(
-    llm_client: Any,
-    *,
-    audit_writer: GateAuditWriter,
-    gate_kind: str,
-    stage_key: str,
-    requested_model: str,
-    messages: list[dict[str, Any]],
-    output_model: type[BaseModel],
-    output_schema: dict[str, Any],
-    event_types: CodexCallEventTypes,
-    request_payload: dict[str, Any],
-    envelope: CodexCallEnvelope,
-    input_snapshot: dict[str, Any],
-    verdict: Callable[[CodexCallOutcome], CodexCallVerdict],
-    trace_scope: str,
-    template_id: str,
-    trace_stage_key: str = "",
-    preferred_provider_kind: str = "codex",
-    label: str = "Gate delegation",
-) -> CodexCallOutcome:
-    """One read-only structured call on the Codex route, with its PromptTrace and decision events.
-
-    The answer counts only when the Codex bridge proves ``requested_model`` answered and it
-    validates against ``output_model``; otherwise ``failure_reason`` is ``llm_call_failed``,
-    ``model_mismatch`` or ``parse_or_schema``. ``verdict`` words the completed or failed event.
-    """
-    requested_event = None
-    if event_types.requested:
-        requested_event = audit_writer.save_decision_event(
-            DecisionEventInfo(
-                project_id=envelope.project_id,
-                task_id=envelope.task_id,
-                band_id=envelope.band_id,
-                chapter_number=envelope.chapter_number,
-                scope=envelope.scope,
-                event_family="audit_action",
-                event_type=event_types.requested,
-                actor_type="system",
-                summary=f"{label} requested for {gate_kind}.",
-                payload=request_payload,
-                related_object_type=envelope.related_object_type,
-                related_object_id=envelope.related_object_id,
-                parent_event_id=envelope.parent_event_id,
-                causal_root_id=envelope.causal_root_id,
-            )
-        )
-        causal_root_id = str(requested_event.causal_root_id or requested_event.id or "")
-    else:
-        causal_root_id = envelope.causal_root_id
-    sanitized_snapshot = _sanitize_complete_log(input_snapshot)
-    _drain_attempts(llm_client)
-
-    raw_output = ""
-    call_error: Exception | None = None
-    try:
-        raw_output = str(
-            llm_client.chat(
-                messages,
-                temperature=0.1,
-                max_tokens=2500,
-                response_format={"type": "json_object"},
-                output_schema=output_schema,
-                task_family="review",
-                stage_key=stage_key,
-                latency_class="sync",
-                codex_allowed=True,
-                permission_profile=SPARK_GATE_PERMISSION_PROFILE,
-            )
-            or ""
-        )
-    except Exception as exc:  # noqa: BLE001
-        call_error = exc
-
-    attempts = _drain_attempts(llm_client)
-    call_result = getattr(llm_client, "last_call_result", None)
-    backend = str(getattr(call_result, "backend", "") or "")
-    router_trace = dict(getattr(call_result, "trace", {}) or {})
-    fallback_used = bool(getattr(call_result, "fallback_used", False))
-    actual_model = _codex_actual_model(backend=backend, router_trace=router_trace)
-
-    parsed: BaseModel | None = None
-    failure_reason = ""
-    failure_detail = ""
-    if call_error is not None:
-        failure_reason = "llm_call_failed"
-        failure_detail = f"{call_error.__class__.__name__}: {call_error}"
-    elif actual_model != requested_model:
-        failure_reason = "model_mismatch"
-        failure_detail = (
-            f"Expected {requested_model}, got {actual_model or '<unknown>'}."
-        )
-    else:
-        try:
-            parsed = output_model.model_validate(json.loads(raw_output))
-        except Exception as exc:  # noqa: BLE001
-            failure_reason = "parse_or_schema"
-            failure_detail = f"{exc.__class__.__name__}: {exc}"
-
-    logged_attempts: list[dict[str, Any]] = [
-        _sanitize_complete_log(dict(item))
-        for item in attempts
-        if isinstance(item, dict)
-    ]
-    if router_trace:
-        logged_attempts.append(
-            {
-                "source": "router_trace",
-                "backend": backend,
-                "model": actual_model,
-                "trace": _sanitize_complete_log(router_trace),
-            }
-        )
-    output_summary = {
-        "gate_kind": gate_kind,
-        "raw_model_output": raw_output,
-        "parsed_decision": (
-            parsed.model_dump(mode="json") if parsed is not None else None
-        ),
-        "failure_reason": failure_reason,
-        "failure_detail": failure_detail,
-        "requested_model": requested_model,
-        "actual_model": actual_model,
-        "backend": backend,
-    }
-    trace = audit_writer.save_prompt_trace(
-        project_id=envelope.project_id,
-        decision_event_id=requested_event.id if requested_event is not None else "",
-        trace_scope=trace_scope,
-        stage_key=trace_stage_key or stage_key,
-        template_id=template_id,
-        template_version="v1",
-        effective_system_prompt="\n\n".join(
-            str(message.get("content") or "")
-            for message in messages
-            if message.get("role") == "system"
-        ),
-        prompt_layers_json=_json_dump(_sanitize_complete_log(messages)),
-        input_snapshot_json=_json_dump(sanitized_snapshot),
-        model_profile_json=_json_dump(
-            {
-                "requested_model": requested_model,
-                "actual_model": actual_model,
-                "backend": backend,
-                "permission_profile": SPARK_GATE_PERMISSION_PROFILE,
-                "fallback_used": fallback_used,
-            }
-        ),
-        attempts_json=_json_dump(logged_attempts),
-        output_summary_json=_json_dump(output_summary),
-        backend=backend,
-        codex_job_id=str(
-            router_trace.get("job_id") or router_trace.get("codex_job_id") or ""
-        ),
-        permission_profile=SPARK_GATE_PERMISSION_PROFILE,
-        fallback_used=fallback_used,
-    )
-    trace_event = audit_writer.save_decision_event(
-        DecisionEventInfo(
-            project_id=envelope.project_id,
-            task_id=envelope.task_id,
-            band_id=envelope.band_id,
-            chapter_number=envelope.chapter_number,
-            scope=envelope.scope,
-            event_family="runtime_observation",
-            event_type=DecisionEventType.PROMPT_TRACE_RECORDED,
-            actor_type="system",
-            summary=f"{label} trace recorded for {gate_kind}.",
-            payload={
-                "gate_kind": gate_kind,
-                "trace_id": trace.id,
-                "requested_model": requested_model,
-                "actual_model": actual_model,
-                "backend": backend,
-            },
-            related_object_type="prompt_trace",
-            related_object_id=trace.id,
-            parent_event_id=(
-                requested_event.id
-                if requested_event is not None
-                else envelope.parent_event_id
-            ),
-            causal_root_id=causal_root_id,
-        )
-    )
-    causal_root_id = causal_root_id or str(
-        trace_event.causal_root_id or trace_event.id or ""
-    )
-    outcome = CodexCallOutcome(
-        parsed=parsed,
-        failure_reason=failure_reason,
-        trace_id=trace.id,
-        decision_event_id=trace_event.id,
-        failure_detail=failure_detail,
-        requested_model=requested_model,
-        actual_model=actual_model,
-        backend=backend,
-        causal_root_id=causal_root_id,
-    )
-    event_type = event_types.failed if failure_reason else event_types.completed
-    if not event_type:
-        return outcome
-    wording = verdict(outcome)
-    final_event = audit_writer.save_decision_event(
-        DecisionEventInfo(
-            project_id=envelope.project_id,
-            task_id=envelope.task_id,
-            band_id=envelope.band_id,
-            chapter_number=envelope.chapter_number,
-            scope=envelope.scope,
-            event_family="evaluation_verdict",
-            event_type=event_type,
-            actor_type="worker",
-            actor_id=wording.actor_id,
-            summary=wording.summary,
-            reason=wording.reason,
-            payload=wording.payload,
-            related_object_type="prompt_trace",
-            related_object_id=trace.id,
-            parent_event_id=trace_event.id,
-            causal_root_id=causal_root_id,
-        )
-    )
-    return replace(outcome, decision_event_id=final_event.id)
-
-
-_SPARK_EVENT_TYPES = CodexCallEventTypes(
+_LLM_EVENT_TYPES = StructuredCallEventTypes(
     requested=DecisionEventType.GATE_DELEGATION_REQUESTED,
     completed=DecisionEventType.GATE_DELEGATION_DECIDED,
     failed=DecisionEventType.GATE_DELEGATION_FAILED,
 )
 
 
-def _spark_decision(outcome: CodexCallOutcome) -> SparkGateDecision | None:
-    return cast(SparkGateDecision | None, outcome.parsed)
+def _llm_decision(outcome: StructuredCallOutcome) -> LLMGateDecision | None:
+    return LLMGateDecision.model_validate(outcome.payload) if outcome.payload is not None else None
 
 
-class SparkGateDelegate:
-    def __init__(
-        self,
-        *,
-        llm_client: Any,
-        requested_model: str = SPARK_GATE_MODEL,
-    ) -> None:
+class LLMGateDelegate:
+    def __init__(self, *, llm_client: Any) -> None:
         self.llm_client = llm_client
-        self.requested_model = str(requested_model or SPARK_GATE_MODEL).strip()
 
     def resolve(
         self,
@@ -514,20 +153,18 @@ class SparkGateDelegate:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": _json_dump(user_payload)},
         ]
-        outcome = run_codex_structured_call(
-            self.llm_client,
-            audit_writer=audit_writer,
+        outcome = run_structured_llm_call(
+            llm_client=self.llm_client,
+            recorder=audit_writer,
             gate_kind=request.gate_kind,
-            stage_key="spark_pause_gate",
-            requested_model=self.requested_model,
+            stage_key="pause_gate",
             messages=messages,
-            output_model=SparkGateDecision,
+            output_model=LLMGateDecision,
             output_schema=_OUTPUT_SCHEMA,
-            event_types=_SPARK_EVENT_TYPES,
+            event_types=_LLM_EVENT_TYPES,
             request_payload=attach_gate_outcome(
                 {
                     "gate_kind": request.gate_kind,
-                    "requested_model": self.requested_model,
                     "related_object_type": request.related_object_type,
                     "related_object_id": request.related_object_id,
                 },
@@ -538,7 +175,7 @@ class SparkGateDelegate:
                     blocked=False,
                 ),
             ),
-            envelope=CodexCallEnvelope(
+            envelope=StructuredCallEnvelope(
                 project_id=request.project_id,
                 task_id=request.task_id,
                 band_id=request.band_id,
@@ -552,10 +189,9 @@ class SparkGateDelegate:
             input_snapshot=sanitized_snapshot,
             verdict=lambda result: self._verdict(request, result),
             trace_scope="gate_delegation",
-            trace_stage_key=f"gate_{request.gate_kind}",
-            template_id="spark_pause_gate",
+            template_id="pause_gate",
         )
-        parsed = _spark_decision(outcome)
+        parsed = _llm_decision(outcome)
         failure_reason = outcome.failure_reason
         decision_text = parsed.decision if parsed is not None else "reject"
         reason = parsed.reason if parsed is not None else outcome.failure_detail
@@ -571,15 +207,15 @@ class SparkGateDelegate:
                     event_family="audit_action",
                     event_type=DecisionEventType.GATE_DELEGATION_APPROVED,
                     actor_type="worker",
-                    actor_id=outcome.actual_model,
+                    actor_id=outcome.model,
                     summary=f"Gate delegation approved {request.gate_kind}.",
                     reason=reason,
                     payload=attach_gate_outcome(
                         {
                             "gate_kind": request.gate_kind,
                             "trace_id": outcome.trace_id,
-                            "requested_model": self.requested_model,
-                            "actual_model": outcome.actual_model,
+                            "profile_id": outcome.profile_id,
+                            "model": outcome.model,
                             "backend": outcome.backend,
                         },
                         self._final_gate_outcome(request, outcome),
@@ -594,14 +230,14 @@ class SparkGateDelegate:
             resolved=not bool(failure_reason),
             approved=approved,
             decision=decision_text,
-            delegate="spark",
+            delegate="llm",
             reason=reason,
             risk_level=parsed.risk_level if parsed is not None else "",
             findings=parsed.findings if parsed is not None else [],
             evidence=parsed.evidence if parsed is not None else [],
-            failure_reason=failure_reason,
-            requested_model=self.requested_model,
-            actual_model=outcome.actual_model,
+            failure_reason=failure_reason or "",
+            profile_id=outcome.profile_id,
+            model=outcome.model,
             backend=outcome.backend,
             trace_id=outcome.trace_id,
             decision_event_id=outcome.decision_event_id,
@@ -610,9 +246,9 @@ class SparkGateDelegate:
     @staticmethod
     def _final_gate_outcome(
         request: GateDelegationRequest,
-        outcome: CodexCallOutcome,
+        outcome: StructuredCallOutcome,
     ) -> GateOutcome:
-        parsed = _spark_decision(outcome)
+        parsed = _llm_decision(outcome)
         failure_reason = outcome.failure_reason
         decision_text = parsed.decision if parsed is not None else "reject"
         approved = not bool(failure_reason) and decision_text == "approve"
@@ -621,7 +257,7 @@ class SparkGateDelegate:
             evaluated=True,
             decision=("error" if failure_reason else decision_text),
             blocked=not approved,
-            overridden_by="spark" if approved else "",
+            overridden_by="llm" if approved else "",
             issue_keys=[
                 *([failure_reason] if failure_reason else []),
                 *(parsed.findings if parsed is not None else []),
@@ -633,12 +269,12 @@ class SparkGateDelegate:
     def _verdict(
         self,
         request: GateDelegationRequest,
-        outcome: CodexCallOutcome,
-    ) -> CodexCallVerdict:
-        parsed = _spark_decision(outcome)
+        outcome: StructuredCallOutcome,
+    ) -> StructuredCallVerdict:
+        parsed = _llm_decision(outcome)
         failure_reason = outcome.failure_reason
         decision_text = parsed.decision if parsed is not None else "reject"
-        return CodexCallVerdict(
+        return StructuredCallVerdict(
             summary=(
                 f"Gate delegation failed for {request.gate_kind}: {failure_reason}."
                 if failure_reason
@@ -646,15 +282,15 @@ class SparkGateDelegate:
                 f"{request.gate_kind}."
             ),
             reason=parsed.reason if parsed is not None else outcome.failure_detail,
-            actor_id=outcome.actual_model or "spark-gate-router",
+            actor_id=outcome.model or "llm-gate-router",
             payload=attach_gate_outcome(
                 {
                     "gate_kind": request.gate_kind,
                     "decision": decision_text,
-                    "failure_reason": failure_reason,
+                    "failure_reason": failure_reason or "",
                     "trace_id": outcome.trace_id,
-                    "requested_model": self.requested_model,
-                    "actual_model": outcome.actual_model,
+                    "profile_id": outcome.profile_id,
+                    "model": outcome.model,
                     "backend": outcome.backend,
                     "risk_level": parsed.risk_level if parsed is not None else "",
                     "findings": parsed.findings if parsed is not None else [],
@@ -668,8 +304,8 @@ class SparkGateDelegate:
 
 
 class GateDelegationService:
-    def __init__(self, *, spark_delegate: SparkGateDelegate) -> None:
-        self.spark_delegate = spark_delegate
+    def __init__(self, *, llm_delegate: LLMGateDelegate) -> None:
+        self.llm_delegate = llm_delegate
 
     def resolve(
         self,
@@ -684,25 +320,18 @@ class GateDelegationService:
                 reason="human_pause_required",
             )
         if audit_writer is None:
-            raise ValueError("Spark gate delegation requires an audit writer")
-        return self.spark_delegate.resolve(
+            raise ValueError("LLM gate delegation requires an audit writer")
+        return self.llm_delegate.resolve(
             audit_writer=audit_writer,
             request=request,
         )
 
 
 __all__ = [
-    "CodexCallEnvelope",
-    "CodexCallEventTypes",
-    "CodexCallOutcome",
-    "CodexCallVerdict",
     "GateDelegationRequest",
     "GateDelegationService",
     "GateAuditWriter",
     "GateResolution",
-    "SPARK_GATE_MODEL",
-    "SPARK_GATE_PERMISSION_PROFILE",
-    "SparkGateDecision",
-    "SparkGateDelegate",
-    "run_codex_structured_call",
+    "LLMGateDecision",
+    "LLMGateDelegate",
 ]

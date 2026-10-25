@@ -23,7 +23,7 @@ PLAN_BOUNDARY_VIOLATIONS = frozenset({"milestone", "reveal_schedule"})
 _BOUNDARY_VIOLATIONS = PLAN_BOUNDARY_VIOLATIONS | {"protection"}
 _BOUNDARY_OPTIONS: tuple[ConflictOption, ...] = ("veto_world", "amend_plan")
 _OBLIGATION_IMPACTS = frozenset({"minor", "moderate"})
-_CODEX_IMPACTS = frozenset({"moderate", "major"})
+_LLM_IMPACTS = frozenset({"moderate", "major"})
 
 
 def live_intent(runtime: BookStateRuntime, intent_ref: str) -> bool:
@@ -61,7 +61,7 @@ def available_options(
 
 def route_conflict(draft: ConflictDraft, *, policy: RuntimePolicy) -> ConflictDecider:
     """Rewrites, plan conflicts and critical conflicts go to a human, minor ones are vetoed automatically,
-    and the rest go to Codex unless the policy keeps them for a human.
+    and the rest go to LLM unless the policy keeps them for a human.
 
     A chapter conflict is what the draft repair loop could not fix, so it is never decided automatically:
     rewriting the chapter again on its own would loop.
@@ -70,11 +70,11 @@ def route_conflict(draft: ConflictDraft, *, policy: RuntimePolicy) -> ConflictDe
             or draft.impact_level == "critical"):
         return "human"
     if draft.source == "chapter_extraction":
-        return "codex" if policy.world.conflict_delegate == "codex" else "human"
+        return "llm" if policy.world.conflict_delegate == "llm" else "human"
     if draft.impact_level == "minor":
         return "auto"
-    if draft.impact_level in _CODEX_IMPACTS and policy.world.conflict_delegate == "codex":
-        return "codex"
+    if draft.impact_level in _LLM_IMPACTS and policy.world.conflict_delegate == "llm":
+        return "llm"
     return "human"
 
 

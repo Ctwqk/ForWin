@@ -225,7 +225,7 @@ Run only after Tasks 1–5 are on `origin/master` and the full suite is green. S
   - Scale the six `forwin-*-swarm` services on infra-150 to 0.
   - `pg_dump -Fc` the `forwin-postgres` container on infra-150, relay it through magi1, and `pg_restore --no-owner` it into magi3's `postgres`.
   - Tar the `forwin-swarm-data` volume on `colima-swarmbridged` (magi1) into magi3's `forwin-data`.
-  - `mc mirror` the `forwin-artifacts` bucket (0 objects expected).
+  - No MinIO on magi3 (2026-10-25 ruling: MinIO stopped publishing images, and infra-150's bucket held 0 objects); artifacts use the `local` backend on `forwin-data`, so check infra-150's bucket is still empty before cutover.
   - Qdrant collections were deleted by the purge; check none exist on infra-150 before skipping them.
   - Check: row counts of `projects`, `alembic_version` and the publisher account tables match on both sides.
 - [ ] **Step 4: Deploy the app on magi3.** Run `scripts/deploy_magi3.sh` to migrate to `0007_drop_codex` and start everything. Checks:

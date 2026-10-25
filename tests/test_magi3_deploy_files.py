@@ -46,7 +46,6 @@ def test_compose_has_the_expected_services_and_volumes() -> None:
     assert set(compose["services"]) == {
         "postgres",
         "qdrant",
-        "minio",
         "app",
         "mcp",
         "generation-worker",
@@ -58,16 +57,13 @@ def test_compose_has_the_expected_services_and_volumes() -> None:
     assert set(compose["volumes"]) == {
         "forwin-postgres",
         "forwin-qdrant",
-        "forwin-minio",
         "forwin-data",
     }
 
     services = compose["services"]
     assert services["postgres"]["image"] == "postgres:16-alpine"
     assert services["qdrant"]["image"] == "qdrant/qdrant:v1.17.1"
-    assert services["minio"]["image"] == (
-        "minio/minio:RELEASE.2025-09-07T16-13-09Z"
-    )
+    assert services["app"]["environment"]["FORWIN_ARTIFACT_BACKEND"] == "local"
     assert services["migrate"]["profiles"] == ["tools"]
     assert services["migrate"]["command"] == ["alembic", "upgrade", "head"]
 
@@ -158,7 +154,7 @@ def test_compose_uses_in_network_service_urls_and_no_external_ip_literals() -> N
         in text
     )
     assert "http://qdrant:6333" in text
-    assert "minio:9000" in text
+    assert "minio" not in text.lower()
     assert set(re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text)) <= {
         "127.0.0.1", "0.0.0.0"
     }
@@ -183,11 +179,10 @@ def test_publisher_browser_has_swarm_tmpfs_and_healthcheck() -> None:
 def test_runtime_volumes_and_mcp_healthcheck() -> None:
     services = load_compose()["services"]
     for name, service in services.items():
-        if name not in {"postgres", "qdrant", "minio", "migrate"}:
+        if name not in {"postgres", "qdrant", "migrate"}:
             assert "forwin-data:/app/data" in service["volumes"]
     for name, target in {
         "postgres": "/var/lib/postgresql/data", "qdrant": "/qdrant/storage",
-        "minio": "/data",
     }.items():
         assert services[name]["volumes"] == [f"forwin-{name}:{target}"]
     assert services["mcp"]["command"] == [
@@ -221,8 +216,6 @@ def test_env_example_has_provider_key_names_only() -> None:
         "MINIMAX_API_KEY",
         "MINIMAX_BASE_URL",
         "MINIMAX_MODEL",
-        "FORWIN_MINIO_ACCESS_KEY",
-        "FORWIN_MINIO_SECRET_KEY",
         "FORWIN_PUBLISHER_SESSION_SECRET",
     } <= names
     assert "codex" not in env_text.lower()
@@ -456,7 +449,7 @@ def test_deploy_data_stores_only_skips_migration_health_and_marker(shell_harness
     docker = shell_calls(shell_harness, "docker")
     assert len(docker) == 2
     assert docker[0]["args"][-1] == "build"
-    assert docker[1]["args"][-5:] == ["up", "-d", "postgres", "qdrant", "minio"]
+    assert docker[1]["args"][-4:] == ["up", "-d", "postgres", "qdrant"]
     assert shell_calls(shell_harness, "curl") == []
     assert not (Path(shell_harness["FAKE_REMOTE_HOME"]) / "forwin/src/.deploy-commit").exists()
 

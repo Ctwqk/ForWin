@@ -62,7 +62,7 @@ compose() {
 }
 compose build
 if ((data_stores_only)); then
-    compose up -d postgres qdrant minio
+    compose up -d postgres qdrant
     exit 0
 fi
 compose --profile tools run --rm migrate

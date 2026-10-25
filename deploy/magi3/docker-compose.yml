@@ -20,11 +20,8 @@ x-common-environment: &common-environment
   FORWIN_QDRANT_COLLECTION: "chapter_memories"
   FORWIN_LLM_KB_QDRANT_COLLECTION: "llm_kb_vectors"
   FORWIN_RETRIEVAL_BACKEND: "qdrant"
-  FORWIN_MINIO_ENDPOINT: "minio:9000"
-  FORWIN_MINIO_SECURE: "false"
-  FORWIN_MINIO_BUCKET: "forwin-artifacts"
-  FORWIN_MINIO_PREFIX: "artifacts"
-  FORWIN_ARTIFACT_BACKEND: "minio"
+  # Artifacts live on the forwin-data volume; magi3 runs no object store.
+  FORWIN_ARTIFACT_BACKEND: "local"
   FORWIN_ARTIFACT_ROOT: "data/artifacts"
   FORWIN_RUNTIME_SETTINGS_PATH: "data/runtime_settings.json"
   FORWIN_HTTP_BIND: "0.0.0.0"
@@ -48,8 +45,6 @@ x-common-environment: &common-environment
   FORWIN_PUBLISHER_PREFERRED_CLIENT_ID: "${FORWIN_PUBLISHER_PREFERRED_CLIENT_ID:-}"
   FORWIN_PUBLISHER_EXTENSION_API_KEY: "${FORWIN_PUBLISHER_EXTENSION_API_KEY:-}"
   FORWIN_PUBLISHER_SESSION_SECRET: "${FORWIN_PUBLISHER_SESSION_SECRET:-}"
-  FORWIN_MINIO_ACCESS_KEY: "${FORWIN_MINIO_ACCESS_KEY:-}"
-  FORWIN_MINIO_SECRET_KEY: "${FORWIN_MINIO_SECRET_KEY:-}"
   DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
   DEEPSEEK_BASE_URL: "${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}"
   DEEPSEEK_MODEL: "${DEEPSEEK_MODEL:-deepseek-chat}"
@@ -89,15 +84,6 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    command: ["server", "/data", "--console-address", ":9001"]
-    environment:
-      MINIO_ROOT_USER: "${FORWIN_MINIO_ACCESS_KEY:?FORWIN_MINIO_ACCESS_KEY must be set in deploy/magi3/.env}"
-      MINIO_ROOT_PASSWORD: "${FORWIN_MINIO_SECRET_KEY:?FORWIN_MINIO_SECRET_KEY must be set in deploy/magi3/.env}"
-    volumes:
-      - forwin-minio:/data
-    restart: unless-stopped
 
   app:
     <<: *runtime-service
@@ -114,8 +100,6 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-      minio:
-        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import httpx; r=httpx.get('http://localhost:8899/health', timeout=3); raise SystemExit(0 if r.status_code == 200 else 1)\""]
       interval: 10s
@@ -158,8 +142,6 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-      minio:
-        condition: service_started
     healthcheck:
       disable: true
 
@@ -240,5 +222,4 @@ services:
 volumes:
   forwin-postgres:
   forwin-qdrant:
-  forwin-minio:
   forwin-data:

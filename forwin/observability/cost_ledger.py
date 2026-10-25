@@ -4,7 +4,7 @@ import json
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -17,6 +17,7 @@ from forwin.models.genesis import PromptTrace
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan, Project
 from forwin.models.world_conflict import WorldPlanConflictRow
+from forwin.world_engine.conflict_types import ConflictOption
 
 
 CostDimension = Literal[
@@ -463,27 +464,38 @@ class CostLedgerService:
             if event.event_type not in {DecisionEventType.LLM_REQUEST_SUCCEEDED, DecisionEventType.LLM_REQUEST_FAILED}:
                 continue
             payload = _json_object(event.payload_json)
-            # Writer workflow envelopes describe a whole operation, not an additional model call.
-            if not any(payload.get(key) for key in ("stage_key", "prompt_trace_id", "attempt_group_id")):
-                continue
             trace_id = str(payload.get("prompt_trace_id") or "")
-            if trace_id in represented_trace_ids or (event.related_object_type == "prompt_trace"
-                                                    and event.related_object_id in represented_trace_ids):
+            related_trace_id = str(event.related_object_id or "") if event.related_object_type == "prompt_trace" else ""
+            # Writer workflow envelopes describe a whole operation, not an additional model call.
+            if not (trace_id or related_trace_id or payload.get("stage_key") or payload.get("attempt_group_id")):
                 continue
-            if not self._matches_event(
-                event, project_filter=project_id, chapter_filter=chapter_number, band_filter=band_id,
-                candidate_filter=candidate_id, candidate_by_review=candidate_by_review,
-                band_ranges=band_ranges, chapter_arc_ids=chapter_arc_ids,
+            if trace_id in represented_trace_ids or related_trace_id in represented_trace_ids:
+                continue
+            linked_trace = trace_by_id.get(trace_id) or trace_by_id.get(related_trace_id)
+            trace_context = (resolve_context(linked_trace) if linked_trace is not None
+                             else _TraceContext(project_id=event.project_id))
+            outcome = parse_gate_outcome(payload)
+            event_chapter = int(event.chapter_number or 0) or _snapshot_chapter(payload) or trace_context.chapter_number
+            context = _TraceContext(
+                project_id=event.project_id, chapter_number=event_chapter,
+                band_id=(event.band_id or _snapshot_value(payload, key="band_id") or trace_context.band_id
+                         or self._band_for_chapter(
+                             project_id=event.project_id, chapter_number=event_chapter,
+                             band_ranges=band_ranges, chapter_arc_ids=chapter_arc_ids)),
+                candidate_id=(_event_candidate(event, payload, candidate_by_review=candidate_by_review)
+                              or trace_context.candidate_id),
+                gate_id=((outcome.gate_id if outcome is not None else "")
+                         or _snapshot_value(payload, key="gate_id") or trace_context.gate_id),
+                default_stage_key=str(payload.get("stage_key") or trace_context.default_stage_key),
+                default_model=trace_context.default_model,
+                default_provider=trace_context.default_provider,
+            )
+            if not self._matches(
+                project_id=context.project_id, chapter_number=context.chapter_number, band_id=context.band_id,
+                candidate_id=context.candidate_id, project_filter=project_id, chapter_filter=chapter_number,
+                band_filter=band_id, candidate_filter=candidate_id,
             ):
                 continue
-            context = _TraceContext(
-                project_id=event.project_id, chapter_number=int(event.chapter_number or 0),
-                band_id=event.band_id or self._band_for_chapter(
-                    project_id=event.project_id, chapter_number=int(event.chapter_number or 0),
-                    band_ranges=band_ranges, chapter_arc_ids=chapter_arc_ids),
-                candidate_id=_event_candidate(event, payload, candidate_by_review=candidate_by_review),
-                default_stage_key=str(payload.get("stage_key") or ""),
-            )
             attempt = {**payload, "attempt_no": payload.get("attempt_no", 1),
                        "status": "success" if event.event_type == DecisionEventType.LLM_REQUEST_SUCCEEDED else "failed"}
             records.extend(self._trace_records(PromptTrace(attempts_json=json.dumps([attempt])), context=context))
@@ -640,7 +652,8 @@ class CostLedgerService:
             ):
                 continue
             row = chapter(conflict.project_id, number)
-            human = conflict.status == "resolved" and _json_object(conflict.decision_json).get("decided_by") == "human"
+            human = (conflict.status == "resolved" and conflict.decision_option in get_args(ConflictOption)
+                     and _json_object(conflict.decision_json).get("decided_by") == "human")
             chapters[(row.project_id, number)] = row.model_copy(update={
                 "world_conflicts": row.world_conflicts + 1,
                 "human_decided_conflicts": row.human_decided_conflicts + int(human),

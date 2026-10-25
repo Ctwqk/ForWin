@@ -254,7 +254,8 @@ class BandPlanner:
         else:
             call = self._call(session, project_id=project_id, inputs=inputs, band=band, chapter_numbers=chapter_numbers,
                               beat_sheet=beat_sheet, policy=policy)
-            call.trim_record = inputs.trim_record
+            if inputs is not None:
+                call.trim_record = inputs.trim_record
         if call.error is not None:
             # An audit failure may abort the caller's transaction; spent calls still need their audit trail.
             if isinstance(call.error, DBAPIError):

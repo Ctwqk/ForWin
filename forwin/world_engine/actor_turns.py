@@ -586,22 +586,26 @@ class ActorTurnRunner:
         attempts: list[dict[str, Any]] = []
         business_retries: list[dict[str, Any]] = []
         retry_feedback: list[str] = []
+        # The last prompt sent, which the trace records. Only when nothing was sent does the trace record the
+        # unsent prompt, with no attempts and failure_reason prompt_too_large.
         messages: list[dict] = []
         too_large = False
         # Whether any call returned an answer, valid or not.
         answered = False
         for attempt_no in range(1, self.max_attempts + 1):
             # A retry asks again only for the actors still without a valid turn.
-            messages = build_actor_turn_messages(
+            prompt = build_actor_turn_messages(
                 context=context, views=[by_actor[actor_id] for actor_id in pending], calendar=calendar,
                 lexicon=lexicon, max_new_intents=policy.max_new_intents_per_actor,
                 max_agenda_changes=MAX_AGENDA_CHANGES_PER_TURN, feedback=feedback, retry_feedback=retry_feedback,
             )
-            if len(messages[-1]["content"]) > MAX_ACTOR_TURN_PROMPT_CHARS:
+            if len(prompt[-1]["content"]) > MAX_ACTOR_TURN_PROMPT_CHARS:
                 too_large = True
                 for actor_id in pending:
                     issues[actor_id].append("prompt_too_large")
+                messages = messages or prompt
                 break
+            messages = prompt
             retry_feedback = []
             raw = ""
             call_error: Exception | None = None

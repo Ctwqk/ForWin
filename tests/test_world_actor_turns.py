@@ -525,6 +525,30 @@ def test_oversized_prompt_returns_failure_without_llm_call():
     assert call.prompt_trace["output_summary"]["failure_reason"] == "prompt_too_large"
 
 
+def test_retry_over_the_guard_traces_only_the_prompt_that_was_sent(monkeypatch):
+    from forwin.world_engine import actor_turns
+    from forwin.world_engine.types import PROMPT_TOO_LARGE
+    from forwin.writer.prompt_core.world_engine import build_actor_turn_messages
+
+    view = _view()
+    first = build_actor_turn_messages(
+        context=CONTEXT, views=[view], calendar=CALENDAR, lexicon=LEXICON,
+        max_new_intents=POLICY.max_new_intents_per_actor, max_agenda_changes=actor_turns.MAX_AGENDA_CHANGES_PER_TURN,
+    )
+    # The first prompt just fits; the retry's feedback for the missing turn puts it over the guard.
+    monkeypatch.setattr(actor_turns, "MAX_ACTOR_TURN_PROMPT_CHARS", len(first[-1]["content"]))
+    client = StubLLM({"turns": []})
+
+    [call] = _run(client, [view])
+
+    assert len(client.calls) == 1
+    assert call.result is None and call.failure_reason == PROMPT_TOO_LARGE
+    assert call.prompt_trace["output_summary"]["failure_reason"] == "prompt_too_large"
+    # The trace records the prompt that was sent, not the retry that never was.
+    assert call.prompt_trace["prompt_layers"][-1]["content"] == first[-1]["content"]
+    assert "Retry validation feedback" not in json.dumps(call.prompt_trace, ensure_ascii=False)
+
+
 def test_no_views_make_no_call():
     client = StubLLM()
     assert _run(client, []) == []

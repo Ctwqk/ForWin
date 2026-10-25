@@ -130,21 +130,6 @@ class ObserverType(_StrEnum):
     SYSTEM = "system"
 
 
-class CognitionState(_StrEnum):
-    HIDDEN = "hidden"
-    UNKNOWN = "unknown"
-    HINTED = "hinted"
-    SUSPECTED = "suspected"
-    PARTIALLY_REVEALED = "partially_revealed"
-    PARTIALLY_KNOWN = "partially_known"
-    KNOWN = "known"
-    CONFIRMED = "confirmed"
-    MISLED = "misled"
-    FALSE_BELIEF = "false_belief"
-    FALSE = "false"
-    STALE = "stale"
-
-
 class PatchOp(_StrEnum):
     CREATE = "create"
     SET = "set"

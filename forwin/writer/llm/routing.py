@@ -246,13 +246,9 @@ class RoutingMixin:
             return "planning_json_general"
         if "chapter_delta" in stage:
             return "canon_extraction"
-        if stage in {"writer_preview", "writer_preview_fallback", "chapter_preview_fallback"}:
+        if stage in {"writer_preview", "writer_preview_fallback"}:
             return "writer_preview"
-        if stage == "comment_analysis" or family in {
-            "feedback",
-            "phase4",
-            "reader_feedback",
-        }:
+        if stage == "comment_analysis" or family == "phase4":
             return "feedback_analysis"
         if stage in {
             "chapter_review",
@@ -275,8 +271,6 @@ class RoutingMixin:
             "scene_stitch",
         } or (family == "writer" and not wants_json):
             return "prose_generation"
-        if stage == "chapter_preview":
-            return "writer_preview"
         if stage in {"scene_breakdown", "genesis_brief", "brief"}:
             return "planning_json_low_risk" if wants_json else "planning_prose"
         if stage in {
@@ -285,12 +279,9 @@ class RoutingMixin:
             "story_engine",
             "book_blueprint",
             "world_seed",
-            "band_plan",
         } or family in {
             "genesis",
             "planning",
-            "arc_planning",
-            "world_model",
         }:
             return "planning_json_general" if wants_json else "planning_prose"
         if wants_json:

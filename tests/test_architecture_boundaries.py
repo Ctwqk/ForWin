@@ -23,6 +23,42 @@ from forwin.http.routes import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("path", [
+    "forwin/planning/band_plan",
+    "forwin/planning/service.py",
+    "forwin/book_state/query_interface.py",
+])
+def test_unused_planning_and_query_modules_are_removed(path: str) -> None:
+    assert not (ROOT / path).exists()
+
+
+@pytest.mark.parametrize("module_name,symbol", [
+    ("forwin.planning", "PlanningService"),
+    ("forwin.protocol.book_state", "CognitionState"),
+    ("forwin.state.query_helpers", "_active_arc_rows_for_projects"),
+    ("forwin.experience.service", "load_long_window_audience_trends"),
+])
+def test_unused_planning_and_query_symbols_are_removed(module_name: str, symbol: str) -> None:
+    assert not hasattr(importlib.import_module(module_name), symbol)
+
+
+def test_unused_llm_route_keys_are_removed() -> None:
+    from forwin.writer.llm.routing import RoutingMixin
+
+    source = ast.parse(_read("forwin/writer/llm/routing.py"))
+    route = next(node for node in ast.walk(source) if isinstance(node, ast.FunctionDef)
+                 and node.name == "_llm_task_route")
+    literals = {node.value for node in ast.walk(route)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+    removed_families = {"feedback", "reader_feedback", "arc_planning", "world_model"}
+    removed_stages = {"band_plan", "chapter_preview", "chapter_preview_fallback"}
+    assert not (removed_families | removed_stages) & literals
+    for family in removed_families:
+        assert RoutingMixin._llm_task_route(task_family=family) == "general"
+    for stage in removed_stages:
+        assert RoutingMixin._llm_task_route(stage_key=stage) == "general"
+
+
 def test_dead_review_signals_and_drift_module_are_removed() -> None:
     import forwin.planning.checkpoints as checkpoints
     from typing import get_args

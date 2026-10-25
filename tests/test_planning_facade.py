@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from forwin.planning import PlanHealthService, PlanningQuery, PlanningService
+from forwin.planning import PlanHealthService, PlanningQuery
 from forwin.planning.future_plan_audit import FuturePlanAuditIssue, FuturePlanAuditRun
 
 
@@ -35,9 +35,7 @@ def test_future_plan_audit_maps_to_blocking_plan_health() -> None:
     assert health.evidence == ["chapter:9"]
 
 
-def test_planning_facade_replaces_dynamic_forwarding_shims() -> None:
-    assert PlanningService.__name__ == "PlanningService"
+def test_planning_query_replaces_dynamic_forwarding_shims() -> None:
     assert PlanningQuery.__name__ == "PlanningQuery"
     assert not (ROOT / "forwin" / "planning" / "future_plan_auditor.py").exists()
     assert not (ROOT / "forwin/planning/arc_envelope.py").exists()
-    assert isinstance(PlanningService.build_default().query, PlanningQuery)

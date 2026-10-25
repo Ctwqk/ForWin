@@ -10,7 +10,6 @@ from forwin.models.draft import ChapterDraft
 from forwin.models.phase import (
     ChapterRewriteAttempt,
 )
-from forwin.models.project import ArcPlanVersion
 from forwin.models.task import GenerationTask
 
 
@@ -70,26 +69,6 @@ def _load_latest_partitioned_rows(
         .all()
     )
     return {getattr(row, partition_column.key): row for row in rows}
-
-
-def _active_arc_rows_for_projects(project_ids: list[str]):
-    return (
-        select(
-            ArcPlanVersion.id.label("arc_id"),
-            ArcPlanVersion.project_id.label("project_id"),
-            func.row_number()
-            .over(
-                partition_by=ArcPlanVersion.project_id,
-                order_by=(ArcPlanVersion.version.desc(), ArcPlanVersion.id.desc()),
-            )
-            .label("arc_rn"),
-        )
-        .where(
-            ArcPlanVersion.project_id.in_(project_ids),
-            ArcPlanVersion.status == "active",
-        )
-        .subquery()
-    )
 
 
 def load_latest_drafts_by_plan_id(

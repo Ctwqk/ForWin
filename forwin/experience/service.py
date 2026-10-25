@@ -25,40 +25,6 @@ class AudienceCalibrationProfile:
     recent_trope_categories: list[str] | None = None
 
 
-def load_long_window_audience_trends(
-    session: Session,
-    project_id: str,
-    *,
-    limit: int = 3,
-) -> list[str]:
-    rows = session.execute(
-        select(SignalWindowAggregate)
-        .where(
-            SignalWindowAggregate.project_id == project_id,
-            SignalWindowAggregate.window_type == "long",
-            SignalWindowAggregate.signal_level.in_(("confirmed", "watchlist")),
-        )
-        .order_by(
-            SignalWindowAggregate.window_chapter_end.desc(),
-            SignalWindowAggregate.unique_user_count.desc(),
-            SignalWindowAggregate.max_severity.desc(),
-        )
-        .limit(limit)
-    ).scalars().all()
-    if not rows:
-        return []
-    trend_views = derive_audience_trends(rows, window_type="long", limit=limit)
-    if trend_views:
-        return [
-            f"{row.target_name or '整体'}:{row.signal_type}:{row.current_level}"
-            for row in trend_views
-        ]
-    return [
-        f"{row.target_name or '整体'}:{row.signal_type}:{row.signal_level}"
-        for row in rows
-    ]
-
-
 def load_long_window_audience_trend_views(
     session: Session,
     project_id: str,

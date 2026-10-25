@@ -686,6 +686,9 @@ def test_seed_world_variables_unique_profile_and_missing_warning(variable_seed, 
 
 
 def test_world_variable_prompt_receives_profiles(variable_seed, story_engine, map_atlas):
+    import json
+    import re
+
     from forwin.genesis.messages import _build_stage_generation_messages
     from forwin.models.project import Project
 
@@ -697,5 +700,13 @@ def test_world_variable_prompt_receives_profiles(variable_seed, story_engine, ma
         None, project=Project(id="p", title="t", premise="p", genre="g"),
         pack=pack, stage_key="world_seed", fallback={})[-1]["content"]
     assert "institution-input" in content and "economy-input" in content
+    sections = dict(re.findall(r"【([^】]+)】\n(.*?)(?=\n\n【|\Z)", content, re.S))
+    assert list(sections) == [
+        "阶段", "输出要求", "阶段硬约束", "已锁定阶段上下文（视为当前真值）", "项目 genre",
+        "WorldBible", "地图节点表", "StoryEngine", "卷列表", "当前 WorldSeed", "参考骨架",
+    ]
+    context = json.loads(sections["已锁定阶段上下文（视为当前真值）"])
+    assert context["institution_profiles"] == [{"id": "institution-input"}]
+    assert context["resource_economy_profiles"] == [{"id": "economy-input"}]
     for field in ("world_variables", "source_profile_id", "scale", "level", "scope_refs", "holder_refs", "drift_tendency"):
-        assert field in content
+        assert field in sections["输出要求"]

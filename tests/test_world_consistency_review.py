@@ -5,6 +5,8 @@ import importlib.util
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from forwin.protocol.review import RepairVerification, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review.decision.rules.final_residual import FinalResidualPolicy
@@ -417,18 +419,27 @@ def test_refs_before_trailing_punctuation_get_their_names() -> None:
     assert _named("unknown-1: kept", names) == ("unknown-1: kept", [])
 
 
-# Gate errors the writer cannot fix by rewriting prose keep the generic fix; the reader check
-# applies only to world tick deltas, which never reach the writer.
-_DEFAULT_FIX_GATE_CODES = {"delta_not_allowed_for_canon", "world_engine_reader_knowledge", "invalid_protection"}
+# Malformed patch structure, identity and references keep the generic fix. The reader check
+# applies only to world tick deltas, which never reach the writer; invalid variable values
+# can come from chapter extraction and need prose repairs.
+_DEFAULT_FIX_GATE_CODES = {
+    "delta_not_allowed_for_canon", "world_engine_reader_knowledge", "invalid_protection",
+    "invalid_node_create_patch", "invalid_edge_create_patch", "invalid_fact_create_patch",
+    "invalid_map_create_patch", "invalid_map_patch_target", "invalid_knowledge_patch",
+    "invalid_knowledge_ref", "invalid_knowledge_state", "missing_required_field",
+    "unknown_node_patch_type", "unknown_world_node_type", "unknown_world_edge_family",
+    "world_edge_family_mismatch", "world_edge_missing_endpoint",
+}
 # Broken protections and milestone refs take their fix from the violation's kind (PROTECTION_REPAIR_FIXES).
 _BOUNDARY_GATE_CODES = {"protection_violated", "milestone_ref_ended"}
 
 
 def _gate_error_codes() -> set[str]:
-    """Every error code forwin/book_state/reviewer.py can emit, read from its source."""
-    source = Path(__file__).resolve().parents[1] / "forwin" / "book_state" / "reviewer.py"
+    """Gate errors, including schema errors forwarded unchanged by the reviewer."""
+    root = Path(__file__).resolve().parents[1] / "forwin" / "book_state"
+    source = "\n".join((root / name).read_text(encoding="utf-8") for name in ("reviewer.py", "schema.py"))
     codes: set[str] = set()
-    for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+    for node in ast.walk(ast.parse(source)):
         if not isinstance(node, ast.Call):
             continue
         callee = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
@@ -458,6 +469,46 @@ def test_every_gate_error_code_has_a_repair_fix() -> None:
     assert codes - set(WORLD_REPAIR_FIXES) == _DEFAULT_FIX_GATE_CODES | _BOUNDARY_GATE_CODES
     # The table names no code the gate has stopped emitting.
     assert set(WORLD_REPAIR_FIXES) - codes == {"chapter_delta_missing", "chapter_delta_unverified"}
+
+
+@pytest.mark.parametrize("field,value,code", [
+    ("level", 2, "world_variable_level_out_of_range"),
+    ("level", -1, "invalid_field_value"),
+    ("scale", ["low"], "invalid_field_value"),
+    ("scale", ["low", "low"], "invalid_field_value"),
+])
+def test_world_variable_chapter_errors_receive_safe_repair_fixes(field, value, code) -> None:
+    from forwin.book_state.extraction.translator import _DeltaBuilder
+    from forwin.book_state.reviewer import BookStateReviewGate
+    from forwin.naming.types import EntityAdmissionPlan
+    from forwin.protocol.book_state import ApprovedGraphDeltaSet, WorldNode
+    from forwin.review.world_consistency import _Finding
+    from tests.test_world_constraints import CALENDAR, LEXICON, _runtime
+
+    runtime = _runtime(WorldNode(
+        id="variable", project_id="p", node_type="world_variable", name="Supply",
+        profile={"label": "Supply", "scale": ["low", "high"]}, state={"level": 0}))
+    translation = _DeltaBuilder(
+        project_id="p", chapter_number=4, runtime=runtime, calendar=CALENDAR, lexicon=LEXICON, start=0,
+        admission_plan=EntityAdmissionPlan(project_id="p", chapter_number=4, candidate_fingerprint="test"),
+    ).build(chapter_delta(BODY, entity_changes=[
+        {"ref": "variable", "field": field, "new_value": value, "evidence": "e"},
+    ]), chapter_summary="", review_verdict_id="test")
+    assert translation.delta is not None, translation.issues
+    assert translation.delta.source_type == "chapter_extraction"
+    verdict = BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[translation.delta]),
+        base_chapter=3, runtime=runtime)
+    errors = [issue for issue in verdict.issues if issue.severity == "error" and issue.code == code]
+    assert errors
+    assert code in WORLD_REPAIR_FIXES
+    for error in errors:
+        issue = WorldConsistencyReviewer()._issue(
+            _Finding(error.severity, error.code, error.message, error.target_ref, "BookStateReviewGate"),
+            translation.names, translation.fact_topics)
+        assert issue.suggested_fix == WORLD_REPAIR_FIXES[code] != DEFAULT_WORLD_REPAIR_FIX
+        for fact in runtime.world.facts_by_id.values():
+            assert fact.proposition not in issue.suggested_fix
 
 
 def test_world_issue_type_is_registered_for_routing() -> None:

@@ -4,7 +4,6 @@ from forwin.book_state.schema import (
     WORLD_VARIABLE_SOURCE_KINDS, WORLD_VARIABLE_TENDENCIES, WORLD_VARIABLE_VISIBILITY,
 )
 
-WORLD_PROFILE_SECTION_TITLE = "制度与资源经济"
 WORLD_VARIABLE_OUTPUT_REQUIREMENTS = (
     "world_variables 每项为 {id, label, source_kind, source_profile_id, scale, level, scope_refs, holder_refs, visibility, drift_tendency, summary}；",
     f"source_kind 取 {' / '.join(WORLD_VARIABLE_SOURCE_KINDS)}，source_profile_id 引用对应制度或资源经济 profile 的 id；",

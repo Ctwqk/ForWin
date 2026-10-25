@@ -133,6 +133,15 @@ class ObjectiveWorldGraph:
             self.nodes_by_id[patch.node_id] = node.model_copy(update={"is_active": False})
             return
 
+        if patch.field_path == "state":
+            payload = {"state": self.get_state(patch.node_id)}
+            apply_path_patch(payload, "state", patch.new_value, op=op)
+            state = payload.get("state", {})
+            if not isinstance(state, dict):
+                raise ValueError("world node state must be a mapping")
+            self.states_by_node_id[patch.node_id] = state
+            return
+
         if patch.field_path.startswith("state."):
             state = dict(self.states_by_node_id.get(patch.node_id, {}))
             apply_path_patch(

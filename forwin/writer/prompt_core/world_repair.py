@@ -10,6 +10,8 @@ DEFAULT_WORLD_REPAIR_FIX = "改写相关情节，使人物行动、移动与时�
 
 # World gate v6 error code -> what the writer changes in the prose.
 WORLD_REPAIR_FIXES: dict[str, str] = {
+    "world_variable_level_out_of_range": "将相关世界状况改写到既定档位范围内，不要写出超出范围的状态。",
+    "invalid_field_value": "改写相关状态，使其符合既定世界设定；涉及世界变量时沿用有效的档位与范围。",
     "rule_violated": "调整相关行动、关系或状态变化，使其符合既定规则；不要补写未获准揭示的规则内容或秘密真相。",
     "movement_rule_blocked": "改走规则允许的路线，或先取得所需出行方式，再安排移动。",
     "movement_too_fast": "让这段行程花更多时间（拉长本章时间推进或写出途中耗时），或改为更近的目的地、更快的已知路线。",

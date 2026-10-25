@@ -25,7 +25,7 @@ from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.protections import MILESTONE_KIND, DeltaBoundaryViolation, delta_boundary_violations
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
-from forwin.book_state.runtime import BookStateRuntime, require_runtime_as_of
+from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph, require_runtime_as_of
 from forwin.book_state.schema import validate_graph_delta, validate_world_node
 from forwin.models.project import ChapterPlan
 from forwin.protocol.book_state import (
@@ -182,41 +182,30 @@ def _world_variable_issues(
     runtime: BookStateRuntime, deltas: Iterable[GraphDelta],
 ) -> list[BookStateReviewIssue]:
     """Check the resulting variable state, including partial and combined patches."""
-    nodes: dict[str, dict[str, Any]] = {}
+    projected = ObjectiveWorldGraph()
+    issues: list[BookStateReviewIssue] = []
     for delta in deltas:
         for patch in delta.node_patches:
-            stored = runtime.world.nodes_by_id.get(patch.node_id)
-            if (patch.node_type != "world_variable" and patch.node_id not in nodes
+            stored = projected.get_node(patch.node_id) or runtime.world.get_node(patch.node_id)
+            payload = patch.new_value if str(patch.op) == "create" and isinstance(patch.new_value, dict) else {}
+            if (payload.get("node_type", patch.node_type) != "world_variable"
                     and (stored is None or stored.node_type != "world_variable")):
                 continue
-            if str(patch.op) == "create":
-                payload = patch.new_value if isinstance(patch.new_value, dict) else {}
-                nodes[patch.node_id] = {**deepcopy(payload), "id": patch.node_id, "node_type": "world_variable"}
-            else:
-                if patch.node_id not in nodes:
-                    nodes[patch.node_id] = stored.model_dump(mode="json") if stored is not None else {
-                        "id": patch.node_id, "node_type": "world_variable",
-                    }
-                    if stored is not None:
-                        nodes[patch.node_id]["state"] = deepcopy(
-                            runtime.world.states_by_node_id.get(stored.id, stored.state))
-                apply_path_patch(nodes[patch.node_id], patch.field_path, deepcopy(patch.new_value), op=str(patch.op))
-    issues: list[BookStateReviewIssue] = []
-    for ref, payload in nodes.items():
-        try:
-            node = WorldNode.model_validate(payload)
-        except ValueError as exc:
-            issues.append(BookStateReviewIssue(severity="error", code="invalid_field_value",
-                                               target_ref=f"node:{ref}", message=str(exc)))
+            if stored is not None and projected.get_node(stored.id) is None:
+                projected.add_node(stored.model_copy(deep=True))
+                projected.states_by_node_id[stored.id] = deepcopy(
+                    runtime.world.states_by_node_id.get(stored.id, stored.state))
+            try:
+                projected.apply_node_patch(patch.model_copy(deep=True))
+            except (KeyError, ValueError, TypeError) as exc:
+                issues.append(BookStateReviewIssue(severity="error", code="invalid_field_value",
+                                                   target_ref=f"node:{patch.node_id}", message=str(exc)))
+    for ref, node in projected.nodes_by_id.items():
+        if node.node_type != "world_variable":
             continue
+        node = node.model_copy(update={"state": projected.get_state(ref)})
         issues.extend(BookStateReviewIssue(severity=i.severity, code=i.code, target_ref=i.target, message=i.message)
                       for i in validate_world_node(node).issues)
-        scale, level = node.profile.get("scale"), node.state.get("level")
-        if isinstance(scale, list) and type(level) is int and not 0 <= level < len(scale):
-            issues.append(BookStateReviewIssue(
-                severity="error", code="world_variable_level_out_of_range", target_ref=f"node:{ref}:state.level",
-                message="state.level must index the resulting profile.scale",
-            ))
     return issues
 
 

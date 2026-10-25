@@ -19,7 +19,7 @@ from forwin.book_state.schema import (
     RULE_HARDNESS,
 )
 from forwin.models.project import Project
-from forwin.writer.prompt_core.world_seed import WORLD_VARIABLE_OUTPUT_REQUIREMENTS, WORLD_PROFILE_SECTION_TITLE
+from forwin.writer.prompt_core.world_seed import WORLD_VARIABLE_OUTPUT_REQUIREMENTS
 from forwin.protocol.book_state import MAP_SUBMAP_SCOPES, MapEdgeType, WORLD_EDGE_TYPES
 from forwin.genesis.helpers import (
     _book_arc_list,
@@ -178,14 +178,14 @@ def _build_stage_generation_messages(
             ("阶段", f"{label} ({stage_key})"),
             ("输出要求", _world_seed_output_requirement()),
             ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES[stage_key])),
-            ("已锁定阶段上下文（视为当前真值）", locked_context),
-            ("项目 genre", project.genre),
-            ("WorldBible", world_bible),
-            ("地图节点表", _map_node_table(map_atlas)),
-            (WORLD_PROFILE_SECTION_TITLE, {
+            ("已锁定阶段上下文（视为当前真值）", {
+                "locked_stages": locked_context,
                 "institution_profiles": world_root.get("institution_profiles", []),
                 "resource_economy_profiles": world_root.get("resource_economy_profiles", []),
             }),
+            ("项目 genre", project.genre),
+            ("WorldBible", world_bible),
+            ("地图节点表", _map_node_table(map_atlas)),
             ("StoryEngine", story_engine),
             ("卷列表", _book_arc_list(pack)),
             ("当前 WorldSeed", current_payload),

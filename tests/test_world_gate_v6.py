@@ -1326,3 +1326,77 @@ def test_world_variable_schema_rejects_invalid_fields(section, field, value):
     report = validate_world_node(WorldNode(id="v", project_id="p", node_type="world_variable", **payload))
     assert any(issue.code == "invalid_field_value" and issue.target.endswith(f":{section}.{field}")
                for issue in report.errors)
+
+
+@pytest.mark.parametrize("op", ["set", "merge"])
+@pytest.mark.parametrize("scale_first", [False, True])
+def test_world_variable_whole_state_projection_preserves_range(op, scale_first):
+    from copy import deepcopy
+    from forwin.book_state.compiler import _node_current
+    from forwin.book_state.projection import BookStateProjection
+    from forwin.protocol.book_state import WorldNode
+    from tests.test_world_constraints import _runtime
+
+    runtime = _runtime()
+    runtime.world.add_node(WorldNode(
+        id="variable", project_id="p", node_type="world_variable",
+        profile={"label": "Supply", "scale": ["low", "normal", "high"]}, state={"level": 0}))
+    runtime.world.states_by_node_id["variable"] = {"level": 2, "trend": "stable"}
+    before = deepcopy(runtime.world.snapshot())
+    patches = [
+        NodePatch(node_id="variable", node_type="world_variable", op=op, field_path="state",
+                  old_value={"level": 2, "trend": "stable"}, new_value={"level": 1}),
+        NodePatch(node_id="variable", node_type="world_variable", op="set", field_path="profile.scale",
+                  old_value=["low", "normal", "high"], new_value=["low", "high"]),
+    ]
+    if scale_first:
+        patches.reverse()
+    for patch in patches:
+        assert _node_current(runtime, patch) == patch.old_value
+    delta = GraphDelta(id="change", project_id="p", chapter_number=4, source_type="manual", node_patches=patches)
+    changes = ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta])
+    changes_before = changes.model_dump()
+    verdict = BookStateReviewGate(None).review(changes, base_chapter=3, runtime=runtime)
+    assert verdict.accepted, verdict.issues
+    assert runtime.world.snapshot() == before
+    assert changes.model_dump() == changes_before
+
+    projected = deepcopy(runtime)
+    BookStateProjection(None).apply_delta_to_runtime(projected, delta)
+    state = projected.world.get_state("variable")
+    scale = projected.world.get_node("variable").profile["scale"]
+    assert 0 <= state["level"] < len(scale)
+    assert state == ({"level": 1, "trend": "stable"} if op == "merge" else {"level": 1})
+    assert runtime.world.snapshot() == before
+
+
+@pytest.mark.parametrize("level", [2, 3])
+def test_world_variable_complete_node_rejects_out_of_range_level(level):
+    from forwin.book_state.schema import validate_world_node
+    from forwin.protocol.book_state import WorldNode
+
+    report = validate_world_node(WorldNode(
+        id="variable", project_id="p", node_type="world_variable",
+        profile={"label": "Supply", "scale": ["low", "high"]}, state={"level": level}))
+    assert any(issue.code == "world_variable_level_out_of_range" for issue in report.errors)
+
+
+@pytest.mark.parametrize("override,level", [({"node_type": "world_variable"}, 3),
+                                           ({"node_type": "world_variable"}, 1),
+                                           ({"id": "other-variable"}, 1)])
+def test_world_variable_create_rejects_conflicting_identity(override, level):
+    from forwin.book_state.schema import validate_graph_delta
+    from tests.test_world_constraints import _runtime
+
+    delta = GraphDelta(id="create", project_id="p", chapter_number=4, source_type="manual", node_patches=[
+        NodePatch(node_id="variable", node_type="item" if "node_type" in override else "world_variable", op="create",
+                  new_value={"project_id": "p", "profile": {"label": "Supply", "scale": ["low", "high"]},
+                             "state": {"level": level}, **override})])
+    runtime = _runtime()
+    before = runtime.world.snapshot()
+    verdict = BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta]), base_chapter=3, runtime=runtime)
+    assert not verdict.accepted
+    assert ("error", "invalid_node_create_patch") in _codes(verdict)
+    assert runtime.world.snapshot() == before
+    assert not validate_graph_delta(delta).ok

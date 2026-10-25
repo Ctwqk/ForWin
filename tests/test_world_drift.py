@@ -161,6 +161,9 @@ def test_no_model_leaves_drift_due_next_tick():
 @pytest.mark.parametrize("genre", ["xianxia", "interstellar", "urban_mystery"])
 def test_genre_variable_drifts_through_shared_builder(genre):
     from pathlib import Path
+    from forwin.book_state.projection import BookStateProjection
+    from forwin.book_state.reviewer import BookStateReviewGate
+    from forwin.protocol.book_state import ApprovedGraphDeltaSet
     from forwin.world_engine.delta_builder import _TickBuilder
     from forwin.world_engine.drift import WorldDriftRunner, drift_candidate
 
@@ -182,5 +185,14 @@ def test_genre_variable_drifts_through_shared_builder(genre):
         "state.level": (seed["level"], new_level), "state.trend": ("stable", "stable"),
         "state.last_drift_at": (0, 120),
     }
+    before = world.world.snapshot()
+    verdict = BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=1, graph_deltas=[built.delta]),
+        base_chapter=1, runtime=world)
+    assert verdict.accepted, verdict.issues
+    assert world.world.snapshot() == before
+    BookStateProjection(None).apply_delta_to_runtime(world, built.delta)
+    assert world.world.get_state("condition")["level"] == new_level
+    assert world.world.get_state("condition")["last_drift_at"] == 120
     assert client.calls[0][1]["max_tokens"] == 4000
     assert seed["label"] in client.calls[0][0][-1]["content"]

@@ -601,6 +601,12 @@ def _v6_value_issues(
                 or any(not isinstance(label, str) or not label.strip() for label in scale)
                 or len(set(scale)) != len(scale)):
             invalid("profile.scale", "profile.scale must contain 2–7 distinct nonempty labels")
+        level = state.get("level")
+        if isinstance(scale, list) and type(level) is int and not 0 <= level < len(scale):
+            issues.append(_issue(
+                "error", "world_variable_level_out_of_range", f"{target}:state.level",
+                "state.level must index the resulting profile.scale",
+            ))
 
     if node_type == "character" and "restraint" in state:
         restraint = state["restraint"]
@@ -687,6 +693,12 @@ def validate_graph_delta(delta: GraphDelta, *, strict: bool = False) -> BookStat
             continue
         if str(patch.op) == "create":
             payload = patch.new_value if isinstance(patch.new_value, dict) else {}
+            for field, expected in (("id", patch.node_id), ("node_type", node_type)):
+                if field in payload and payload[field] != expected:
+                    issues.append(_issue(
+                        "error", "invalid_node_create_patch", f"node:{patch.node_id}",
+                        f"create payload {field} must match the patch",
+                    ))
             try:
                 node = WorldNode.model_validate(
                     {"id": patch.node_id, "node_type": node_type, **payload}

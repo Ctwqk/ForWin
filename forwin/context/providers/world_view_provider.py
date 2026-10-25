@@ -19,12 +19,20 @@ class WorldViewContextProvider:
         if session is None:
             return
         chapter_plan = request.chapter_plan
+        as_of_chapter = max(int(chapter_plan.chapter_number) - 1, 0)
+
+        def get_runtime():
+            runtime = draft.data.get("book_state_runtime")
+            if request.share_runtime and runtime is not None and runtime.as_of_chapter == as_of_chapter:
+                return runtime
+            return request.runtime_as_of(as_of_chapter)
+
         draft.data["world_view"] = build_chapter_world_view(
             session,
             project_id=request.project_id,
             chapter_plan=chapter_plan,
             budget_chars=_budget_chars(session, request.project_id),
-            runtime=request.runtime_as_of(max(int(chapter_plan.chapter_number) - 1, 0)),
+            runtime=get_runtime,
         )
         draft.data["arc_phase_purpose"] = _phase_purpose(session, chapter_plan)
 

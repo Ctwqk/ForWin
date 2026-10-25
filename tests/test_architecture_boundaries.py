@@ -23,13 +23,37 @@ from forwin.http.routes import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _python_sources(relative_path: str) -> list[Path]:
+    path = ROOT / relative_path
+    if path.suffix == ".py":
+        return [path] if path.is_file() else []
+    return list(path.rglob("*.py"))
+
+
 @pytest.mark.parametrize("path", [
     "forwin/planning/band_plan",
     "forwin/planning/service.py",
     "forwin/book_state/query_interface.py",
 ])
 def test_unused_planning_and_query_modules_are_removed(path: str) -> None:
-    assert not (ROOT / path).exists()
+    assert _python_sources(path) == []
+
+
+@pytest.mark.parametrize("source_file", [None, "__init__.py", "nested/module.py"])
+def test_removed_module_check_ignores_only_non_python_files(tmp_path, monkeypatch, source_file):
+    monkeypatch.setitem(globals(), "ROOT", tmp_path)
+    module = tmp_path / "forwin/planning/band_plan"
+    cache = module / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "__init__.cpython-313.pyc").write_bytes(b"stale")
+    if source_file is None:
+        test_unused_planning_and_query_modules_are_removed("forwin/planning/band_plan")
+    else:
+        source = module / source_file
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("", encoding="utf-8")
+        with pytest.raises(AssertionError):
+            test_unused_planning_and_query_modules_are_removed("forwin/planning/band_plan")
 
 
 @pytest.mark.parametrize("module_name,symbol", [
@@ -245,7 +269,7 @@ def test_design_status_contains_deprecation_matrix() -> None:
 
 
 def test_v5_legacy_alias_modules_stay_removed() -> None:
-    assert not (ROOT / "forwin/reviewer_v4").exists()
+    assert _python_sources("forwin/reviewer_v4") == []
     assert not (ROOT / "forwin/planning/scenario_rehearsal.py").exists()
 
 
@@ -310,10 +334,10 @@ def test_planning_runtime_has_one_explicit_composition_service() -> None:
 
 
 def test_removed_world_v4_projection_modules_stay_removed() -> None:
-    assert not (ROOT / "forwin/world_model").exists()
+    assert _python_sources("forwin/world_model") == []
     assert not (ROOT / "forwin/api_world_model_v4_routes.py").exists()
-    assert not (ROOT / "forwin/world_model_v4").exists()
-    assert not (ROOT / "forwin/world_v4_compat").exists()
+    assert _python_sources("forwin/world_model_v4") == []
+    assert _python_sources("forwin/world_v4_compat") == []
 
 
 def test_v5_schema_has_no_dead_world_v4_model_or_tables() -> None:
@@ -560,7 +584,7 @@ def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
         "forwin/review/repair_handlers/active_rules.py",
         "forwin/runtime/ports.py",
     ):
-        assert not (ROOT / removed_path).exists()
+        assert _python_sources(removed_path) == []
 
     production_files = sorted((ROOT / "forwin").rglob("*.py"))
     production_source = "\n".join(
@@ -917,7 +941,7 @@ def test_genesis_workflow_contains_delegation_only() -> None:
         "forwin/genesis_workspace",
         "forwin/genesis_handoff",
     ):
-        assert not (ROOT / removed_path).exists()
+        assert _python_sources(removed_path) == []
     service = _read("forwin/genesis/service.py")
     assert "from forwin.genesis.workflow" not in service
     assert "def patch_pack(" in service
@@ -1024,7 +1048,7 @@ def test_entry_adapters_use_explicit_application_services() -> None:
         "forwin/api_task_center_service.py",
         "forwin/project_ops",
     ):
-        assert not (ROOT / removed_path).exists()
+        assert _python_sources(removed_path) == []
 
     api_entry = _read("forwin/api.py")
     assert '__all__ = ["app", "create_app", "lifespan"]' in api_entry
@@ -1036,7 +1060,7 @@ def test_entry_adapters_use_explicit_application_services() -> None:
     assert '__all__ = ["create_app", "lifespan"]' in api_app
     assert "def create_app(" in api_app
     assert "app = FastAPI" in api_app
-    assert not (ROOT / "forwin/api_core").exists()
+    assert _python_sources("forwin/api_core") == []
     assert not (ROOT / "forwin/api_route_registry.py").exists()
 
     project_routes = _read("forwin/http/adapters/api_project_routes.py")
@@ -1326,7 +1350,7 @@ def test_p4a_deleted_modules_and_tables_stay_gone() -> None:
     from forwin.models import Base
     from forwin.runtime.policy import PlanningPolicy
 
-    assert [path for path in P4A_REMOVED_PATHS if (ROOT / path).exists()] == []
+    assert [path for path in P4A_REMOVED_PATHS if _python_sources(path)] == []
     assert set(P4A_REMOVED_TABLES).isdisjoint(Base.metadata.tables)
     assert "context_recency_" + "window" not in PlanningPolicy.model_fields
     _assert_no_p4a_removed_imports()

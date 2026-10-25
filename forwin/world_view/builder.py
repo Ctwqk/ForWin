@@ -71,7 +71,7 @@ def build_chapter_world_view(
     project_id: str,
     chapter_plan: ChapterPlan,
     budget_chars: int,
-    runtime: BookStateRuntime | None = None,
+    runtime: BookStateRuntime | Callable[[], BookStateRuntime | None] | None = None,
 ) -> ChapterWorldView:
     """The POV's view of canon as it stands before the planned chapter.
 
@@ -79,13 +79,16 @@ def build_chapter_world_view(
     trimmed in the order reader_known, locations (down to the chapter's), pov_knowledge (down
     to secrets and false beliefs), onstage held_items, until ``render_world_view``, the text the
     writer reads, fits ``budget_chars``; known_entities is rendered outside that text. Without
-    ``runtime`` only the POV's and the reader's cognition overlays load.
+    ``runtime`` only the POV's and the reader's cognition overlays load. A runtime accessor
+    is resolved here, so callers need not load state before the builder uses it.
     """
     if budget_chars < 0:
         raise ValueError("budget_chars must be nonnegative")
     chapter_number = int(chapter_plan.chapter_number)
     as_of_chapter = max(chapter_number - 1, 0)
     pov_ref = str(chapter_plan.pov_ref or "")
+    if callable(runtime):
+        runtime = runtime()
     if runtime is None:
         runtime = BookStateProjection(session).load_runtime_as_of(
             project_id, as_of_chapter=as_of_chapter,

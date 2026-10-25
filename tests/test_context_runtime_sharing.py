@@ -67,6 +67,44 @@ def test_shared_context_prompt_and_hash_are_identical(chapter_source, chapter_nu
     assert hashlib.sha256(shared.model_dump_json().encode()).digest() == hashlib.sha256(independent.model_dump_json().encode()).digest()
 
 
+def test_world_view_reuses_matching_draft_runtime(chapter_source, monkeypatch):
+    from forwin.context.providers.world_view_provider import WorldViewContextProvider
+    from forwin.context.request import ContextDraft, ContextRequest
+
+    session, repo, plan = chapter_source
+    runtime = BookStateProjection(session).load_runtime_as_of("p", as_of_chapter=0)
+    loads = []
+    real_load = BookStateProjection.load_runtime_as_of
+
+    def counted(self, project_id, **kwargs):
+        loads.append((project_id, kwargs["as_of_chapter"]))
+        return real_load(self, project_id, **kwargs)
+
+    monkeypatch.setattr(BookStateProjection, "load_runtime_as_of", counted)
+    request = ContextRequest(project_id="p", chapter_plan=plan, repo=repo, session=session)
+    draft = ContextDraft(data={"book_state_runtime": runtime})
+    WorldViewContextProvider().contribute(request, draft)
+    assert draft.data["world_view"].pov_name == "Visitor"
+    assert loads == []
+
+
+def test_world_view_does_not_load_runtime_when_builder_does_not_use_it(monkeypatch):
+    from types import SimpleNamespace
+    from forwin.context.providers import world_view_provider
+    from forwin.context.request import ContextDraft, ContextRequest
+    from forwin.world_view import builder
+    from forwin.world_view.types import ChapterWorldView
+
+    monkeypatch.setattr(world_view_provider, "_budget_chars", lambda *_: 6000)
+    monkeypatch.setattr(world_view_provider, "_phase_purpose", lambda *_: "")
+    monkeypatch.setattr(builder, "build_chapter_world_view", lambda *_, **__: ChapterWorldView())
+    request = ContextRequest(project_id="p", chapter_plan=SimpleNamespace(chapter_number=1),
+                             repo=object(), session=object())
+    draft = ContextDraft()
+    world_view_provider.WorldViewContextProvider().contribute(request, draft)
+    assert draft.data["world_view"] == ChapterWorldView()
+
+
 @pytest.mark.parametrize("project_id,chapter", [("other", 0), ("p", 1)])
 def test_assembly_rejects_mismatched_runtime(chapter_source, project_id, chapter):
     session, repo, plan = chapter_source
@@ -75,7 +113,7 @@ def test_assembly_rejects_mismatched_runtime(chapter_source, project_id, chapter
         ChapterContextAssembler().assemble(repo, "p", plan, runtime=runtime)
 
 
-@pytest.mark.parametrize("consumer", ["query", "knowledge", "view", "constraints"])
+@pytest.mark.parametrize("consumer", ["query", "knowledge", "view", "lazy_view", "constraints"])
 @pytest.mark.parametrize("project_id,chapter", [("other", 0), ("p", 1)])
 def test_consumers_reject_mismatched_runtime(chapter_source, consumer, project_id, chapter):
     from forwin.book_state.query import BookStateQuery
@@ -92,6 +130,8 @@ def test_consumers_reject_mismatched_runtime(chapter_source, consumer, project_i
             KnowledgeContextQuery(session).build(project_id="p", chapter_number=1, runtime=runtime)
         elif consumer == "view":
             build_chapter_world_view(session, project_id="p", chapter_plan=plan, budget_chars=6000, runtime=runtime)
+        elif consumer == "lazy_view":
+            build_chapter_world_view(session, project_id="p", chapter_plan=plan, budget_chars=6000, runtime=lambda: runtime)
         else:
             _build_canon_quality_context(session=session, project_id="p", chapter_number=1,
                                          target_total_chapters=10, runtime=runtime)

@@ -56,4 +56,4 @@ def test_cli_does_not_construct_or_run_chapter_pipeline() -> None:
 
 
 def test_legacy_api_core_namespace_is_deleted() -> None:
-    assert not (ROOT / "forwin/api_core").exists()
+    assert list((ROOT / "forwin/api_core").rglob("*.py")) == []

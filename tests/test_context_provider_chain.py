@@ -209,6 +209,7 @@ def test_world_view_provider_builds_once_with_policy_budget_and_shared_runtime(m
     calls = []
 
     def build(session, *, project_id, chapter_plan, budget_chars, runtime=None):
+        runtime = runtime() if callable(runtime) else runtime
         calls.append((project_id, chapter_plan.chapter_number, budget_chars, runtime))
         return ChapterWorldView(pov_ref="char-1", pov_name="陆沉")
 

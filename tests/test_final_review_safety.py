@@ -173,7 +173,8 @@ def test_exhausted_plot_response_names_remaining_options(pending_side_effect_ses
 
 def test_cancelled_onstage_resolution_does_not_stage_its_intent():
     tick = object.__new__(_Tick)
-    candidate = SimpleNamespace(candidate_id="candidate", origin="conflict_resolution", actor_id="actor", intent_id="intent")
+    candidate = SimpleNamespace(candidate_id="candidate", origin="conflict_resolution", actor_id="actor", intent_id="intent",
+                                effects=SimpleNamespace(new_actors=[]))
     issue = SimpleNamespace(code="touches_onstage_entity", message="onstage change")
     check = SimpleNamespace(admit=lambda _: [issue], mark=lambda: "mark", reset=lambda _: None)
     tick._running_check = lambda: check

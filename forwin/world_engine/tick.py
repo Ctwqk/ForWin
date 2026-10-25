@@ -225,6 +225,9 @@ def _actor_name_issues(candidate: TickCandidate, names: set[str]) -> list[Constr
 class _Tick:
     """One run of the tick: its context, its candidates as they pass each phase, and what it dropped."""
 
+    # The ticks a rewrite of this chapter retired; __init__ sets them, none by default.
+    retired_tick_ids: tuple[str, ...] = ()
+
     def __init__(
         self, service: WorldTickService, session: Session, commit: CanonCommitRecord, *, policy: RuntimePolicy,
         tick_id: str, retired_tick_ids: Sequence[str] = (), rewritten: bool = False, committed_units: bool = False,

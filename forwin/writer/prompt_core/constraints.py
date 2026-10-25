@@ -156,6 +156,7 @@ def _operator_retry_constraint_sections(items: list[dict]) -> list[ConstraintSec
 
 
 def _invariant_constraint_sections(items: list[dict]) -> list[ConstraintSection]:
+    items = [item for item in items if str(item.get("kind") or "").strip() in {"active_rule", "accepted_future_anchor"}]
     if not items:
         return []
     lines = [
@@ -206,7 +207,6 @@ def _invariant_constraint_sections(items: list[dict]) -> list[ConstraintSection]
                 "这是历史章节重写：本章必须作为该结果的前置事件保持兼容，"
                 "不得提前完成、重排、否定或改写锚点结果。"
             )
-            continue
     return [ConstraintSection(key="invariants", priority=18, must_inject=True, text="\n".join(lines))]
 
 

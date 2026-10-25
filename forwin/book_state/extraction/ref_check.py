@@ -1,7 +1,7 @@
-"""Refs in an extraction that its own input tables cannot resolve.
+"""Refs in an extraction that its input tables and runtime facts cannot resolve.
 
 The translator resolves every ref against BookState and fails translation on one it cannot
-resolve. The extractor runs this check first, against the tables the model was given, so the
+resolve. The extractor runs this check first, against the offered tables and runtime facts, so the
 model corrects its own ref instead of the writer rewriting a sound chapter. The checks follow
 the translator's rules; the translator stays the backstop.
 """
@@ -49,7 +49,7 @@ class _RefCheck:
         self.locations = {row.id for row in extraction_input.locations}
         self.location_labels = _labels((row.id, (row.name,)) for row in extraction_input.locations)
         self.regions = {row.region_id for row in extraction_input.locations if row.region_id}
-        self.facts = {row.fact_ref for row in extraction_input.secrets}
+        self.facts = {row.fact_ref for row in extraction_input.secrets} | set(extraction_input.runtime_fact_refs)
         self.intents = {row.id for row in extraction_input.intents}
         # Like the translator, a new site exists once its own entry resolved.
         self.new_sites: set[str] = set()
@@ -183,7 +183,7 @@ class _RefCheck:
 
     def fact(self, ref: str, path: str) -> None:
         if ref.strip() not in self.facts:
-            self.report(path, ref, "is not a fact_ref in the secret list")
+            self.report(path, ref, "is not a fact_ref in the secret list or runtime facts")
 
     def _is_location(self, ref: str) -> bool:
         text = ref.strip()

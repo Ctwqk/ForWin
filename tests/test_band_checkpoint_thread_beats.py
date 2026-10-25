@@ -33,6 +33,21 @@ def test_setup_beats_without_delivery_flag_band() -> None:
     ]
 
 
+@pytest.mark.parametrize("with_beats", [False, True])
+def test_thread_beats_count_as_director_evidence(with_beats):
+    issues = evaluate_director_imbalance(
+        review_metas=[{
+            "chapter_number": number, "planned_reward_tags": ["power"],
+            "thread_beat_types": ["advance"] if with_beats else [],
+        } for number in (1, 2, 3)],
+        band_stall_guard=2, reviewer="test", target_scope="band",
+    )
+    assert [issue.rule_name for issue in issues] == ([
+        "director_payoff_consecutive_missing", "director_payoff_consecutive_missing",
+        "director_reward_gap_exceeded",
+    ] if with_beats else [])
+
+
 @pytest.mark.parametrize("metas", [
     [{"thread_beat_types": ["setup"]}],
     [{"issue_types": ["setup", "experience"]}] * 2,

@@ -293,6 +293,15 @@ def test_writer_prompt_suppresses_constraints_already_promoted_to_plan_patches()
     assert "第14章必须给出门禁来源证据" not in content
 
 
+def test_unknown_invariant_kind_renders_no_constraint_section():
+    from forwin.writer.prompt_core.constraints import _invariant_constraint_sections
+
+    assert _invariant_constraint_sections([{
+        "invariant_key": "unknown", "kind": "unrecognized", "label": "Do not render",
+        "current_value": "Hidden content",
+    }]) == []
+
+
 def test_writer_prompt_includes_generic_invariant_constraints() -> None:
     context = ChapterContextPack(
         project_id="p1",

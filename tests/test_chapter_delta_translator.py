@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
+
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
 from forwin.book_state.book_frame_repository import StoryCalendarRepository
 from forwin.book_state.extraction.chapter_delta_schema import ChapterDeltaExtraction, RelationChange
@@ -997,7 +999,8 @@ def test_location_entity_change_is_skipped_when_the_entity_has_a_movement() -> N
     engine.dispose()
 
 
-def test_thread_beats_metadata_records_resolved_ids_without_database():
+@pytest.mark.parametrize("invalid_ref", [None, "", "plot_thread:missing"])
+def test_thread_beats_metadata_records_resolved_ids_without_database(invalid_ref):
     from forwin.book_state.extraction.translator import _DeltaBuilder
     from forwin.book_state.lexicon import BookLexicon
     from forwin.book_state.map_graph import MapGraph
@@ -1011,16 +1014,26 @@ def test_thread_beats_metadata_records_resolved_ids_without_database():
         lexicon=BookLexicon(), start=0,
         admission_plan=EntityAdmissionPlan(project_id="p", chapter_number=1, candidate_fingerprint="f"),
     )
-    result = builder.build(_extraction(1, {"thread_beats": [
+    beats = [
         {"new_thread_title": "missing parcel", "beat_type": beat_type, "evidence": "evidence"}
         for beat_type in ("setup", "advance", "resolution")
-    ]}), chapter_summary="", review_verdict_id="")
-    assert result.delta is not None
-    thread_id = result.delta.narrative_patches[0].target_ref.removeprefix("plot_thread:")
-    assert result.delta.metadata["thread_beats"] == [
+    ]
+    if invalid_ref is not None:
+        beats.append({"thread_ref": invalid_ref, "beat_type": "setup", "evidence": "evidence"})
+    result = builder.build(_extraction(1, {"thread_beats": beats}), chapter_summary="", review_verdict_id="")
+    thread_id = builder.narrative_patches[0].target_ref.removeprefix("plot_thread:")
+    assert builder.thread_beats == [
         {"thread_id": thread_id, "beat_type": beat_type}
         for beat_type in ("setup", "advance", "resolution")
     ]
+    if invalid_ref:
+        assert result.delta is None
+        assert any(issue.code == "unresolved_ref" for issue in result.issues)
+    else:
+        assert result.delta is not None
+        assert result.delta.metadata["thread_beats"] == builder.thread_beats
+        if invalid_ref == "":
+            assert [issue.code for issue in result.issues] == ["untargeted_thread_beat"]
 
 
 def test_reused_runtime_must_match_project_and_as_of_chapter():

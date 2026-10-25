@@ -1519,8 +1519,8 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     issues=[
                         BandCheckpointIssueInfo(
                             code="band_not_fully_accepted",
-                            severity="warning",
-                            description="下一 band 前提存在风险。",
+                            severity="error",
+                            description="band 内仍有章节未被接受。",
                         )
                     ],
                 )

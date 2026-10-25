@@ -241,6 +241,11 @@ def test_build_input_collects_entities_locations_targets_secrets() -> None:
                 NarrativeObligationRow(id="owed", project_id=project.id, summary="Resolve debt", payoff_test="Debt is paid"),
                 NarrativeObligationRow(id="legacy", project_id=project.id, summary="Legacy obligation"),
                 ChapterPlan(project_id=project.id, arc_plan_id=arc.id, chapter_number=1,
+                            pov_ref=seed_ref_id(project.id, "character", "cast-hero"),
+                            location_refs_json='["node-old-city", "node-ruins"]',
+                            world_bindings_json=json.dumps([{
+                                "kind": "secret", "ref": f"fact:{seed_ref_id(project.id, 'fact', 'fact-seal')}",
+                            }]),
                             goals_json=json.dumps(["Reach the site"]),
                             experience_plan_json=json.dumps({"planned_reward_tags": ["mystery"], "obligations_to_resolve": ["legacy", "owed"]})),
             ])
@@ -254,6 +259,8 @@ def test_build_input_collects_entities_locations_targets_secrets() -> None:
                 "obligation:legacy": "Legacy obligation", "reward:mystery": "mystery (planned)",
                 "reward:power": "power (optional)", "reward:social": "social (optional)",
                 "reward:justice": "justice (optional)", "reward:emotion": "emotion (optional)",
+                # The plan's secret binding is a fulfillment target too.
+                "bind:0": json.dumps({"kind": "secret", "ref": f"fact:{seed_ref_id(project.id, 'fact', 'fact-seal')}"}),
             }
             # Planned rewards come first, then every other reward tag.
             assert [row.target_id for row in result.fulfillment_targets if row.target_id.startswith("reward:")] == [
@@ -353,12 +360,9 @@ def test_input_builder_filters_prior_runtime_without_database(monkeypatch, caplo
     assert result.scene_location_hints == ("map", "new:Harbor")
     assert "unknown" in caplog.text and "other-project-map" in caplog.text
     assert seen == [("p", 2)]
-    assert {row.kind for row in result.entities} == {"character", "faction", "organization", "group", "item", "location"}
-    assert all(row.aliases == ("alias",) for row in result.entities)
-    assert "inactive" not in {row.id for row in result.entities}
+    assert result.entities == result.locations == result.secrets == ()
     assert [(row.id, row.owner_id, row.summary, row.status) for row in result.intents] == [("intent-due", "character", "Act now", "due")]
-    assert [(row.id, row.region_id, row.subworld_id) for row in result.locations] == [("map", "region", "subworld")]
-    assert {row.fact_ref for row in result.secrets} == {"fact:hidden", "fact:secret"}
+    assert set(result.runtime_fact_refs) == {"fact:hidden", "fact:secret", "fact:public"}
     assert result.fulfillment_targets == result.calendar_units == result.time_aliases == result.travel_modes == ()
 
 
@@ -437,3 +441,138 @@ def test_extraction_targets_include_bindings_and_directives():
 
 def test_extraction_legacy_payload_defaults_plan_fingerprint():
     assert _extraction().plan_fingerprint == ""
+
+
+@pytest.fixture
+def pov_extraction_context(monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from forwin.book_state.cognition import CognitionView
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+    from forwin.models.base import Base
+    from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+    from forwin.protocol.book_state import CognitionOverlay, FactNode, MapNode, WorldNode
+    from forwin.world_view import builder
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(Project(id="p", title="POV", premise="test", genre="test"))
+        session.add(ArcPlanVersion(id="arc", project_id="p", arc_synopsis="arc"))
+        plan = ChapterPlan(
+            project_id="p", arc_plan_id="arc", chapter_number=3, pov_ref="pov",
+            onstage_refs_json='["pov", "guest"]', location_refs_json='["site"]',
+            reveal_directives_json=json.dumps([{
+                "id": "reveal", "fact_ref": "fact:revealed", "observer": "reader", "target_state": "knows",
+            }]),
+            hint_directives_json=json.dumps([{"id": "hint", "fact_ref": "fact:hinted", "hint_text": "A clue"}]),
+            world_bindings_json=json.dumps([
+                {"kind": "secret", "ref": "fact:bound"},
+                {"kind": "secret", "ref": "fact:forbidden"},
+                {"kind": "secret", "ref": "fact:absent"},
+            ]),
+        )
+        session.add(plan)
+        session.flush()
+        world = ObjectiveWorldGraph(
+            nodes=[WorldNode(
+                id=ref, project_id="p", node_type="character", name=ref, aliases=[f"alias-{ref}"],
+                state={"location_id": "site"} if ref == "pov" else {},
+            ) for ref in ("pov", "guest", "known", "unrelated")],
+            facts=[FactNode(
+                id=ref, project_id="p", proposition=f"Truth of {ref}",
+                sensitivity_level="public" if ref == "bound" else "secret",
+                related_node_refs=["guest"] if ref == "forbidden" else ["known"] if ref == "held" else [],
+            ) for ref in ("forbidden", "held", "reader-known", "revealed", "hinted", "bound", "unrelated")],
+        )
+        runtime = BookStateRuntime(
+            project_id="p", as_of_chapter=2, world=world,
+            map_graph=MapGraph(nodes=[MapNode(
+                id=ref, project_id="p", node_type="site", name=ref, region_id="region", subworld_id="subworld",
+            ) for ref in ("site", "distant")]),
+            cognition_by_observer={
+                ("character", "pov"): CognitionView(CognitionOverlay(
+                    id="pov-overlay", observer_type="character", observer_id="pov", project_id="p",
+                    knowledge_by_ref={"fact:held": "knows", "fact:reader-known": "knows"},
+                )),
+                ("reader", "reader"): CognitionView(CognitionOverlay(
+                    id="reader-overlay", observer_type="reader", observer_id="reader", project_id="p",
+                    knowledge_by_ref={"fact:reader-known": "knows"},
+                )),
+            },
+        )
+        monkeypatch.setattr(builder, "earliest_reveal_chapters", lambda *_args: {})
+        yield session, plan, runtime
+    engine.dispose()
+
+
+def test_extraction_input_uses_world_view_tables(pov_extraction_context):
+    session, plan, runtime = pov_extraction_context
+    result = build_chapter_extraction_input(session, project_id="p", chapter_number=3, runtime=runtime)
+    assert {row.id for row in result.entities} == {"pov", "guest", "known"}
+    assert all(row.aliases == (f"alias-{row.id}",) for row in result.entities)
+    assert [(row.id, row.region_id, row.subworld_id) for row in result.locations] == [
+        ("site", "region", "subworld"),
+    ]
+
+
+def test_extraction_secrets_are_the_three_relevant_sets(pov_extraction_context):
+    session, plan, runtime = pov_extraction_context
+    result = build_chapter_extraction_input(session, project_id="p", chapter_number=3, runtime=runtime)
+    assert {row.fact_ref for row in result.secrets} == {
+        "fact:forbidden", "fact:held", "fact:revealed", "fact:hinted", "fact:bound",
+    }
+    assert len(result.secrets) == 5
+    assert all(row.proposition == f"Truth of {row.fact_ref.removeprefix('fact:')}" for row in result.secrets)
+    assert set(result.runtime_fact_refs) == {f"fact:{ref}" for ref in runtime.world.facts_by_id}
+
+
+def test_extraction_world_view_reuses_runtime_and_project_budget(pov_extraction_context, monkeypatch):
+    from forwin.book_state.extraction import chapter_input
+    from forwin.models.project import Project
+    from forwin.runtime.policy import RuntimePolicy
+
+    session, plan, runtime = pov_extraction_context
+    policy = RuntimePolicy.for_profile("pulp")
+    project = session.get(Project, "p")
+    project.runtime_policy_json = policy.model_dump_json()
+    project.runtime_policy_version = 1
+    seen = []
+    build_view = chapter_input.build_chapter_world_view
+
+    def capture_view(session, **kwargs):
+        seen.append(kwargs)
+        return build_view(session, **kwargs)
+
+    def unexpected_reload(*args, **kwargs):
+        pytest.fail("Supplied runtime must not be reloaded")
+
+    monkeypatch.setattr(chapter_input, "build_chapter_world_view", capture_view)
+    monkeypatch.setattr(chapter_input.BookStateProjection, "load_runtime_as_of", unexpected_reload)
+    build_chapter_extraction_input(session, project_id="p", chapter_number=3, runtime=runtime)
+    assert len(seen) == 1
+    assert seen[0]["runtime"] is runtime
+    assert seen[0]["chapter_plan"] is plan
+    assert seen[0]["budget_chars"] == policy.writer.world_view_budget_chars
+
+
+def test_extraction_does_not_add_writer_hidden_truth_to_world_view(pov_extraction_context):
+    from forwin.world_view.builder import build_chapter_world_view
+    from forwin.writer.prompt_core.chapter_delta import build_chapter_delta_messages
+    from forwin.writer.prompt_core.world_view import render_world_view
+
+    session, plan, runtime = pov_extraction_context
+    result = build_chapter_extraction_input(session, project_id="p", chapter_number=3, runtime=runtime)
+    extraction_prompt = str(build_chapter_delta_messages(
+        extraction_input=result, chapter_title="Title", chapter_body="Body", chapter_summary="Summary",
+    ))
+    writer_view = render_world_view(build_chapter_world_view(
+        session, project_id="p", chapter_plan=plan, budget_chars=6000, runtime=runtime,
+    ))
+    for ref in ("forbidden", "hinted", "bound"):
+        assert f"Truth of {ref}" in extraction_prompt
+        assert f"Truth of {ref}" not in writer_view
+    assert "Truth of held" in extraction_prompt
+    assert "Truth of unrelated" not in extraction_prompt

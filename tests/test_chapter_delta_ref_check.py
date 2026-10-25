@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -44,6 +45,22 @@ def _extraction(**fields: Any) -> ChapterDeltaExtraction:
 
 def _paths(**fields: Any) -> list[tuple[str, str]]:
     return [(item.path, item.ref) for item in unknown_refs(_extraction(**fields), INPUT)]
+
+
+@pytest.mark.parametrize("field", ["fact_ref", "touches_secret_ref", "contradicts_ref"])
+def test_ref_check_accepts_runtime_fact_outside_offered_list(field):
+    extraction_input = replace(INPUT, runtime_fact_refs=("fact:outside",))
+    event = {"observer_ref": "reader", "fact_ref": "fact:secret-1", "state": "knows", "channel": "told", "evidence": "e"}
+    event[field] = "fact:outside"
+    assert unknown_refs(_extraction(knowledge_events=[event]), extraction_input) == []
+
+
+def test_ref_check_still_rejects_unknown_fact():
+    extraction_input = replace(INPUT, runtime_fact_refs=("fact:outside",))
+    unknown = unknown_refs(_extraction(knowledge_events=[{
+        "observer_ref": "reader", "fact_ref": "fact:missing", "state": "knows", "channel": "told", "evidence": "e",
+    }]), extraction_input)
+    assert [(item.path, item.ref) for item in unknown] == [("knowledge_events[0].fact_ref", "fact:missing")]
 
 
 def test_refs_from_the_input_tables_resolve() -> None:
@@ -175,6 +192,17 @@ def test_extractor_corrects_an_unknown_location_before_translation() -> None:
     client = _Replies(moving_to("site-2"), moving_to(world.loc(2)))
     try:
         with Session() as session:
+            from forwin.models.project import ArcPlanVersion, ChapterPlan
+
+            arc = ArcPlanVersion(project_id=world.project_id, arc_synopsis="arc")
+            session.add(arc)
+            session.flush()
+            session.add(ChapterPlan(
+                project_id=world.project_id, arc_plan_id=arc.id, chapter_number=1,
+                pov_ref=world.hero, onstage_refs_json=json.dumps([world.hero]),
+                location_refs_json=json.dumps([world.loc(1), world.loc(2)]),
+            ))
+            session.flush()
             result = ChapterDeltaExtractor(client).extract(
                 extraction_input=build_chapter_extraction_input(session, project_id=world.project_id, chapter_number=1),
                 chapter_title="一", chapter_body=body, chapter_summary="甲到了。",

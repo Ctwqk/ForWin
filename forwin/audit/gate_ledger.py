@@ -621,7 +621,6 @@ class GateLedgerService:
 
         recommendations = self._recommendations(
             override_counter=override_counter,
-            warn_allowed_counter=warn_allowed_counter,
             constraint_counter=constraint_counter,
             issue_group_counter=issue_group_counter,
             forced_accept_frequency=forced_accept_frequency,
@@ -983,7 +982,6 @@ class GateLedgerService:
     def _recommendations(
         *,
         override_counter: Counter[str],
-        warn_allowed_counter: Counter[str],
         constraint_counter: Counter[str],
         issue_group_counter: Counter[str],
         forced_accept_frequency: int,

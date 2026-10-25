@@ -19,7 +19,7 @@ completed_phase = "P4"
 
 [story_id_literal]
 allowed_values = ["main", "fact_type", "fact_id", "thread_id", "world_line_id", "fact_refs",
-  "fact_conflict", "thread_closed_too_early", "thread_keep_open", "thread_already_closed",
+  "fact_conflict", "thread_keep_open", "thread_already_closed",
   "thread_drift", "thread_time_extraction", "fact_nodes", "gap_between_public_and_actual",
   # protocol field / enum / ref-namespace names (not story content); "fact_" is the bare
   # prefix of generated ids such as f"fact_{new_id()}"

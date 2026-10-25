@@ -585,7 +585,6 @@
           card.appendChild(createNode('div', latestCheckpoint.issues.slice(0, 5).map((issue) => [
             issue.severity || 'info',
             issue.issue_group || '',
-            issue.category || '',
             issue.description || issue.code || '',
           ].filter(Boolean).join(' · ')).join('\\n'), 'meta-line'));
         }

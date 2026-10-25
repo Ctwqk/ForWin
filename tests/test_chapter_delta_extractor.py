@@ -95,6 +95,21 @@ def test_valid_extraction_passes_through_with_body_hash():
     assert client.llm_attempt_events == []
 
 
+def test_runtime_fact_outside_offered_list_is_validated_without_prompt_exposure():
+    candidate = payload()
+    candidate["knowledge_events"] = [{
+        "observer_ref": "reader", "fact_ref": "fact:unoffered", "state": "knows",
+        "channel": "told", "evidence": BODY,
+    }]
+    client = StubLLM(candidate)
+    result = extract(client, extraction_input=replace(INPUT, runtime_fact_refs=("fact:unoffered",)))
+    assert result.attempts == 1
+    assert result.issues == ()
+    assert result.extraction.knowledge_events[0].fact_ref == "fact:unoffered"
+    assert "fact:unoffered" not in str(client.calls[0][0])
+    assert "runtime_fact_refs" not in str(client.calls[0][0])
+
+
 def test_configured_max_tokens_is_used_on_every_attempt():
     client = StubLLM("not JSON", payload())
     result = extract(client, max_tokens=12000)

@@ -14,10 +14,14 @@ from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.runtime import BookStateRuntime, require_runtime_as_of
 from forwin.models.narrative_obligation import NarrativeObligationRow
-from forwin.models.project import ChapterPlan
+from forwin.models.project import ChapterPlan, Project
 from forwin.narrative_obligations.repository import NarrativeObligationRepository, _CLOSED_STATUSES
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.protocol.experience import RewardTag
+from forwin.runtime.policy import WriterPolicy
+from forwin.runtime.policy_store import ProjectPolicyMissing, ProjectPolicyStore
+from forwin.world_view.builder import build_chapter_world_view
+from forwin.world_view.types import ChapterWorldView
 
 
 logger = logging.getLogger(__name__)
@@ -73,6 +77,8 @@ class ChapterExtractionInput:
     secrets: tuple[SecretRow, ...]
     travel_modes: tuple[str, ...]
     scene_location_hints: tuple[str, ...] = ()
+    # Validation-only ids from the same runtime; never rendered into the extraction prompt.
+    runtime_fact_refs: tuple[str, ...] = ()
 
 
 def _loads(raw: str | None, default: Any) -> Any:
@@ -182,6 +188,18 @@ def build_chapter_extraction_input(
         ChapterPlan.project_id == project_id,
         ChapterPlan.chapter_number == chapter_number,
     ))
+    view = ChapterWorldView()
+    if plan is not None:
+        budget_chars = WriterPolicy().world_view_budget_chars
+        project = session.get(Project, project_id)
+        if project is not None:
+            try:
+                budget_chars = ProjectPolicyStore(session).load(project).policy.writer.world_view_budget_chars
+            except ProjectPolicyMissing:
+                pass
+        view = build_chapter_world_view(
+            session, project_id=project_id, chapter_plan=plan, budget_chars=budget_chars, runtime=runtime,
+        )
     obligation_repo = NarrativeObligationRepository(session)
     judged_obligations = [
         # Includes the gate/acceptance selection and current-origin obligations
@@ -189,13 +207,34 @@ def build_chapter_extraction_input(
         *obligation_repo.list_active_for_context(project_id, chapter_number=chapter_number + 1),
         *obligation_repo.list_planned_for_chapter(project_id, origin_chapter_number=chapter_number),
     ]
-    entities = []
+    entities = {}
+    for entity in [*view.onstage, *view.known_entities]:
+        node = runtime.world.get_node(entity.ref)
+        if node is not None and node.is_active:
+            entities[node.id] = EntityRow(
+                node.id, str(node.node_type), entity.name,
+                tuple(getattr(entity, "aliases", node.aliases)) if entity.name else (),
+            )
+    locations = {location.id: location for location in view.locations}
+    if view.pov_location is not None:
+        locations.setdefault(view.pov_location.id, view.pov_location)
+    secret_refs = {topic.fact_ref for topic in view.forbidden_topics}
+    secret_refs.update(fact.fact_ref for fact in view.pov_knowledge if fact.pov_only_secret)
+    if plan is not None:
+        for raw in (plan.reveal_directives_json, plan.hint_directives_json):
+            items = _loads(raw, [])
+            for item in items if isinstance(items, list) else []:
+                if isinstance(item, dict) and isinstance(ref := item.get("fact_ref"), str):
+                    secret_refs.add(f"{FACT_REF_PREFIX}{ref.strip().removeprefix(FACT_REF_PREFIX)}")
+        bindings = _loads(plan.world_bindings_json, [])
+        for binding in bindings if isinstance(bindings, list) else []:
+            if (isinstance(binding, dict) and binding.get("kind") == "secret"
+                    and isinstance(ref := binding.get("ref"), str)):
+                secret_refs.add(f"{FACT_REF_PREFIX}{ref.strip().removeprefix(FACT_REF_PREFIX)}")
     intents = []
     for node in sorted(runtime.world.nodes_by_id.values(), key=lambda node: node.id):
         if not node.is_active:
             continue
-        if node.node_type in {"character", "faction", "organization", "group", "item", "location"}:
-            entities.append(EntityRow(node.id, str(node.node_type), node.name, tuple(node.aliases)))
         if node.node_type == "intent":
             state = runtime.world.get_state(node.id)
             status = state.get("status", "")
@@ -215,10 +254,11 @@ def build_chapter_extraction_input(
     return ChapterExtractionInput(
         project_id=project_id,
         chapter_number=chapter_number,
-        entities=tuple(entities),
+        entities=tuple(entities[ref] for ref in sorted(entities)),
         locations=tuple(
-            LocationRow(node.id, node.name, node.region_id, node.subworld_id)
-            for node in sorted(runtime.map.nodes_by_id.values(), key=lambda node: node.id)
+            LocationRow(ref, locations[ref].name, node.region_id, node.subworld_id)
+            for ref in sorted(locations)
+            if (node := runtime.map.nodes_by_id.get(ref)) is not None
         ),
         calendar_units=tuple(unit.name for unit in calendar.units) if calendar else (),
         time_aliases=tuple(alias.name for alias in lexicon.time_unit_aliases),
@@ -227,8 +267,9 @@ def build_chapter_extraction_input(
         secrets=tuple(
             SecretRow(f"{FACT_REF_PREFIX}{fact.id}", fact.proposition, fact.sensitivity_level)
             for fact in sorted(runtime.world.facts_by_id.values(), key=lambda fact: fact.id)
-            if fact.sensitivity_level in {"hidden", "secret"}
+            if f"{FACT_REF_PREFIX}{fact.id}" in secret_refs
         ),
         travel_modes=tuple(mode.id for mode in lexicon.travel_modes),
         scene_location_hints=tuple(location_hints),
+        runtime_fact_refs=tuple(f"{FACT_REF_PREFIX}{ref}" for ref in sorted(runtime.world.facts_by_id)),
     )

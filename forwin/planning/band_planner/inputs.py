@@ -321,39 +321,11 @@ def _trim_payload(
     }
     news_actors = {item["observer_ref"] for item in payload["news"]}
     news_facts = {item["fact_ref"] for item in payload["news"]}
-    band_locations = {ref for row in rows.values() for ref in json.loads(row.location_refs_json or "[]")}
-    subworlds = {runtime.map.nodes_by_id[ref].subworld_id for ref in band_locations
-                if ref in runtime.map.nodes_by_id}
-    if not subworlds and origin in runtime.map.nodes_by_id:
-        subworlds.add(runtime.map.nodes_by_id[origin].subworld_id)
-    travel = estimate_travel_from(runtime, lexicon, mover_id=protagonist, from_location_id=origin) if origin in runtime.map.nodes_by_id else {}
-
-    def location_rank(item):
-        estimate = travel.get(item["id"])
-        minutes = estimate.minutes if estimate is not None and estimate.minutes is not None else float("inf")
-        return (item["subworld_id"] not in subworlds, minutes, item["id"])
-
-    payload["locations"] = sorted((item for item in payload["locations"]
-                                    if not subworlds or item["subworld_id"] in subworlds
-                                    or (travel.get(item["id"]) is not None
-                                        and travel[item["id"]].minutes is not None
-                                        and travel[item["id"]].minutes <= window_minutes)), key=location_rank)
-    location_order = {item["id"]: index for index, item in enumerate(payload["locations"])}
+    location_order, actor_order, node_order = _payload_locality_orders(
+        payload, runtime=runtime, lexicon=lexicon, rows=rows,
+        protagonist=protagonist, origin=origin, window_minutes=window_minutes,
+    )
     farthest = len(location_order) + 1
-    actor_order = {item["id"]: (-1 if item["id"] == protagonist
-                               else location_order.get(item["location_ref"], farthest))
-                   for item in payload["actors"]}
-    node_order = {**location_order, **actor_order}
-    for key in ("world_nodes", "events", "clocks", "intents"):
-        for item in payload[key]:
-            node = runtime.world.nodes_by_id[item["id"]]
-            state = runtime.world.get_state(node.id)
-            refs = [node.profile.get("owner_ref"), *(node.profile.get("involved_node_refs") or []),
-                    *(state.get("participant_ids") or [])]
-            node_order[node.id] = min(
-                [location_order.get(resolve_world_node_location_id(runtime.world, node.id), farthest),
-                 *(actor_order.get(ref, farthest) for ref in refs)],
-            )
 
     def deadline(value):
         return max(0, value - payload["story_now"]) if isinstance(value, (int, float)) else float("inf")
@@ -401,16 +373,7 @@ def _trim_payload(
     for item in payload["facts"]:
         item["related_refs"] = [ref for ref in item["related_refs"] if ref in nodes]
 
-    def sync_context_refs():
-        intents = {item["id"] for item in payload["intents"]}
-        payload["due_onstage_intent_ids"] = [ref for ref in payload["due_onstage_intent_ids"] if ref in intents]
-        bindable = intents | {item["ref"] for item in payload["facts"]} | {
-            item["id"] for key in ("events", "clocks", "relations") for item in payload[key]
-        }
-        for item in payload["pending_responses"]:
-            item["refs"] = [ref for ref in item["refs"] if ref in bindable]
-
-    sync_context_refs()
+    _sync_context_refs(payload)
     trimmable = ("facts", "events", "clocks", "relations", "news", "stalled_threads",
                  "locations", "intents", "actors", "world_nodes")
     optional = {}
@@ -423,22 +386,81 @@ def _trim_payload(
                          and not (key == "intents" and item["id"] in required_intents)
                          and not (key == "clocks" and item["id"] in required_clocks)]
 
-    def dependencies(key, item):
-        if key == "facts":
-            return item["related_refs"]
-        if key == "news":
-            return [item["fact_ref"], item["observer_ref"]]
-        if key == "relations":
-            return [item["source"], item["target"]]
-        if key == "intents":
-            return [item["owner_ref"], item["location_ref"]]
-        if key in {"actors", "world_nodes"}:
-            return [item["location_ref"]]
-        return []
+    _trim_optional_items(payload, optional=optional, trimmable=trimmable, budget_chars=budget_chars)
 
+
+def _payload_locality_orders(
+    payload: dict[str, Any], *, runtime: BookStateRuntime, lexicon: BookLexicon,
+    rows: Mapping[int, ChapterPlan], protagonist: str, origin: str, window_minutes: int,
+) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
+    band_locations = {ref for row in rows.values() for ref in json.loads(row.location_refs_json or "[]")}
+    subworlds = {runtime.map.nodes_by_id[ref].subworld_id for ref in band_locations
+                if ref in runtime.map.nodes_by_id}
+    if not subworlds and origin in runtime.map.nodes_by_id:
+        subworlds.add(runtime.map.nodes_by_id[origin].subworld_id)
+    travel = estimate_travel_from(runtime, lexicon, mover_id=protagonist, from_location_id=origin) if origin in runtime.map.nodes_by_id else {}
+
+    def location_rank(item):
+        estimate = travel.get(item["id"])
+        minutes = estimate.minutes if estimate is not None and estimate.minutes is not None else float("inf")
+        return (item["subworld_id"] not in subworlds, minutes, item["id"])
+
+    payload["locations"] = sorted((item for item in payload["locations"]
+                                    if not subworlds or item["subworld_id"] in subworlds
+                                    or (travel.get(item["id"]) is not None
+                                        and travel[item["id"]].minutes is not None
+                                        and travel[item["id"]].minutes <= window_minutes)), key=location_rank)
+    location_order = {item["id"]: index for index, item in enumerate(payload["locations"])}
+    farthest = len(location_order) + 1
+    actor_order = {item["id"]: (-1 if item["id"] == protagonist
+                               else location_order.get(item["location_ref"], farthest))
+                   for item in payload["actors"]}
+    node_order = {**location_order, **actor_order}
+    for key in ("world_nodes", "events", "clocks", "intents"):
+        for item in payload[key]:
+            node = runtime.world.nodes_by_id[item["id"]]
+            state = runtime.world.get_state(node.id)
+            refs = [node.profile.get("owner_ref"), *(node.profile.get("involved_node_refs") or []),
+                    *(state.get("participant_ids") or [])]
+            node_order[node.id] = min(
+                [location_order.get(resolve_world_node_location_id(runtime.world, node.id), farthest),
+                 *(actor_order.get(ref, farthest) for ref in refs)],
+            )
+
+    return location_order, actor_order, node_order
+
+
+def _sync_context_refs(payload: dict[str, Any]) -> None:
+    intents = {item["id"] for item in payload["intents"]}
+    payload["due_onstage_intent_ids"] = [ref for ref in payload["due_onstage_intent_ids"] if ref in intents]
+    bindable = intents | {item["ref"] for item in payload["facts"]} | {
+        item["id"] for key in ("events", "clocks", "relations") for item in payload[key]
+    }
+    for item in payload["pending_responses"]:
+        item["refs"] = [ref for ref in item["refs"] if ref in bindable]
+
+
+def _payload_dependencies(key: str, item: dict[str, Any]) -> list[str]:
+    if key == "facts":
+        return item["related_refs"]
+    if key == "news":
+        return [item["fact_ref"], item["observer_ref"]]
+    if key == "relations":
+        return [item["source"], item["target"]]
+    if key == "intents":
+        return [item["owner_ref"], item["location_ref"]]
+    if key in {"actors", "world_nodes"}:
+        return [item["location_ref"]]
+    return []
+
+
+def _trim_optional_items(
+    payload: dict[str, Any], *, optional: dict[str, list[dict[str, Any]]],
+    trimmable: tuple[str, ...], budget_chars: int,
+) -> None:
     # A retained item keeps its subjects available. Dropping a location or actor must not
     # silently remove several other categories, or leave a news item without its fact.
-    referenced = Counter(ref for key in trimmable for item in payload[key] for ref in dependencies(key, item) if ref)
+    referenced = Counter(ref for key in trimmable for item in payload[key] for ref in _payload_dependencies(key, item) if ref)
     def size(value: Any) -> int:
         return len(json.dumps(value, ensure_ascii=False))
 
@@ -459,9 +481,9 @@ def _trim_payload(
             current_size -= size(item) + (2 if len(payload[key]) > 1 else 0)
             payload[key].remove(item)
             optional[key].remove(item)
-            referenced.subtract(ref for ref in dependencies(key, item) if ref)
+            referenced.subtract(ref for ref in _payload_dependencies(key, item) if ref)
             old_context_size = size(payload["pending_responses"]) + size(payload["due_onstage_intent_ids"])
-            sync_context_refs()
+            _sync_context_refs(payload)
             current_size += size(payload["pending_responses"]) + size(payload["due_onstage_intent_ids"]) - old_context_size
             removed[key] += 1
             progress = True

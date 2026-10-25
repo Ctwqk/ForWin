@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.knowledge import READER_OBSERVER
 from forwin.book_state.knowledge import FACT_REF_PREFIX, is_concealed
 from forwin.book_state.narrative import OPEN_PROTECTION_UNTIL
 from forwin.book_state.projection import BookStateProjection
@@ -28,7 +29,6 @@ from forwin.book_state.runtime import BookStateRuntime
 from forwin.generation.gate_delegation import GateAuditWriter
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.planning.fact_text import states_proposition
-from forwin.protocol.book_state import ObserverType
 from forwin.protocol.review import ReviewVerdict
 from forwin.runtime.policy import RuntimePolicy
 from forwin.world_view.builder import _subject_names
@@ -54,7 +54,6 @@ NO_LONGER_VIOLATED_RATIONALE = "A later candidate of the chapter no longer break
 DRAFT_REVIEW_DETECTION = "draft_review"
 CANON_GATE_DETECTION = "canon_gate"
 _CANDIDATE_REF_PREFIX = "candidate:"
-_READER = ObserverType.READER.value
 _READER_LABEL = "the reader"
 
 
@@ -135,7 +134,7 @@ def boundary_names(runtime: BookStateRuntime, violation: DeltaBoundaryViolation)
     unknown; the fact by the names of the subjects a scene could show, never by its proposition."""
     names = {
         ref: _entity_name(runtime, ref)
-        for ref in (violation.ref, violation.observer_ref) if ref and ref != _READER
+        for ref in (violation.ref, violation.observer_ref) if ref and ref != READER_OBSERVER
     }
     fact = runtime.world.facts_by_id.get(violation.fact_ref.removeprefix(FACT_REF_PREFIX))
     if fact is not None:
@@ -153,7 +152,7 @@ def boundary_fix_names(runtime: BookStateRuntime, violation: DeltaBoundaryViolat
     observer = violation.observer_ref
     return {
         "name": _entity_name(runtime, violation.ref) if violation.ref else "",
-        "observer": (READER_OBSERVER_LABEL if observer == _READER
+        "observer": (READER_OBSERVER_LABEL if observer == READER_OBSERVER
                      else _entity_name(runtime, observer) if observer else ""),
         "topic": forbidden_topic_text(_subject_names(runtime, fact)) if fact is not None else "",
     }
@@ -174,7 +173,7 @@ def _entity_name(runtime: BookStateRuntime, ref: str) -> str:
 
 def _summary(v: DeltaBoundaryViolation, *, chapter_number: int, names: Mapping[str, str]) -> str:
     def name(ref: str) -> str:
-        return _READER_LABEL if ref == _READER else names.get(ref) or UNNAMED_ACTOR_LABEL
+        return _READER_LABEL if ref == READER_OBSERVER else names.get(ref) or UNNAMED_ACTOR_LABEL
 
     chapter = f"Chapter {chapter_number}"
     until = f" through chapter {v.until_chapter}" if v.until_chapter != OPEN_PROTECTION_UNTIL else ""

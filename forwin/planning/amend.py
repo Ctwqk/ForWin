@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from forwin.book_state.knowledge import READER_OVERLAY_KEY
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.projection import BookStateProjection
@@ -206,7 +207,7 @@ class PlanAmender:
                 ),))
             runtime = BookStateProjection(session).load_runtime_as_of(
                 project_id, as_of_chapter=max(0, first - 1),
-                observer_keys=[("reader", "reader"), *([("character", blocked.pov_ref)] if blocked.pov_ref else [])],
+                observer_keys=[READER_OVERLAY_KEY, *([("character", blocked.pov_ref)] if blocked.pov_ref else [])],
             )
             issues = FeasibilityAuditor().audit_plans(
                 session, project_id=project_id, plans=[blocked], policy=policy, runtime=runtime,

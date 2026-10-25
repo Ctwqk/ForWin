@@ -11,12 +11,13 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
+from forwin.book_state.knowledge import READER_OBSERVER
+from forwin.book_state.knowledge import FACT_REF_PREFIX, is_secret_fact
 from forwin.book_state.narrative import OPEN_PROTECTION_UNTIL, PROTECTION_KINDS, RELEASED_PROTECTION_STATUS
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.book_state.schema import ENDED_STATUSES, WORLD_NODE_FIELDS
-from forwin.protocol.book_state import GraphDelta, ObserverType
+from forwin.protocol.book_state import GraphDelta
 
 
 # The kind of a violation that ends a ref a later hard milestone or the arc's exit state needs.
@@ -30,7 +31,6 @@ _STATUS_PATH = "state.status"
 _DEAD = "dead"
 # The state path the must_exist and must_be_alive protections guard; must_hold_state names its own field.
 _GUARDED_PATHS = {"must_exist": _STATUS_PATH, "must_be_alive": _ALIVE_PATH}
-_READER = ObserverType.READER.value
 
 
 @dataclass(frozen=True)
@@ -226,13 +226,13 @@ def _fold(runtime: BookStateRuntime, delta: GraphDelta, ref: str, path: str) -> 
 def _learns(tag: Mapping[str, Any], protection: ActiveProtection) -> bool:
     if tag.get("state") not in _KNOWN_STATES:
         return False
-    is_reader = tag.get("observer_type") == _READER
-    if protection.observer_ref == _READER:
+    is_reader = tag.get("observer_type") == READER_OBSERVER
+    if protection.observer_ref == READER_OBSERVER:
         observer_matches = is_reader
     else:
         observer_matches = not is_reader and tag.get("observer_id") == protection.observer_ref
     facts = {_fact_ref(_text(tag.get("fact_ref")))}
-    if protection.observer_ref == _READER:
+    if protection.observer_ref == READER_OBSERVER:
         # The reader is shown the secret the prose touches; an actor who touches a secret does not know it.
         facts.add(_fact_ref(_text(tag.get("touches_secret_ref"))))
     return observer_matches and protection.fact_ref in facts
@@ -250,7 +250,7 @@ def _impact(runtime: BookStateRuntime, protection: ActiveProtection, milestone_r
         return "major" if node is not None and node.node_type == "character" else "moderate"
     if protection.kind == "must_not_know":
         fact = runtime.world.facts_by_id.get(fact_id)
-        return "major" if fact is not None and fact.sensitivity_level in HIDDEN_SENSITIVITY else "moderate"
+        return "major" if fact is not None and is_secret_fact(fact.sensitivity_level) else "moderate"
     return "moderate"
 
 

@@ -13,15 +13,14 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
 from forwin.book_state.extraction.chapter_delta_schema import Duration
-from forwin.book_state.extraction.translator import (
-    _OBSERVER_TYPES,
-    _SYMMETRIC_EDGE_TYPES,
-    _current_node_value,
-    _edge_field_path,
-    _leaf_patch,
-    _stable_id,
+from forwin.book_state.delta_helpers import (
+    OBSERVER_TYPES,
+    RelationshipPlanner,
+    current_node_value,
+    leaf_patch,
+    stable_id,
 )
-from forwin.book_state.knowledge import FACT_REF_PREFIX, KnowledgeEvent, knowledge_event_to_patch
+from forwin.book_state.knowledge import EVENT_FACT_TYPE, FACT_REF_PREFIX, KnowledgeEvent, knowledge_event_to_patch
 from forwin.book_state.narrative import PROTECTION_STATUS_PATH, RELEASED_PROTECTION_STATUS
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.names import normalized_name
@@ -32,16 +31,13 @@ from forwin.book_state.schema import ACTOR_NODE_TYPES, WORLD_NODE_FIELDS
 from forwin.book_state.story_clock import StoryCalendar, StoryClockError, duration_to_minutes, format_story_time
 from forwin.models.entity import Entity, EntityAlias
 from forwin.protocol.book_state import (
-    WORLD_EDGE_TYPES_BY_FAMILY,
     CognitionPatch,
-    Directionality,
     EdgePatch,
     FactPatch,
     GraphDelta,
     GraphDeltaType,
     NarrativePatch,
     NodePatch,
-    WorldEdge,
     WorldNode,
 )
 from .effect_validation import new_actor_name_taken
@@ -73,7 +69,7 @@ _PROTECTION_REF_PREFIX = "review_constraint:"
 
 def _tick_local_id(project_id: str, tick_id: str, candidate_id: str, kind: str, local: int | str) -> str:
     """A stable id for something one candidate creates; a rebuild without other candidates keeps it."""
-    return _stable_id(project_id, kind, "\0".join((tick_id, candidate_id, str(local))))
+    return stable_id(project_id, kind, "\0".join((tick_id, candidate_id, str(local))))
 
 
 def tick_event_fact_ref(project_id: str, tick_id: str, candidate_id: str, event_index: int) -> str:
@@ -82,7 +78,7 @@ def tick_event_fact_ref(project_id: str, tick_id: str, candidate_id: str, event_
     Later candidates of the same tick, such as its news, reference the event's fact by this ref.
     """
     event_id = _tick_local_id(project_id, tick_id, candidate_id, "event", event_index)
-    return f"{FACT_REF_PREFIX}{_stable_id(project_id, 'fact', event_id)}"
+    return f"{FACT_REF_PREFIX}{stable_id(project_id, 'fact', event_id)}"
 
 
 class TickIssue(BaseModel):
@@ -360,7 +356,7 @@ class _TickBuilder:
         node_id = self._node(ref, "observer")
         if node_id is None:
             return None
-        observer_type = _OBSERVER_TYPES.get(self._node_type(node_id))
+        observer_type = OBSERVER_TYPES.get(self._node_type(node_id))
         if observer_type is None:
             self._unresolved(f"{node_id!r} is not an observer")
             return None
@@ -433,8 +429,8 @@ class _TickBuilder:
         payload = self.world.nodes_by_id[node_id].model_dump(mode="json")
         payload["state"] = self.world.get_state(node_id)
         leaf = (
-            ("set", field_path, _current_node_value(self.runtime, node_id, field_path), value)
-            if field_path.startswith("state.") else _leaf_patch(payload, field_path, value)
+            ("set", field_path, current_node_value(self.runtime, node_id, field_path), value)
+            if field_path.startswith("state.") else leaf_patch(payload, field_path, value)
         )
         if leaf is None:
             # Historical rewind restores non-state fields from old_value.
@@ -641,121 +637,13 @@ class _TickBuilder:
 
     def _relation_change(self, change: EffectRelationChange) -> None:
         change = change.model_copy(update={"new_value": self._actor_values(change.new_value, change.field)})
-        families = [
-            family for family, edge_types in WORLD_EDGE_TYPES_BY_FAMILY.items() if change.edge_type in edge_types
-        ]
-        if len(families) != 1:
-            self._issue("error", "edge_type_invalid", f"{change.edge_type!r} has no unique edge family")
-            return
-        source_id = self._relation_endpoint(change.source_ref)
-        target_id = self._relation_endpoint(change.target_ref)
-        if source_id is None or target_id is None:
-            return
-        symmetric = change.edge_type in _SYMMETRIC_EDGE_TYPES
-        same_type = sorted(
-            (edge for edge in self.world.edges_by_id.values() if edge.edge_type == change.edge_type),
-            key=lambda edge: edge.id,
-        )
-        forward = [edge for edge in same_type if (edge.source_id, edge.target_id) == (source_id, target_id)]
-        backward = [edge for edge in same_type if (edge.source_id, edge.target_id) == (target_id, source_id)]
-        matching = forward + backward if symmetric else forward
-        active = next((edge for edge in matching if edge.is_active), None)
-        if change.change == "create":
-            # A create earlier in this tick counts as existing too.
-            pairs = {(source_id, target_id), (target_id, source_id)} if symmetric else {(source_id, target_id)}
-            pending = next(
-                (
-                    patch for patch in self.edge_patches
-                    if str(patch.op) == "create" and patch.edge_type == change.edge_type
-                    and (patch.source_id, patch.target_id) in pairs
-                ),
-                None,
-            )
-            existing_id = active.id if active is not None else pending.edge_id if pending is not None else ""
-            if existing_id:
-                self._issue("warning", "relation_exists", f"relation {existing_id} already exists")
-            elif not symmetric and not forward and any(edge.is_active for edge in backward):
-                # An ended reverse edge is a past role; only a live one blocks the flip.
-                self._direction_mismatch(change)
-            else:
-                self._create_relation(change, matching, source_id, target_id, families[0])
-            return
-        if active is None:
-            if not symmetric and any(edge.is_active for edge in backward):
-                self._direction_mismatch(change)
-            else:
-                self._issue("warning", "relation_missing", f"no active {change.edge_type} relation to {change.change}")
-            return
-        endpoints = {
-            "source_id": active.source_id, "target_id": active.target_id,
-            "edge_type": active.edge_type, "edge_family": str(active.edge_family),
-        }
-        if change.change == "end":
-            self.edge_patches.append(EdgePatch(
-                edge_id=active.id, op="deactivate", **endpoints,
-                field_path="is_active", old_value=True, reason=self.reason,
-            ))
-            return
-        field_path = _edge_field_path(change.field)
-        if field_path is None:
-            self._issue("error", "unknown_field", f"{change.field!r} is not a settable relation field")
-            return
-        leaf = _leaf_patch(active.model_dump(mode="json"), field_path, change.new_value)
-        if leaf is None:
-            self._issue("error", "missing_old_value", f"{active.id}:{field_path} has no current value or parent")
-            return
-        op, patch_path, old_value, new_value = leaf
-        self.edge_patches.append(EdgePatch(
-            edge_id=active.id, op=op, **endpoints, field_path=patch_path,
-            old_value=old_value, new_value=new_value, reason=self.reason,
-        ))
-
-    def _create_relation(
-        self,
-        change: EffectRelationChange,
-        matching: list[WorldEdge],
-        source_id: str,
-        target_id: str,
-        edge_family: str,
-    ) -> None:
-        ended = [edge for edge in matching if edge.ended_at_chapter is not None]
-        # A create on an ended relation reactivates that same edge.
-        symmetric = change.edge_type in _SYMMETRIC_EDGE_TYPES
-        # A symmetric relation has one id whichever endpoint comes first.
-        first, second = sorted((source_id, target_id)) if symmetric else (source_id, target_id)
-        edge_id = (
-            max(ended, key=lambda edge: (edge.ended_at_chapter, edge.id)).id
-            if ended
-            else _stable_id(self.project_id, "edge", f"{first}/{change.edge_type}/{second}")
-        )
-        if any(patch.edge_id == edge_id for patch in self.edge_patches):
-            return
-        endpoints = {
-            "source_id": source_id, "target_id": target_id,
-            "edge_type": change.edge_type, "edge_family": edge_family,
-        }
-        directionality = Directionality.UNDIRECTED if symmetric else Directionality.DIRECTED
-        self.edge_patches.append(EdgePatch(
-            edge_id=edge_id,
-            op="create",
-            **endpoints,
-            new_value={
-                "project_id": self.project_id,
-                **endpoints,
-                "directionality": directionality.value,
-                "established_at_chapter": self.chapter,
-                "valid_from_chapter": self.chapter,
-                "evidence_refs": [self._evidence_ref()],
-                "metadata": self._provenance(),
-            },
-            reason=self.reason,
-        ))
-
-    def _direction_mismatch(self, change: EffectRelationChange) -> None:
-        self._issue(
-            "warning", "relation_direction_mismatch",
-            f"only the reverse {change.edge_type} relation exists; directed relations are not flipped",
-        )
+        RelationshipPlanner(
+            project_id=self.project_id, chapter=self.chapter, world=self.world,
+            edge_patches=self.edge_patches, operation=change.change,
+            reason=self.reason, evidence_ref=self._evidence_ref(), source=self._provenance(),
+            resolve_endpoint=lambda ref, path: self._relation_endpoint(ref),
+            issue=lambda severity, code, path, message: self._issue(severity, code, message),
+        ).plan(change)
 
     def _relation_endpoint(self, ref: str) -> str | None:
         """A BookState node, or a map node id standing for the site_state node of that site."""
@@ -830,7 +718,7 @@ class _TickBuilder:
         created = self.created_nodes.get(node_id)
         if created is not None:
             return str(created.new_value.get("state", {}).get(field) or "")
-        return str(_current_node_value(self.runtime, node_id, f"state.{field}") or "")
+        return str(current_node_value(self.runtime, node_id, f"state.{field}") or "")
 
     def _event(self, candidate: TickCandidate, event: EffectEvent, index: int) -> None:
         participants: list[str] = []
@@ -880,7 +768,7 @@ class _TickBuilder:
         self._create_fact(
             fact_id, proposition=summary, truth_value=True, sensitivity=sensitivity, related=related,
             extra={
-                "fact_type": "event",
+                "fact_type": EVENT_FACT_TYPE,
                 "confidence": 1.0,
                 "state": {
                     "status": "active",
@@ -978,7 +866,7 @@ class _TickBuilder:
             fact = item.fact_ref.strip()
             known_observer = (
                 observer in self.world.nodes_by_id or observer in self.created_nodes
-            ) and _OBSERVER_TYPES.get(self._node_type(observer)) is not None
+            ) and OBSERVER_TYPES.get(self._node_type(observer)) is not None
             if known_observer and not fact.startswith(NEW_FACT_REF_PREFIX) and self._fact_exists(
                 fact.removeprefix(FACT_REF_PREFIX)
             ):

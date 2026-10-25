@@ -23,7 +23,7 @@ from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.observability.llm_trace import (
-    RAW_REQUEST_KEY, RAW_RESPONSE_KEY, mark_latest_attempt_parse_failure, mark_latest_attempt_workflow,
+    build_workflow_trace, drain_workflow_attempts,
 )
 from forwin.planning.band_planner.inputs import BandPayloadBudgetExceeded, BandPlanInputs, build_band_inputs
 from forwin.planning.band_planner.persistence import persist_band_plan
@@ -35,7 +35,6 @@ from forwin.planning.band_planner.validation import band_plan_issues
 from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
 from forwin.planning.beat_sheet.types import READER_OBSERVER, ArcBeatSheetData, BandSpan
 from forwin.runtime.policy import RuntimePolicy
-from forwin.skills import serialize_prompt_layers
 from forwin.utils import parse_llm_json
 from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.world_engine.conflict_types import ConflictDraft
@@ -364,10 +363,6 @@ class BandPlanner:
                     parsed = BandPlanOutput.model_validate(parse_llm_json(raw, error_prefix=_PARSER_NAME))
                 except Exception as exc:  # noqa: BLE001 - a malformed answer is sent back to the model
                     call_error = exc
-                    mark_latest_attempt_parse_failure(
-                        self.llm_client, parser_name=_PARSER_NAME, stage_key=STAGE_KEY,
-                        schema_name="BandPlanOutput", raw_output=raw, error=exc,
-                    )
             if call_error is not None:
                 code = LLM_UNAVAILABLE if provider_failed else INVALID_OUTPUT
                 call.issues = [_error(code, f"{type(call_error).__name__}: {call_error}")]
@@ -389,12 +384,13 @@ class BandPlanner:
                 except Exception as exc:  # noqa: BLE001 - re-raised by the caller once the trace is saved
                     call.error, call.failure_reason = exc, AUDIT_ERROR
                     call.issues = [_error(AUDIT_ERROR, f"{type(exc).__name__}: {exc}")]
-                    mark_latest_attempt_workflow(self.llm_client, attempt_no=attempt_no, stage_key=STAGE_KEY)
                     call.attempts.extend(self._drained_attempts(attempt_no, call.messages, raw, exc, str(exc)))
                     return call
             feedback = [_feedback_line(issue) for issue in call.issues]
-            mark_latest_attempt_workflow(self.llm_client, attempt_no=attempt_no, stage_key=STAGE_KEY)
-            call.attempts.extend(self._drained_attempts(attempt_no, call.messages, raw, call_error, "\n".join(feedback)))
+            call.attempts.extend(self._drained_attempts(
+                attempt_no, call.messages, raw, call_error, "\n".join(feedback),
+                parse_error=call_error if not provider_failed else None,
+            ))
             if not call.issues:
                 call.draft = BandPlanDraft(band=band, chapters=chapters)
                 call.failure_reason = ""
@@ -429,59 +425,37 @@ class BandPlanner:
 
     def _drained_attempts(
         self, attempt_no: int, messages: list[dict], raw: str, call_error: Exception | None, error_message: str,
+        *, parse_error: Exception | None = None,
     ) -> list[dict[str, Any]]:
-        drain = getattr(self.llm_client, "drain_llm_attempt_events", None)
-        drained = drain() if callable(drain) else []
-        attempts = drained if isinstance(drained, list) and drained else [{
-            "attempt_no": 1, "stage_key": STAGE_KEY, "task_family": _TASK_FAMILY,
-        }]
-        for event in attempts:
-            event.setdefault("workflow_attempt_no", attempt_no)
-            event.setdefault("workflow_retry", attempt_no > 1)
-            event.setdefault(RAW_REQUEST_KEY, {"messages": messages})
-            event.setdefault(RAW_RESPONSE_KEY, raw)
-            if call_error is not None:
-                event.setdefault("error_class", type(call_error).__name__)
-                event.setdefault("error_message", error_message)
-        return attempts
+        return drain_workflow_attempts(
+            self.llm_client, attempt_no=attempt_no, stage_key=STAGE_KEY, task_family=_TASK_FAMILY,
+            messages=messages, raw=raw, call_error=call_error, error_message=error_message,
+            parse_error=parse_error, parser_name=_PARSER_NAME, schema_name="BandPlanOutput",
+        )
 
     def _prompt_trace(
         self, call: _BandPlanCall, context: _TraceContext, outcome: BandPlanOutcome, *, superseded: bool = False,
     ) -> dict[str, Any]:
-        last_call_result = getattr(self.llm_client, "last_call_result", None) if call.attempts else None
-        trace = getattr(last_call_result, "trace", {}) or {}
-        layers = serialize_prompt_layers(call.messages, [])
         band = context.band
-        return {
-            "trace_scope": "planning", "stage_key": STAGE_KEY,
-            "backend": str(trace.get("backend") or getattr(last_call_result, "backend", "") or ""),
-            "codex_job_id": str(trace.get("codex_job_id", "") or ""),
-            "permission_profile": str(trace.get("permission_profile", "") or ""),
-            "fallback_used": bool(getattr(last_call_result, "fallback_used", False)),
-            "template_id": "planning:band_plan", "template_version": "v1",
-            "effective_system_prompt": "\n\n".join(
-                str(item["content"]).strip() for item in layers if item["role"] == "system"
-            ),
-            "prompt_layers": layers,
-            "input_snapshot": {
+        return build_workflow_trace(
+            self.llm_client, messages=call.messages, attempts=call.attempts,
+            trace_scope="planning",
+            stage_key=STAGE_KEY,
+            template_id="planning:band_plan",
+            input_snapshot={
                 "project_id": context.project_id, "chapter_number": band.chapter_start,
                 "arc_plan_id": context.arc_plan_id, "band_index": band.band_index,
                 "band": [band.chapter_start, band.chapter_end], "chapters_to_plan": list(context.chapter_numbers),
                 "reason": context.reason, "stage_key": STAGE_KEY, "selected_skills": [],
             },
-            "model_profile": {
-                **{key: getattr(self.llm_client, key, "") for key in ("profile_id", "profile_name", "model", "base_url")},
-                "actual_model": getattr(last_call_result, "actual_model", "") or "",
-            },
-            "attempts": call.attempts,
-            "output_summary": {
+            output_summary={
                 "failure_reason": call.failure_reason, "issues": [issue.model_dump(mode="json") for issue in call.issues],
                 "warnings": [issue.model_dump(mode="json") for issue in call.warnings],
                 "band_plan_id": outcome.band_plan_id, "chapter_plan_ids": list(outcome.chapter_plan_ids),
                 "superseded_by_concurrent_plan": superseded,
                 "skill_summary": [], "business_retry_events": call.business_retries,
             },
-        }
+        )
 
 
 @dataclass

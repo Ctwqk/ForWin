@@ -442,12 +442,12 @@ class ReviewWorkflowStage:
                 or 0
             ),
             "plan_columns": {
-                str(number): _plan_columns_snapshot(plan)
-                for number in range(
-                    int(getattr(row, "chapter_start", getattr(live_schedule, "chapter_start", 0)) or 0),
-                    int(getattr(row, "chapter_end", getattr(live_schedule, "chapter_end", 0)) or 0) + 1,
+                str(plan.chapter_number): _plan_columns_snapshot(plan)
+                for plan in repo.chapter_plans_in_range(
+                    project_id,
+                    chapter_start=int(getattr(row, "chapter_start", getattr(live_schedule, "chapter_start", 0)) or 0),
+                    chapter_end=int(getattr(row, "chapter_end", getattr(live_schedule, "chapter_end", 0)) or 0),
                 )
-                if (plan := repo.get_chapter_plan(project_id, number)) is not None
             },
             "schedule": live_schedule.model_dump(mode="json")
             if live_schedule is not None

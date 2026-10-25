@@ -17,8 +17,9 @@ from typing import Any, Protocol
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.knowledge import READER_OVERLAY_KEY
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
-from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
+from forwin.book_state.knowledge import FACT_REF_PREFIX, is_secret_fact
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.protections import active_protections
@@ -305,7 +306,7 @@ class _ChapterWalk:
         unrevealable = {
             f"{FACT_REF_PREFIX}{fact.id}": fact.proposition
             for fact in self.runtime.world.facts_by_id.values()
-            if (fact.sensitivity_level in HIDDEN_SENSITIVITY or fact.id in protected) and fact.id not in revealed
+            if (is_secret_fact(fact.sensitivity_level, fact_id=fact.id, protected=protected)) and fact.id not in revealed
             and fact.id not in self.reader_known and self.schedule.get(fact.id, math.inf) > chapter.number
         }
         fields: dict[str, list[str]] = {}
@@ -565,7 +566,7 @@ def band_for_chapter(session: Session, project_id: str, chapter_number: int) -> 
 def reader_known_facts(runtime: BookStateRuntime) -> frozenset[str]:
     """The fact node ids the reader's recorded cognition knows or believes; an unrecorded public fact is not
     known by default."""
-    reader = runtime.cognition_by_observer.get((READER_OBSERVER, READER_OBSERVER))
+    reader = runtime.cognition_by_observer.get(READER_OVERLAY_KEY)
     states = reader.knowledge_by_ref if reader is not None else {}
     return frozenset(ref.removeprefix(FACT_REF_PREFIX) for ref, state in states.items() if state in _KNOWN_STATES)
 

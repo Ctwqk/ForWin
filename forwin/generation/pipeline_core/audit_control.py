@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.book_state.knowledge import READER_OVERLAY_KEY
 from forwin.context.assembler_core import _build_canon_quality_context
 from forwin.generation.pipeline_core.common import (
     _future_plan_audit_checkpoint_payload,
@@ -341,7 +342,7 @@ class AuditControlStage:
             project_id,
             as_of_chapter=max(0, chapter_number - 1),
             observer_keys=[
-                (READER_OBSERVER, READER_OBSERVER),
+                READER_OVERLAY_KEY,
                 *([(_POV_OBSERVER_TYPE, chapter_plan.pov_ref)] if chapter_plan.pov_ref else []),
             ],
         )
@@ -895,6 +896,16 @@ class AuditControlStage:
         unresolved_review_chapters: list[int] = []
         review_fail_chapters: list[int] = []
         review_metas: list[dict[str, Any]] = []
+        thread_beats_by_chapter: dict[int, list[str]] = {}
+        for delta in BookStateRepository(session).list_graph_deltas(
+            project_id, after_chapter=int(band_row.chapter_start or 0) - 1,
+            through_chapter=int(band_row.chapter_end or 0),
+        ):
+            if delta.source_type == "chapter_extraction" and delta.allowed_for_canon:
+                thread_beats_by_chapter.setdefault(delta.chapter_number, []).extend(
+                    str(beat.get("beat_type") or "") for beat in (delta.metadata.get("thread_beats") or [])
+                    if isinstance(beat, dict)
+                )
         for plan in band_plans:
             if str(plan.status or "") == "needs_review":
                 unresolved_review_chapters.append(int(plan.chapter_number or 0))
@@ -932,19 +943,10 @@ class AuditControlStage:
                         for item in review_issues
                         if isinstance(item, dict)
                     ]
-                    review_meta["thread_beat_types"] = [
-                        str(beat.get("beat_type") or "")
-                        for delta in BookStateRepository(session).list_graph_deltas(
-                            project_id,
-                            after_chapter=int(plan.chapter_number or 0) - 1,
-                            through_chapter=int(plan.chapter_number or 0),
-                        )
-                        if plan.status == "accepted"
-                        and delta.source_type == "chapter_extraction"
-                        and delta.allowed_for_canon
-                        for beat in (delta.metadata.get("thread_beats") or [])
-                        if isinstance(beat, dict)
-                    ]
+                    review_meta["thread_beat_types"] = (
+                        list(thread_beats_by_chapter.get(int(plan.chapter_number or 0), []))
+                        if plan.status == "accepted" else []
+                    )
                     review_metas.append(review_meta)
         if any(plan.status != "accepted" for plan in band_plans):
             status = "fail"

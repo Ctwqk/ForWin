@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY, KNOWLEDGE_STATES, is_concealed
+from forwin.book_state.knowledge import FACT_REF_PREFIX, is_secret_fact, KNOWLEDGE_STATES, is_concealed
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
@@ -25,7 +25,7 @@ from forwin.models.planning_v6 import ArcBeatSheetRow
 from forwin.models.project import ArcPlanVersion, Project
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.observability.llm_trace import (
-    RAW_REQUEST_KEY, RAW_RESPONSE_KEY, mark_latest_attempt_parse_failure, mark_latest_attempt_workflow,
+    build_workflow_trace, drain_workflow_attempts,
 )
 from forwin.planning.beat_sheet.fallback import arc_bounds, build_fallback_beat_sheet, fallback_protagonist_ref
 from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
@@ -37,7 +37,6 @@ from forwin.planning.fact_text import stated_facts
 from forwin.planning.world_digest import build_world_digest
 from forwin.protocol.book_state import WorldNode
 from forwin.runtime.policy import RuntimePolicy
-from forwin.skills import serialize_prompt_layers
 from forwin.utils import parse_llm_json
 from forwin.world_engine.types import INVALID_OUTPUT, LLM_UNAVAILABLE
 from forwin.writer.prompt_core.planning import build_arc_beats_messages
@@ -291,10 +290,6 @@ class ArcBeatSheetService:
                     parsed = ArcBeatSheetData.model_validate(answer)
                 except Exception as exc:  # noqa: BLE001 - a malformed answer is sent back to the model
                     call_error = exc
-                    mark_latest_attempt_parse_failure(
-                        self.llm_client, parser_name=_PARSER_NAME, stage_key=STAGE_KEY,
-                        schema_name="ArcBeatSheetData", raw_output=raw, error=exc,
-                    )
             if call_error is not None:
                 call.issues = [f"{type(call_error).__name__}: {call_error}"]
             else:
@@ -302,9 +297,10 @@ class ArcBeatSheetService:
                     parsed, chapter_start=start, chapter_end=end, runtime=runtime, actor_ids=actor_ids,
                     reveal_chapters=reveal_chapters, reader_known=reader_known,
                 )
-            mark_latest_attempt_workflow(self.llm_client, attempt_no=attempt_no, stage_key=STAGE_KEY)
+
             call.attempts.extend(self._drained_attempts(
                 attempt_no, call.messages, raw, call_error, "\n".join(call.issues),
+                parse_error=call_error if not provider_failed else None,
             ))
             if not call.issues:
                 call.data = _normalized(parsed)
@@ -332,56 +328,34 @@ class ArcBeatSheetService:
 
     def _drained_attempts(
         self, attempt_no: int, messages: list[dict], raw: str, call_error: Exception | None, error_message: str,
+        *, parse_error: Exception | None = None,
     ) -> list[dict[str, Any]]:
-        drain = getattr(self.llm_client, "drain_llm_attempt_events", None)
-        drained = drain() if callable(drain) else []
-        attempts = drained if isinstance(drained, list) and drained else [{
-            "attempt_no": 1, "stage_key": STAGE_KEY, "task_family": _TASK_FAMILY,
-        }]
-        for event in attempts:
-            event.setdefault("workflow_attempt_no", attempt_no)
-            event.setdefault("workflow_retry", attempt_no > 1)
-            event.setdefault(RAW_REQUEST_KEY, {"messages": messages})
-            event.setdefault(RAW_RESPONSE_KEY, raw)
-            if call_error is not None:
-                event.setdefault("error_class", type(call_error).__name__)
-                event.setdefault("error_message", error_message)
-        return attempts
+        return drain_workflow_attempts(
+            self.llm_client, attempt_no=attempt_no, stage_key=STAGE_KEY, task_family=_TASK_FAMILY,
+            messages=messages, raw=raw, call_error=call_error, error_message=error_message,
+            parse_error=parse_error, parser_name=_PARSER_NAME, schema_name="ArcBeatSheetData",
+        )
 
     def _prompt_trace(
         self, call: _BeatSheetCall, *, project_id: str, as_of: int, arc_plan: ArcPlanVersion, reason: str,
         source: str,
     ) -> dict[str, Any]:
-        last_call_result = getattr(self.llm_client, "last_call_result", None) if call.attempts else None
-        trace = getattr(last_call_result, "trace", {}) or {}
-        layers = serialize_prompt_layers(call.messages, [])
-        return {
-            "trace_scope": "planning", "stage_key": STAGE_KEY,
-            "backend": str(trace.get("backend") or getattr(last_call_result, "backend", "") or ""),
-            "codex_job_id": str(trace.get("codex_job_id", "") or ""),
-            "permission_profile": str(trace.get("permission_profile", "") or ""),
-            "fallback_used": bool(getattr(last_call_result, "fallback_used", False)),
-            "template_id": "planning:arc_beats", "template_version": "v1",
-            "effective_system_prompt": "\n\n".join(
-                str(item["content"]).strip() for item in layers if item["role"] == "system"
-            ),
-            "prompt_layers": layers,
-            "input_snapshot": {
+        return build_workflow_trace(
+            self.llm_client, messages=call.messages, attempts=call.attempts,
+            trace_scope="planning",
+            stage_key=STAGE_KEY,
+            template_id="planning:arc_beats",
+            input_snapshot={
                 "project_id": project_id, "chapter_number": as_of, "arc_plan_id": arc_plan.id,
                 "arc_number": int(arc_plan.arc_number or 0), "reason": reason, "stage_key": STAGE_KEY,
                 "selected_skills": [],
             },
-            "model_profile": {
-                **{key: getattr(self.llm_client, key, "") for key in ("profile_id", "profile_name", "model", "base_url")},
-                "actual_model": getattr(last_call_result, "actual_model", "") or "",
-            },
-            "attempts": call.attempts,
-            "output_summary": {
+            output_summary={
                 "source": source, "failure_reason": call.failure_reason, "issues": call.issues,
                 "beat_sheet_id": "", "version": 0, "normalizations": call.normalizations,
                 "skill_summary": [], "business_retry_events": call.business_retries,
             },
-        }
+        )
 
 
 @dataclass
@@ -523,7 +497,7 @@ def _writer_text_issues(
     protected = {spec.fact_ref.removeprefix(FACT_REF_PREFIX) for spec in data.protections
                  if spec.kind == "must_not_know" and spec.observer_ref == READER_OBSERVER}
     concealed = {f"{FACT_REF_PREFIX}{fact.id}": fact.proposition for fact in runtime.world.facts_by_id.values()
-                 if (fact.sensitivity_level in HIDDEN_SENSITIVITY or fact.id in protected) and fact.id not in known}
+                 if (is_secret_fact(fact.sensitivity_level, fact_id=fact.id, protected=protected)) and fact.id not in known}
     texts = [(f"phases[{index}].purpose", phase.purpose, phase.chapter_range[0])
              for index, phase in enumerate(data.phases)]
     texts.extend((f"milestones[{index}].description", milestone.description, milestone.target_range[0])

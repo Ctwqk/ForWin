@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from forwin.book_state.knowledge import observer_overlay_key
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.runtime import BookStateRuntime
@@ -9,7 +10,6 @@ from forwin.book_state.rule_predicates import active_rule_predicates, blocked_ed
 from forwin.book_state.travel import (
     TravelEstimate,
     _mover_modes,
-    _overlay_key,
     estimate_route_travel as _estimate_travel,
 )
 from forwin.protocol.book_state import PathResult
@@ -49,7 +49,7 @@ def estimate_travel_from(
     runtime: BookStateRuntime, lexicon: BookLexicon, *, mover_id: str | None, from_location_id: str,
 ) -> dict[str, TravelEstimate]:
     """Estimate every destination with one search per profile; None selects objective travel for news."""
-    observer = _overlay_key(runtime, mover_id) if mover_id is not None else None
+    observer = observer_overlay_key(runtime, mover_id) if mover_id is not None else None
     profiles = list(dict.fromkeys([
         (None, None), (observer, None),
         *((observer, frozenset(mode.allowed_edge_types)) for mode in _mover_modes(runtime, lexicon, mover_id)),

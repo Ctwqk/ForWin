@@ -7,7 +7,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
+from forwin.book_state.story_clock import MINUTE_EPSILON
+from forwin.book_state.knowledge import FACT_REF_PREFIX, is_secret_fact
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.protections import (
@@ -219,9 +220,9 @@ def classify_impact(
             level = max(level, IMPACT_LEVELS.index("moderate"))
     hidden = {
         f"{FACT_REF_PREFIX}{fact.id}"
-        for fact in runtime.world.facts_by_id.values() if fact.sensitivity_level in HIDDEN_SENSITIVITY
+        for fact in runtime.world.facts_by_id.values() if is_secret_fact(fact.sensitivity_level)
     }
-    hidden.update(f"fact:new:{fact.key}" for fact in candidate.effects.new_facts if fact.sensitivity in HIDDEN_SENSITIVITY)
+    hidden.update(f"fact:new:{fact.key}" for fact in candidate.effects.new_facts if is_secret_fact(fact.sensitivity))
     for ref, path, before, after in transitions:
         node = runtime.world.get_node(ref)
         state = after.get("state", {})
@@ -250,7 +251,7 @@ def _exposes_secret(runtime: BookStateRuntime, candidate: TickCandidate) -> bool
     """
     makers = {
         f"{NEW_FACT_REF_PREFIX}{fact.key}": set(fact.known_by)
-        for fact in candidate.effects.new_facts if fact.sensitivity in HIDDEN_SENSITIVITY
+        for fact in candidate.effects.new_facts if is_secret_fact(fact.sensitivity)
     }
     for item in candidate.effects.knowledge:
         if item.state not in _KNOWN_STATES:
@@ -260,7 +261,7 @@ def _exposes_secret(runtime: BookStateRuntime, candidate: TickCandidate) -> bool
                 return True
             continue
         fact = runtime.world.facts_by_id.get(item.fact_ref.removeprefix(FACT_REF_PREFIX))
-        if fact is None or fact.sensitivity_level not in HIDDEN_SENSITIVITY:
+        if fact is None or not is_secret_fact(fact.sensitivity_level):
             continue
         views = [view for (_kind, observer_id), view in runtime.cognition_by_observer.items()
                  if observer_id == item.observer_ref]
@@ -327,7 +328,6 @@ def check_hard_rules(
 ) -> list[ConstraintIssue]:
     """Check against the pre-tick runtime using the caller's calendar and tick window."""
     # The review gate imports world-engine types; defer this import to avoid a cycle.
-    from forwin.book_state.reviewer import _MINUTE_EPSILON
 
     issues: list[ConstraintIssue] = []
 
@@ -423,7 +423,7 @@ def check_hard_rules(
             travel = estimate_travel(runtime, lexicon, mover_id=owner, from_location_id=start,
                                      to_location_id=intent.location_id)
             if (not travel.reachable or not travel.route_known or travel.minutes is None
-                    or travel.minutes > delay + _MINUTE_EPSILON):
+                    or travel.minutes > delay + MINUTE_EPSILON):
                 issue("unreachable_before_scheduled", owner,
                       f"{owner} cannot reach {intent.location_id} in {delay} minutes")
     for ref, path, before, after in transitions:

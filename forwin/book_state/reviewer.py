@@ -13,9 +13,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.story_clock import MINUTE_EPSILON
 from forwin.book_state.book_frame_repository import BookLexiconRepository
 from forwin.book_state.cognition import CognitionView
-from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY, KNOWLEDGE_STATES
+from forwin.book_state.knowledge import FACT_REF_PREFIX, is_secret_fact, observer_overlay_key, KNOWLEDGE_STATES
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.narrative import (
@@ -50,7 +51,6 @@ WORLD_ENGINE_SOURCE_TYPE = "world_engine"
 _V6_SOURCE_TYPES = frozenset({CHAPTER_EXTRACTION_SOURCE_TYPE, WORLD_ENGINE_SOURCE_TYPE})
 DEFAULT_TRAVEL_TOLERANCE = 0.2
 _AWARE_STATES = frozenset({"knows", "believes"})
-_MINUTE_EPSILON = 1e-6
 
 
 class BookStateReviewIssue(BaseModel):
@@ -676,9 +676,9 @@ class _ChapterExtractionChecks:
             f"the shortest is {shortest:g} min"
         )
         # The epsilon keeps a claim exactly at a bound from losing to float rounding.
-        if claimed < shortest * (1 - self.tolerance) - _MINUTE_EPSILON:
+        if claimed < shortest * (1 - self.tolerance) - MINUTE_EPSILON:
             self._issue("error", "movement_too_fast", f"node:{mover}", detail)
-        elif claimed < shortest - _MINUTE_EPSILON:
+        elif claimed < shortest - MINUTE_EPSILON:
             self._issue("warning", "movement_fast_within_tolerance", f"node:{mover}", detail)
 
     def _total_time_issues(self, required: dict[str, list[float]], chapter_minutes: int) -> None:
@@ -693,9 +693,9 @@ class _ChapterExtractionChecks:
                 f"the chapter spans {chapter_minutes} min"
             )
             # The per-movement band: the span stands in for the claimed time, the total for the shortest.
-            if chapter_minutes < total * (1 - self.tolerance) - _MINUTE_EPSILON:
+            if chapter_minutes < total * (1 - self.tolerance) - MINUTE_EPSILON:
                 self._issue("error", "movement_total_too_fast", f"node:{mover}", detail)
-            elif chapter_minutes < total - _MINUTE_EPSILON:
+            elif chapter_minutes < total - MINUTE_EPSILON:
                 self._issue("warning", "movement_total_fast_within_tolerance", f"node:{mover}", detail)
 
     # entities and items
@@ -778,14 +778,7 @@ class _ChapterExtractionChecks:
         return "unknown" if self._hidden(fact_ref) else "knows"
 
     def _overlay_key(self, node_id: str) -> tuple[str, str] | None:
-        """The cognition overlay of a world node; node ids are unique across observer types."""
-        return next(
-            (
-                key for key in self.runtime.cognition_by_observer
-                if key[1] == node_id and key[0] != ObserverType.READER.value
-            ),
-            None,
-        )
+        return observer_overlay_key(self.runtime, node_id)
 
     @cached_property
     def _allowed_reader_reveals(self) -> dict[str, set[str]]:
@@ -846,7 +839,7 @@ class _ChapterExtractionChecks:
 
     def _hidden(self, fact_ref: str) -> bool:
         sensitivity, _truth = self.facts.get(fact_ref.removeprefix(FACT_REF_PREFIX), ("", ""))
-        return sensitivity in HIDDEN_SENSITIVITY
+        return is_secret_fact(sensitivity)
 
     def _true(self, fact_ref: str) -> bool:
         _sensitivity, truth = self.facts.get(fact_ref.removeprefix(FACT_REF_PREFIX), ("", ""))

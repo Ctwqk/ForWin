@@ -76,8 +76,18 @@ class Hit:
 def scan_source(text: str, path: str, *, allowed_ids: Collection[str] = ()) -> list[Hit]:
     """Run every AST check on one file. ``fixture_term`` needs repo data; see scan_runtime."""
     scanner = _Scanner(path, frozenset(allowed_ids))
-    scanner.visit(ast.parse(text, filename=path))
+    scanner.visit(_FoldStringLiterals().visit(ast.parse(text, filename=path)))
     return scanner.hits
+
+
+class _FoldStringLiterals(ast.NodeTransformer):
+    """Expose explicit literal concatenation to the same checks as adjacent literals."""
+
+    def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        self.generic_visit(node)
+        if isinstance(node.op, ast.Add) and _is_str(node.left) and _is_str(node.right):
+            return ast.copy_location(ast.Constant(value=node.left.value + node.right.value), node)
+        return node
 
 
 def _is_str(node: ast.AST) -> bool:
@@ -194,12 +204,9 @@ class _Scanner(ast.NodeVisitor):
         self._visit_assignment(node, node.target, node.value)
 
     def _visit_assignment(self, node: ast.stmt, target: ast.expr, value: ast.expr | None) -> None:
-        if self._function_depth:
-            self.generic_visit(node)
-            return
         self._assign_target = target.id if isinstance(target, ast.Name) else ast.unparse(target)
         # Children first: regex/membership checks claim their literals before the
-        # module/class-level collection check counts what is left.
+        # collection check counts what is left.
         self.generic_visit(node)
         if value is not None:
             self._cjk_hits("cjk_collection", _collection_units(value))
@@ -230,7 +237,16 @@ class _Scanner(ast.NodeVisitor):
 
     def visit_Dict(self, node: ast.Dict) -> None:
         self._story_exempt.update(id(key) for key in node.keys if key is not None)
+        self._visit_collection(node)
+
+    def _visit_collection(self, node: ast.expr) -> None:
         self.generic_visit(node)
+        if self._function_depth:
+            self._cjk_hits("cjk_collection", _collection_units(node))
+
+    visit_List = _visit_collection
+    visit_Tuple = _visit_collection
+    visit_Set = _visit_collection
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
         self._story_exempt.add(id(node.slice))
@@ -256,6 +272,8 @@ class _Scanner(ast.NodeVisitor):
             if units:
                 self._cjk_claimed.update(id(unit) for unit in units)
                 self._hit("cjk_regex", pattern, _literal_text(pattern))
+        if isinstance(func, ast.Attribute) and func.attr in {"startswith", "endswith"} and node.args:
+            self._cjk_hits("cjk_membership", _cjk_units(node.args[0]))
         if self._function_depth and isinstance(func, ast.Name) and func.id in {"any", "all"}:
             for arg in node.args:
                 if isinstance(arg, _COLLECTIONS):

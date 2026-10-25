@@ -17,7 +17,7 @@ def test_repair_snapshots_capture_current_chapter_and_band_plan_columns() -> Non
         get_chapter_experience_plan=lambda *_: ChapterExperiencePlan(),
         get_band_row_for_chapter=lambda *_: None,
         get_band_experience_plan_for_chapter=lambda *_: schedule,
-        get_chapter_plan=lambda _project_id, number: plan if number == 2 else None,
+        chapter_plans_in_range=lambda _project_id, **bounds: [plan],
     )
     stage = ReviewWorkflowStage()
     chapter = stage._chapter_plan_snapshot(repo=repo, project_id="project-1", chapter_plan=plan)

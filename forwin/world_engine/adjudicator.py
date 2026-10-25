@@ -11,10 +11,9 @@ from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.book_state.story_clock import StoryCalendar
 from forwin.observability.llm_trace import (
-    RAW_REQUEST_KEY, RAW_RESPONSE_KEY, mark_latest_attempt_parse_failure, mark_latest_attempt_workflow,
+    build_workflow_trace, drain_workflow_attempts,
 )
 from forwin.protocol.book_state import WorldNode
-from forwin.skills import serialize_prompt_layers
 from forwin.utils import parse_llm_json
 from forwin.world_engine.constraints import ConstraintIssue
 from forwin.world_engine.effect_validation import effect_reference_issues
@@ -141,33 +140,18 @@ class WorldAdjudicator:
                     parsed = AdjudicationResult.model_validate(parse_llm_json(raw, error_prefix=_PARSER_NAME))
                 except Exception as exc:  # noqa: BLE001
                     retry_feedback = [str(exc)]
-                    mark_latest_attempt_parse_failure(
-                        self.llm_client, parser_name=_PARSER_NAME, stage_key=_STAGE_KEY,
-                        schema_name="AdjudicationResult", raw_output=raw, error=exc,
-                    )
                     raise
             except Exception as exc:  # noqa: BLE001
                 call_error = exc
                 failure_reason = "\n".join(retry_feedback) if retry_feedback else type(exc).__name__
             finally:
-                mark_latest_attempt_workflow(self.llm_client, attempt_no=attempt_no, stage_key=_STAGE_KEY)
-                drain = getattr(self.llm_client, "drain_llm_attempt_events", None)
-                drained = drain() if callable(drain) else []
-                current_attempts = drained if isinstance(drained, list) and drained else [{
-                    "attempt_no": 1, "stage_key": _STAGE_KEY, "task_family": "world_engine",
-                }]
-                for event in current_attempts:
-                    event.setdefault("workflow_attempt_no", attempt_no)
-                    event.setdefault("workflow_retry", attempt_no > 1)
-                    event.setdefault(RAW_REQUEST_KEY, {"messages": messages})
-                    event.setdefault(RAW_RESPONSE_KEY, raw)
-                    if call_error is not None:
-                        event.setdefault("error_class", type(call_error).__name__)
-                        if retry_feedback:
-                            event.setdefault("error_message", failure_reason)
-                        else:
-                            event["error_message"] = failure_reason
-                attempts.extend(current_attempts)
+                attempts.extend(drain_workflow_attempts(
+                    self.llm_client, attempt_no=attempt_no, stage_key=_STAGE_KEY, task_family="world_engine",
+                    messages=messages, raw=raw, call_error=call_error, error_message=failure_reason,
+                    replace_error_message=not retry_feedback,
+                    parse_error=call_error if retry_feedback else None,
+                    parser_name=_PARSER_NAME, schema_name="AdjudicationResult",
+                ))
 
             if call_error is None:
                 candidate, candidate_issues, missing_count = _validated_result(parsed, intent_ids, runtime, lexicon)
@@ -214,29 +198,17 @@ class WorldAdjudicator:
         result: AdjudicationResult | None, issues: list[str], failure_reason: str = "",
     ) -> dict[str, Any]:
         missing = set(intent_ids) - {outcome.intent_id for outcome in result.outcomes} if result is not None else set(intent_ids)
-        last_call_result = getattr(self.llm_client, "last_call_result", None) if attempts else None
-        trace = getattr(last_call_result, "trace", {}) or {}
-        layers = serialize_prompt_layers(messages, [])
-        return {
-            "trace_scope": "world_engine", "stage_key": _STAGE_KEY,
-            "backend": str(trace.get("backend") or getattr(last_call_result, "backend", "") or ""),
-            "codex_job_id": str(trace.get("codex_job_id", "") or ""),
-            "permission_profile": str(trace.get("permission_profile", "") or ""),
-            "fallback_used": bool(getattr(last_call_result, "fallback_used", False)),
-            "template_id": "world_engine:adjudicate", "template_version": "v1",
-            "effective_system_prompt": "\n\n".join(str(item["content"]).strip() for item in layers if item["role"] == "system"),
-            "prompt_layers": layers,
-            "input_snapshot": {**context.model_dump(mode="json"), "intent_ids": intent_ids,
+        return build_workflow_trace(
+            self.llm_client, messages=messages, attempts=attempts,
+            trace_scope="world_engine",
+            stage_key=_STAGE_KEY,
+            template_id="world_engine:adjudicate",
+            input_snapshot={**context.model_dump(mode="json"), "intent_ids": intent_ids,
                                "stage_key": _STAGE_KEY, "selected_skills": []},
-            "model_profile": {
-                **{key: getattr(self.llm_client, key, "") for key in ("profile_id", "profile_name", "model", "base_url")},
-                "actual_model": getattr(last_call_result, "actual_model", "") or "",
-            },
-            "attempts": attempts,
-            "output_summary": {
+            output_summary={
                 "adjudication_ok": result is not None and not missing, "issues": issues,
                 "missing_intent_ids": sorted(missing), "failure_reason": failure_reason,
                 "outcome_count": len(result.outcomes) if result is not None else 0,
                 "skill_summary": [], "business_retry_events": business_retries,
             },
-        }
+        )

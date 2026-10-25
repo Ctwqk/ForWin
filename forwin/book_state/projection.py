@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from forwin.book_state.knowledge import READER_OVERLAY_KEY
 from forwin.book_state.cognition import CognitionView
 from forwin.book_state.narrative import NarrativeControlGraph
 from forwin.book_state.repository import BookStateRepository
@@ -183,7 +184,7 @@ class BookStateProjection:
                     },
                 }
             ),
-            reader_overlay_digest=_digest(runtime.cognition_by_observer.get(("reader", "reader"), {})),
+            reader_overlay_digest=_digest(runtime.cognition_by_observer.get(READER_OVERLAY_KEY, {})),
             character_overlay_digests={
                 observer_id: _digest(view.overlay)
                 for (observer_type, observer_id), view in runtime.cognition_by_observer.items()
@@ -299,7 +300,7 @@ def _summary_from_runtime(runtime: BookStateRuntime) -> str:
 
 
 def _reader_summary_from_runtime(runtime: BookStateRuntime) -> str:
-    reader = runtime.cognition_by_observer.get(("reader", "reader"))
+    reader = runtime.cognition_by_observer.get(READER_OVERLAY_KEY)
     if reader is None:
         return "reader_overlay=missing"
     return (

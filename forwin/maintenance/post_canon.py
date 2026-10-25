@@ -10,11 +10,10 @@ import threading
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
+from forwin.observability.llm_trace import own_transaction_audit_writer, save_world_prompt_trace
 from forwin.audience.feedback import run_feedback_aggregation_pass
-from forwin.audit.events import DecisionEventInfo, DecisionEventType
-from forwin.generation.gate_delegation import GateAuditWriter
 from forwin.models.base import new_id
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord
@@ -31,11 +30,9 @@ from forwin.maintenance.state import (
     post_canon_phase3_complete,
 )
 from forwin.maintenance.trace_upload import enqueue_trace_upload
-from forwin.observability.llm_trace import build_llm_decision_event_payloads, prepare_prompt_trace_payload
 from forwin.observability.payloads import safe_error_summary
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.audience.comment_analysis import CommentAnalyzer, analyze_recent_comments
-from forwin.state.updater import StateUpdater
 
 if TYPE_CHECKING:
     from forwin.canon.admission import CanonAdmissionService
@@ -1043,100 +1040,6 @@ def build_world_tick_service(
         audit_writer_factory=own_transaction_audit_writer(session_factory),
         save_prompt_trace=save_prompt_trace,
     )
-
-
-def own_transaction_audit_writer(
-    session_factory: Callable[[], Session],
-) -> Callable[[], GateAuditWriter]:
-    """Audit writers whose every write commits on its own, so it outlives a world step that rolls back."""
-
-    def save_decision_event(info: DecisionEventInfo) -> Any:
-        with session_factory.begin() as session:
-            row = StateUpdater(session).save_decision_event(info)
-            session.expunge(row)
-            return row
-
-    def save_prompt_trace(**payload: Any) -> Any:
-        with session_factory.begin() as session:
-            project = session.get(Project, payload["project_id"])
-            payload.setdefault("genesis_revision_id", str(getattr(project, "active_genesis_revision_id", "") or ""))
-            row = StateUpdater(session).save_prompt_trace(**payload)
-            session.expunge(row)
-            return row
-
-    def factory() -> GateAuditWriter:
-        return GateAuditWriter(
-            save_decision_event=save_decision_event,
-            save_prompt_trace=save_prompt_trace,
-        )
-
-    return factory
-
-
-def save_world_prompt_trace(
-    session: Session,
-    prompt_trace: Mapping[str, Any],
-    *,
-    artifact_store: Any = None,
-    independent: bool = False,
-) -> str:
-    """Save a role's trace and events, optionally through the independent audit writer."""
-    if not prompt_trace:
-        return ""
-    if independent and not prompt_trace.get("attempts"):
-        # No model attempt needs preserving before the caller's parent rows commit.
-        return ""
-    snapshot = prompt_trace.get("input_snapshot")
-    snapshot = snapshot if isinstance(snapshot, Mapping) else {}
-    project_id = str(snapshot.get("project_id") or "")
-    chapter_number = int(snapshot.get("chapter_number") or 0)
-    payload = prepare_prompt_trace_payload(
-        dict(prompt_trace),
-        artifact_store=artifact_store,
-        project_id=project_id,
-        chapter_number=chapter_number,
-    )
-    if independent:
-        updater = own_transaction_audit_writer(sessionmaker(bind=session.get_bind().engine, expire_on_commit=False))()
-        revision = {}
-    else:
-        project = session.get(Project, project_id)
-        updater = StateUpdater(session)
-        revision = {"genesis_revision_id": str(getattr(project, "active_genesis_revision_id", "") or "")}
-    row = updater.save_prompt_trace(
-        project_id=project_id,
-        **revision,
-        trace_scope=str(payload.get("trace_scope") or "world_engine"),
-        stage_key=str(payload.get("stage_key") or ""),
-        template_id=str(payload.get("template_id") or ""),
-        template_version=str(payload.get("template_version") or "v1"),
-        effective_system_prompt=str(payload.get("effective_system_prompt") or ""),
-        prompt_layers_json=json.dumps(payload.get("prompt_layers", []), ensure_ascii=False),
-        input_snapshot_json=json.dumps(payload.get("input_snapshot", {}), ensure_ascii=False),
-        model_profile_json=json.dumps(payload.get("model_profile", {}), ensure_ascii=False),
-        attempts_json=json.dumps(payload.get("attempts", []), ensure_ascii=False),
-        output_summary_json=json.dumps(payload.get("output_summary", {}), ensure_ascii=False),
-        backend=str(payload.get("backend") or ""),
-        codex_job_id=str(payload.get("codex_job_id") or ""),
-        permission_profile=str(payload.get("permission_profile") or ""),
-        fallback_used=bool(payload.get("fallback_used", False)),
-    )
-    for event in build_llm_decision_event_payloads(payload, prompt_trace_id=row.id):
-        updater.save_decision_event(
-            DecisionEventInfo(
-                project_id=project_id,
-                chapter_number=chapter_number,
-                scope="chapter" if chapter_number else "project",
-                event_family=str(event.get("event_family") or "runtime_observation"),
-                event_type=str(event.get("event_type") or DecisionEventType.LLM_REQUEST_FAILED),
-                actor_type="system",
-                summary=str(event.get("summary") or "World engine LLM trace event."),
-                payload=event.get("payload") if isinstance(event.get("payload"), dict) else {},
-                related_object_type="prompt_trace",
-                related_object_id=row.id,
-            )
-        )
-    return row.id
 
 
 def post_canon_idempotency_key(

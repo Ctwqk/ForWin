@@ -1,24 +1,38 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from forwin.protocol.book_state import CognitionPatch, ObserverType, WorldNode
 
 if TYPE_CHECKING:
-    from forwin.book_state.runtime import ObjectiveWorldGraph
+    from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
 
 KNOWLEDGE_STATES = ("heard", "suspects", "believes", "knows", "disbelieves", "misled")
 KNOWLEDGE_CHANNELS = ("witnessed", "told", "rumor", "document", "inferred", "seeded")
 HIDDEN_SENSITIVITY = frozenset({"hidden", "secret", "must_not_reveal"})
+EVENT_FACT_TYPE = "event"
 FACT_REF_PREFIX = "fact:"
-READER_OBSERVER = "reader"
+READER_OBSERVER = ObserverType.READER.value
+READER_OVERLAY_KEY = (READER_OBSERVER, READER_OBSERVER)
+READER_KNOWN_STATES = frozenset({"believes", "knows"})
+
+
+def is_secret_fact(sensitivity: str, *, fact_id: str = "", protected: Collection[str] = ()) -> bool:
+    """Whether writer-facing handling must treat a fact as secret."""
+    return sensitivity in HIDDEN_SENSITIVITY or fact_id in protected
+
+
+def observer_overlay_key(runtime: BookStateRuntime, node_id: str) -> tuple[str, str] | None:
+    """The cognition overlay of a world node; ids are unique across observer types."""
+    return next((key for key in runtime.cognition_by_observer
+                 if key[1] == node_id and key[0] != READER_OBSERVER), None)
 
 
 def is_concealed(world: ObjectiveWorldGraph, node: WorldNode) -> bool:
     level = world.get_state(node.id).get("visibility_level") or node.profile.get("visibility_level")
-    return str(level or "") in HIDDEN_SENSITIVITY
+    return is_secret_fact(str(level or ""))
 
 
 @dataclass(frozen=True)
@@ -63,6 +77,12 @@ def knowledge_event_to_patch(
 
 
 __all__ = [
+    "EVENT_FACT_TYPE",
+    "READER_OBSERVER",
+    "READER_OVERLAY_KEY",
+    "READER_KNOWN_STATES",
+    "is_secret_fact",
+    "observer_overlay_key",
     "FACT_REF_PREFIX",
     "HIDDEN_SENSITIVITY",
     "KNOWLEDGE_CHANNELS",

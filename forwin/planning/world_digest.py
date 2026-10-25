@@ -10,8 +10,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from forwin.book_state.knowledge import READER_OVERLAY_KEY
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
-from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
+from forwin.book_state.knowledge import FACT_REF_PREFIX, is_secret_fact
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
@@ -127,11 +128,11 @@ def build_world_digest(
             chapter=event.created_at_chapter,
         ))
 
-    reader = runtime.cognition_by_observer.get(("reader", "reader"))
+    reader = runtime.cognition_by_observer.get(READER_OVERLAY_KEY)
     recorded = reader.knowledge_by_ref if reader is not None else {}
     targets = earliest_reveal_chapters(session, project_id)
     secrets = [fact for fact in runtime.world.facts_by_id.values()
-               if fact.sensitivity_level in HIDDEN_SENSITIVITY or fact.id in targets
+               if is_secret_fact(fact.sensitivity_level, fact_id=fact.id, protected=targets)
                or f"{FACT_REF_PREFIX}{fact.id}" in recorded]
     for fact in sorted(secrets, key=lambda item: (
         recorded.get(f"{FACT_REF_PREFIX}{item.id}") == "knows", targets.get(item.id) or float("inf"), item.id,

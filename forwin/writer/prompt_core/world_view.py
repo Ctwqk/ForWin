@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from forwin.protocol.book_state import ObserverType
+from forwin.book_state.knowledge import READER_OBSERVER, READER_KNOWN_STATES
 from forwin.world_view.types import (
     AllowedReveal, ChapterWorldView, KnownFact, OnstageEntity, ViewClock, ViewLocation,
 )
@@ -34,8 +34,6 @@ KNOWLEDGE_STATE_LABELS = {
     "misled": "被误导",
 }
 # Reader target states a reveal may state outright; the others are reached by hints only.
-_STATED_READER_STATES = frozenset({"believes", "knows"})
-_READER = ObserverType.READER.value
 _NOT_FOR_READER = "POV 知道；本章不得向读者明示"
 
 
@@ -133,8 +131,8 @@ def _knowledge_row(fact: KnownFact) -> str:
 def _reveal_row(view: ChapterWorldView, reveal: AllowedReveal) -> str:
     """A reveal by its observer: the reader, the POV or another actor."""
     state = _state_label(reveal.target_state)
-    if reveal.observer == _READER:
-        if reveal.target_state in _STATED_READER_STATES:
+    if reveal.observer == READER_OBSERVER:
+        if reveal.target_state in READER_KNOWN_STATES:
             return f"可以让读者{state}：{reveal.proposition}"
         return f"可以让读者{state}，只暗示不要明说：{reveal.proposition}"
     if view.pov_ref and reveal.observer == view.pov_ref:

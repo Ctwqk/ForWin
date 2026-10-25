@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
+from forwin.book_state.knowledge import FACT_REF_PREFIX, is_secret_fact
 from forwin.protocol.book_state import CognitionOverlay, FactNode, MapEdge, WorldEdge, WorldNode
 
 FALSE_BELIEF_STATES = frozenset({"believes", "knows"})
@@ -48,7 +48,7 @@ class CognitionView:
         recorded = self.knowledge_by_ref.get(f"{FACT_REF_PREFIX}{fact.id}")
         if recorded:
             return recorded
-        return "unknown" if fact.sensitivity_level in HIDDEN_SENSITIVITY else "knows"
+        return "unknown" if is_secret_fact(fact.sensitivity_level) else "knows"
 
     def false_beliefs(self, facts_by_id: Mapping[str, FactNode]) -> list[str]:
         """Refs this observer holds wrongly: recorded belief in a false fact, or any field override."""

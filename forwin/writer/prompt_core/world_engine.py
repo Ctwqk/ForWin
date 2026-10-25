@@ -8,6 +8,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
+from forwin.book_state.knowledge import EVENT_FACT_TYPE
 from forwin.book_state.knowledge import FACT_REF_PREFIX, KNOWLEDGE_CHANNELS, KNOWLEDGE_STATES
 from forwin.book_state.lexicon import BookLexicon, lexicon_to_payload
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
@@ -136,7 +137,6 @@ _COLOCATED_TYPES = frozenset({*ACTOR_NODE_TYPES, "item", "resource", "site_state
 _RECORD_TYPES = frozenset({"event", "intent"})
 # The intents still to happen; the compact index lists these, not settled ones.
 _PENDING_INTENT_STATUSES = frozenset({"planned", "due", "held"})
-EVENT_FACT_TYPE = "event"
 
 
 def _without_empty(value: Any) -> Any:

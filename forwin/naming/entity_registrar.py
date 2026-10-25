@@ -846,7 +846,7 @@ class EntityRegistrar:
         writer_output: WriterOutput,
     ) -> list[str]:
         # Imported lazily: the translator also consumes the naming package's plan types.
-        from forwin.book_state.extraction.translator import matching_runtime_entities
+        from forwin.book_state.names import matching_runtime_entities
 
         mentioned = _structured_character_reference_names(writer_output)
         if not mentioned:

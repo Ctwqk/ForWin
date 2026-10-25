@@ -13,9 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.knowledge import EVENT_FACT_TYPE
+from forwin.book_state.story_clock import MINUTE_EPSILON
 from forwin.book_state.cognition import CognitionView
 from forwin.book_state.extraction.chapter_delta_schema import Duration
-from forwin.book_state.extraction.translator import _OBSERVER_TYPES
+from forwin.book_state.delta_helpers import OBSERVER_TYPES
 from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
@@ -23,11 +25,10 @@ from forwin.book_state.schema import ACTOR_NODE_TYPES, ACTOR_TIERS
 from forwin.book_state.story_clock import StoryCalendar, StoryClockError, duration_to_minutes
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.observability.llm_trace import (
-    RAW_REQUEST_KEY, RAW_RESPONSE_KEY, mark_latest_attempt_parse_failure, mark_latest_attempt_workflow,
+    build_workflow_trace, drain_workflow_attempts,
 )
 from forwin.protocol.book_state import CognitionOverlay, MapNode, WorldNode
 from forwin.runtime.policy import WorldPolicy
-from forwin.skills import serialize_prompt_layers
 from forwin.utils import parse_llm_json
 from forwin.world_engine.constraints import ConstraintIssue, is_living_actor
 from forwin.world_engine.effect_validation import scoped_effect_reference_issues
@@ -55,12 +56,10 @@ MAX_PUBLIC_FACTS = 30
 _HELD_STATES = frozenset({"heard", "suspects", "believes", "knows"})
 _PENDING_INTENT_STATUSES = frozenset({"planned", "due", "held"})
 # News of an event reaches an actor only through propagation's recorded knowledge.
-_EVENT_FACT_TYPE = "event"
 _VETO_OPTION = "veto_world"
 # The priority an agenda without one ranks at, as the tick's budget reads it.
 _DEFAULT_AGENDA_PRIORITY = 3
 # Travel minutes absorb float noise before rounding up.
-_MINUTE_EPSILON = 1e-6
 
 
 class ActorView(BaseModel):
@@ -303,7 +302,7 @@ def _pending_intents(runtime: BookStateRuntime, actor_id: str) -> list[dict[str,
 
 
 def _cognition(runtime: BookStateRuntime, actor: WorldNode) -> CognitionView:
-    key = (_OBSERVER_TYPES[str(actor.node_type)], actor.id)
+    key = (OBSERVER_TYPES[str(actor.node_type)], actor.id)
     view = runtime.cognition_by_observer.get(key)
     if view is not None:
         return view
@@ -325,7 +324,7 @@ def _known_facts(runtime: BookStateRuntime, cognition: CognitionView) -> tuple[l
     public: list[tuple[int, str, dict]] = []
     for fact in runtime.world.facts_by_id.values():
         ref = f"{FACT_REF_PREFIX}{fact.id}"
-        if ref not in cognition.knowledge_by_ref and fact.fact_type == _EVENT_FACT_TYPE:
+        if ref not in cognition.knowledge_by_ref and fact.fact_type == EVENT_FACT_TYPE:
             continue
         state = cognition.knowledge_state(fact)
         if state not in _HELD_STATES:
@@ -335,7 +334,7 @@ def _known_facts(runtime: BookStateRuntime, cognition: CognitionView) -> tuple[l
         if related:
             entry["related_refs"] = related
         if ref in cognition.knowledge_by_ref:
-            is_event = fact.fact_type == _EVENT_FACT_TYPE
+            is_event = fact.fact_type == EVENT_FACT_TYPE
             recorded.append((is_event, -fact.created_at_chapter, ref, {**entry, "state": state}))
         else:
             public.append((-fact.created_at_chapter, ref, entry))
@@ -360,7 +359,7 @@ def _reachable_places(
         if estimate.minutes is not None:
             found.append((estimate.minutes, node.id, node.name))
     return [
-        {"location_id": ref, "name": name, "minutes": math.ceil(minutes - _MINUTE_EPSILON)}
+        {"location_id": ref, "name": name, "minutes": math.ceil(minutes - MINUTE_EPSILON)}
         for minutes, ref, name in sorted(found)[:MAX_REACHABLE_PLACES]
     ]
 
@@ -612,34 +611,19 @@ class ActorTurnRunner:
                     parsed = ActorTurnBatch.model_validate(parse_llm_json(raw, error_prefix=_PARSER_NAME))
                 except Exception as exc:  # noqa: BLE001
                     retry_feedback = [str(exc)]
-                    mark_latest_attempt_parse_failure(
-                        self.llm_client, parser_name=_PARSER_NAME, stage_key=_STAGE_KEY,
-                        schema_name="ActorTurnBatch", raw_output=raw, error=exc,
-                    )
                     raise
             except Exception as exc:  # noqa: BLE001
                 call_error = exc
                 # A transport error's message never reaches the model or the trace.
                 failure_reason = "\n".join(retry_feedback) if retry_feedback else type(exc).__name__
             finally:
-                mark_latest_attempt_workflow(self.llm_client, attempt_no=attempt_no, stage_key=_STAGE_KEY)
-                drain = getattr(self.llm_client, "drain_llm_attempt_events", None)
-                drained = drain() if callable(drain) else []
-                current_attempts = drained if isinstance(drained, list) and drained else [{
-                    "attempt_no": 1, "stage_key": _STAGE_KEY, "task_family": "world_engine",
-                }]
-                for event in current_attempts:
-                    event.setdefault("workflow_attempt_no", attempt_no)
-                    event.setdefault("workflow_retry", attempt_no > 1)
-                    event.setdefault(RAW_REQUEST_KEY, {"messages": messages})
-                    event.setdefault(RAW_RESPONSE_KEY, raw)
-                    if call_error is not None:
-                        event.setdefault("error_class", type(call_error).__name__)
-                        if retry_feedback:
-                            event.setdefault("error_message", failure_reason)
-                        else:
-                            event["error_message"] = failure_reason
-                attempts.extend(current_attempts)
+                attempts.extend(drain_workflow_attempts(
+                    self.llm_client, attempt_no=attempt_no, stage_key=_STAGE_KEY, task_family="world_engine",
+                    messages=messages, raw=raw, call_error=call_error, error_message=failure_reason,
+                    replace_error_message=not retry_feedback,
+                    parse_error=call_error if retry_feedback else None,
+                    parser_name=_PARSER_NAME, schema_name="ActorTurnBatch",
+                ))
 
             if call_error is None:
                 seen: set[str] = set()
@@ -703,32 +687,20 @@ class ActorTurnRunner:
         results: Mapping[str, ActorTurnResult], issues: Mapping[str, list[str]], failure_reason: str,
     ) -> dict[str, Any]:
         missing = [actor_id for actor_id in actor_ids if actor_id not in results]
-        last_call_result = getattr(self.llm_client, "last_call_result", None) if attempts else None
-        trace = getattr(last_call_result, "trace", {}) or {}
-        layers = serialize_prompt_layers(messages, [])
-        return {
-            "trace_scope": "world_engine", "stage_key": _STAGE_KEY,
-            "backend": str(trace.get("backend") or getattr(last_call_result, "backend", "") or ""),
-            "codex_job_id": str(trace.get("codex_job_id", "") or ""),
-            "permission_profile": str(trace.get("permission_profile", "") or ""),
-            "fallback_used": bool(getattr(last_call_result, "fallback_used", False)),
-            "template_id": "world_engine:actor_turn", "template_version": "v1",
-            "effective_system_prompt": "\n\n".join(str(item["content"]).strip() for item in layers if item["role"] == "system"),
-            "prompt_layers": layers,
-            "input_snapshot": {**context.model_dump(mode="json"), "actor_ids": actor_ids, "batch_index": batch_index,
+        return build_workflow_trace(
+            self.llm_client, messages=messages, attempts=attempts,
+            trace_scope="world_engine",
+            stage_key=_STAGE_KEY,
+            template_id="world_engine:actor_turn",
+            input_snapshot={**context.model_dump(mode="json"), "actor_ids": actor_ids, "batch_index": batch_index,
                                "stage_key": _STAGE_KEY, "selected_skills": []},
-            "model_profile": {
-                **{key: getattr(self.llm_client, key, "") for key in ("profile_id", "profile_name", "model", "base_url")},
-                "actual_model": getattr(last_call_result, "actual_model", "") or "",
-            },
-            "attempts": attempts,
-            "output_summary": {
+            output_summary={
                 "actor_turn_ok": not missing,
                 "issues": [f"{actor_id}: {issue}" for actor_id in actor_ids for issue in issues[actor_id]],
                 "missing_actor_ids": missing, "failure_reason": failure_reason,
                 "turn_count": len(results), "skill_summary": [], "business_retry_events": business_retries,
             },
-        }
+        )
 
 
 # candidates

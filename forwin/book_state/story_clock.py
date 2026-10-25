@@ -8,6 +8,10 @@ from typing import Any
 from .lexicon import BookLexicon
 
 
+# Absorb floating-point travel noise before rounding to story minutes.
+MINUTE_EPSILON = 1e-6
+
+
 @dataclass(frozen=True)
 class CalendarUnit:
     name: str

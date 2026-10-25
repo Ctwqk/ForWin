@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from forwin.book_state.extraction.translator import _INTENT_STATUS_BY_EFFECT
+from forwin.book_state.delta_helpers import INTENT_STATUS_BY_EFFECT
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.book_state.schema import ACTOR_TIERS, IMPACT_LEVELS
 from forwin.protocol.book_state import WorldNode
@@ -39,7 +39,7 @@ def apply_intent_interactions(
     statuses: dict[str, tuple[str, str]] = {}
     for interaction in interactions:
         intent_id = str(interaction.get("intent_id") or "").strip()
-        status = _INTENT_STATUS_BY_EFFECT.get(str(interaction.get("effect") or ""))
+        status = INTENT_STATUS_BY_EFFECT.get(str(interaction.get("effect") or ""))
         if status is not None and _is_intent(runtime, intent_id):
             statuses[intent_id] = (status, str(interaction.get("evidence") or "").strip())
     return [
@@ -62,7 +62,7 @@ def release_held_intents(
 ) -> list[TickCandidate]:
     """A canon chapter answered its bound holds; settlement takes precedence over release."""
     settled = {str(item.get("intent_id") or "").strip() for item in interactions
-               if str(item.get("effect") or "") in _INTENT_STATUS_BY_EFFECT}
+               if str(item.get("effect") or "") in INTENT_STATUS_BY_EFFECT}
     return [TickCandidate(
         candidate_id=f"release:{intent.id}", origin="intent_interaction", intent_id=intent.id,
         actor_id=_owner(intent), summary=_summary(intent),

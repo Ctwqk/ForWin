@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+from forwin.book_state.knowledge import READER_OVERLAY_KEY
 from forwin.book_state.narrative import reader_promises_from_graph
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
@@ -594,7 +595,7 @@ class ObsidianExporter:
         )
 
     def _reader_visibility(self, runtime) -> str:
-        reader = runtime.cognition_by_observer.get(("reader", "reader"))
+        reader = runtime.cognition_by_observer.get(READER_OVERLAY_KEY)
         if reader is None:
             return "Reader cognition overlay is not materialized."
         return (

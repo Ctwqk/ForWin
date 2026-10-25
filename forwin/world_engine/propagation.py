@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.book_state.extraction.translator import _OBSERVER_TYPES
+from forwin.book_state.story_clock import MINUTE_EPSILON
+from forwin.book_state.delta_helpers import OBSERVER_TYPES
 from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
@@ -28,7 +29,6 @@ _AWARE_STATES = frozenset({"knows", "believes"})
 _WITNESS_STATE, _WITNESS_CHANNEL = "knows", "witnessed"
 _NEWS_STATE, _NEWS_CHANNEL = "heard", "rumor"
 # Arrival minutes absorb float noise before rounding up.
-_MINUTE_EPSILON = 1e-6
 
 
 @dataclass(frozen=True)
@@ -134,7 +134,7 @@ def propagate_news(
             estimate = estimates.get(location_id)
             if estimate is not None and estimate.minutes is not None:
                 minutes = estimate.minutes / lexicon.news_speed_multiplier
-                news.hear(actor_id, fact_ref, event.at + math.ceil(minutes - _MINUTE_EPSILON))
+                news.hear(actor_id, fact_ref, event.at + math.ceil(minutes - MINUTE_EPSILON))
     return news.result()
 
 
@@ -186,7 +186,7 @@ class _News:
         if observer_id not in self.recipients:
             return True
         node_type = str(self.runtime.world.nodes_by_id[observer_id].node_type)
-        view = self.runtime.cognition_by_observer.get((_OBSERVER_TYPES[node_type], observer_id))
+        view = self.runtime.cognition_by_observer.get((OBSERVER_TYPES[node_type], observer_id))
         recorded = view.knowledge_by_ref.get(fact_ref) if view is not None else None
         return recorded in _AWARE_STATES or recorded == state
 

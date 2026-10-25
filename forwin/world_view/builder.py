@@ -18,9 +18,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from forwin.book_state.knowledge import READER_OVERLAY_KEY
+from forwin.book_state.knowledge import READER_OBSERVER, READER_KNOWN_STATES
+from forwin.book_state.story_clock import MINUTE_EPSILON
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
 from forwin.book_state.cognition import CognitionView
-from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY, is_concealed
+from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY, is_secret_fact, observer_overlay_key, is_concealed
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.projection import BookStateProjection
@@ -32,7 +35,7 @@ from forwin.book_state.story_clock import StoryCalendar, format_story_time
 from forwin.map.visibility import is_writer_visible_map_edge
 from forwin.models.project import ChapterPlan
 from forwin.planning.fact_text import states_proposition
-from forwin.protocol.book_state import FactNode, ObserverType, WorldEdge, WorldNode
+from forwin.protocol.book_state import FactNode, WorldEdge, WorldNode
 from forwin.world_engine.travel import estimate_travel
 from forwin.writer.prompt_core.world_view import forbidden_topic_text, render_world_view
 
@@ -46,11 +49,9 @@ logger = logging.getLogger(__name__)
 
 VIEW_NEARBY_LOCATIONS = 8
 VIEW_KNOWN_ENTITIES = 12
-_READER = ObserverType.READER.value
 # States in which an observer holds a fact; disbelieving or being misled is not holding it.
 _HELD_STATES = frozenset({"heard", "suspects", "believes", "knows"})
 # Recorded reader states that settle a secret for the reader.
-_READER_KNOWN_STATES = frozenset({"believes", "knows"})
 # Node types whose names may stand for a secret's subjects; abstract nodes such as events or
 # intents may be named after the secret itself.
 _TOPIC_SUBJECT_TYPES = frozenset({*ACTOR_NODE_TYPES, "family", "institution", "item", "location", "region"})
@@ -62,7 +63,6 @@ _POV_TYPE = "character"
 # Edge families whose two ends know each other; a target or a witness may be a stranger.
 _ACQUAINTANCE_FAMILIES = frozenset({"social", "kinship_training", "organization", "loyalty_conflict"})
 # Travel minutes absorb float noise before rounding up.
-_MINUTE_EPSILON = 1e-6
 
 
 def build_chapter_world_view(
@@ -89,7 +89,7 @@ def build_chapter_world_view(
     if runtime is None:
         runtime = BookStateProjection(session).load_runtime_as_of(
             project_id, as_of_chapter=as_of_chapter,
-            observer_keys=[(_READER, _READER), *([(_POV_TYPE, pov_ref)] if pov_ref else [])],
+            observer_keys=[READER_OVERLAY_KEY, *([(_POV_TYPE, pov_ref)] if pov_ref else [])],
         )
     calendar = StoryCalendarRepository(session).get(project_id)
     now = BookStateQuery(session).current_story_minute(project_id, as_of_chapter=as_of_chapter)
@@ -118,7 +118,7 @@ def build_chapter_world_view(
         chapter_number=chapter_number,
         schedule=earliest_reveal_chapters(session, project_id),
         permitted={reveal.fact_ref for reveal in allowed},
-        reader_permitted={reveal.fact_ref for reveal in allowed if reveal.observer == _READER},
+        reader_permitted={reveal.fact_ref for reveal in allowed if reveal.observer == READER_OBSERVER},
         relevant_refs=relevant_refs,
         topic_refs=relevant_refs | {item.id for entity in onstage for item in held.get(entity.ref, ())},
         hinted_refs={
@@ -238,11 +238,7 @@ def _hints(
 
 
 def _observer_key(runtime: BookStateRuntime, ref: str) -> tuple[str, str] | None:
-    """The cognition overlay key of a world node; node ids are unique across observer types."""
-    if not ref:
-        return None
-    return next((key for key in runtime.cognition_by_observer if key[1] == ref and key[0] != _READER), None)
-
+    return observer_overlay_key(runtime, ref) if ref else None
 
 def _fact_parts(
     runtime: BookStateRuntime,
@@ -268,7 +264,7 @@ def _fact_parts(
     pov_view = runtime.cognition_by_observer[key] if key is not None else None
     pov_states = pov_view.knowledge_by_ref if pov_view is not None else {}
     false_refs = set(pov_view.false_beliefs(runtime.world.facts_by_id)) if pov_view is not None else set()
-    reader = runtime.cognition_by_observer.get((_READER, _READER))
+    reader = runtime.cognition_by_observer.get(READER_OVERLAY_KEY)
     reader_states = reader.knowledge_by_ref if reader is not None else {}
     knowledge: list[KnownFact] = []
     reader_known: list[str] = []
@@ -277,11 +273,11 @@ def _fact_parts(
     for fact in sorted(runtime.world.facts_by_id.values(), key=lambda item: (-item.created_at_chapter, item.id)):
         ref = f"{FACT_REF_PREFIX}{fact.id}"
         secret = fact.truth_value != "false" and (
-            fact.sensitivity_level in HIDDEN_SENSITIVITY or fact.id in schedule
+            is_secret_fact(fact.sensitivity_level, fact_id=fact.id, protected=schedule)
         )
         state = pov_states.get(ref, "")
         pov_holds = state in _HELD_STATES
-        reader_knows = reader_states.get(ref) in _READER_KNOWN_STATES
+        reader_knows = reader_states.get(ref) in READER_KNOWN_STATES
         reveal_due = schedule.get(fact.id, math.inf) <= chapter_number
         if secret:
             secret_refs.add(ref)
@@ -439,7 +435,7 @@ def _locations(
                 runtime, lexicon, mover_id=pov_ref, from_location_id=origin, to_location_id=node_id, graph=graph,
             )
             if estimate.minutes is not None:
-                minutes[node_id] = math.ceil(estimate.minutes - _MINUTE_EPSILON)
+                minutes[node_id] = math.ceil(estimate.minutes - MINUTE_EPSILON)
     nearest = sorted((value, node_id) for node_id, value in minutes.items() if node_id != origin)
     ordered = dict.fromkeys([origin, *location_refs, *(node_id for _, node_id in nearest[:VIEW_NEARBY_LOCATIONS])])
     locations = [

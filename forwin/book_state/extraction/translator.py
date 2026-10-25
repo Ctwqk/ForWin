@@ -4,15 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from hashlib import sha256
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from forwin.book_state.knowledge import READER_OBSERVER
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
-from forwin.book_state.knowledge import FACT_REF_PREFIX, KnowledgeEvent, is_concealed, knowledge_event_to_patch
+from forwin.book_state.knowledge import EVENT_FACT_TYPE, FACT_REF_PREFIX, KnowledgeEvent, is_concealed, knowledge_event_to_patch
 from forwin.book_state.lexicon import BookLexicon
-from forwin.book_state.names import normalized_name as _normalized_name
+from forwin.book_state.names import matching_runtime_entities, normalized_name as _normalized_name
+from forwin.book_state.delta_helpers import (
+    OBSERVER_TYPES, INTENT_STATUS_BY_EFFECT, RelationshipPlanner,
+    stable_id, leaf_patch, current_node_value, get_path,
+)
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
@@ -23,9 +27,7 @@ from forwin.book_state.story_clock import (
 )
 from forwin.naming.types import EntityAdmissionDecision, EntityAdmissionPlan
 from forwin.protocol.book_state import (
-    WORLD_EDGE_TYPES_BY_FAMILY,
     CognitionPatch,
-    Directionality,
     EdgePatch,
     FactPatch,
     GraphDelta,
@@ -37,7 +39,6 @@ from forwin.protocol.book_state import (
     NarrativePatch,
     NodePatch,
     ObserverType,
-    WorldEdge,
     WorldNode,
 )
 from forwin.writer.prompt_core.world_view import UNNAMED_ACTOR_LABEL
@@ -63,21 +64,12 @@ from .chapter_delta_schema import (
 
 
 SOURCE_TYPE = "chapter_extraction"
-READER_REF = "reader"
 _THREAD_REF_PREFIX = "plot_thread:"
 # MapGraph adds a runtime copy of every bidirectional edge under this suffix.
 _REVERSE_EDGE_SUFFIX = "__reverse"
 _NEW_SITE_EDGE_HOURS = 0.25
 _NEW_ENTITY_NODE_TYPES = frozenset({"faction", "organization", "group", "item", "location"})
-_OBSERVER_TYPES = {"character": "character", "faction": "faction", "organization": "group", "group": "group"}
 _MAP_NODE_TYPES = frozenset(node_type.value for node_type in MapNodeType)
-# Relations that read the same from either endpoint; every other edge type is directed.
-_SYMMETRIC_EDGE_TYPES = frozenset(
-    {"family_of", "kin_of", "ally_of", "enemy_of", "rival_of", "romantic_with", "allied_with"}
-)
-_EDGE_SET_FIELDS = frozenset({"weight", "confidence", "status", "visibility", "truth_relation", "visibility_default"})
-_EDGE_SET_PREFIXES = ("state.", "metadata.")
-_INTENT_STATUS_BY_EFFECT = {"disrupted": "disrupted", "fulfilled": "resolved"}
 _TOPIC_SUBJECT_TYPES = frozenset({*ACTOR_NODE_TYPES, "family", "institution", "item", "location", "region"})
 
 
@@ -364,7 +356,7 @@ class _DeltaBuilder:
         if entity is None or entity.kind not in _NEW_ENTITY_NODE_TYPES:
             self._unresolved(path, f"new entity {name!r} has no admission decision or declared non-character kind")
             return None
-        node_id = _stable_id(self.project_id, entity.kind, name)
+        node_id = stable_id(self.project_id, entity.kind, name)
         if self._node_exists(node_id):
             # Retired nodes retain their generated ids, but cannot bypass an ambiguous name.
             node = self.world.nodes_by_id.get(node_id)
@@ -439,12 +431,12 @@ class _DeltaBuilder:
         return self._location(text, path) if is_site else self._entity(text, path)
 
     def _observer(self, ref: str, path: str) -> tuple[str, str] | None:
-        if ref.strip() == READER_REF:
-            return ObserverType.READER.value, READER_REF
+        if ref.strip() == READER_OBSERVER:
+            return ObserverType.READER.value, READER_OBSERVER
         node_id = self._entity(ref, path)
         if not node_id:
             return None
-        observer_type = _OBSERVER_TYPES.get(self._node_type(node_id))
+        observer_type = OBSERVER_TYPES.get(self._node_type(node_id))
         if observer_type is None:
             self._unresolved(path, f"{node_id!r} is not an observer")
             return None
@@ -496,9 +488,9 @@ class _DeltaBuilder:
             return
         if field_path.startswith("state."):
             # State is snapshot-backed, so a field without a value yet needs no old_value.
-            leaf = ("set", field_path, _current_node_value(self.runtime, node_id, field_path), value)
+            leaf = ("set", field_path, current_node_value(self.runtime, node_id, field_path), value)
         else:
-            leaf = _leaf_patch(self.world.nodes_by_id[node_id].model_dump(mode="json"), field_path, value)
+            leaf = leaf_patch(self.world.nodes_by_id[node_id].model_dump(mode="json"), field_path, value)
         if leaf is None:
             # Historical rewind restores non-state fields from old_value.
             self._issue("error", "missing_old_value", path, f"{node_id}:{field_path} has no current value or parent")
@@ -557,7 +549,7 @@ class _DeltaBuilder:
             else:
                 self.new_sites[name] = existing
             return
-        node_id = _stable_id(self.project_id, "map_node", name)
+        node_id = stable_id(self.project_id, "map_node", name)
         if node_id in self.map.nodes_by_id:
             self._unresolved(path, f"new site {name!r} would reuse {node_id!r} without a unique name match")
             return
@@ -604,7 +596,7 @@ class _DeltaBuilder:
         ))
         if near_id:
             edge = MapEdge(
-                id=_stable_id(self.project_id, "map_edge", f"{node_id}/{near_id}"),
+                id=stable_id(self.project_id, "map_edge", f"{node_id}/{near_id}"),
                 project_id=self.project_id,
                 subworld_id=anchor.subworld_id,
                 from_node_id=node_id,
@@ -620,7 +612,7 @@ class _DeltaBuilder:
             ))
         self._create_node(
             WorldNode(
-                id=_stable_id(self.project_id, "site_state", node_id),
+                id=stable_id(self.project_id, "site_state", node_id),
                 project_id=self.project_id,
                 node_type="site_state",
                 name=name,
@@ -675,114 +667,13 @@ class _DeltaBuilder:
             self._set_node_field(node_id, field_path, change.new_value, path=f"{path}.field", reason=change.evidence)
 
     def _relation_change(self, change: RelationChange, path: str) -> None:
-        families = [family for family, edge_types in WORLD_EDGE_TYPES_BY_FAMILY.items() if change.edge_type in edge_types]
-        if len(families) != 1:
-            self._issue("error", "edge_type_invalid", f"{path}.edge_type", f"{change.edge_type!r} has no unique edge family")
-            return
-        source_id = self._relation_endpoint(change.source_ref, f"{path}.source_ref")
-        target_id = self._relation_endpoint(change.target_ref, f"{path}.target_ref")
-        if not source_id or not target_id:
-            return
-        symmetric = change.edge_type in _SYMMETRIC_EDGE_TYPES
-        same_type = sorted(
-            (edge for edge in self.world.edges_by_id.values() if edge.edge_type == change.edge_type),
-            key=lambda edge: edge.id,
-        )
-        forward = [edge for edge in same_type if (edge.source_id, edge.target_id) == (source_id, target_id)]
-        backward = [edge for edge in same_type if (edge.source_id, edge.target_id) == (target_id, source_id)]
-        matching = forward + backward if symmetric else forward
-        active = next((edge for edge in matching if edge.is_active), None)
-        if change.op == "create":
-            # A create earlier in this chapter counts as existing too.
-            pairs = {(source_id, target_id), (target_id, source_id)} if symmetric else {(source_id, target_id)}
-            pending = next(
-                (
-                    patch for patch in self.edge_patches
-                    if str(patch.op) == "create" and patch.edge_type == change.edge_type
-                    and (patch.source_id, patch.target_id) in pairs
-                ),
-                None,
-            )
-            existing_id = active.id if active is not None else pending.edge_id if pending is not None else ""
-            if existing_id:
-                self._issue("warning", "relation_exists", path, f"relation {existing_id} already exists")
-            elif not symmetric and not forward and any(edge.is_active for edge in backward):
-                # An ended reverse edge is a past role; only a live one blocks the flip.
-                self._direction_mismatch(change, path)
-            else:
-                self._create_relation(change, matching, source_id, target_id, families[0])
-            return
-        if active is None:
-            if not symmetric and any(edge.is_active for edge in backward):
-                self._direction_mismatch(change, path)
-            else:
-                self._issue("warning", "relation_missing", path, f"no active {change.edge_type} relation to {change.op}")
-            return
-        endpoints = {
-            "source_id": active.source_id, "target_id": active.target_id,
-            "edge_type": active.edge_type, "edge_family": str(active.edge_family),
-        }
-        if change.op == "end":
-            self.edge_patches.append(EdgePatch(
-                edge_id=active.id, op="deactivate", **endpoints,
-                field_path="is_active", old_value=True, reason=change.evidence,
-            ))
-            return
-        field_path = _edge_field_path(change.field)
-        if field_path is None:
-            self._issue("error", "unknown_field", f"{path}.field", f"{change.field!r} is not a settable relation field")
-            return
-        leaf = _leaf_patch(active.model_dump(mode="json"), field_path, change.new_value)
-        if leaf is None:
-            self._issue("error", "missing_old_value", f"{path}.field", f"{active.id}:{field_path} has no current value or parent")
-            return
-        op, patch_path, old_value, new_value = leaf
-        self.edge_patches.append(EdgePatch(
-            edge_id=active.id, op=op, **endpoints, field_path=patch_path,
-            old_value=old_value, new_value=new_value, reason=change.evidence,
-        ))
-
-    def _create_relation(
-        self, change: RelationChange, matching: list[WorldEdge], source_id: str, target_id: str, edge_family: str,
-    ) -> None:
-        ended = [edge for edge in matching if edge.ended_at_chapter is not None]
-        # A create on an ended relation reactivates that same edge.
-        symmetric = change.edge_type in _SYMMETRIC_EDGE_TYPES
-        # A symmetric relation has one id whichever endpoint the prose names first.
-        first, second = sorted((source_id, target_id)) if symmetric else (source_id, target_id)
-        edge_id = (
-            max(ended, key=lambda edge: (edge.ended_at_chapter, edge.id)).id
-            if ended
-            else _stable_id(self.project_id, "edge", f"{first}/{change.edge_type}/{second}")
-        )
-        if any(patch.edge_id == edge_id for patch in self.edge_patches):
-            return
-        endpoints = {
-            "source_id": source_id, "target_id": target_id,
-            "edge_type": change.edge_type, "edge_family": edge_family,
-        }
-        directionality = Directionality.UNDIRECTED if symmetric else Directionality.DIRECTED
-        self.edge_patches.append(EdgePatch(
-            edge_id=edge_id,
-            op="create",
-            **endpoints,
-            new_value={
-                "project_id": self.project_id,
-                **endpoints,
-                "directionality": directionality.value,
-                "established_at_chapter": self.chapter,
-                "valid_from_chapter": self.chapter,
-                "evidence_refs": [f"chapter:{self.chapter}"],
-                "metadata": {"appellation": change.appellation, "source": SOURCE_TYPE},
-            },
-            reason=change.evidence,
-        ))
-
-    def _direction_mismatch(self, change: RelationChange, path: str) -> None:
-        self._issue(
-            "warning", "relation_direction_mismatch", path,
-            f"only the reverse {change.edge_type} relation exists; directed relations are not flipped",
-        )
+        RelationshipPlanner(
+            project_id=self.project_id, chapter=self.chapter, world=self.world,
+            edge_patches=self.edge_patches, operation=change.op,
+            reason=change.evidence, evidence_ref=f"chapter:{self.chapter}",
+            source={"appellation": change.appellation, "source": SOURCE_TYPE},
+            resolve_endpoint=self._relation_endpoint, issue=self._issue,
+        ).plan(change, path)
 
     def _relation_endpoint(self, ref: str, path: str) -> str | None:
         """An entity ref, or a map node id standing for the site_state node of that site."""
@@ -845,7 +736,7 @@ class _DeltaBuilder:
 
     def _create_fact(self, fact: NewFact, *, reason: str) -> str:
         proposition = fact.proposition.strip()
-        fact_id = _stable_id(self.project_id, "fact", proposition)
+        fact_id = stable_id(self.project_id, "fact", proposition)
         if fact_id not in self.world.facts_by_id and fact_id not in self.created_facts:
             truth_value = "true" if fact.truth_value else "false"
             self.fact_patches.append(FactPatch(
@@ -925,11 +816,11 @@ class _DeltaBuilder:
         created = self.created_nodes.get(node_id)
         if created is not None:
             return str(created.new_value.get("state", {}).get(field) or "")
-        return str(_current_node_value(self.runtime, node_id, f"state.{field}") or "")
+        return str(current_node_value(self.runtime, node_id, f"state.{field}") or "")
 
     def _discover_route(self, mover: str, from_id: str, to_id: str) -> None:
         """Reveal the edges of the route the prose says the mover found that it did not know yet."""
-        observer = (_OBSERVER_TYPES.get(self._node_type(mover), ""), mover)
+        observer = (OBSERVER_TYPES.get(self._node_type(mover), ""), mover)
         view = self.runtime.cognition_by_observer.get(observer)
         if view is None or from_id not in self.map.nodes_by_id or to_id not in self.map.nodes_by_id:
             return
@@ -998,8 +889,8 @@ class _DeltaBuilder:
         if not resolved or location_id is None:
             return
         summary = event.summary.strip()
-        event_id = _stable_id(self.project_id, "event", f"{self.chapter}/{index}/{summary}")
-        fact_id = _stable_id(self.project_id, "fact", event_id)
+        event_id = stable_id(self.project_id, "event", f"{self.chapter}/{index}/{summary}")
+        fact_id = stable_id(self.project_id, "fact", event_id)
         fact_ref = f"{FACT_REF_PREFIX}{fact_id}"
         sensitivity = "secret" if event.visibility == "secret" else "public"
         if event.flashback:
@@ -1047,7 +938,7 @@ class _DeltaBuilder:
             new_value={
                 "project_id": self.project_id,
                 "proposition": summary,
-                "fact_type": "event",
+                "fact_type": EVENT_FACT_TYPE,
                 "truth_value": "true",
                 "confidence": 1.0,
                 "related_node_refs": related,
@@ -1091,7 +982,7 @@ class _DeltaBuilder:
             target_ref=target_ref,
             op="append",
             field_path="payload.beats",
-            old_value=_get_path(node.model_dump(mode="json"), "payload.beats"),
+            old_value=get_path(node.model_dump(mode="json"), "payload.beats"),
             new_value=entry,
             reason=beat.evidence,
             evidence_refs=[f"chapter:{self.chapter}"],
@@ -1126,7 +1017,7 @@ class _DeltaBuilder:
         existing = next((node_id for node_id, node in threads.items() if node.title.strip() == title), None)
         if existing is not None:
             return existing
-        thread_id = _stable_id(self.project_id, "plot_thread", title)
+        thread_id = stable_id(self.project_id, "plot_thread", title)
         if thread_id in threads:
             return thread_id
         if thread_id not in self.created_threads:
@@ -1157,7 +1048,7 @@ class _DeltaBuilder:
         self.intent_interactions.append({
             "intent_id": intent_id, "effect": interaction.effect, "evidence": interaction.evidence,
         })
-        status = _INTENT_STATUS_BY_EFFECT.get(interaction.effect)
+        status = INTENT_STATUS_BY_EFFECT.get(interaction.effect)
         if status is not None:
             self._set_node_field(intent_id, "state.status", status, path=path, reason=interaction.evidence)
 
@@ -1194,65 +1085,6 @@ def _decisions_by_name(plan: EntityAdmissionPlan) -> dict[str, EntityAdmissionDe
             index.setdefault(name.strip(), decision)
     index.pop("", None)
     return index
-
-
-def matching_runtime_entities(world: ObjectiveWorldGraph, kind: str, name: str) -> list[WorldNode]:
-    """Exact active-node matches shared with admission planning; never choose an ambiguous owner."""
-    wanted = _normalized_name(name)
-    return [
-        node for node in world.nodes_by_id.values()
-        if wanted and str(node.node_type) == kind and node.is_active
-        and node.status not in {"inactive", "retired", "deleted"}
-        and wanted in {_normalized_name(label) for label in (node.name, *node.aliases)}
-    ]
-
-
-def _stable_id(project_id: str, kind: str, name: str) -> str:
-    """Hyphenated ``kind-<20 hex>`` id, the same scheme as the world seed's ``seed_ref_id``."""
-    digest = sha256(f"{project_id}\0{kind}\0{name}".encode()).hexdigest()[:20]
-    return f"{kind}-{digest}"
-
-
-def _leaf_patch(payload: dict[str, Any], field_path: str, value: Any) -> tuple[str, str, Any, Any] | None:
-    """(op, field_path, old_value, new_value) setting one leaf of ``payload``.
-
-    A leaf without a value yet merges into its parent dict, whose current value is the
-    old_value rewind restores; None when that parent does not exist either.
-    """
-    old_value = _get_path(payload, field_path)
-    if old_value is not None:
-        return "set", field_path, old_value, value
-    parent, _, leaf = field_path.rpartition(".")
-    current = _get_path(payload, parent) if parent else None
-    if not isinstance(current, dict):
-        return None
-    return "merge", parent, dict(current), {leaf: value}
-
-
-def _edge_field_path(field: str) -> str | None:
-    text = field.strip()
-    if text == "appellation":
-        return "metadata.appellation"
-    if text in _EDGE_SET_FIELDS or (text.startswith(_EDGE_SET_PREFIXES) and text.split(".", 1)[1]):
-        return text
-    return None
-
-
-def _current_node_value(runtime: BookStateRuntime, node_id: str, field_path: str) -> Any:
-    node = runtime.world.nodes_by_id.get(node_id)
-    if node is None:
-        return None
-    if field_path.startswith("state."):
-        return _get_path(runtime.world.get_state(node_id), field_path.removeprefix("state."))
-    return _get_path(node.model_dump(mode="json"), field_path)
-
-
-def _get_path(payload: Any, field_path: str) -> Any:
-    for part in field_path.split("."):
-        if not isinstance(payload, dict):
-            return None
-        payload = payload.get(part)
-    return payload
 
 
 __all__ = ["ChapterDeltaTranslator", "TranslationResult"]

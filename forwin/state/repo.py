@@ -215,6 +215,15 @@ class StateRepository:
         )
         return self.session.execute(stmt).scalar_one_or_none()
 
+    def chapter_plans_in_range(
+        self, project_id: str, *, chapter_start: int, chapter_end: int,
+    ) -> list[ChapterPlan]:
+        return list(self.session.scalars(select(ChapterPlan).where(
+            ChapterPlan.project_id == project_id,
+            ChapterPlan.chapter_number >= chapter_start,
+            ChapterPlan.chapter_number <= chapter_end,
+        ).order_by(ChapterPlan.chapter_number)))
+
     def get_chapter_experience_plan(
         self,
         project_id: str,

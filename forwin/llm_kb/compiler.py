@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
 
+from forwin.book_state.knowledge import is_secret_fact
 from forwin.book_state.narrative import reader_promises_from_graph
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
@@ -295,7 +296,7 @@ def _hidden_node(node: WorldNode) -> bool:
 
 
 def _hidden_fact(fact: FactNode) -> bool:
-    return str(fact.sensitivity_level).lower() in {"hidden", "secret", "must_not_reveal"}
+    return is_secret_fact(str(fact.sensitivity_level).lower())
 
 
 def _hidden_delta(delta: GraphDelta) -> bool:

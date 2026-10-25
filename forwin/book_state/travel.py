@@ -6,10 +6,11 @@ from collections.abc import Callable
 
 from pydantic import BaseModel, ConfigDict
 
+from forwin.book_state.knowledge import observer_overlay_key
 from forwin.book_state.lexicon import BookLexicon, TravelMode
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.book_state.rule_predicates import active_rule_predicates, blocked_edge_types
-from forwin.protocol.book_state import ObserverType, PathResult
+from forwin.protocol.book_state import PathResult
 
 
 # Map edges give travel_time in hours.
@@ -65,7 +66,7 @@ def estimate_route_travel(
         return TravelEstimate(
             reachable=False, minutes=None, route_known=False, blocked_reason=objective.blocked_reason,
         )
-    observer = _overlay_key(runtime, mover_id) if mover_id is not None else None
+    observer = observer_overlay_key(runtime, mover_id) if mover_id is not None else None
     route = objective
     if observer is not None:
         route = path(observer, None)
@@ -85,14 +86,3 @@ def _mover_modes(runtime: BookStateRuntime, lexicon: BookLexicon, mover_id: str 
     modes = {mode.id: mode for mode in lexicon.travel_modes}
     ids = (runtime.world.get_state(mover_id).get("travel_mode_ids") or []) if mover_id is not None else []
     return [modes[mode_id] for mode_id in ids if mode_id in modes]
-
-
-def _overlay_key(runtime: BookStateRuntime, node_id: str) -> tuple[str, str] | None:
-    """The cognition overlay of a world node; node ids are unique across observer types."""
-    return next(
-        (
-            key for key in runtime.cognition_by_observer
-            if key[1] == node_id and key[0] != ObserverType.READER.value
-        ),
-        None,
-    )

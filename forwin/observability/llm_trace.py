@@ -4,9 +4,14 @@ import copy
 import hashlib
 import json
 import re
-from typing import Any
+from typing import Any, TYPE_CHECKING
+from collections.abc import Callable, Mapping
 
-from forwin.audit.events import DecisionEventType
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+    from forwin.generation.gate_delegation import GateAuditWriter
+
+from forwin.audit.events import DecisionEventInfo, DecisionEventType
 
 from .payloads import safe_error_summary
 from .redaction import redact_payload
@@ -488,3 +493,166 @@ def post_canon_trace_artifact_key(
     if not _POST_CANON_ID_RE.fullmatch(step):
         raise ValueError("step_name is not safe for an artifact key")
     return f"post_canon/{commit_id}/{step}/llm_trace.json"
+
+
+def drain_workflow_attempts(
+    llm_client: object, *, attempt_no: int, stage_key: str, task_family: str,
+    messages: list[dict], raw: str, call_error: Exception | None, error_message: str,
+    replace_error_message: bool = False,
+    parse_error: Exception | None = None, parser_name: str = "", schema_name: str = "",
+) -> list[dict[str, Any]]:
+    """Drain one workflow attempt, retaining provider details and the caller's error policy."""
+    if parse_error is not None:
+        mark_latest_attempt_parse_failure(
+            llm_client, parser_name=parser_name, stage_key=stage_key,
+            schema_name=schema_name, raw_output=raw, error=parse_error,
+        )
+    mark_latest_attempt_workflow(llm_client, attempt_no=attempt_no, stage_key=stage_key)
+    drain = getattr(llm_client, "drain_llm_attempt_events", None)
+    drained = drain() if callable(drain) else []
+    attempts = drained if isinstance(drained, list) and drained else [{
+        "attempt_no": 1, "stage_key": stage_key, "task_family": task_family,
+    }]
+    for event in attempts:
+        event.setdefault("workflow_attempt_no", attempt_no)
+        event.setdefault("workflow_retry", attempt_no > 1)
+        event.setdefault(RAW_REQUEST_KEY, {"messages": messages})
+        event.setdefault(RAW_RESPONSE_KEY, raw)
+        if call_error is not None:
+            event.setdefault("error_class", type(call_error).__name__)
+            if replace_error_message:
+                event["error_message"] = error_message
+            else:
+                event.setdefault("error_message", error_message)
+    return attempts
+
+
+def build_workflow_trace(
+    llm_client: object, *, messages: list[dict], attempts: list[dict[str, Any]],
+    trace_scope: str, stage_key: str, template_id: str,
+    input_snapshot: dict[str, Any], output_summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the common trace envelope while retaining role-specific input and output fields."""
+    from forwin.skills import serialize_prompt_layers
+
+    last_call_result = getattr(llm_client, "last_call_result", None) if attempts else None
+    trace = getattr(last_call_result, "trace", {}) or {}
+    layers = serialize_prompt_layers(messages, [])
+    return {
+        "trace_scope": trace_scope, "stage_key": stage_key,
+        "backend": str(trace.get("backend") or getattr(last_call_result, "backend", "") or ""),
+        "codex_job_id": str(trace.get("codex_job_id", "") or ""),
+        "permission_profile": str(trace.get("permission_profile", "") or ""),
+        "fallback_used": bool(getattr(last_call_result, "fallback_used", False)),
+        "template_id": template_id, "template_version": "v1",
+        "effective_system_prompt": "\n\n".join(str(item["content"]).strip() for item in layers if item["role"] == "system"),
+        "prompt_layers": layers,
+        "input_snapshot": input_snapshot,
+        "model_profile": {
+            **{key: getattr(llm_client, key, "") for key in ("profile_id", "profile_name", "model", "base_url")},
+            "actual_model": getattr(last_call_result, "actual_model", "") or "",
+        },
+        "attempts": attempts,
+        "output_summary": output_summary,
+    }
+
+
+def own_transaction_audit_writer(
+    session_factory: Callable[[], Session],
+) -> Callable[[], GateAuditWriter]:
+    """Audit writers whose every write commits on its own, so it outlives a world step that rolls back."""
+    from forwin.generation.gate_delegation import GateAuditWriter
+    from forwin.models.project import Project
+    from forwin.state.updater import StateUpdater
+
+    def save_decision_event(info: DecisionEventInfo) -> Any:
+        with session_factory.begin() as session:
+            row = StateUpdater(session).save_decision_event(info)
+            session.expunge(row)
+            return row
+
+    def save_prompt_trace(**payload: Any) -> Any:
+        with session_factory.begin() as session:
+            project = session.get(Project, payload["project_id"])
+            payload.setdefault("genesis_revision_id", str(getattr(project, "active_genesis_revision_id", "") or ""))
+            row = StateUpdater(session).save_prompt_trace(**payload)
+            session.expunge(row)
+            return row
+
+    def factory() -> GateAuditWriter:
+        return GateAuditWriter(
+            save_decision_event=save_decision_event,
+            save_prompt_trace=save_prompt_trace,
+        )
+
+    return factory
+
+
+def save_world_prompt_trace(
+    session: Session,
+    prompt_trace: Mapping[str, Any],
+    *,
+    artifact_store: Any = None,
+    independent: bool = False,
+) -> str:
+    """Save a role's trace and events, optionally through the independent audit writer."""
+    from sqlalchemy.orm import sessionmaker
+    from forwin.models.project import Project
+    from forwin.state.updater import StateUpdater
+
+    if not prompt_trace:
+        return ""
+    if independent and not prompt_trace.get("attempts"):
+        # No model attempt needs preserving before the caller's parent rows commit.
+        return ""
+    snapshot = prompt_trace.get("input_snapshot")
+    snapshot = snapshot if isinstance(snapshot, Mapping) else {}
+    project_id = str(snapshot.get("project_id") or "")
+    chapter_number = int(snapshot.get("chapter_number") or 0)
+    payload = prepare_prompt_trace_payload(
+        dict(prompt_trace),
+        artifact_store=artifact_store,
+        project_id=project_id,
+        chapter_number=chapter_number,
+    )
+    if independent:
+        updater = own_transaction_audit_writer(sessionmaker(bind=session.get_bind().engine, expire_on_commit=False))()
+        revision = {}
+    else:
+        project = session.get(Project, project_id)
+        updater = StateUpdater(session)
+        revision = {"genesis_revision_id": str(getattr(project, "active_genesis_revision_id", "") or "")}
+    row = updater.save_prompt_trace(
+        project_id=project_id,
+        **revision,
+        trace_scope=str(payload.get("trace_scope") or "world_engine"),
+        stage_key=str(payload.get("stage_key") or ""),
+        template_id=str(payload.get("template_id") or ""),
+        template_version=str(payload.get("template_version") or "v1"),
+        effective_system_prompt=str(payload.get("effective_system_prompt") or ""),
+        prompt_layers_json=json.dumps(payload.get("prompt_layers", []), ensure_ascii=False),
+        input_snapshot_json=json.dumps(payload.get("input_snapshot", {}), ensure_ascii=False),
+        model_profile_json=json.dumps(payload.get("model_profile", {}), ensure_ascii=False),
+        attempts_json=json.dumps(payload.get("attempts", []), ensure_ascii=False),
+        output_summary_json=json.dumps(payload.get("output_summary", {}), ensure_ascii=False),
+        backend=str(payload.get("backend") or ""),
+        codex_job_id=str(payload.get("codex_job_id") or ""),
+        permission_profile=str(payload.get("permission_profile") or ""),
+        fallback_used=bool(payload.get("fallback_used", False)),
+    )
+    for event in build_llm_decision_event_payloads(payload, prompt_trace_id=row.id):
+        updater.save_decision_event(
+            DecisionEventInfo(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                scope="chapter" if chapter_number else "project",
+                event_family=str(event.get("event_family") or "runtime_observation"),
+                event_type=str(event.get("event_type") or DecisionEventType.LLM_REQUEST_FAILED),
+                actor_type="system",
+                summary=str(event.get("summary") or "World engine LLM trace event."),
+                payload=event.get("payload") if isinstance(event.get("payload"), dict) else {},
+                related_object_type="prompt_trace",
+                related_object_id=row.id,
+            )
+        )
+    return row.id

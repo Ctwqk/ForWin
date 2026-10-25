@@ -436,3 +436,32 @@ def test_allowlist_categories_are_known(allowlist) -> None:
         if entry.category not in CATEGORIES
     ]
     assert unknown == []
+
+
+def test_scanner_detects_function_local_cjk_collections():
+    hits = _scan('''
+        def choose(text):
+            words: list[str] = ["山门", "灵根"]
+            return any(word in text for word in words)
+    ''')
+    assert _literals(hits, "cjk_collection") == ["山门", "灵根"]
+    assert _literals(_scan('def choose(): return ["山门"]'), "cjk_collection") == ["山门"]
+
+
+def test_scanner_detects_cjk_startswith_tuple():
+    hits = _scan('''
+        def choose(text):
+            return text.startswith(("宗门", "掌门"))
+    ''')
+    assert _literals(hits, "cjk_membership") == ["宗门", "掌门"]
+
+
+def test_scanner_detects_concatenated_literals():
+    hits = _scan('''
+        def choose(text):
+            words = ["宗" + "门", "灵" "根"]
+            return ("秘" + "密") in text
+    ''')
+    assert _literals(hits, "cjk_collection") == ["宗门", "灵根"]
+    assert _literals(hits, "cjk_membership") == ["秘密"]
+    assert _literals(_scan('x = "line_" + "story"'), "story_id_literal") == ["line_story"]

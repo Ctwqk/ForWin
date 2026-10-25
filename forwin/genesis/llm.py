@@ -461,7 +461,6 @@ def _trace_payload(
     backend = str(
         trace.get("backend", "") or getattr(last_call_result, "backend", "") or ""
     )
-    permission_profile = str(trace.get("permission_profile", "") or "")
     fallback_used = (
         bool(getattr(last_call_result, "fallback_used", False))
         if last_call_result is not None
@@ -469,8 +468,6 @@ def _trace_payload(
     )
     return {
         "backend": backend,
-        "codex_job_id": str(trace.get("codex_job_id", "") or ""),
-        "permission_profile": permission_profile,
         "fallback_used": fallback_used,
         "effective_system_prompt": effective_system_prompt,
         "prompt_layers": prompt_layers

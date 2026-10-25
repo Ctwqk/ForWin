@@ -434,7 +434,7 @@ def test_missing_or_foreign_turn_retries_and_duplicate_keeps_first():
 def test_runner_call_kwargs_trace_and_allowed_values():
     client = StubLLM({"turns": [_turn()]})
     client.last_call_result = SimpleNamespace(
-        backend="codex_bridge", actual_model="test-actual-model", fallback_used=False, trace={"codex_job_id": "job-1"},
+        backend="deepseek_chain", actual_model="test-actual-model", fallback_used=False, trace={},
     )
     [call] = _run(client, max_tokens_per_actor=4321)
     messages, kwargs = client.calls[0]
@@ -446,7 +446,7 @@ def test_runner_call_kwargs_trace_and_allowed_values():
     trace = call.prompt_trace
     assert trace["trace_scope"] == "world_engine" and trace["stage_key"] == "world.actor_turn"
     assert trace["template_id"] == "world_engine:actor_turn"
-    assert trace["backend"] == "codex_bridge" and trace["codex_job_id"] == "job-1"
+    assert trace["backend"] == "deepseek_chain"
     assert trace["model_profile"]["actual_model"] == "test-actual-model"
     assert trace["input_snapshot"]["seed"] == 77
     assert trace["attempts"][0]["provider_request_id"] == "1"

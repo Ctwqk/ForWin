@@ -279,8 +279,6 @@ class ChapterDeltaExtractor:
         return {
             "trace_scope": "writer", "stage_key": _STAGE_KEY,
             "backend": str(trace.get("backend") or getattr(last_call_result, "backend", "") or ""),
-            "codex_job_id": str(trace.get("codex_job_id", "") or ""),
-            "permission_profile": str(trace.get("permission_profile", "") or ""),
             "fallback_used": bool(getattr(last_call_result, "fallback_used", False)),
             "template_id": "extraction:chapter_delta", "template_version": "v1",
             "effective_system_prompt": "\n\n".join(str(item["content"]).strip() for item in layers if item["role"] == "system"),

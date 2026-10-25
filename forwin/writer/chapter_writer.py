@@ -990,8 +990,6 @@ class ChapterWriter:
                 or getattr(last_call_result, "backend", "")
                 or ""
             ),
-            "codex_job_id": str(trace.get("codex_job_id", "") or ""),
-            "permission_profile": str(trace.get("permission_profile", "") or ""),
             "fallback_used": bool(getattr(last_call_result, "fallback_used", False))
             if last_call_result is not None
             else False,

@@ -53,7 +53,5 @@ class PromptTrace(Base):
     attempts_json: Mapped[str] = mapped_column(Text, default="[]")
     output_summary_json: Mapped[str] = mapped_column(Text, default="{}")
     backend: Mapped[str] = mapped_column(String, default="")
-    codex_job_id: Mapped[str] = mapped_column(String, default="")
-    permission_profile: Mapped[str] = mapped_column(String, default="")
     fallback_used: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())

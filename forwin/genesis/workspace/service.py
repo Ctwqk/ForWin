@@ -355,8 +355,6 @@ class GenesisWorkspaceService:
             attempts_json=_json_dump(trace_payload.get("attempts", [])),
             output_summary_json=_json_dump(trace_payload.get("output_summary", {})),
             backend=str(trace_payload.get("backend", "") or ""),
-            codex_job_id=str(trace_payload.get("codex_job_id", "") or ""),
-            permission_profile=str(trace_payload.get("permission_profile", "") or ""),
             fallback_used=bool(trace_payload.get("fallback_used", False)),
         )
         self.owner._record_llm_events_for_trace(
@@ -476,8 +474,6 @@ class GenesisWorkspaceService:
             attempts_json=_json_dump(trace_payload.get("attempts", [])),
             output_summary_json=_json_dump(trace_payload.get("output_summary", {})),
             backend=str(trace_payload.get("backend", "") or ""),
-            codex_job_id=str(trace_payload.get("codex_job_id", "") or ""),
-            permission_profile=str(trace_payload.get("permission_profile", "") or ""),
             fallback_used=bool(trace_payload.get("fallback_used", False)),
         )
         self.owner._record_llm_events_for_trace(

@@ -149,8 +149,6 @@ class RuntimeSupportStage:
                 payload.get("output_summary", {}), ensure_ascii=False
             ),
             backend=str(payload.get("backend", "") or ""),
-            codex_job_id=str(payload.get("codex_job_id", "") or ""),
-            permission_profile=str(payload.get("permission_profile", "") or ""),
             fallback_used=bool(payload.get("fallback_used", False)),
         )
         for event_payload in build_llm_decision_event_payloads(

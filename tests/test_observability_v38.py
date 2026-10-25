@@ -285,9 +285,7 @@ class ObservabilityReadApiTests(unittest.TestCase):
                         ],
                     }
                 ),
-                backend="codex_bridge",
-                codex_job_id="codex-job-v38",
-                permission_profile="prompt_only_readonly",
+                backend="deepseek_chain",
                 fallback_used=True,
             )
             session.commit()
@@ -310,9 +308,7 @@ class ObservabilityReadApiTests(unittest.TestCase):
         self.assertEqual(timeline.stage_durations[0].total_duration_ms, 7)
         self.assertEqual(trace.id, trace_id)
         self.assertEqual(trace.attempts[0]["attempt_no"], 1)
-        self.assertEqual(trace.backend, "codex_bridge")
-        self.assertEqual(trace.codex_job_id, "codex-job-v38")
-        self.assertEqual(trace.permission_profile, "prompt_only_readonly")
+        self.assertEqual(trace.backend, "deepseek_chain")
         self.assertTrue(trace.fallback_used)
 
     def test_chapter_ledger_and_artifact_read_are_queryable_and_restricted(

@@ -319,11 +319,10 @@ def test_new_actor_requires_map_location_and_existing_group(changes, path):
 def test_trace_preserves_backend_and_actual_model():
     client = StubLLM({"outcomes": [_outcome()]})
     client.last_call_result = SimpleNamespace(
-        backend="codex_bridge", actual_model="test-actual-model", fallback_used=True, trace={"codex_job_id": "job-1"},
+        backend="deepseek_chain", actual_model="test-actual-model", fallback_used=True, trace={},
     )
     trace = _adjudicate(client).prompt_trace
-    assert trace["backend"] == "codex_bridge"
-    assert trace["codex_job_id"] == "job-1"
+    assert trace["backend"] == "deepseek_chain"
     assert trace["fallback_used"] is True
     assert trace["model_profile"]["actual_model"] == "test-actual-model"
 

@@ -607,6 +607,7 @@ def test_baseline_revision_is_rotated_and_followed_only_by_later_migrations() ->
         "0004_drop_parallel_ledgers.py",
         "0005_world_plan_conflicts.py",
         "0006_planning_v6.py",
+        "0007_drop_codex.py",
     ]
     assert migration.revision == "0001_v5_recovery"
     assert migration.down_revision is None

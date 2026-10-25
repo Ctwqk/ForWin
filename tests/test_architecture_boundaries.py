@@ -493,6 +493,7 @@ def test_v5_schema_and_accepted_state_have_single_authorities() -> None:
         "0004_drop_parallel_ledgers.py",
         "0005_world_plan_conflicts.py",
         "0006_planning_v6.py",
+        "0007_drop_codex.py",
     ]
 
     base_source = _read("forwin/models/base.py")

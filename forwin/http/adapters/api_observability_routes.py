@@ -57,8 +57,6 @@ def build_handlers(
             decision_event_id=str(row.decision_event_id or ""),
             parent_trace_id=str(row.parent_trace_id or ""),
             backend=str(row.backend or ""),
-            codex_job_id=str(row.codex_job_id or ""),
-            permission_profile=str(row.permission_profile or ""),
             fallback_used=bool(row.fallback_used),
             created_at=display_datetime(row.created_at),
         )

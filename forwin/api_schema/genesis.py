@@ -40,8 +40,6 @@ class PromptTraceInfo(BaseModel):
     decision_event_id: str = ""
     parent_trace_id: str = ""
     backend: str = ""
-    codex_job_id: str = ""
-    permission_profile: str = ""
     fallback_used: bool = False
     created_at: str = ""
 

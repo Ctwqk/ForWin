@@ -989,8 +989,8 @@ max_literals = 25
 path = "forwin/writer/prompt_core/world_repair.py"
 checks = ["cjk_collection"]
 category = "prompt_text"
-justification = "世界审查门与计划绑定写给 writer 的修复模板；绑定只列位置与 kind，不含作者视角的 how 或 ref，不参与判定"
-max_literals = 19
+justification = "世界审查门、叙事保护与计划绑定写给 writer 的修复模板；保护只填实体名与秘密话题（不含 proposition），绑定只列位置与 kind，不含作者视角的 how 或 ref，不参与判定"
+max_literals = 24
 
 [[entry]]
 path = "forwin/writer/prompt_core/world_view.py"

@@ -165,6 +165,9 @@ class BookStateCanonPreparer:
                 blocked_path="chapter-delta-unverified-blocked",
                 extraction=extraction,
             )
+        # Imported here: the beat-sheet service imports the canon package, which imports this module.
+        from forwin.planning.beat_sheet.service import milestone_refs_for_chapter
+
         world = review_chapter_extraction(
             session,
             project_id=project_id,
@@ -173,6 +176,7 @@ class BookStateCanonPreparer:
             admission_plan=entity_admission_plan,
             chapter_summary=writer_output.end_of_chapter_summary,
             travel_tolerance=context.policy.review.travel_tolerance,
+            milestone_refs=milestone_refs_for_chapter(session, project_id, chapter_number),
         )
         if world.gate is None:
             _record_book_state_block(

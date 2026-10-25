@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
+from forwin.writer.prompt_core.world_view import UNNAMED_ACTOR_LABEL, UNNAMED_FACT_TOPIC
+
 DEFAULT_WORLD_REPAIR_FIX = "改写相关情节，使人物行动、移动与时间符合本书世界状态。"
 
 # World gate v6 error code -> what the writer changes in the prose.
@@ -25,6 +29,20 @@ WORLD_REPAIR_FIXES: dict[str, str] = {
 }
 
 
+# A broken protection's kind (book_state.narrative.PROTECTION_KINDS), or "milestone" for a ref a later milestone
+# needs -> what the writer keeps. {name} is the protected entity, {observer} who may not learn a fact and {topic}
+# the fact's topic; a fact's proposition never fills them.
+PROTECTION_REPAIR_FIXES: dict[str, str] = {
+    "must_exist": "本章不得让{name}覆灭、解散或消失；保留其存在。",
+    "must_be_alive": "本章不得让{name}死亡；保留其存活。",
+    "must_hold_state": "本章不得改变{name}的这一状态；保持其原状。",
+    "must_not_know": "本章不要让{observer}得知或确信「{topic}」；至多留下怀疑或传闻。",
+    "milestone": "本章不得让{name}死亡、覆灭或消失；保留其存在。",
+}
+# The {observer} of a protection that keeps a fact from the reader.
+READER_OBSERVER_LABEL = "读者"
+
+
 PLAN_BINDING_REPAIR_TEXT = {
     "missing": "本章计划的第 {n} 项世界绑定（{kind}）没有在正文中落实；按本章目标补写相应情节。",
     "partial": "本章计划的第 {n} 项世界绑定（{kind}）仅部分落实；按本章目标补足相应情节。",
@@ -36,4 +54,24 @@ def world_repair_fix(code: str) -> str:
     return WORLD_REPAIR_FIXES.get(code, DEFAULT_WORLD_REPAIR_FIX)
 
 
-__all__ = ["DEFAULT_WORLD_REPAIR_FIX", "WORLD_REPAIR_FIXES", "PLAN_BINDING_REPAIR_TEXT", "world_repair_fix"]
+def protection_repair_fix(kind: str, names: Mapping[str, str]) -> str:
+    """The fix for a broken protection or milestone ref; ``names`` holds ``name``, ``observer`` and ``topic``."""
+    template = PROTECTION_REPAIR_FIXES.get(kind)
+    if template is None:
+        return DEFAULT_WORLD_REPAIR_FIX
+    return template.format(
+        name=names.get("name") or UNNAMED_ACTOR_LABEL,
+        observer=names.get("observer") or UNNAMED_ACTOR_LABEL,
+        topic=names.get("topic") or UNNAMED_FACT_TOPIC,
+    )
+
+
+__all__ = [
+    "DEFAULT_WORLD_REPAIR_FIX",
+    "PLAN_BINDING_REPAIR_TEXT",
+    "PROTECTION_REPAIR_FIXES",
+    "READER_OBSERVER_LABEL",
+    "WORLD_REPAIR_FIXES",
+    "protection_repair_fix",
+    "world_repair_fix",
+]

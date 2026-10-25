@@ -15,10 +15,12 @@ from forwin.book_state.extraction.evidence import (
 from forwin.book_state.extraction.world_review import review_chapter_extraction
 from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
+from forwin.planning.beat_sheet.service import milestone_refs_for_chapter
+from forwin.protocol.book_state import ObserverType
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review.issue_groups import issue_group_for_issue
-from forwin.writer.prompt_core.world_repair import world_repair_fix
+from forwin.writer.prompt_core.world_repair import READER_OBSERVER_LABEL, protection_repair_fix, world_repair_fix
 from forwin.writer.prompt_core.world_view import UNNAMED_ACTOR_LABEL, forbidden_topic_text
 
 ISSUE_TYPE = "world_consistency"
@@ -34,6 +36,8 @@ class _Finding(NamedTuple):
     message: str
     evidence_ref: str
     source_analyzer: str
+    # The gate's broken protection or milestone ref, as BookStateReviewIssue.detail.
+    boundary: Mapping[str, Any] | None = None
 
 
 class WorldConsistencyReviewer:
@@ -101,6 +105,7 @@ class WorldConsistencyReviewer:
                 admission_plan=admission_plan,
                 chapter_summary=writer_output.end_of_chapter_summary,
                 travel_tolerance=travel_tolerance,
+                milestone_refs=milestone_refs_for_chapter(session, project_id, chapter_number),
             )
             names = world.names
             fact_topics = world.translation.fact_topics
@@ -111,7 +116,8 @@ class WorldConsistencyReviewer:
             )
             if world.gate is not None:
                 findings.extend(
-                    _Finding(issue.severity, issue.code, issue.message, issue.target_ref, "BookStateReviewGate")
+                    _Finding(issue.severity, issue.code, issue.message, issue.target_ref, "BookStateReviewGate",
+                             issue.detail)
                     for issue in world.gate.issues
                 )
         return _verdict([self._issue(finding, names, fact_topics, concealed_names) for finding in findings])
@@ -122,8 +128,14 @@ class WorldConsistencyReviewer:
     ) -> ContinuityIssue:
         error = finding.severity == "error"
         description, entity_names = _named(finding.message or finding.code, names, fact_topics)
-        fix = world_repair_fix(finding.code) if error else ""
-        suggested_fix, _ = _named(fix, names, fact_topics)
+        if error and finding.boundary:
+            # Built from names and the fact's topic alone; the violation itself stays in original_result.
+            fix = suggested_fix = protection_repair_fix(
+                str(finding.boundary.get("kind") or ""), _boundary_names(finding.boundary, names, fact_topics),
+            )
+        else:
+            fix = world_repair_fix(finding.code) if error else ""
+            suggested_fix, _ = _named(fix, names, fact_topics)
         for name in sorted({name for name in (concealed_names or {}).values() if name}, key=len, reverse=True):
             description = description.replace(name, UNNAMED_ACTOR_LABEL)
             suggested_fix = suggested_fix.replace(name, UNNAMED_ACTOR_LABEL)
@@ -154,6 +166,7 @@ class WorldConsistencyReviewer:
                 "concealed_entity_names": {
                     ref: name for ref, name in (concealed_names or {}).items() if ref in audit_refs
                 },
+                **({"boundary": dict(finding.boundary)} if finding.boundary else {}),
             },
         )
 
@@ -178,6 +191,18 @@ def _named(
         return f"{name}{suffix}"
 
     return _REF_TOKEN.sub(name_of, text), list(dict.fromkeys(entity_names))
+
+
+def _boundary_names(
+    boundary: Mapping[str, Any], names: Mapping[str, str], fact_topics: Mapping[str, Sequence[str]],
+) -> dict[str, str]:
+    """The protected entity's and the observer's names and the fact's topic for the protection fix."""
+    observer = str(boundary.get("observer_ref") or "")
+    return {
+        "name": names.get(str(boundary.get("ref") or ""), ""),
+        "observer": READER_OBSERVER_LABEL if observer == ObserverType.READER.value else names.get(observer, ""),
+        "topic": forbidden_topic_text(fact_topics.get(str(boundary.get("fact_ref") or ""), ())),
+    }
 
 
 def _path_ref(path: Any) -> str:

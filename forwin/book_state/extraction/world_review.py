@@ -41,7 +41,12 @@ def review_chapter_extraction(
     admission_plan: EntityAdmissionPlan,
     chapter_summary: str,
     travel_tolerance: float,
+    milestone_refs: frozenset[str] = frozenset(),
 ) -> ChapterWorldReview:
+    """Translate the extraction and gate its delta against the canon before the chapter.
+
+    ``milestone_refs`` are the refs later hard milestones and the arc's exit state need; the chapter may not end them.
+    """
     base_chapter = max(chapter_number - 1, 0)
     runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=base_chapter)
     review_verdict_id = f"book_state_direct_review_{project_id}_{chapter_number}"
@@ -77,6 +82,7 @@ def review_chapter_extraction(
         base_chapter=base_chapter,
         runtime=runtime,
         travel_tolerance=travel_tolerance,
+        milestone_refs=milestone_refs,
     )
     return ChapterWorldReview(translation=translation, gate=gate)
 

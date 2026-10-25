@@ -14,7 +14,13 @@ from forwin.review.decision.types import DecisionInput, PlanLayerHealth
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.review.world_consistency import WorldConsistencyReviewer, _named
 from forwin.runtime.policy import RuntimePolicy
-from forwin.writer.prompt_core.world_repair import DEFAULT_WORLD_REPAIR_FIX, WORLD_REPAIR_FIXES
+from forwin.writer.prompt_core.world_repair import (
+    DEFAULT_WORLD_REPAIR_FIX,
+    PROTECTION_REPAIR_FIXES,
+    READER_OBSERVER_LABEL,
+    WORLD_REPAIR_FIXES,
+    protection_repair_fix,
+)
 from tests.chapter_delta_helpers import chapter_delta
 from tests.world_gate_helpers import _knowledge, _seed_world, _session_factory, _World
 from tests.test_world_gate_v6 import (
@@ -253,6 +259,104 @@ def test_hidden_fact_contradiction_names_only_the_topic() -> None:
     engine.dispose()
 
 
+def _commit_protection(Session, world: _World, **spec: Any) -> str:
+    from forwin.book_state.projection import BookStateProjection
+    from forwin.canon.admission import CanonAdmissionService
+    from forwin.planning.beat_sheet.types import ProtectionSpec
+
+    with Session.begin() as session:
+        CanonAdmissionService().commit_plan_constraints(
+            session=session, project_id=world.project_id, beat_sheet_id=f"sheet-{spec['kind']}",
+            creates=[ProtectionSpec(until_chapter=0, **spec)], releases=[],
+        )
+        runtime = BookStateProjection(session).load_runtime_as_of(world.project_id, as_of_chapter=0)
+        return next(node.id for node in runtime.narrative.nodes_by_id.values()
+                    if node.metadata.get("beat_sheet_id") == f"sheet-{spec['kind']}")
+
+
+def test_repair_fix_text_has_no_fact_proposition() -> None:
+    # R44: a must_not_know repair names the observer and the secret's topic, never its proposition.
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    protection_id = _commit_protection(Session, world, ref=world.rival, kind="must_not_know",
+                                       observer_ref=world.rival, fact_ref=world.fact("fact-secret"))
+
+    verdict = _draft_review(Session, world, _output(world, {"knowledge_events": [
+        _knowledge(world.rival, world.fact("fact-secret"), evidence="乙 overhears it"),
+    ]}))
+
+    assert _codes(verdict) == [("protection_violated", "error")]
+    issue = verdict.issues[0]
+    assert issue.suggested_fix == protection_repair_fix(
+        "must_not_know", {"observer": "乙", "topic": "涉及甲的未揭示真相"},
+    )
+    assert "乙" in issue.suggested_fix and "涉及甲的未揭示真相" in issue.suggested_fix
+    writer_text = [issue.description, issue.suggested_fix, *verdict.repair_instruction.must_fix]
+    assert all("proposition-secret" not in text and "fact:" not in text for text in writer_text)
+    assert all(world.rival not in text and protection_id not in text for text in writer_text)
+    assert any(issue.suggested_fix in item for item in verdict.repair_instruction.must_fix)
+    assert issue.evidence_refs == [f"review_constraint:{protection_id}"]
+    boundary = issue.original_result["boundary"]
+    assert {key: boundary[key] for key in ("protection_node_id", "kind", "observer_ref", "fact_ref", "impact_level",
+                                           "evidence")} == {
+        "protection_node_id": protection_id, "kind": "must_not_know", "observer_ref": world.rival,
+        "fact_ref": world.fact("fact-secret"), "impact_level": "major", "evidence": "乙 overhears it",
+    }
+    assert issue.original_result["fact_propositions"] == {world.fact("fact-secret"): "proposition-secret"}
+    engine.dispose()
+
+
+def test_milestone_ref_from_the_beat_sheet_names_the_entity_only() -> None:
+    from sqlalchemy import select
+
+    from forwin.models.project import ArcPlanVersion
+    from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+    from forwin.planning.beat_sheet.types import ArcBeatSheetData
+
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    kill_rival = {"entity_changes": [
+        {"ref": world.rival, "field": "alive_status", "new_value": "dead", "evidence": "e"},
+    ]}
+    assert _codes(_world_review(Session, world, _output(world, kill_rival))) == []
+    with Session.begin() as session:
+        arc = session.scalars(select(ArcPlanVersion).where(
+            ArcPlanVersion.project_id == world.project_id, ArcPlanVersion.arc_number == 1)).one()
+        ArcBeatSheetRepository(session).create(world.project_id, arc.id, ArcBeatSheetData(
+            protagonist_ref=world.hero, phases=[], band_breakdown=[], milestones=[{
+                "id": "duel", "description": "description-duel", "target_range": [3, 5],
+                "required_refs": [world.rival], "hard": True,
+            }],
+        ), source="llm", reason="milestone")
+
+    verdict = _world_review(Session, world, _output(world, kill_rival))
+
+    assert _codes(verdict) == [("milestone_ref_ended", "error")]
+    issue = verdict.issues[0]
+    assert issue.suggested_fix == protection_repair_fix("milestone", {"name": "乙"})
+    assert "乙" in issue.description and world.rival not in issue.description
+    assert "description-duel" not in issue.description + issue.suggested_fix
+    assert issue.evidence_refs == [f"node:{world.rival}"]
+    assert (issue.original_result["boundary"]["milestone_ref"], issue.original_result["boundary"]["impact_level"]) == (
+        world.rival, "critical",
+    )
+    engine.dispose()
+
+
+def test_protection_fix_covers_every_kind_and_masks_missing_names() -> None:
+    from forwin.book_state.narrative import PROTECTION_KINDS
+    from forwin.writer.prompt_core.world_view import UNNAMED_ACTOR_LABEL, UNNAMED_FACT_TOPIC
+
+    assert set(PROTECTION_REPAIR_FIXES) == {*PROTECTION_KINDS, "milestone"}
+    for kind in PROTECTION_REPAIR_FIXES:
+        fix = protection_repair_fix(kind, {"name": "Ann", "observer": "Bo", "topic": "topic-1"})
+        assert "{" not in fix and ("Ann" in fix or ("Bo" in fix and "topic-1" in fix))
+        assert UNNAMED_ACTOR_LABEL in protection_repair_fix(kind, {}) or UNNAMED_FACT_TOPIC in protection_repair_fix(
+            kind, {"observer": "Bo"})
+    assert READER_OBSERVER_LABEL in protection_repair_fix("must_not_know", {"observer": READER_OBSERVER_LABEL})
+    assert protection_repair_fix("unknown", {"name": "Ann"}) == DEFAULT_WORLD_REPAIR_FIX
+
+
 def test_refs_before_trailing_punctuation_get_their_names() -> None:
     names = {"node-1": "Ann", "site-1": "Harbor", "fact:fact-1": "the vault is empty"}
 
@@ -270,6 +374,8 @@ def test_refs_before_trailing_punctuation_get_their_names() -> None:
 # Gate errors the writer cannot fix by rewriting prose keep the generic fix; the reader check
 # applies only to world tick deltas, which never reach the writer.
 _DEFAULT_FIX_GATE_CODES = {"delta_not_allowed_for_canon", "world_engine_reader_knowledge", "invalid_protection"}
+# Broken protections and milestone refs take their fix from the violation's kind (PROTECTION_REPAIR_FIXES).
+_BOUNDARY_GATE_CODES = {"protection_violated", "milestone_ref_ended"}
 
 
 def _gate_error_codes() -> set[str]:
@@ -296,7 +402,7 @@ def test_every_gate_error_code_has_a_repair_fix() -> None:
     codes = _gate_error_codes()
 
     assert "movement_unreachable" in codes and "movement_total_too_fast" in codes
-    assert codes - set(WORLD_REPAIR_FIXES) == _DEFAULT_FIX_GATE_CODES
+    assert codes - set(WORLD_REPAIR_FIXES) == _DEFAULT_FIX_GATE_CODES | _BOUNDARY_GATE_CODES
     # The table names no code the gate has stopped emitting.
     assert set(WORLD_REPAIR_FIXES) - codes == {"chapter_delta_missing", "chapter_delta_unverified"}
 

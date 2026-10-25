@@ -658,6 +658,13 @@ def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.Mo
             )
 
     shared_runtime = object()
+    milestone_calls: list[tuple[Any, ...]] = []
+
+    def milestone_refs(*args: Any) -> frozenset[str]:
+        milestone_calls.append(args[1:])
+        return frozenset({"milestone-ref"})
+
+    monkeypatch.setattr("forwin.planning.beat_sheet.service.milestone_refs_for_chapter", milestone_refs)
     monkeypatch.setattr(world_review.BookStateProjection, "load_runtime_as_of", lambda *args, **kwargs: shared_runtime)
     monkeypatch.setattr(world_review, "ChapterDeltaTranslator", Translator)
     monkeypatch.setattr(world_review, "BookStateReviewGate", Gate)
@@ -691,7 +698,9 @@ def test_canon_preparation_passes_policy_travel_tolerance(monkeypatch: pytest.Mo
         ("delta-3", {"translation_warnings": []}),
     ]
     assert calls == [{"approved_by": ["chapter_extraction"], "base_chapter": 2,
-                      "travel_tolerance": 0.35, "runtime": shared_runtime}]
+                      "travel_tolerance": 0.35, "runtime": shared_runtime,
+                      "milestone_refs": frozenset({"milestone-ref"})}]
+    assert milestone_calls == [("project-1", 3)]
 
 
 @pytest.mark.parametrize("payload", [
@@ -731,6 +740,97 @@ def test_gate_rejects_non_narrative_plan_constraint(monkeypatch):
     verdict = gate.review(ApprovedGraphDeltaSet(project_id="p", chapter_number=0, graph_deltas=[delta]), base_chapter=0)
     assert not verdict.accepted
     assert ("error", "invalid_protection") in _codes(verdict)
+
+
+@pytest.mark.parametrize("source", ["chapter_extraction", "world_engine"])
+def test_gate_reports_protection_violation_on_chapter_delta_only(monkeypatch, source):
+    from dataclasses import asdict
+
+    from forwin.book_state.protections import delta_boundary_violations
+    from tests.test_world_constraints import _protection, _runtime
+
+    runtime = _runtime(protections=[_protection("must_be_alive")])
+    delta = GraphDelta(id="kill", project_id="p", chapter_number=4, source_type=source, node_patches=[
+        NodePatch(node_id=ref, node_type="character", op="set", field_path="state.alive_status",
+                  old_value="alive", new_value="dead", reason=f"{ref} dies")
+        for ref in ("a", "b")
+    ])
+    gate = BookStateReviewGate(None)
+    monkeypatch.setattr(gate.projection, "load_runtime_as_of", lambda *args, **kwargs: runtime)
+    verdict = gate.review(ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta]),
+                          base_chapter=3, milestone_refs=frozenset({"b"}))
+    boundary = [issue for issue in verdict.issues if issue.code in {"protection_violated", "milestone_ref_ended"}]
+
+    if source == "world_engine":
+        # A tick's delta is boundary-checked before it is built.
+        assert boundary == []
+        return
+    protection, milestone = delta_boundary_violations(runtime, delta, chapter=4, milestone_refs=frozenset({"b"}))
+    assert [(issue.severity, issue.code, issue.target_ref, issue.detail) for issue in boundary] == [
+        ("error", "protection_violated", "review_constraint:protection", asdict(protection)),
+        ("error", "milestone_ref_ended", "node:b", asdict(milestone)),
+    ]
+    assert (protection.kind, protection.ref, milestone.kind, milestone.milestone_ref) == (
+        "must_be_alive", "a", "milestone", "b",
+    )
+    assert verdict.accepted is False
+    # Without milestone refs only the protection is broken.
+    plain = gate.review(ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta]), base_chapter=3)
+    assert [issue.code for issue in plain.issues if issue.severity == "error"] == ["protection_violated"]
+
+
+def test_chapter_review_checks_committed_protections_and_given_milestone_refs():
+    from forwin.book_state.projection import BookStateProjection
+    from forwin.canon.admission import CanonAdmissionService
+    from forwin.planning.beat_sheet.types import ProtectionSpec
+
+    engine, Session = _session_factory()
+    try:
+        world = _seed_world(Session)
+        kill_rival = {"entity_changes": [
+            {"ref": world.rival, "field": "alive_status", "new_value": "dead", "evidence": "the rival falls"},
+        ]}
+
+        def review(milestone_refs: frozenset[str]) -> BookStateReviewVerdict:
+            with Session() as session:
+                result = world_review.review_chapter_extraction(
+                    session, project_id=world.project_id, chapter_number=1,
+                    extraction=ChapterDeltaExtraction.model_validate({
+                        "body_sha256": "1" * 64, "time": {"elapsed": None, "evidence": ""}, **kill_rival,
+                    }),
+                    admission_plan=EntityAdmissionPlan(project_id=world.project_id, chapter_number=1,
+                                                       candidate_fingerprint="fingerprint"),
+                    chapter_summary="summary", travel_tolerance=0.2, milestone_refs=milestone_refs,
+                )
+            assert result.gate is not None
+            return result.gate
+
+        assert review(frozenset()).issues == []
+        with Session.begin() as session:
+            CanonAdmissionService().commit_plan_constraints(
+                session=session, project_id=world.project_id, beat_sheet_id="sheet-1",
+                creates=[ProtectionSpec(ref=world.rival, kind="must_be_alive", until_chapter=0)], releases=[],
+            )
+            runtime = BookStateProjection(session).load_runtime_as_of(world.project_id, as_of_chapter=0)
+            protection_id = next(node.id for node in runtime.narrative.nodes_by_id.values()
+                                 if node.node_type == "review_constraint")
+
+        protected = review(frozenset())
+        assert [(issue.severity, issue.code, issue.target_ref) for issue in protected.issues] == [
+            ("error", "protection_violated", f"review_constraint:{protection_id}"),
+        ]
+        detail = protected.issues[0].detail
+        assert {key: detail[key] for key in ("kind", "ref", "source", "impact_level", "evidence")} == {
+            "kind": "must_be_alive", "ref": world.rival, "source": "beat_sheet", "impact_level": "major",
+            "evidence": "the rival falls",
+        }
+        needed = review(frozenset({world.rival}))
+        assert [(issue.code, issue.target_ref, issue.detail["impact_level"]) for issue in needed.issues] == [
+            ("protection_violated", f"review_constraint:{protection_id}", "critical"),
+            ("milestone_ref_ended", f"node:{world.rival}", "critical"),
+        ]
+    finally:
+        engine.dispose()
 
 
 def test_beat_sheet_reader_target_moves_premature_reveal_boundary():

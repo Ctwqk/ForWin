@@ -21,6 +21,7 @@ from forwin.book_state.book_frame_repository import BookLexiconRepository, Story
 from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.protections import active_protections
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
@@ -38,7 +39,7 @@ from forwin.runtime.policy import RuntimePolicy
 from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.world_engine.conflict_routing import PLAN_CONFLICT_SOURCES, available_options, route_conflict
 from forwin.world_engine.conflict_types import ConflictDraft
-from forwin.world_engine.constraints import active_protections, narrative_boundary_violations
+from forwin.world_engine.constraints import narrative_boundary_violations
 from forwin.world_engine.travel import estimate_travel
 
 
@@ -295,9 +296,9 @@ class _ChapterWalk:
         reader already knows it, the chapter reveals it to the reader, or its earliest reveal chapter has come.
         """
         protected = {
-            _fact_ref(str(node.payload.get("fact_ref") or "")).removeprefix(FACT_REF_PREFIX)
-            for node in active_protections(self.runtime, next_chapter=chapter.number)
-            if node.payload.get("kind") == "must_not_know" and node.payload.get("observer_ref") == READER_OBSERVER
+            protection.fact_ref.removeprefix(FACT_REF_PREFIX)
+            for protection in active_protections(self.runtime, chapter=chapter.number)
+            if protection.kind == "must_not_know" and protection.observer_ref == READER_OBSERVER
         }
         revealed = {_fact_ref(fact_ref).removeprefix(FACT_REF_PREFIX)
                     for fact_ref, observer, _state in chapter.reveals if observer == READER_OBSERVER}

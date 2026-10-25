@@ -5,6 +5,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Iterable
 from copy import copy, deepcopy
+from dataclasses import asdict
 from functools import cached_property
 from typing import Any
 
@@ -22,6 +23,7 @@ from forwin.book_state.narrative import (
 )
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.protections import MILESTONE_KIND, DeltaBoundaryViolation, delta_boundary_violations
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
 from forwin.book_state.runtime import BookStateRuntime, require_runtime_as_of
 from forwin.book_state.schema import validate_graph_delta
@@ -54,6 +56,8 @@ class BookStateReviewIssue(BaseModel):
     code: str
     target_ref: str
     message: str
+    # A broken protection or milestone ref: the DeltaBoundaryViolation as a dict.
+    detail: dict[str, Any] = Field(default_factory=dict)
 
 
 class BookStateReviewVerdict(BaseModel):
@@ -79,7 +83,13 @@ class BookStateReviewGate:
         base_chapter: int | None = None,
         travel_tolerance: float = DEFAULT_TRAVEL_TOLERANCE,
         runtime: BookStateRuntime | None = None,
+        milestone_refs: frozenset[str] = frozenset(),
     ) -> BookStateReviewVerdict:
+        """Review each delta against the runtime as of ``base_chapter``.
+
+        ``milestone_refs`` are the refs later hard milestones and the arc's exit state need, which a chapter's
+        delta may not end; the caller computes them from the beat sheets.
+        """
         if base_chapter is None:
             base_chapter = self.projection.repo.compile_base_chapter(
                 changes.project_id, changes.chapter_number
@@ -103,6 +113,7 @@ class BookStateReviewGate:
                 issues.extend(
                     _ChapterExtractionChecks(
                         self.session, runtime, delta, travel_tolerance=travel_tolerance,
+                        milestone_refs=milestone_refs,
                     ).run()
                 )
             else:
@@ -342,11 +353,13 @@ class _ChapterExtractionChecks:
         delta: GraphDelta,
         *,
         travel_tolerance: float,
+        milestone_refs: frozenset[str] = frozenset(),
     ) -> None:
         self.session = session
         self.runtime = runtime
         self.delta = delta
         self.tolerance = travel_tolerance
+        self.milestone_refs = milestone_refs
         self.movements = _records(delta.metadata.get("movements"))
         self.knowledge_tags = _records(delta.metadata.get("knowledge_tags"))
         self.item_transfers = _records(delta.metadata.get("item_transfers"))
@@ -359,12 +372,17 @@ class _ChapterExtractionChecks:
         self._dead_entity_issues()
         self._item_holder_issues()
         self._knowledge_issues()
+        # A world tick's delta is checked against protections before it is built.
+        if self.delta.source_type == CHAPTER_EXTRACTION_SOURCE_TYPE:
+            self._protection_issues()
         return self.issues
 
-    def _issue(self, severity: str, code: str, target_ref: str, message: str) -> None:
-        self.issues.append(
-            BookStateReviewIssue(severity=severity, code=code, target_ref=target_ref, message=message)
-        )
+    def _issue(
+        self, severity: str, code: str, target_ref: str, message: str, *, detail: dict[str, Any] | None = None,
+    ) -> None:
+        self.issues.append(BookStateReviewIssue(
+            severity=severity, code=code, target_ref=target_ref, message=message, detail=detail or {},
+        ))
 
     # movements
 
@@ -668,6 +686,27 @@ class _ChapterExtractionChecks:
                 f"its earliest reveal chapter is {earliest}",
             )
 
+    # protections and milestones
+
+    def _protection_issues(self) -> None:
+        """Errors for the protections and milestone refs the chapter's delta breaks.
+
+        They stay errors so that canon preparation blocks on them; the code and detail carry the violation.
+        """
+        for violation in delta_boundary_violations(
+            self.runtime, self.delta, chapter=self.delta.chapter_number, milestone_refs=self.milestone_refs,
+        ):
+            if violation.kind == MILESTONE_KIND:
+                self._issue(
+                    "error", "milestone_ref_ended", f"node:{violation.ref}",
+                    f"the plan needs {violation.ref} past this chapter; the chapter ends it", detail=asdict(violation),
+                )
+            else:
+                self._issue(
+                    "error", "protection_violated", f"review_constraint:{violation.protection_node_id}",
+                    _protection_message(violation), detail=asdict(violation),
+                )
+
     def _hidden(self, fact_ref: str) -> bool:
         sensitivity, _truth = self.facts.get(fact_ref.removeprefix(FACT_REF_PREFIX), ("", ""))
         return sensitivity in HIDDEN_SENSITIVITY
@@ -675,6 +714,18 @@ class _ChapterExtractionChecks:
     def _true(self, fact_ref: str) -> bool:
         _sensitivity, truth = self.facts.get(fact_ref.removeprefix(FACT_REF_PREFIX), ("", ""))
         return truth == "true"
+
+
+def _protection_message(violation: DeltaBoundaryViolation) -> str:
+    """What the chapter breaks; refs stay bare so draft review can name them, and the protection's id is left out."""
+    if violation.kind == "must_not_know":
+        observer = "the reader" if violation.observer_ref == ObserverType.READER.value else violation.observer_ref
+        return f"{observer} may not know or believe {violation.fact_ref} in this chapter; the chapter has them learn it"
+    if violation.kind == "must_hold_state":
+        return f"{violation.ref} keeps {violation.field} at {violation.value!r} in this chapter; the chapter changes it"
+    if violation.kind == "must_be_alive":
+        return f"{violation.ref} stays alive in this chapter; the chapter kills it"
+    return f"{violation.ref} keeps existing in this chapter; the chapter ends it"
 
 
 def _records(value: Any) -> list[dict[str, Any]]:

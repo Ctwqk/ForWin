@@ -9,18 +9,18 @@ from typing import Any
 
 from forwin.book_state.knowledge import FACT_REF_PREFIX, HIDDEN_SENSITIVITY
 from forwin.book_state.lexicon import BookLexicon
-from forwin.book_state.narrative import RELEASED_PROTECTION_STATUS
 from forwin.book_state.path_patch import apply_path_patch
+from forwin.book_state.protections import (
+    ENDED_STATUSES, active_protections, breaks_protection, guarded_path, paths_overlap, value_at, world_field_path,
+)
 from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph, resolve_world_node_location_id
 from forwin.book_state.schema import ACTOR_NODE_TYPES, ACTOR_TIERS, IMPACT_LEVELS, WORLD_NODE_FIELDS
-from forwin.protocol.book_state import NarrativeNode, WorldNode
+from forwin.protocol.book_state import WorldNode
 from forwin.book_state.story_clock import StoryCalendar, StoryClockError, duration_to_minutes
 from forwin.world_engine.travel import estimate_travel
 from forwin.world_engine.types import NEW_FACT_REF_PREFIX, EffectEntityChange, TickCandidate, WorldEffects
 
 
-# The state.status values that end a faction, organization, group or site: it no longer exists.
-ENDED_STATUSES = frozenset({"destroyed", "dissolved", "disbanded", "inactive"})
 # Node types whose end is major; WORLD_NODE_FIELDS gives each a state.status.
 _ENDING_TYPES = frozenset({"faction", "organization", "group", "site_state"})
 # State fields whose change is major on the node types WORLD_NODE_FIELDS gives them to: who leads a
@@ -68,19 +68,6 @@ def is_living_actor(world: ObjectiveWorldGraph, node: WorldNode | None) -> bool:
             and world.get_state(node.id).get("alive_status") != "dead")
 
 
-def _path(runtime: BookStateRuntime, ref: str, field: str) -> str:
-    """The field's path as the builder writes it: a profile field when only the profile has it, else state."""
-    field = field.strip()
-    if field in {"state", "profile"} or field.startswith(("state.", "profile.")):
-        return field
-    node = runtime.world.get_node(ref)
-    fields = WORLD_NODE_FIELDS.get(str(node.node_type), {}) if node else {}
-    root = field.split(".", 1)[0]
-    if root in fields.get("profile", ()) and root not in fields.get("state", ()):
-        return f"profile.{field}"
-    return f"state.{field}"
-
-
 def _payload(runtime: BookStateRuntime, ref: str) -> dict[str, Any]:
     node = runtime.world.get_node(ref)
     if node is not None:
@@ -120,7 +107,7 @@ def _transitions(runtime: BookStateRuntime, changes: Iterable[tuple[str, str, An
     for ref, field, value in changes:
         before = payloads.get(ref, _payload(runtime, ref))
         after = deepcopy(before)
-        path = _path(runtime, ref, field)
+        path = world_field_path(runtime, ref, field)
         apply_path_patch(after, path, deepcopy(value))
         # Report malformed state without letting it corrupt subsequent transitions.
         if isinstance(after.get("state", {}), dict):
@@ -365,7 +352,7 @@ def check_hard_rules(
     holders: dict[str, str] = {}
     # Entity holder changes precede explicit transfer records in the delta builder.
     for change in candidate.effects.entity_changes:
-        if _path(runtime, change.ref, change.field) == "state.holder_id":
+        if world_field_path(runtime, change.ref, change.field) == "state.holder_id":
             holders[change.ref] = str(change.new_value or "")
     for transfer in candidate.effects.item_transfers:
         node = runtime.world.get_node(transfer.item_ref)
@@ -418,36 +405,6 @@ def check_hard_rules(
     return issues
 
 
-def _at(payload: dict[str, Any], path: str) -> Any:
-    value: Any = payload
-    for key in path.split("."):
-        if not isinstance(value, dict):
-            return None
-        value = value.get(key)
-    return value
-
-
-def active_protections(runtime: BookStateRuntime, *, next_chapter: int) -> list[NarrativeNode]:
-    """The review_constraint protections in force in ``next_chapter``, in id order.
-
-    A protection is in force while its node is active, its payload is not released, and its until_chapter
-    is open (0) or not before ``next_chapter``.
-    """
-    protections = []
-    for node in sorted(runtime.narrative.nodes_by_id.values(), key=lambda node: node.id):
-        if node.node_type != "review_constraint" or getattr(node, "status", "active") != "active":
-            continue
-        payload = node.payload
-        if payload.get("status") == RELEASED_PROTECTION_STATUS:
-            continue
-        until = payload.get("until_chapter", 0)
-        until = until if type(until) is int else 0
-        if until != 0 and until < next_chapter:
-            continue
-        protections.append(node)
-    return protections
-
-
 def check_narrative_boundaries(
     runtime: BookStateRuntime, candidate: TickCandidate, *, next_chapter: int,
 ) -> list[BoundaryViolation]:
@@ -473,44 +430,18 @@ def narrative_boundary_violations(
     """
     transitions = list(_transitions(runtime, changes))
     violations: list[BoundaryViolation] = []
-    for node in active_protections(runtime, next_chapter=next_chapter):
-        payload = node.payload
-        ref, kind = str(payload.get("ref") or ""), str(payload.get("kind") or "")
-        violated = False
-        if kind == "must_not_know":
-            observer, fact = payload.get("observer_ref"), payload.get("fact_ref")
-            if not isinstance(observer, str) or not isinstance(fact, str) or not fact:
-                continue
-            fact = f"{FACT_REF_PREFIX}{fact.removeprefix(FACT_REF_PREFIX)}"
-            violated = (observer, fact) in knowledge
+    for protection in active_protections(runtime, chapter=next_chapter):
+        if protection.kind == "must_not_know":
+            violated = (protection.observer_ref, protection.fact_ref) in knowledge
         else:
-            if kind == "must_hold_state":
-                field = payload.get("field")
-                if not isinstance(field, str) or not field.strip():
-                    continue
-                path, value = _path(runtime, ref, field), payload.get("value")
-            else:
-                path, value = {
-                    "must_exist": ("state.status", None),
-                    "must_be_alive": ("state.alive_status", "alive"),
-                }.get(kind, ("", None))
-            for changed, changed_path, before, after in transitions:
-                if changed != ref or not path:
-                    continue
-                if not (changed_path == path or changed_path.startswith(path + ".") or path.startswith(changed_path + ".")):
-                    continue
-                old, new = _at(before, path), _at(after, path)
-                if old == new:
-                    continue
-                if kind == "must_exist":
-                    # A destroyed or inactive ref no longer exists; one that had already ended stays so.
-                    violated |= new in ENDED_STATUSES and old not in ENDED_STATUSES
-                elif kind == "must_be_alive":
-                    violated |= new == "dead"
-                else:
-                    violated |= new != value
+            path = guarded_path(runtime, protection)
+            violated = any(
+                changed == protection.ref and paths_overlap(changed_path, path)
+                and breaks_protection(protection, value_at(before, path), value_at(after, path))
+                for changed, changed_path, before, after in transitions
+            )
         if violated:
-            violations.append(BoundaryViolation(node.id, kind, ref))
+            violations.append(BoundaryViolation(protection.node_id, protection.kind, protection.ref))
     return violations
 
 

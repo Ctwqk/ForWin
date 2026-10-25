@@ -64,8 +64,9 @@ def _review(monkeypatch, code, related_refs=None):
             code=code, target_ref="fact:secret", message=MESSAGES[code],
         )],
     )
-    # Only the database-backed translation/gate boundary is substituted; topic construction,
-    # reviewer rendering, repair instructions, overlays and writer builders all run normally.
+    # Only the database-backed milestone lookup and translation/gate boundary are substituted; topic
+    # construction, reviewer rendering, repair instructions, overlays and writer builders all run normally.
+    monkeypatch.setattr(world_consistency, "milestone_refs_for_chapter", lambda *args: frozenset())
     monkeypatch.setattr(world_consistency, "review_chapter_extraction", lambda *args, **kwargs: ChapterWorldReview(
         translation=translation, gate=gate,
     ))

@@ -1,6 +1,6 @@
 # ForWin 当前设计
 
-更新：2026-09-04；2026-10-25 更新世界引擎大修 P4（P4a + follow-up + P4b）的现状（见第 13 节）。范围：当前源码实际实现及本轮已验证的收口修改。
+更新：2026-09-04；2026-10-25 更新世界引擎大修 P4（P4a + follow-up + P4b）的现状（见第 13 节）及 Codex LLM backend 移除后的调用链。范围：当前源码实际实现及本轮已验证的收口修改。
 
 当前设计以已集成的 `master@0a06cfa` 为基础，包含随后按外部评审落实的修复验证、trace补传和同日调度修复。分支整合与前轮消融见[收口验证记录](../docs/operations/v5-closure-reassessment-2026-09-04.md)，本轮边界见[运行自主性修复设计](../docs/superpowers/specs/2026-09-04-v5-autonomy-fixes-design.md)，本地证据见[修复验证记录](../docs/operations/v5-autonomy-fixes-2026-09-04.md)。
 
@@ -22,7 +22,7 @@ ForWin 是有持久状态的长篇小说生产系统。它把写前设定、分�
   → Arc → Band → Chapter 计划与上下文
   → Scene 分解 / 生成 → Stitch 最终正文 → 结构化候选
   → draft review → 有限 repair / verification
-  → residual eligibility → 必要的 human / spark 委托门
+  → residual eligibility → 必要的 human / llm 委托门
   → CanonPreparation：冻结提交计划
   → CanonAdmission.commit_plan：原子接纳
   → post-Canon maintenance / durable outbox
@@ -65,7 +65,7 @@ ForWin 是有持久状态的长篇小说生产系统。它把写前设定、分�
 
 `RuntimeContainer` 是 pipeline 构造点，按运行角色构建所需服务。`ChapterPipeline` 通过显式协作者与 stage owner 组合；不存在旧 `WritingOrchestrator` 的跨模块函数赋值、动态模块代理或隐藏全局 API 状态。
 
-RuntimePolicy v2 是冻结的类型模型，拒绝未知字段。用户维度只有质量 profile、模型 profile、章节长度和 pause/delegate 设置。任务执行使用创建时的 snapshot；后续项目设置不能悄悄改变已在跑的任务。
+RuntimePolicy v2 是冻结的类型模型，拒绝未知字段。用户维度只有质量 profile、模型 fallback chains、章节长度和 pause/delegate 设置。任务执行使用创建时的 snapshot；后续项目设置不能悄悄改变已在跑的任务。2026-10-25 已移除 Codex LLM backend 与 Codex Bridge；所有聊天调用统一经 `LLMClient`，按 `RuntimePolicy.models.chains` 的逐路由有序链选择 DeepSeek / Kimi / MiniMax profiles。
 
 | 默认策略 | standard | pulp |
 | --- | --- | --- |
@@ -108,7 +108,7 @@ DraftReviewService 聚合不同职责的信号：文本/体验、计划契约、
 1. draft_review：草稿问题与 verdict。
 2. repair：修复范围、尝试、预算和 verification。
 3. residual_eligibility：修复耗尽后是否仍有资格继续。
-4. gate_delegation：本应交给人的合格候选暂停门，由 human 或 spark 处理。
+4. gate_delegation：本应交给人的合格候选暂停门，由 `pause.gate_delegate="human"|"llm"` 决定处理方；LLM 路径为 `LLMGateDelegate`，stage 为 `pause_gate`。
 5. canon：真正已接纳的 candidate/commit 身份。
 
 RepairService 选择 scope，必要时修改未来计划，再重写、重新 review、验证 must_fix / must_preserve 和新风险。预算在当前 candidate/repair cycle 内计算。警告不自动变成必须修复；内容错误、合同错误与基础设施失败不能混为同一“重试”。
@@ -119,7 +119,7 @@ RepairVerifier 对全部 must_fix、must_preserve、must_not_reveal 条件分别
 
 完整正文和合同超过输入预算、输出截断、缺引用或复核分歧时，相关条件保持unknown。既有两个聚合字段使用true / false / null表示已验证通过 / 证实失败 / 未验证；API、修复记录和UI保留区别。unknown不生成新的质量错误或人工门，仍由主review、hard residual与Canon约束决定能否接纳。因此“候选已接纳”不意味着每条语义修复条件都已验证通过。
 
-FinalResidualPolicy 只判资格，不提交 Canon。fail/error 或不可接纳 candidate 不能交给 Spark 放行。Spark 只有写 trace/event 的窄能力，不能修改 eligibility 或直接调用 Canon 写入口。JSON/schema/model/timeout 等失败按现有契约关闭该委托路径。
+FinalResidualPolicy 只判资格，不提交 Canon。fail/error 或不可接纳 candidate 不能交给 LLM 放行。`LLMGateDelegate` 通过 `forwin/llm/structured_call.py` 的 `run_structured_llm_call` 发起普通结构化调用，只有写 trace/event 的窄能力，不能修改 eligibility 或直接调用 Canon 写入口。调用链耗尽或 JSON/schema 失败时，门保持未解决并阻断，交人工处理。
 
 ## 7. Canon 原子事务
 
@@ -163,7 +163,7 @@ Daily automation 继续保留，通过应用层入队同一 durable generation t
 DecisionEvent 记录决策、阶段、失败和人工动作；PromptTrace/原始产物说明模型调用及其输入输出；性能记录说明耗时。B0 的三个只读账本已实现：
 
 - S1 GateLedger：机会数、触发/阻断/覆盖，无法恢复 denominator 时为 unknown；后续事故只称 incident proxy，不伪称真实误报/漏报。
-- S3 CostLedger：provider usage、Codex usage、估算或缺失分别记录；人工动作是次数，没有显式 duration 不推测人时。
+- S3 CostLedger：provider usage、历史 Codex usage、估算或缺失分别记录；人工动作是次数，没有显式 duration 不推测人时。
 - S2 RuleProvenance：运行规则 project-scoped，observing/active/suspended/retired 需显式生命周期；跨书数据只能建议全局提升，不能自动生成全局运行规则。
 
 Generation Audit 每6个 accepted DB chapter 写一次 report-only 摘要，不 pause/delegate/block。它引用已发生的 FuturePlanAudit 结果，不是第二次修改计划的决定器。R27只读证据有13个 checkpoint，均未产生 gate 阻断。
@@ -231,14 +231,14 @@ major 影响包括 faction / organization / group / site_state 的 `state.status
 
 当前迁移头为 `0006_planning_v6`（父为 `0005_world_plan_conflicts`，再前为 `0004_drop_parallel_ledgers`）。`world_plan_conflicts` 是世界–计划冲突事实源，记录来源、被违反边界、影响、待提交变化、可选项、决定者、阻塞起章与决定 / 结果引用。世界冲突来源为 `world_tick` / `historical_rewrite` / `plan_feasibility` / `band_planning` / `chapter_extraction`；`impact_review` 表示未破坏边界但达到需审查的影响，`replay_cas` 表示重放失败。
 
-historical_rewrite 或 critical 交人工；以下 minor / moderate / major 规则仅指 world_tick（正文冲突见 P4b）：minor 自动 veto；moderate / major 在 `world.conflict_delegate="codex"` 时交 `WorldConflictDelegate`，否则交人工。Codex 按 `models.role_preferences["review.world_conflict"]` 默认使用 `gpt-6-luna`，模型目录由 `FORWIN_CODEX_MODELS` 声明；它与 Spark 门共用 `run_codex_structured_call`，PromptTrace / 决策审计独立事务落盘。任何失败或选择 `amend_plan` 都升级人工，delegate 自身不写世界或计划。
+historical_rewrite 或 critical 交人工；以下 minor / moderate / major 规则仅指 world_tick（正文冲突见 P4b）：minor 自动 veto；moderate / major 在 `world.conflict_delegate="llm"` 时交 `WorldConflictDelegate`，否则交人工（策略仅有 `"llm"|"human"`）。LLM 决定记录 `decider="llm"`；reviewer 与暂停门共用 `run_structured_llm_call`，按 `RuntimePolicy.models.chains` 路由调用，记录实际服务的 profile / model，PromptTrace / 决策审计独立事务落盘。任何失败或选择 `amend_plan` 都升级人工，delegate 自身不写世界或计划。
 
 | 选项 | 当前执行语义 |
 | --- | --- |
 | `veto_world` | 不提交被扣留的变化；将未结 intent 标为 vetoed，把 veto 注入下一次 actor turn，并在 `[latest - world.max_rerolls, latest]`（两端均含）检测到的冲突中，统计该 actor 的 `veto_world` 决定次数；次数小于 `world.max_rerolls` 时安排重新行动。历史重写冲突只提供此选项。 |
 | `accept_with_obligation` | 提交变化，经 `DeferAcceptanceTransaction` 写 `world_change_response` 义务，deadline 为 `min(latest+6, target)`（`latest` 为最新 canon 章，`target` 为 `project.target_total_chapters`），有下一个未接受计划时绑定，否则保留未结义务。只在非叙事边界的 minor / moderate 冲突提供。 |
 | `plot_responds` | 只提交 intent 的 `status="held"` 补丁（带 `old_value`），不提交被扣留的世界变化；有下一计划时绑定 intent 与回应目标，否则登记 `pending_plan_response` 供下一 band 消费。 |
-| `amend_plan` | 仅人工选择；提交变化并解除被破坏的 protections。随后由 PlanAmender 重规划剩余 band，Codex 的该选择只升级人工。 |
+| `amend_plan` | 仅人工选择；提交变化并解除被破坏的 protections。随后由 PlanAmender 重规划剩余 band，LLM 的该选择只升级人工。 |
 
 world_tick 的 protection / milestone / reveal_schedule 边界冲突只提供 `veto_world` / `amend_plan`；其他非历史冲突提供 veto / amend；仅对 live、未结且从未有 resolved plot response 的 intent 增加 `plot_responds`。`accept_with_obligation` 仍只对 minor / moderate 提供，已用过 plot response 不改变其影响等级资格（R42、FU-R47）。直接 resolve 紧随冲突行锁取得 `FOR NO KEY UPDATE` 项目锁，在锁内读取 canon 和 news queue，再用同一 running-state 检查复核选项变化；hard-rule / gate error 抛 `ConflictStale`（HTTP/MCP 409）并保持 open，veto 不受 held change 失效影响。Canon 拒绝写入同样返回 409。context 与 delta 的 `story_time_start` 使用最新章 extraction 起点至当前故事分钟的窗口。变化经 `commit_world_tick(tick_id="conflict-<id>")` 写入，与义务 / 计划副作用、关闭冲突同在一个 SAVEPOINT；失败整体回滚。
 
@@ -267,7 +267,7 @@ P3 的确定性地图物化使用 `sha256(f"{project_id}|{subworld_id}")`，Gene
 - **writer 输入（R41、FU-R45）**：writer prompt 不携带原始 Genesis `genesis_world_overview` / `genesis_map_overview`、长线摘要 `genesis_story_engine_summary`、项目 premise 或 `setting_summary`；只保留 Genesis revision-id 行。主角姓名只取 `ChapterWorldView.pov_name`，缺省时只在视图 `known_entities` 中解析 `pov_ref`，不从作者摘要或 premise 猜名字。pitch 由经校验的 reader_promise、phase purpose 和本章 goals 承载；世界样貌与基调由本章所在卷 active 节拍表的 `setting_brief` 承载，在故事基本信息中渲染为「设定简介」，为空则不渲染。brief 不超过 200 字（去首尾空白后），与 reader_promise 一样按卷起始章做命题与隐藏名字校验；fallback 节拍表不写 brief（FU-R51）。作者原文仍可供规划与 LLM reviewer 使用。
 - **review 文本（R44、FU-R46）**：`WorldConsistencyReviewer` 对所有 gate code（含 `contradicts_hidden_fact`、`premature_reveal`、`told_by_unaware_source`）都将事实引用渲染成由未隐藏主体名字组成的话题；没有可命名主体时使用 prompt_core 的中性标签，不输出 fact id 或秘密命题。description / suggested_fix 供 writer 使用，作者 review API 的 `ChapterReviewIssueInfo.original_result` 保留原始 message 与 fact_propositions。
 - **onstage 与移动（R43）**：章 N 后的 tick 排除计划 `onstage_refs`、`pov_ref` 及已提交章节 delta 中的全部 movers / event participants。actor turns 跳过这些实体；候选不得改变其 location、alive_status、restraint 或转移其持有物，knowledge / relation 变化仍可通过。触及它们的 offstage intent 不提交物理效果，保留为 due 并以带 old_value 的补丁设 `profile.requires_onstage=true`，交 band 规划绑定；记录 `WORLD_TICK_CANDIDATE_DROPPED` / `touches_onstage_entity`。同一 mover 的 depart_at 早于上次 arrival 时以 `movement_overlap` 拒绝；tick 检查章内移动及累计 tick 移动，章节 gate 也检查同 delta 内的重叠。
-- **与设计的取舍**：`models.role_preferences` 当前只在 `review.world_conflict` 读取消费，不是通用的逐角色模型路由。没有 `extract.split_calls`；章节抽取仍是统一的 ChapterDeltaExtractor 调用，失败校验可以重试。
+- **与设计的取舍**：模型路由统一由 `RuntimePolicy.models.chains` 定义，世界冲突 reviewer 使用同一调用链。没有 `extract.split_calls`；章节抽取仍是统一的 ChapterDeltaExtractor 调用，失败校验可以重试。
 - **取舍 18**：独立 access rules、team speed、edge multipliers 已由出行方式取代；共享 `estimate_travel` 消费本书 lexicon `travel_modes`。本期不另实现这些机制。
 
 删除模块与表的逐项清单见 [CURRENT_ARCHITECTURE.md 的 P4a 删除清单](CURRENT_ARCHITECTURE.md#p4a-删除清单)，以 consolidated boundary test 为准。

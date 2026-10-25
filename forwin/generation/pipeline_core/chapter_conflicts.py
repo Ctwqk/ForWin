@@ -1,7 +1,7 @@
 """The chapter stage's side of chapter conflicts.
 
 After draft review, and again when canon preparation's review gate blocks the candidate, the stage records the
-candidate's residual boundary violations. A LLM rewrite_chapter buys one more repair pass per chapter run, after
+candidate's residual boundary violations. An LLM rewrite_chapter buys one more repair pass per chapter run, after
 which every conflict goes to a human; a conflict a human decides pauses the chapter mid-way, with its draft kept as
 the latest candidate. Once that conflict is decided, the next run resumes the chapter from the saved draft instead
 of writing it again.
@@ -75,7 +75,7 @@ class RecordedChapterConflicts(NamedTuple):
     writer_output: WriterOutput
     verdict: ReviewVerdict
     force_accept_applied: bool
-    # Whether a LLM rewrite_chapter ran one more repair pass, which changed the candidate and its verdict.
+    # Whether an LLM rewrite_chapter ran one more repair pass, which changed the candidate and its verdict.
     repaired: bool
 
 

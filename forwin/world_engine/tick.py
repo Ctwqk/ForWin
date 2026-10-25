@@ -546,7 +546,7 @@ class _Tick:
         return self.service.save_prompt_trace(self.session, prompt_trace)
 
     def _hold(self, candidate: TickCandidate, draft: ConflictDraft, *, extra: Mapping[str, Any]) -> None:
-        # A LLM review may decide the conflict: a stale tick ends before it pays for one.
+        # An LLM review may decide the conflict: a stale tick ends before it pays for one.
         self._check_snapshot()
         holder = self.conflicts.hold(draft, extra=extra)
         if holder:

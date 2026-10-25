@@ -105,6 +105,8 @@ stateDiagram-v2
 
 ### 4. LLM request retry/fallback
 
+2026-10-25 已移除 Codex LLM backend 与 Codex Bridge。所有聊天调用统一经 `LLMClient`，由 `RuntimePolicy.models.chains` 定义逐路由的有序 DeepSeek / Kimi / MiniMax profile fallback chains。
+
 ```mermaid
 stateDiagram-v2
     [*] --> primary_profile
@@ -170,7 +172,7 @@ worker 已 claim lease 并开始推进。`GenerationApplicationService` 根据 p
 4. 写前可行性审计检查角色可用性、地点与出行时间、揭示 / protection、writer 文本泄密和 milestone 覆盖；错误持久化为 `plan_feasibility` 冲突并暂停。`band_planning` / `plan_feasibility` 仅向 human 提供 `amend_plan`；PlanAmender 按问题修订节拍表或强制重规划。
 5. context 使用 `ChapterWorldView`；writer 分 scene 生成并 stitch。失败仍可调用普通 preview fallback。`<<FORWIN_LOCATION>>` 为视图地点 id 或 `new:<名称>`，抽取仅将其作为 `scene_location_hints`，不作事实证据。
 6. `ChapterDeltaExtractor` 按 ChapterWorldView 的实体 / 地点 / 相关秘密从最终 body 抽取，只有 body hash 与 plan fingerprint 同时匹配才复用；draft review / repair 和 CanonPreparation 共享它。`world_consistency` 经 translator / gate 检查时间、移动、角色、物品与揭示，`plan_fulfillment` 提供计划 / 义务履行证据。
-7. review、有限 repair 后仍有正文边界违反则先走下述章内冲突；其余由 residual eligibility 与配置的 human/spark delegation 决定候选资格；CanonPreparation 冻结计划，`CanonAdmissionService.commit_plan` 在事务内重验并原子写入 BookState、实体身份、accepted 状态、审计和 outbox。
+7. review、有限 repair 后仍有正文边界违反则先走下述章内冲突；其余先由 residual eligibility 判定资格，再按 `pause.gate_delegate="human"|"llm"` 处理暂停门。`LLMGateDelegate` 使用 `pause_gate` stage，经 `forwin/llm/structured_call.py` 的 `run_structured_llm_call` 调用同一模型链；调用或解析失败时门保持未解决并阻断。CanonPreparation 冻结计划，`CanonAdmissionService.commit_plan` 在事务内重验并原子写入 BookState、实体身份、accepted 状态、审计和 outbox。
 8. 依次运行 world → plan → feedback，然后 order controls。plan 审计本 band 剩余计划，按上限重规划，必要时开冲突；band / arc 边界准备下一 band。accepted/drafted/needs_review 计划不改；并发发布只覆盖调用方所见的 band 版本，过期审计延期。
 9. feedback 由 `CommentAnalyzer` 先分析评论再聚合。`plan.arc_beats` / `plan.band` 均保存 PromptTrace / LLM DecisionEvents。plan 分别提交卷激活、节拍表、审计 / 重规划及下一 band 工作，最后提交 step 完成状态与 trace outbox；同步 raw-artifact 写失败可使当前单元 / step 失败，重试保留并按条件复用已提交规划工作。事务后 trace outbox 上传失败只重试上传。
 10. 下一章重新检查冲突与维护屏障。没有下一计划的 `plot_responds` 保留待回应世界变化，`accept_with_obligation` 保留义务，由后续 band 规划消费并补 `plan_patch:` 引用。
@@ -181,7 +183,7 @@ world tick 使用 `tick-<commit id>` 与本章故事时间窗口，经过候选�
 
 历史重写对 plan_constraint 重放 release 时，将 old_value 重置为当前 status，跳过缺失或已 released 的目标；create 保留意图，引用的节点 / fact 缺失则抛 `HistoricalRewriteInvalid` 拒绝整次重写（R20）。world_engine deltas（含直接 `conflict-<id>` resolve）单独走 CAS；失败或依赖已丢弃 tick 的创建引用时退役，产生 `replay_cas` 人工冲突并 supersede 该 delta 承载的 resolutions。原冲突仍为 `resolved`，其未结义务变为终态 `cancelled`（`metadata.cancel_reason`），退出 open 列表、预算和 gate；`planned` / `failed` 计划的关联补丁回撤并记 `plan_patch_revert`，accepted 等其他状态计划不变。同计划其他有效 resolution 仍贡献的目标 / 标记保留，五项上限挤出的旧条目无法恢复。replay_cas 的 `proposed_change` 总含 `superseded_conflict_ids`、`cancelled_obligation_ids`、`reverted_plan_patch_ids`，有 supersede 时摘要给出三项数量。
 
-P4（P4a + follow-up + P4b）已实现，生产部署为独立 Task 14 runbook。`chapter_extraction` 残留冲突保留 needs_review 草稿，提供 `rewrite_chapter` / 人工 `amend_plan`；resolve 后显式 continue，从草稿修复或重审，不重新生成正文。`world_conflict_repair` 有独立预算；critical 交人，其余按策略交 Codex 或人，从不 auto。控制台展示脱敏 evidence / held change。
+P4（P4a + follow-up + P4b）已实现，生产部署为独立 Task 14 runbook。`chapter_extraction` 残留冲突保留 needs_review 草稿，提供 `rewrite_chapter` / 人工 `amend_plan`；resolve 后显式 continue，从草稿修复或重审，不重新生成正文。`world_conflict_repair` 有独立预算；critical 交人，其余按 `world.conflict_delegate="llm"|"human"` 处理，从不 auto。世界冲突 reviewer 同样使用 `run_structured_llm_call`，LLM 决定记录 `decider="llm"` 和实际 profile / model；失败或 `amend_plan` 升级人工。控制台展示脱敏 evidence / held change。
 
 最新章重写退役旧 tick，world step 重跑并让受影响 open conflicts 进入 `expired`；更早重写检查消失引用，依赖它的 tick 丢弃并建 replay_cas，非 tick 依赖拒绝重写。`world_variable` / `world.drift`、五种 `checkable` 谓词及幕后新 minor actors 均经 gate / Canon；抽取输入已按 ChapterWorldView 收窄。task_contract_json 与 `narrative_constraints` 已删除，计划用 amend_plan / 重规划 / plan patches 修改。CostLedgerReport 提供按章角色成本 / token、冲突与人工决定、checkpoint 暂停、payload 裁剪及 intent 顺延计数；剩余清理与 P5 调参见 [DESIGN_STATUS](DESIGN_STATUS.md#post-deploy-cleanup)。
 

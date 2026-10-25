@@ -345,7 +345,6 @@ def _call_json_with_trace_impl(
                 response_format={"type": "json_object"},
                 task_family="genesis",
                 stage_key=stage_key,
-                codex_allowed=True,
                 output_schema={"type": "object"},
             )
             try:

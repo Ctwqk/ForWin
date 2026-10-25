@@ -4,7 +4,7 @@
 
 状态：active-current。本文档给当前保留的设计文档标注阅读顺序和权威等级。
 
-2026-10-25：Codex LLM backend 已删除（router、client、bridge、配置、健康检查与 CLI eval adapter）。聊天调用统一通过 `LLMClient` 的 per-route fallback chains；Codex MCP operator 保留。pause-gate 与 world-conflict delegate 的旧策略和模型字面量留待 Task 3 迁移。
+2026-10-25：Codex LLM backend 已删除（router、client、Codex Bridge、配置、健康检查与 CLI eval adapter）。聊天调用统一通过 `LLMClient`，按 `RuntimePolicy.models.chains` 的 per-route fallback chains 使用 DeepSeek / Kimi / MiniMax profiles；Codex MCP operator 保留。Task 3 已完成：pause-gate 与 world-conflict delegate 均已切换为普通结构化 LLM 调用和 human/llm 策略；存量旧值迁移及遗留 PromptTrace 列清理由 Task 4 负责。
 
 ## 状态枚举
 
@@ -74,7 +74,7 @@
 
 - **tick**：post-Canon 固定 `("world", "plan", "feedback")`，world 只运行 `WorldTickService.run`；feedback 在聚合前分析新评论。tick 以 `tick-<commit id>`、本章整数分钟时间窗口与 seed 运行；disabled / 非最新章 / 已 tick 章跳过，`target_total_chapters > 0` 且本章达到或超过目标时只结算 / 释放本章绑定的 held intents，不启动新世界行动；无需写入时以 `skipped_reason="book_complete"` 跳过。intent interactions、clock producers、due intents、onstage bookkeeping（按本章绑定与 band 规划机会判定）与 `ActorTurnRunner` 产候选，过 hard rules / 逐候选 gate、一次重试（actor feedback 脱敏）、impact / budgets / narrative boundaries、冲突审查、一轮新闻传播，再由 `WorldTickDeltaBuilder` 构建。LLM 故障跳过节点，不使 tick 失败。
 - **准入与重写**：`CanonAdmissionService.commit_world_tick` 以 tick_id 幂等、在最新章以 `FOR NO KEY UPDATE` 项目锁写入。提交前 `RunningStateCheck` 先逐个检查 base candidates，再按组检查 in-tick resolutions：hard rules 读取累计接受后的 runtime，world gate 检查累计 delta；base 失效以 `constraint_violation` 丢弃，resolution 失效以 `failure_reason="conflict_stale"` 升级人工、保持 open。无补丁且无 resolution 的 quiet tick 不取项目锁；其余在 commit SAVEPOINT 前取锁并复核 snapshot（P27）。world step `result_json` 保留 `tick_id`、`graph_delta_ids`、`conflict_ids`、`dropped_candidate_ids`、`postponed_candidate_ids`、`warnings`、`skipped_reason`。历史重写 CAS 重放 world_engine deltas，失败者退役并产生 `replay_cas` 人工冲突；依赖其创建引用的 tick 级联丢弃、非 tick 依赖拒绝整次重写。
-- **冲突裁定迁移边界**：`world_plan_conflicts` 保存待决变化和审查 / 阻塞信息。historical_rewrite / critical → human，minor → auto veto_world。2026-10-25 已删除 Codex LLM backend；moderate / major 的旧 delegate 路由与 Spark 审稿门尚待 Task 3 改为 LLM fallback chains。保留旧策略 / 模型字面量不代表 Codex backend 仍可用；独立事务审计以及失败或 `amend_plan` 升级人工的契约保留。
+- **冲突裁定**：`world_plan_conflicts` 保存待决变化和审查 / 阻塞信息。historical_rewrite / critical → human，minor → auto veto_world。Task 3 已完成：moderate / major 按 `world.conflict_delegate="llm"|"human"` 路由，LLM 决定记录 `decider="llm"`；暂停门按 `pause.gate_delegate="human"|"llm"` 路由，`LLMGateDelegate` 使用 `pause_gate` stage。两者共用 `forwin/llm/structured_call.py` 的 `run_structured_llm_call` 和 `RuntimePolicy.models.chains`，记录实际 profile / model；独立事务审计、调用或解析失败时保持阻断，以及冲突失败或 `amend_plan` 升级人工的契约保留。存量旧策略 / decider 值迁移归 Task 4。
 - **选项**：historical_rewrite 仅 veto；protection / milestone / reveal_schedule 仅 veto / amend；其他提供 veto / amend，只有 live、未结且未有 resolved plot response 的 intent 才有一次 plot_responds；minor / moderate 另有 accept_with_obligation，用过 plot response 不改变其影响等级资格（FU-R47）。veto 标未结 intent 为 vetoed，并在 `[latest - world.max_rerolls, latest]`（两端均含）检测到的冲突中，统计该 actor 的 `veto_world` 决定次数；次数小于 `world.max_rerolls` 时让 actor 再行动；accept 经 `DeferAcceptanceTransaction` 提交 `world_change_response` 义务，deadline 为 `min(latest+6, target)`（`latest` 为最新 canon 章，`target` 为 `project.target_total_chapters`）；plot_responds 只提交带 old_value 的 intent held 状态补丁，不提交被扣留变化，有计划时绑定 intent 与回应目标，否则登记 pending_plan_response；人工 amend 提交变化并解除破坏的 protection。直接 resolve 用 `commit_world_tick(tick_id="conflict-<id>")`，世界变化、计划 / 义务和关闭冲突同一个 SAVEPOINT。
 - **阻塞与入口**：open human conflict 在 `blocks_from_chapter` 起暂停 run，stage 为 `paused_for_review`、任务为 `needs_review`，派生 reason 为 `world_conflict_pending`；continue / review-approve（`continue_generation=true`）返回 409 直到解决。解决后重新读状态、查 active task 再显式继续。HTTP `/api/projects/{id}/world-conflicts[/{cid}[/resolve]]`、MCP `world_conflict_list` / `world_conflict_get` / `world_conflict_resolve` 与 task drawer 已接入；旧信号用 `world_model_signal_list`，保留 `/world-model/conflicts`。
 - **裁定与 actor 上限**：裁定只给本次 due intents、其 owner / targets、它们持有的 items / resources 及同地 active actors / items / resources / site_states 完整正文；event 与非本次 due intent 不给完整正文，compact index 排除 event / 已结 intent，保留 pending intents。facts 保留全部 scoped standing facts，事件事实按 `created_at_chapter` 降序、id 升序在各 intent 内排序，按每 intent 首轮最多 5 条再轮转补满 `MAX_ADJUDICATION_EVENT_FACTS = 20` 条；允许值含 `ended_status`。每 tick 最多裁定 20 个 due offstage intents，按 prompt guard 选入可容纳的批次；单个超限则以 `prompt_too_large_deferred` 顺延到 now+1，后续 intent 补位，超 cap 未询问者以 `adjudication:<intent>` 进入 `postponed_candidate_ids`。actor 视图按 priority 降序、id 升序只保留 `MAX_ACTOR_AGENDAS = 8` 条 active agendas；超过 `MAX_AGENDA_CHANGES_PER_TURN = 3` 项 agenda_changes 以 `too_many_agenda_changes` 重试，prompt 含 `max_agenda_changes_per_actor`；SQL 为每个实际回合 actor 只读最新五条 veto_world resolutions。
@@ -96,7 +96,7 @@
 - **review 文本（R44、FU-R46）**：所有 gate code 的 writer 文本按未隐藏主体名指称事实话题；无可命名主体时使用 prompt_core 中性标签，不输出 fact id 或命题。作者 review API 的 `ChapterReviewIssueInfo.original_result` 保留原始 message 与 fact_propositions。
 - **onstage / 移动（R43）**：tick 排除本章计划 onstage_refs、pov_ref 及 committed extraction delta 的 movers / event participants；actor turns 跳过它们，候选不得改变其 location / alive_status / restraint 或转移持有物，knowledge / relation 仍可通过。触及它们的 offstage intent 留为 due、以带 old_value 的补丁设 profile.requires_onstage=true，交 band 绑定，并记 WORLD_TICK_CANDIDATE_DROPPED / touches_onstage_entity。章 gate 与 tick 都以 `movement_overlap` 拒绝同 mover 的重叠移动，tick 同时考虑本章及累计 tick 移动。
 - **行锁的唯一例外**：start-writing 在首张节拍表 LLM 调用期间保留项目 `FOR NO KEY UPDATE NOWAIT` 锁，保证 arcs / map / chapter-0 seed / sheet protections 原子交接；后续规划在 LLM 后取发布锁。
-- **与设计的取舍**：`models.role_preferences` 当前只读 `review.world_conflict`；没有 `extract.split_calls`，章节抽取为统一调用（校验失败可重试）。
+- **与设计的取舍**：模型路由统一使用 `RuntimePolicy.models.chains`，包括世界冲突 reviewer；没有 `extract.split_calls`，章节抽取为统一调用（校验失败可重试）。
 - **与设计的取舍（既有直接写入，C5）**：`POST /characters` 与 personality writers（backfill、reassign、manual override、relationship enrichment）仍直接写 BookState，绕过 canon admission；这是既有行为，本轮仅记录，尚未接入 `CanonAdmissionService.commit_world_edit`。
 
 字段、POV 保密边界和完整裁定见 [CURRENT_DESIGN 第 13 节](CURRENT_DESIGN.md)。删除模块与表的逐项清单见 [CURRENT_ARCHITECTURE 的 P4a 删除清单](CURRENT_ARCHITECTURE.md#p4a-删除清单)，以 consolidated boundary test 为准。
@@ -254,7 +254,7 @@ P1 代码收口时的记录；当前 P4 状态以上节为准。
 状态：implementation-complete，已部署；旧 200 章运行已退出并降级为 pre-roadmap soak，等待新 RC gate。
 
 - `InfrastructureConfig` 仅负责基础设施、凭据和环境模型目录；不存在 `Config` 兼容名。
-- 项目运行行为只来自版本化 `RuntimePolicy`，质量 profile 仅有 `standard/pulp`，gate delegate 仅有 `human/spark`。当前契约为 `RuntimePolicy.schema_version=2`；Generation Audit 固定为 `report-only`，按数据库中 `ChapterPlan.status="accepted"` row 计数，对 `all profiles` 使用 `cadence=6`，即每六个 accepted DB chapter 记录一次 `generation_audit_checkpoint_reached`，其 `event_family="runtime_observation"`，并固定为 `no pause/delegation/block`，不改变 generation `RunResult`。
+- 项目运行行为只来自版本化 `RuntimePolicy`，质量 profile 仅有 `standard/pulp`，gate delegate 仅有 `human/llm`。当前契约为 `RuntimePolicy.schema_version=2`；Generation Audit 固定为 `report-only`，按数据库中 `ChapterPlan.status="accepted"` row 计数，对 `all profiles` 使用 `cadence=6`，即每六个 accepted DB chapter 记录一次 `generation_audit_checkpoint_reached`，其 `event_family="runtime_observation"`，并固定为 `no pause/delegation/block`，不改变 generation `RunResult`。
 - generation task 保存不可变 policy snapshot；所有任务生产者和 worker 执行均通过 `GenerationApplicationService`。
 - GET `/api/settings/llm` 是 secret-free 只读目录；控制台不再保存 API Key、模型 profile 或全局生成偏好。
 - 项目抽屉是唯一 RuntimePolicy UI 写入口；MCP 对应工具为 `project_set_gate_delegate`。
@@ -350,7 +350,7 @@ Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手�
 |---|---|---|
 | `docs/superpowers/plans/2026-04-24-forwin-v4-world-model.md` | historical-plan | 解释 `world_model_v4` / `reviewer_v4` side-by-side 来源；已被 BookState final 覆盖。 |
 | `docs/superpowers/plans/2026-04-24-forwin-v4-1-runtime-hardening.md` | historical-plan | V4.1 hardening 计划；“V4 source semantics” 口径已被 BookState final 覆盖。 |
-| `docs/superpowers/specs/2026-07-09-forwin-reckless-review-mode-design.md` | historical-plan | 已被 RuntimePolicy `gate_delegate=human|spark` 与 fail-closed gate delegation 覆盖。 |
+| `docs/superpowers/specs/2026-07-09-forwin-reckless-review-mode-design.md` | historical-plan | 已被 RuntimePolicy `gate_delegate=human|llm` 与 fail-closed gate delegation 覆盖。 |
 | `docs/superpowers/plans/2026-07-09-forwin-reckless-review-mode.md` | historical-plan | 独立 reckless mode 已删除，不再是当前产品或运行时概念。 |
 | `forwin_design_cleanup_update_plan.md` | historical-plan | 旧冗余清单，已被 v5 审计和实施规格覆盖。 |
 | `forwin_decoupling_plan.md` | historical-plan | 旧解耦建议；其中 `forwin.orchestration` 目标已被 v5 owner-local service 设计取代。 |

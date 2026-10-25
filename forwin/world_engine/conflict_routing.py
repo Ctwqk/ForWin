@@ -61,7 +61,7 @@ def available_options(
 
 def route_conflict(draft: ConflictDraft, *, policy: RuntimePolicy) -> ConflictDecider:
     """Rewrites, plan conflicts and critical conflicts go to a human, minor ones are vetoed automatically,
-    and the rest go to LLM unless the policy keeps them for a human.
+    and the rest go to the LLM unless the policy keeps them for a human.
 
     A chapter conflict is what the draft repair loop could not fix, so it is never decided automatically:
     rewriting the chapter again on its own would loop.

@@ -471,7 +471,7 @@ def test_major_change_becomes_conflict_and_llm_veto_is_applied(pipeline, genre: 
         )).all()
         after = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=1)
 
-    # The death is major: the tick held it back as a conflict for LLM instead of committing it.
+    # The death is major: the tick held it back as a conflict for the LLM instead of committing it.
     assert ticked.step["conflict_ids"] == [conflict.id]
     assert (conflict.source, conflict.violated, conflict.impact_level, conflict.required_decider) == (
         "world_tick", "impact_review", "major", "llm",

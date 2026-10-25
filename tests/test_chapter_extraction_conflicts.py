@@ -174,6 +174,7 @@ def test_chapter_conflict_draft_fields() -> None:
     assert (draft.intent_ref, draft.actor_ref) == ("", "")
     assert draft.proposed_change == {
         "kind": "chapter_boundary", "chapter": CHAPTER, "boundary": asdict(protection), "candidate_id": "candidate-1",
+        "detected_by": "draft_review",
     }
     assert (milestone_draft.violated, milestone_draft.impact_level) == ("milestone", "critical")
     assert milestone_draft.origin_key == f"chapter_extraction:{CHAPTER}:milestone:{SHADOW}"
@@ -307,6 +308,31 @@ def test_open_row_no_longer_violated_resolves_as_auto_rewrite(factory) -> None:
     assert (decision["option"], decision["decided_by"]) == ("rewrite_chapter", "auto")
     assert json.loads(row.result_refs_json) == ["candidate:candidate-2"]
     assert [event.related_object_id for event in resolved] == [row.id]
+
+
+def test_no_longer_violated_resolution_uses_the_rows_own_source(factory) -> None:
+    """The draft review never reports a gate-only boundary, so only the gate may close a gate row, and back."""
+    gate_violation = _violation(protection_node_id="gate-only", impact_level="critical")
+    draft_violation = _violation()
+    with factory() as session:
+        recorder = _recorder(session)
+        gate = recorder.record(project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-1",
+                               violations=[gate_violation], detected_by="canon_gate")
+        draft = recorder.record(project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-1",
+                                violations=[draft_violation])
+        session.commit()
+        recorder.record(project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-2", violations=[])
+        session.commit()
+        after_draft = {row.id: row.status for row in _rows(session)}
+        recorder.record(project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-2", violations=[],
+                        detected_by="canon_gate")
+        session.commit()
+        after_gate = {row.id: row.status for row in _rows(session)}
+        gate_row = session.get(WorldPlanConflictRow, gate.blocking_conflict_id)
+
+    assert after_draft == {gate.blocking_conflict_id: "open", draft.blocking_conflict_id: "resolved"}
+    assert after_gate == {gate.blocking_conflict_id: "resolved", draft.blocking_conflict_id: "resolved"}
+    assert json.loads(gate_row.proposed_change_json)["detected_by"] == "canon_gate"
 
 
 # the chapter stage
@@ -487,6 +513,88 @@ def test_codex_rewrite_gets_one_more_pass_then_human(factory, monkeypatch, fixed
     assert run.result.pause_reason == "world_conflict"
     assert run.paused == [{"reason": "world_conflict", "conflict_id": human_row.id}]
     assert (run.status, run.drafts) == ("needs_review", 2)
+
+
+def test_boundary_first_seen_after_the_extra_pass_goes_to_a_human(factory, monkeypatch) -> None:
+    first = _violation(impact_level="moderate")
+    second = _violation(protection_node_id="protection-two", impact_level="moderate")
+    delegate = FakeDelegate("rewrite_chapter")
+    repair = FakeRepair(_failing(first), after_extra_pass=_failing(second))
+
+    run = _run(factory, monkeypatch, repair=repair, policy=CODEX, delegate=delegate)
+
+    with factory() as session:
+        rows = {row.origin_key.rsplit(":", 1)[-1]: row for row in _rows(session)}
+    # Codex decides once per chapter pass: the repaired draft's new boundary goes straight to a human.
+    assert delegate.calls == [rows[PROTECTION].id]
+    assert repair.extra_passes == [[rows[PROTECTION].id]]
+    assert (rows["protection-two"].status, rows["protection-two"].required_decider) == ("open", "human")
+    assert run.result.pause_reason == "world_conflict"
+    assert run.paused == [{"reason": "world_conflict", "conflict_id": rows["protection-two"].id}]
+    assert run.status == "needs_review"
+
+
+class SequencedPreparation:
+    """Canon preparation whose review gate blocks with each verdict in turn, the last one from then on."""
+
+    def __init__(self, *gates: BookStateReviewVerdict) -> None:
+        self.gates = list(gates)
+        self.calls = 0
+
+    def prepare(self, **_kwargs):
+        gate = self.gates[min(self.calls, len(self.gates) - 1)]
+        self.calls += 1
+        return CanonPreparationOutcome(
+            blocked_path="book-state-review-gate-blocked", block_kind="book_state", book_state_review=gate,
+        )
+
+
+def _gate(*violations: DeltaBoundaryViolation) -> BookStateReviewVerdict:
+    return BookStateReviewVerdict(project_id=PROJECT_ID, chapter_number=CHAPTER, verdict_id="v", accepted=False, issues=[
+        BookStateReviewIssue(severity="error", code="protection_violated", message="m",
+                             target_ref=f"review_constraint:{violation.protection_node_id}", detail=asdict(violation))
+        for violation in violations
+    ])
+
+
+@pytest.mark.parametrize("blocks", ["pass_then_critical", "critical_beside_codex"])
+def test_gate_violation_stays_open_after_the_extra_pass(factory, monkeypatch, blocks) -> None:
+    critical = _violation(impact_level="critical")
+    moderate = _violation(protection_node_id="protection-two", impact_level="moderate")
+    gates = [_gate(moderate), _gate(critical, moderate)] if blocks == "pass_then_critical" else [_gate(critical, moderate)]
+    preparation = SequencedPreparation(*gates)
+    delegate = FakeDelegate("rewrite_chapter")
+    repair = FakeRepair(PASSING, after_extra_pass=PASSING)
+
+    run = _run(factory, monkeypatch, repair=repair, policy=CODEX, delegate=delegate, canon_preparation=preparation)
+
+    with factory() as session:
+        rows = _rows(session)
+        pending = WorldConflictRepository(session).pending_chapter_resumes(PROJECT_ID, chapter_number=CHAPTER)
+    decided_by = [json.loads(row.decision_json or "{}").get("decided_by") for row in rows]
+    (critical_row,) = [row for row in rows if row.origin_key.endswith(f":{PROTECTION}")]
+    (codex_row,) = [row for row in rows if row.required_decider == "codex"]
+    # A residual gate conflict is never auto: the critical boundary the chapter still breaks stays open.
+    assert "auto" not in decided_by
+    assert (critical_row.status, critical_row.required_decider) == ("open", "human")
+    assert json.loads(critical_row.proposed_change_json)["detected_by"] == "canon_gate"
+    assert run.result.pause_reason == "world_conflict"
+    assert run.paused == [{"reason": "world_conflict", "conflict_id": critical_row.id}]
+    assert run.status == "needs_review"
+    assert delegate.calls == [codex_row.id]
+    if blocks == "pass_then_critical":
+        # The pass ran on the first block; the gate, not the repaired draft's verdict, judged the result.
+        assert preparation.calls == 2
+        assert repair.extra_passes == [[codex_row.id]]
+        assert pending == []
+        (repeat,) = [row for row in rows if row.origin_key == codex_row.origin_key and row.id != codex_row.id]
+        assert (repeat.status, repeat.required_decider) == ("open", "human")
+    else:
+        # A human conflict already blocks the chapter: no pass, and Codex's decision waits as a pending resume.
+        assert preparation.calls == 1
+        assert repair.extra_passes == []
+        assert [row.id for row in pending] == [codex_row.id]
+        assert len(rows) == 2
 
 
 def test_canon_preparation_outcome_carries_the_gate_verdict(factory) -> None:

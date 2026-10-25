@@ -665,7 +665,7 @@ class ChapterExecutionStage(ChapterConflictStage):
                     if canon_outcome.book_state_review is not None:
                         writer_output, verdict, force_accept_applied, repaired = conflicts.record(
                             writer_output, verdict, force_accept_applied, gate=canon_outcome.book_state_review)
-                        if repaired and verdict.verdict != "fail":
+                        if repaired:
                             repair_attempt_count, residual_review_issues, canon_risk_level = conflicts.review_state(
                                 verdict)
                             continue

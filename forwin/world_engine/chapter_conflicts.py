@@ -1,9 +1,9 @@
 """Residual chapter-text boundary violations become chapter_extraction conflicts.
 
 A violation the draft repair loop fixes never gets here: that loop is the automatic rewrite_chapter. What the
-loop leaves, or what canon preparation finds, is stored once per chapter and boundary and routed: critical
-conflicts go to a human, the rest to Codex when the policy delegates to it. Codex decides once per boundary;
-its rewrite_chapter buys the chapter one more repair pass, and a violation still left after it goes to a human.
+loop leaves, or what canon preparation's review gate finds, is stored once per chapter and boundary and routed:
+critical conflicts go to a human, the rest to Codex when the policy delegates to it. Codex decides once per boundary;
+its rewrite_chapter buys the chapter one more repair pass, and whatever is found after that pass goes to a human.
 
 Conflict summaries name entities, never a fact's proposition; concealed entities get the neutral label.
 """
@@ -48,6 +48,10 @@ CHAPTER_CONFLICT_SOURCE = "chapter_extraction"
 CHAPTER_BOUNDARY_CHANGE = "chapter_boundary"
 # Why an open chapter conflict closed on its own: a later candidate no longer breaks the boundary.
 NO_LONGER_VIOLATED_RATIONALE = "A later candidate of the chapter no longer breaks this boundary."
+# Which check found a chapter conflict's violation; only the same check can find that it is gone, since the draft
+# review never sees a boundary only canon preparation's review gate reports.
+DRAFT_REVIEW_DETECTION = "draft_review"
+CANON_GATE_DETECTION = "canon_gate"
 _CANDIDATE_REF_PREFIX = "candidate:"
 _READER = ObserverType.READER.value
 _READER_LABEL = "the reader"
@@ -81,8 +85,9 @@ def chapter_conflict_draft(
     story_time: int,
     candidate_id: str = "",
     names: Mapping[str, str] | None = None,
+    detected_by: str = DRAFT_REVIEW_DETECTION,
 ) -> ConflictDraft:
-    """The conflict for a boundary chapter ``chapter_number``'s text still breaks.
+    """The conflict for a boundary chapter ``chapter_number``'s text still breaks, as ``detected_by`` found it.
 
     ``names`` maps the violation's entity refs to display names and its fact ref to the names of the fact's
     subjects; a ref it does not name gets the neutral label.
@@ -99,7 +104,7 @@ def chapter_conflict_draft(
         summary=_summary(v, chapter_number=chapter_number, names=names or {}),
         proposed_change={
             "kind": CHAPTER_BOUNDARY_CHANGE, "chapter": chapter_number, "boundary": asdict(v),
-            "candidate_id": candidate_id,
+            "candidate_id": candidate_id, "detected_by": detected_by,
         },
         blocks_from_chapter=chapter_number,
     )
@@ -186,18 +191,23 @@ class ChapterConflictRecorder:
         chapter_number: int,
         candidate_id: str,
         violations: Sequence[DeltaBoundaryViolation],
+        detected_by: str = DRAFT_REVIEW_DETECTION,
+        allow_codex: bool = True,
     ) -> ChapterConflictOutcome:
-        """Record ``candidate_id``'s violations of chapter ``chapter_number``.
+        """Record ``candidate_id``'s violations of chapter ``chapter_number`` that ``detected_by`` found.
 
-        Each boundary reuses its open conflict or gets a new one with its DETECTED event. Open conflicts of the
-        chapter whose boundary the candidate no longer breaks are resolved as an automatic rewrite_chapter.
-        Codex reviews each conflict routed to it after a commit, so no conflict row stays locked across the model
-        call; the caller commits the rest.
+        Each boundary reuses its open conflict or gets a new one with its DETECTED event. Open conflicts the same
+        check found earlier, whose boundary the candidate no longer breaks, are resolved as an automatic
+        rewrite_chapter. Without ``allow_codex`` every conflict goes to a human. Codex reviews each conflict routed
+        to it after a commit, so no conflict row stays locked across the model call; the caller commits the rest.
         """
-        drafts = self._drafts(project_id, chapter_number, candidate_id, violations)
-        rows = [self._open_or_create(draft, chapter_number=chapter_number) for draft in drafts]
+        drafts = self._drafts(project_id, chapter_number, candidate_id, violations, detected_by=detected_by)
+        rows = [
+            self._open_or_create(draft, chapter_number=chapter_number, allow_codex=allow_codex) for draft in drafts
+        ]
         self._resolve_no_longer_violated(
             project_id, chapter_number, candidate_id, kept={draft.origin_key for draft in drafts},
+            detected_by=detected_by,
         )
         for_codex = [row.id for row in rows if row.status == "open" and row.required_decider == "codex"]
         codex_rewrite_ids = tuple(
@@ -213,6 +223,7 @@ class ChapterConflictRecorder:
 
     def _drafts(
         self, project_id: str, chapter_number: int, candidate_id: str, violations: Sequence[DeltaBoundaryViolation],
+        *, detected_by: str,
     ) -> list[ConflictDraft]:
         if not violations:
             return []
@@ -223,17 +234,21 @@ class ChapterConflictRecorder:
         for violation in violations:
             draft = chapter_conflict_draft(
                 violation, project_id=project_id, chapter_number=chapter_number, story_time=story_time,
-                candidate_id=candidate_id, names=boundary_names(runtime, violation),
+                candidate_id=candidate_id, names=boundary_names(runtime, violation), detected_by=detected_by,
             )
             drafts.setdefault(draft.origin_key, draft)
         return list(drafts.values())
 
-    def _open_or_create(self, draft: ConflictDraft, *, chapter_number: int) -> WorldPlanConflictRow:
+    def _open_or_create(
+        self, draft: ConflictDraft, *, chapter_number: int, allow_codex: bool,
+    ) -> WorldPlanConflictRow:
         row = self.repo.open_for_origin(draft.project_id, draft.origin_key)
         if row is not None:
+            if not allow_codex and row.required_decider == "codex":
+                self.repo.escalate(row)
             return row
         decider: ConflictDecider = (
-            "human" if self._codex_decided(draft.project_id, draft.origin_key)
+            "human" if not allow_codex or self._codex_decided(draft.project_id, draft.origin_key)
             else route_conflict(draft, policy=self.policy)
         )
         row = self.repo.create(draft, required_decider=decider, options=available_options(draft))
@@ -250,7 +265,7 @@ class ChapterConflictRecorder:
         return any(json.loads(decision or "{}").get("decided_by") == "codex" for decision in decisions)
 
     def _resolve_no_longer_violated(
-        self, project_id: str, chapter_number: int, candidate_id: str, *, kept: set[str],
+        self, project_id: str, chapter_number: int, candidate_id: str, *, kept: set[str], detected_by: str,
     ) -> None:
         rows = self.session.scalars(
             select(WorldPlanConflictRow).where(
@@ -262,7 +277,7 @@ class ChapterConflictRecorder:
             .with_for_update().execution_options(populate_existing=True)
         )
         for row in rows:
-            if row.origin_key in kept:
+            if row.origin_key in kept or json.loads(row.proposed_change_json or "{}").get("detected_by") != detected_by:
                 continue
             self.repo.mark_resolved(row, decision=ConflictDecision(
                 option="rewrite_chapter", decided_by="auto", rationale=NO_LONGER_VIOLATED_RATIONALE,
@@ -307,6 +322,8 @@ __all__ = [
     "CHAPTER_BOUNDARY_CHANGE",
     "CHAPTER_CONFLICT_OPTIONS",
     "CHAPTER_CONFLICT_SOURCE",
+    "CANON_GATE_DETECTION",
+    "DRAFT_REVIEW_DETECTION",
     "NO_LONGER_VIOLATED_RATIONALE",
     "WORLD_CONFLICT_REPAIR_PHASE",
     "ChapterConflictOutcome",

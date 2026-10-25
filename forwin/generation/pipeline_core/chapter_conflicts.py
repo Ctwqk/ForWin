@@ -1,8 +1,9 @@
 """The chapter stage's side of chapter conflicts.
 
 After draft review, and again when canon preparation's review gate blocks the candidate, the stage records the
-candidate's residual boundary violations. A Codex rewrite_chapter buys one more repair pass; a conflict a human
-decides pauses the chapter mid-way, with its draft kept as the latest candidate.
+candidate's residual boundary violations. A Codex rewrite_chapter buys one more repair pass per chapter run, after
+which every conflict goes to a human; a conflict a human decides pauses the chapter mid-way, with its draft kept as
+the latest candidate.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.world_engine.chapter_conflicts import (
+    CANON_GATE_DETECTION,
+    DRAFT_REVIEW_DETECTION,
     ChapterConflictRecorder,
     violations_from_gate,
     violations_from_verdict,
@@ -60,9 +63,9 @@ class RecordedChapterConflicts(NamedTuple):
     repaired: bool
 
 
-@dataclass(frozen=True)
+@dataclass
 class ChapterConflicts:
-    """One chapter's conflict recording, bound to the stage's helpers for that chapter."""
+    """One chapter run's conflict recording, bound to the stage's helpers for that chapter."""
 
     stage: Any
     session: Session
@@ -72,6 +75,8 @@ class ChapterConflicts:
     policy: RuntimePolicy
     chapter_plan: ChapterPlan
     context: Any
+    # Codex decides once per chapter run: after its extra repair pass every conflict goes to a human.
+    codex_pass_used: bool = False
 
     def record(
         self,
@@ -82,23 +87,29 @@ class ChapterConflicts:
         gate: BookStateReviewVerdict | None = None,
     ) -> RecordedChapterConflicts:
         """Record the latest candidate's residual boundary violations, from ``verdict`` or from the blocking
-        ``gate``, then commit.
+        ``gate`` alone, then commit.
 
-        Codex choosing rewrite_chapter buys one more repair pass; the repaired candidate is recorded again, and
-        Codex does not decide the same boundary twice, so a violation still left goes to a human. A conflict a
-        human decides marks the chapter needs_review and raises ChapterConflictBlocked.
+        Codex choosing rewrite_chapter buys one more repair pass unless a human conflict already blocks the
+        chapter. After the pass the repaired draft is recorded again, or, on the gate path, the canon loop
+        prepares again and the gate records what is left; either way every conflict then goes to a human. A
+        conflict a human decides marks the chapter needs_review and raises ChapterConflictBlocked.
         """
         session, project_id = self.session, self.chapter_plan.project_id
         chapter_number = int(self.chapter_plan.chapter_number)
+        # Lock order: conflict rows come before the chapter plan, which this transaction may already have written.
+        session.commit()
         recorder = self.stage._chapter_conflict_recorder(session, self.policy)
         candidates = CandidateDraftRepository(session)
         candidate = candidates.latest_for_chapter(project_id=project_id, chapter_number=chapter_number)
         outcome = recorder.record(
             project_id=project_id, chapter_number=chapter_number, candidate_id=candidate.id,
             violations=violations_from_gate(gate) if gate is not None else violations_from_verdict(verdict),
+            detected_by=CANON_GATE_DETECTION if gate is not None else DRAFT_REVIEW_DETECTION,
+            allow_codex=not self.codex_pass_used,
         )
-        repaired = bool(outcome.codex_rewrite_ids)
+        repaired = bool(outcome.codex_rewrite_ids) and not outcome.blocking_conflict_id
         if repaired:
+            self.codex_pass_used = True
             # The repair pass calls the writer: no conflict row stays locked across it.
             session.commit()
             conflicts = WorldConflictRepository(session)
@@ -113,10 +124,11 @@ class ChapterConflicts:
             # The repair the decision asked for ran on this candidate, so the decision is no pending resume.
             for row in rows:
                 conflicts.attach_result_refs(row, [f"candidate:{candidate.id}"])
-            outcome = recorder.record(
-                project_id=project_id, chapter_number=chapter_number, candidate_id=candidate.id,
-                violations=violations_from_verdict(verdict),
-            )
+            if gate is None:
+                outcome = recorder.record(
+                    project_id=project_id, chapter_number=chapter_number, candidate_id=candidate.id,
+                    violations=violations_from_verdict(verdict), allow_codex=False,
+                )
         if outcome.blocking_conflict_id:
             repair_attempt_count, residual_review_issues, _risk = self.review_state(verdict)
             self.updater.mark_chapter_status(

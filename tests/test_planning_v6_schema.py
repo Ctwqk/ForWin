@@ -78,6 +78,8 @@ def _assert_planning_schema(engine: sa.Engine) -> None:
     assert str(brief["default"]).split("::")[0] == "''"
     assert {c["name"] for c in inspector.get_columns("band_plans")} == BAND_PLAN_COLUMNS
     assert PLANNING_COLUMNS <= {c["name"] for c in inspector.get_columns("chapter_plans")}
+    for table_name in ("chapter_plans", "band_experience_plans"):
+        assert "task_contract_json" not in {c["name"] for c in inspector.get_columns(table_name)}
     snapshot_columns = {c["name"]: c for c in inspector.get_columns("world_snapshots")}
     assert snapshot_columns["seq"]["nullable"] is False
     assert isinstance(snapshot_columns["seq"]["type"], sa.BigInteger)
@@ -163,6 +165,31 @@ def test_0006_conflict_origin_backfills_and_round_trips(legacy_database) -> None
     with Session(engine) as session:
         row = session.get(models.WorldPlanConflictRow, "conflict-1")
         assert row.origin_key == "" and row.status == "open"
+
+
+def test_0006_drops_plan_columns_and_restores_defaults(legacy_database) -> None:
+    config, engine = legacy_database
+    with Session(engine) as session, session.begin():
+        _seed_legacy_chapter(session)
+    command.upgrade(config, "head")
+    _assert_planning_schema(engine)
+    with Session(engine) as session, session.begin():
+        session.add(models.BandExperiencePlan(
+            id="band-1", project_id="project-1", arc_id="arc-1", band_id="band:1:5",
+            chapter_start=1, chapter_end=5,
+        ))
+    command.downgrade(config, "0005_world_plan_conflicts")
+    inspector = sa.inspect(engine)
+    for table_name in ("chapter_plans", "band_experience_plans"):
+        column = next(c for c in inspector.get_columns(table_name) if c["name"] == "task_contract_json")
+        assert isinstance(column["type"], sa.Text)
+        assert column["nullable"] is False
+        assert str(column["default"]).split("::")[0] == "'[]'"
+        with engine.connect() as connection:
+            table = sa.Table(table_name, sa.MetaData(), autoload_with=connection)
+            assert connection.execute(sa.select(table.c.task_contract_json)).scalar_one() == "[]"
+    command.upgrade(config, "head")
+    _assert_planning_schema(engine)
 
 
 def test_chapter_plans_gain_planning_columns_and_unique_chapter(legacy_database) -> None:

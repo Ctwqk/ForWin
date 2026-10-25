@@ -240,8 +240,10 @@ P2 的抽取与审查已落地；P3 基础与 P4a 增量见后文。
 - `provisional_promotion_records`
 - `sub_world_roster_items`
 
-### P4b 范围（尚未实现）
+### P4b 范围与已完成项
 
-以[批准的 P4b 计划](../docs/superpowers/plans/2026-10-22-world-engine-p4b.md)为准：任务 0–2 补冲突前置字段、保护消息重排 / veto / 快照新鲜度等 P3 小修及 runtime 复用、快照排序、义务与路径成本；任务 3–6 做正文叙事边界检测、残留 `chapter_extraction` 冲突、章内暂停 / `rewrite_chapter` 恢复、最新章 tick 退役重跑、历史消失 ref 检查与控制台 held-change 卡片；任务 7 删除 `task_contract_json`；任务 8–10 实现 `checkable` 谓词、组织 / 地点状态枚举、`world_variable` / `world.drift` 与幕后新行动者；任务 11 清理 P2 死信号 / ledger drift、生产 `director_setup_without_delivery` 并按 ChapterWorldView 收窄抽取；任务 12–13 做多题材端到端验证与文档收尾。任务 14 单独负责生产 runbook，本文不提供部署步骤，也不宣称生产验收完成。
+以[批准的 P4b 计划](../docs/superpowers/plans/2026-10-22-world-engine-p4b.md)为准：任务 0–2 补冲突前置字段、保护消息重排 / veto / 快照新鲜度等 P3 小修及 runtime 复用、快照排序、义务与路径成本；任务 3–6 做正文叙事边界检测、残留 `chapter_extraction` 冲突、章内暂停 / `rewrite_chapter` 恢复、最新章 tick 退役重跑、历史消失 ref 检查与控制台 held-change 卡片；任务 7 已完成（见下述删除说明）；任务 8–10 实现 `checkable` 谓词、组织 / 地点状态枚举、`world_variable` / `world.drift` 与幕后新行动者；任务 11 清理 P2 死信号 / ledger drift、生产 `director_setup_without_delivery` 并按 ChapterWorldView 收窄抽取；任务 12–13 做多题材端到端验证与文档收尾。任务 14 单独负责生产 runbook，本文不提供部署步骤，也不宣称生产验收完成。
+
+任务 7 已完成：task contract 及其存储已删除，HTTP 路由、UI 编辑器与 `planning/contracts.py` 一并删除。`0006_planning_v6` 删除 `chapter_plans.task_contract_json` / `band_experience_plans.task_contract_json`；计划由 band planner 生成，通过 `amend_plan`、重规划与 plan patches 修改。
 
 兼容标记仅记录旧边界：P3 当时的“writer prompt 不携带 clock / restraint state；替代物是设计 §5.1 的 `ChapterWorldView`”已在 P4a 落地。当前最新章重写仍跳过已有 tick；retained tick 引用、消息重排、世界变量、规则谓词和新行动者按上述 P4b 范围处理。

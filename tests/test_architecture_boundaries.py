@@ -26,8 +26,11 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_task_contract_storage_and_routes_are_gone() -> None:
     from fastapi.testclient import TestClient
     from forwin.http import create_app
+    from forwin.models import BandExperiencePlan, ChapterPlan
 
     assert not (ROOT / "forwin/planning/contracts.py").exists()
+    for model in (ChapterPlan, BandExperiencePlan):
+        assert "task_contract_json" not in model.__table__.columns
     client = TestClient(create_app())
     for scope in ("chapters/1", "bands/band-1"):
         path = f"/api/projects/project-1/{scope}/task-contract"

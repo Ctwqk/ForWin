@@ -199,3 +199,14 @@ def test_p4a_docs_describe_planning_world_view_and_maintenance() -> None:
         ):
             assert marker in text, (name, marker)
         assert '("world", "planning", "arc", "feedback")' not in text, name
+
+
+def test_p4b_docs_describe_task_contract_removal() -> None:
+    for name in ("CURRENT_ARCHITECTURE.md", "CURRENT_DESIGN.md", "DESIGN_STATUS.md"):
+        text = _read(DOC_ROOT / name)
+        for marker in (
+            "task contract 及其存储已删除",
+            "`chapter_plans.task_contract_json` / `band_experience_plans.task_contract_json`",
+            "计划由 band planner 生成，通过 `amend_plan`、重规划与 plan patches 修改",
+        ):
+            assert marker in text, (name, marker)

@@ -49,7 +49,6 @@ class DecisionEventType:
     CONSTRAINT_CREATED = "constraint_created"
     CONSTRAINT_UPDATED = "constraint_updated"
     CONSTRAINT_ARCHIVED = "constraint_archived"
-    PLAN_TASK_CONTRACT_UPDATED = "plan_task_contract_updated"
     FUTURE_PLAN_AUDIT_RUN = "future_plan_audit_run"
     FUTURE_PLAN_PATCH_APPLIED = "future_plan_patch_applied"
     GENERATION_AUDIT_CHECKPOINT_REACHED = "generation_audit_checkpoint_reached"
@@ -211,7 +210,6 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.CONSTRAINT_CREATED,
     DecisionEventType.CONSTRAINT_UPDATED,
     DecisionEventType.CONSTRAINT_ARCHIVED,
-    DecisionEventType.PLAN_TASK_CONTRACT_UPDATED,
     DecisionEventType.FUTURE_PLAN_AUDIT_RUN,
     DecisionEventType.FUTURE_PLAN_PATCH_APPLIED,
     DecisionEventType.GENERATION_AUDIT_CHECKPOINT_REACHED,

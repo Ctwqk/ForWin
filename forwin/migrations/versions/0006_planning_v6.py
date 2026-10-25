@@ -134,6 +134,9 @@ def upgrade() -> None:
                       COALESCE(MAX(seq), 1), MAX(seq) IS NOT NULL) FROM world_snapshots
     """)
 
+    op.drop_column("chapter_plans", "task_contract_json")
+    op.drop_column("band_experience_plans", "task_contract_json")
+
 
 def _drop_simulation_from_policies() -> None:
     bind = op.get_bind()
@@ -159,6 +162,14 @@ def _drop_simulation_from_policies() -> None:
 
 def downgrade() -> None:
     """Revert schema; the maintenance step data rewrite is not reversed."""
+    op.add_column(
+        "band_experience_plans",
+        sa.Column("task_contract_json", sa.Text(), server_default="[]", nullable=False),
+    )
+    op.add_column(
+        "chapter_plans",
+        sa.Column("task_contract_json", sa.Text(), server_default="[]", nullable=False),
+    )
     op.drop_column("world_snapshots", "seq")
     op.drop_index("ix_world_plan_conflicts_project_origin", table_name="world_plan_conflicts")
     op.drop_column("world_plan_conflicts", "origin_key")

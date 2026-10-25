@@ -92,7 +92,6 @@ class ChapterPlan(Base):
     title: Mapped[str] = mapped_column(String, default="")
     one_line: Mapped[str] = mapped_column(Text, default="")
     goals_json: Mapped[str] = mapped_column(Text, default="[]")
-    task_contract_json: Mapped[str] = mapped_column(Text, default="[]")
     experience_plan_json: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String, default="planned")
     acceptance_mode: Mapped[str] = mapped_column(String, default="")

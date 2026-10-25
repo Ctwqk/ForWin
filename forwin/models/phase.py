@@ -26,7 +26,6 @@ class BandExperiencePlan(Base):
     chapter_start: Mapped[int] = mapped_column(Integer, default=1)
     chapter_end: Mapped[int] = mapped_column(Integer, default=1)
     stall_guard_max_gap: Mapped[int] = mapped_column(Integer, default=0)
-    task_contract_json: Mapped[str] = mapped_column(Text, default="[]")
     schedule_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 

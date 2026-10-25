@@ -156,8 +156,8 @@ def test_world_and_models_defaults_per_profile(profile, actor_turns) -> None:
         "max_rerolls": 2,
         "conflict_delegate": "codex",
     }
-    assert policy.models.role_preferences == {"review.world_conflict": ("gpt-6-astra",)}
-    assert role_models(policy, "review.world_conflict") == ("gpt-6-astra",)
+    assert policy.models.role_preferences == {"review.world_conflict": ("gpt-6-luna",)}
+    assert role_models(policy, "review.world_conflict") == ("gpt-6-luna",)
     assert role_models(policy, "unknown.role") == ()
 
 
@@ -170,7 +170,7 @@ def test_stored_policy_without_world_section_loads_defaults(profile, actor_turns
     assert policy.schema_version == 2
     assert policy.world.conflict_delegate == "codex"
     assert policy.world.max_actor_turns_per_tick == actor_turns
-    assert policy.models.role_preferences == {"review.world_conflict": ("gpt-6-astra",)}
+    assert policy.models.role_preferences == {"review.world_conflict": ("gpt-6-luna",)}
     saved = policy.with_user_settings(gate_delegate="spark").model_dump_json()
     assert RuntimePolicy.model_validate_json(saved).world.max_actor_turns_per_tick == actor_turns
 

@@ -128,7 +128,7 @@ class WorldPolicy(FrozenPolicyModel):
 class ModelsPolicy(FrozenPolicyModel):
     # The dict field makes RuntimePolicy unhashable despite the frozen models.
     role_preferences: dict[str, tuple[str, ...]] = Field(
-        default_factory=lambda: {"review.world_conflict": ("gpt-6-astra",)}
+        default_factory=lambda: {"review.world_conflict": ("gpt-6-luna",)}
     )
 
 

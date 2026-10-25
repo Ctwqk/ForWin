@@ -1066,7 +1066,7 @@ def sample_runtime_policy() -> dict[str, Any]:
             "max_rerolls": 2,
             "conflict_delegate": "codex",
         },
-        "models": {"role_preferences": {"review.world_conflict": ["gpt-6-astra"]}},
+        "models": {"role_preferences": {"review.world_conflict": ["gpt-6-luna"]}},
     }
 
 

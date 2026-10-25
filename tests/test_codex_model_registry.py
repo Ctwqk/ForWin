@@ -134,6 +134,6 @@ def test_factory_passes_configured_registry():
 
 def test_default_registry_supports_astra_and_spark():
     config = InfrastructureConfig()
-    assert config.codex_models == ("gpt-5.3-codex-spark", "gpt-6-astra")
+    assert config.codex_models == ("gpt-5.3-codex-spark", "gpt-6-luna")
     for model in config.codex_models:
         assert LLMClient._profile_kind({"model": model}) == "spark"

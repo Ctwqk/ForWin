@@ -24,7 +24,7 @@ from forwin.writer.prompt_core.world_engine import build_conflict_review_message
 
 
 PROJECT_ID = "project-1"
-ASTRA = "gpt-6-astra"
+ASTRA = "gpt-6-luna"
 
 
 @pytest.fixture

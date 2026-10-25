@@ -38,7 +38,7 @@ from .conflict_types import ConflictOption
 
 
 WORLD_CONFLICT_STAGE_KEY = "review.world_conflict"
-WORLD_CONFLICT_DEFAULT_MODEL = "gpt-6-astra"
+WORLD_CONFLICT_DEFAULT_MODEL = "gpt-6-luna"
 UPCOMING_CHAPTER_LIMIT = 3
 _GATE_KIND = "world_conflict"
 # Only the user amends the plan, so Codex choosing it hands the conflict to a human.

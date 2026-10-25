@@ -42,7 +42,7 @@ FORWIN_CODEX_ENABLED=true
 FORWIN_CODEX_BRIDGE_URL=http://host.docker.internal:8897
 FORWIN_CODEX_BRIDGE_TOKEN=change-me
 FORWIN_CODEX_DEFAULT_MODEL=gpt-5.3-codex-spark
-FORWIN_CODEX_MODELS=gpt-5.3-codex-spark,gpt-6-astra
+FORWIN_CODEX_MODELS=gpt-5.3-codex-spark,gpt-6-luna
 FORWIN_CODEX_MAX_CONCURRENT=1
 FORWIN_CODEX_SYNC_TIMEOUT_SECONDS=90
 FORWIN_CODEX_JOB_TIMEOUT_SECONDS=900
@@ -52,7 +52,7 @@ FORWIN_CODEX_JOB_TIMEOUT_SECONDS=900
 
 `FORWIN_CODEX_MODELS` declares the comma-separated model names recognized as
 Codex preferences. Matching trims whitespace and ignores case, but requires the
-entire model name. The default list is `gpt-5.3-codex-spark,gpt-6-astra`; setting
+entire model name. The default list is `gpt-5.3-codex-spark,gpt-6-luna`; setting
 the variable replaces that list, and an empty value clears it. Profile routing
 classifies listed models as `spark` regardless of the profile's name or URL.
 Explicit provider kinds `spark`, `codex`, and `codex_bridge` still request the

@@ -84,7 +84,7 @@ Historical rewrite replays world_engine deltas (ticks and direct conflict resolu
 
 An open conflict requiring a human blocks generation from `blocks_from_chapter`. The task reports `needs_review` via `paused_for_review`, and the project exposes `blocking_reason.code="world_conflict_pending"`. Continue and review-approve with `continue_generation=true` return 409 while this block applies; approving a chapter review does not resolve a world conflict. The console task drawer exposes the same conflict decisions.
 
-For world-tick conflicts, routing is automatic veto for minor conflicts, human for historical rewrites or critical conflicts, and Codex for moderate/major when `world.conflict_delegate="codex"` (otherwise human). `WorldConflictDelegate` uses `models.role_preferences["review.world_conflict"]`, default `gpt-6-astra`, through the same `run_codex_structured_call` as the Spark gate; audit records use independent transactions. `FORWIN_CODEX_MODELS` declares Codex models. Any delegate failure or an `amend_plan` choice escalates to a human.
+For world-tick conflicts, routing is automatic veto for minor conflicts, human for historical rewrites or critical conflicts, and Codex for moderate/major when `world.conflict_delegate="codex"` (otherwise human). `WorldConflictDelegate` uses `models.role_preferences["review.world_conflict"]`, default `gpt-6-luna`, through the same `run_codex_structured_call` as the Spark gate; audit records use independent transactions. `FORWIN_CODEX_MODELS` declares Codex models. Any delegate failure or an `amend_plan` choice escalates to a human.
 
 Use only the options returned by the existing inspection tools:
 

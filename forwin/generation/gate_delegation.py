@@ -15,7 +15,7 @@ from forwin.audit.gate_outcome import GateOutcome, attach_gate_outcome
 from forwin.runtime.policy import GateDelegate, RuntimePolicy
 
 
-SPARK_GATE_MODEL = "gpt-5.3-codex-spark"
+SPARK_GATE_MODEL = "gpt-6-luna"
 SPARK_GATE_PERMISSION_PROFILE = "prompt_only_readonly"
 
 _SYSTEM_PROMPT = """You are ForWin's delegated reviewer for one pause gate.

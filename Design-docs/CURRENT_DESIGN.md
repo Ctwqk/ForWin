@@ -231,7 +231,7 @@ major 影响包括 faction / organization / group / site_state 的 `state.status
 
 当前迁移头为 `0006_planning_v6`（父为 `0005_world_plan_conflicts`，再前为 `0004_drop_parallel_ledgers`）。`world_plan_conflicts` 是世界–计划冲突事实源，记录来源、被违反边界、影响、待提交变化、可选项、决定者、阻塞起章与决定 / 结果引用。世界冲突来源为 `world_tick` / `historical_rewrite` / `plan_feasibility` / `band_planning` / `chapter_extraction`；`impact_review` 表示未破坏边界但达到需审查的影响，`replay_cas` 表示重放失败。
 
-historical_rewrite 或 critical 交人工；以下 minor / moderate / major 规则仅指 world_tick（正文冲突见 P4b）：minor 自动 veto；moderate / major 在 `world.conflict_delegate="codex"` 时交 `WorldConflictDelegate`，否则交人工。Codex 按 `models.role_preferences["review.world_conflict"]` 默认使用 `gpt-6-astra`，模型目录由 `FORWIN_CODEX_MODELS` 声明；它与 Spark 门共用 `run_codex_structured_call`，PromptTrace / 决策审计独立事务落盘。任何失败或选择 `amend_plan` 都升级人工，delegate 自身不写世界或计划。
+historical_rewrite 或 critical 交人工；以下 minor / moderate / major 规则仅指 world_tick（正文冲突见 P4b）：minor 自动 veto；moderate / major 在 `world.conflict_delegate="codex"` 时交 `WorldConflictDelegate`，否则交人工。Codex 按 `models.role_preferences["review.world_conflict"]` 默认使用 `gpt-6-luna`，模型目录由 `FORWIN_CODEX_MODELS` 声明；它与 Spark 门共用 `run_codex_structured_call`，PromptTrace / 决策审计独立事务落盘。任何失败或选择 `amend_plan` 都升级人工，delegate 自身不写世界或计划。
 
 | 选项 | 当前执行语义 |
 | --- | --- |

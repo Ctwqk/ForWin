@@ -60,7 +60,7 @@ def test_legacy_policy_snapshot_loads_world_and_models_defaults(profile, actor_t
     assert restored.policy_snapshot.world.conflict_delegate == "codex"
     assert restored.policy_snapshot.world.max_actor_turns_per_tick == actor_turns
     assert restored.policy_snapshot.models.role_preferences == {
-        "review.world_conflict": ("gpt-6-astra",),
+        "review.world_conflict": ("gpt-6-luna",),
     }
 
 

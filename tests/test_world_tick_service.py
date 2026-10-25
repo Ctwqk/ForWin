@@ -61,7 +61,7 @@ from tests.test_world_gate_v6 import (
 from tests.test_world_tick_delta import _built, _commit_tick, _context
 
 
-ASTRA = "gpt-6-astra"
+ASTRA = "gpt-6-luna"
 POLICY = RuntimePolicy.for_profile("standard")
 DAY = 1440
 _STAGES = {"world.adjudicate": "adjudicate", "world.actor_turn": "actor_turn", "world.drift": "drift", "review.world_conflict": "review"}

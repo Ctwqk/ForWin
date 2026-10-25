@@ -240,7 +240,8 @@ def test_deploy_script_has_safety_contract() -> None:
     assert "magi3:~/forwin/repo.git" in source
     assert "docker compose" in source
     assert "build" in source
-    assert "run --rm migrate" in source or "--profile tools run --rm migrate" in source
+    # The remote script arrives on ssh stdin; a migrate run that reads stdin would swallow the rest of it.
+    assert "--profile tools run --rm -T migrate </dev/null" in source
     assert "up -d --remove-orphans" in source
     assert "180" in source
     assert ".deploy-commit" in source
@@ -408,7 +409,7 @@ def test_deploy_checks_out_and_records_exact_master_commit(shell_harness: dict, 
     docker = shell_calls(shell_harness, "docker")
     prefix = ["compose", "-p", "forwin", "-f", "deploy/magi3/docker-compose.yml", "--env-file", "deploy/magi3/.env"]
     assert [call["args"] for call in docker] == [
-        prefix + ["build"], prefix + ["--profile", "tools", "run", "--rm", "migrate"],
+        prefix + ["build"], prefix + ["--profile", "tools", "run", "--rm", "-T", "migrate"],
         prefix + ["up", "-d", "--remove-orphans"],
     ]
     assert [call["args"][-1] for call in shell_calls(shell_harness, "curl")] == [

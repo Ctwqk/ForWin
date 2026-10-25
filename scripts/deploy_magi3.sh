@@ -65,7 +65,7 @@ if ((data_stores_only)); then
     compose up -d postgres qdrant
     exit 0
 fi
-compose --profile tools run --rm migrate
+compose --profile tools run --rm -T migrate </dev/null
 compose up -d --remove-orphans
 
 deadline=$((SECONDS + 180))

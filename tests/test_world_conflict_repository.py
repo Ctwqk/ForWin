@@ -125,6 +125,12 @@ def test_expire_only_open_rows_and_hides_from_blocking(session):
     repo = WorldConflictRepository(session)
     row = repo.create(_draft(origin_key="tick-1"), required_decider="human", options=["veto_world"])
     assert repo.open_blocking("project-1", next_chapter=4).id == row.id
+    grouped = load_open_world_conflicts_by_project(session, ["project-1"])
+    for conflicts in (load_open_world_conflicts(session, "project-1"), grouped["project-1"]):
+        assert [conflict.conflict_id for conflict in conflicts] == [row.id]
+        assert _derive_blocking_reason(
+            plans=[], latest_band_checkpoint=None, open_world_conflicts=conflicts, next_chapter=4,
+        ).code == "world_conflict_pending"
     repo.expire(row, reason="chapter rewritten")
     session.commit()
     session.expire_all()
@@ -160,11 +166,16 @@ def test_origin_lookups_are_project_scoped_open_and_oldest_first(session):
         row.created_at = datetime(2026, 10, 22) + timedelta(seconds=index)
         rows.append(row)
     repo.create(_draft(project_id="project-2", origin_key="tick-1"), required_decider="human", options=[])
+    repo.create(_draft(origin_key=""), required_decider="human", options=[])
     assert repo.open_for_origin("project-1", "tick-1") == rows[0]
     assert repo.open_by_origin("project-1", ["tick-2", "tick-1", "tick-1"]) == rows
     assert repo.open_by_origin("project-1", []) == []
+    assert repo.open_by_origin("project-1", [""]) == []
+    assert repo.open_by_origin("project-1", ["", "tick-1", "tick-2"]) == rows
+    assert repo.open_for_origin("project-1", "") is None
     assert repo.open_for_origin("project-1", "missing") is None
     repo.expire(rows[0], reason="retired")
+    assert repo.open_for_origin("project-1", "tick-1") == rows[1]
     repo.mark_resolved(rows[1], decision=_decision(), result_refs=[])
     assert repo.open_by_origin("project-1", ["tick-1", "tick-2"]) == [rows[2]]
     assert repo.open_for_origin("project-1", "tick-1") is None
@@ -198,22 +209,6 @@ def test_pending_chapter_resumes_filters_and_orders_unconsumed_decisions(session
     assert repo.pending_chapter_resumes("project-1", chapter_number=4) == [older, newer]
     repo.attach_result_refs(older, ["candidate:done"])
     assert repo.pending_chapter_resumes("project-1", chapter_number=4) == [newer]
-
-
-def test_chapter_origin_creation_reuses_only_open_rows(session):
-    from forwin.world_engine.conflict_repository import WorldConflictRepository
-
-    repo = WorldConflictRepository(session)
-    draft = _draft(source="chapter_extraction", origin_key="chapter_extraction:4:protection-1")
-    first = repo.create(draft, required_decider="human", options=["rewrite_chapter"])
-    assert repo.create(draft, required_decider="codex", options=["amend_plan"]) is first
-    assert first.required_decider == "human"
-    repo.expire(first, reason="replaced")
-    second = repo.create(draft, required_decider="human", options=["amend_plan"])
-    assert second.id != first.id
-    repo.mark_resolved(second, decision=_decision("amend_plan"), result_refs=[])
-    third = repo.create(draft, required_decider="human", options=["rewrite_chapter"])
-    assert third.id not in {first.id, second.id}
 
 
 def test_tick_and_slip_drafts_carry_tick_origin():

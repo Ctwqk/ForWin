@@ -1792,13 +1792,13 @@ def test_change_touching_hard_milestone_is_critical_and_goes_to_human():
     refs = frozenset({"milestone-actor"})
     candidate = candidate.model_copy(update={"impact_level": classify_impact(runtime, candidate, milestone_refs=refs)})
     assert candidate.impact_level == "critical"
-    review = review_draft(candidate, runtime=runtime, milestone_refs=refs, context=TickContext(
+    review = review_draft(candidate, runtime=runtime, milestone_refs=refs, tick_id="tick-1", context=TickContext(
         project_id=runtime.project_id, chapter_number=3, now=100, window_start=0, seed=1,
     ))
     assert review.draft.violated == "milestone"
     assert route_conflict(review.draft, policy=_policy()) == "human"
     assert available_options(review.draft) == ("veto_world", "amend_plan")
-    unrelated = review_draft(candidate, runtime=runtime, milestone_refs=frozenset({"other"}), context=TickContext(
+    unrelated = review_draft(candidate, runtime=runtime, milestone_refs=frozenset({"other"}), tick_id="tick-1", context=TickContext(
         project_id=runtime.project_id, chapter_number=3, now=100, window_start=0, seed=1,
     ))
     assert unrelated.draft.violated == "impact_review"
@@ -1967,7 +1967,7 @@ def test_declared_critical_bookkeeping_keeps_informational_refs_without_mileston
                               effects=WorldEffects(), next_turn_at={"hero": 200}, impact_level="critical")
     refs = frozenset({"hero"})
     assert classify_impact(runtime, candidate, milestone_refs=refs) == "critical"
-    review = review_draft(candidate, runtime=runtime, milestone_refs=refs, context=TickContext(
+    review = review_draft(candidate, runtime=runtime, milestone_refs=refs, tick_id="tick-1", context=TickContext(
         project_id=runtime.project_id, chapter_number=1, now=100, window_start=0, seed=1,
     ))
     assert review.draft.violated == "impact_review"

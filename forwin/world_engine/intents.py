@@ -106,7 +106,7 @@ def onstage_bookkeeping(
     bound_intent_refs: frozenset[str],
     band_ended: bool,
     band_bound_intent_refs: frozenset[str],
-    tick_id: str = "",
+    tick_id: str,
 ) -> OnstageResult:
     """Slip missed plan bindings, or due intents never bound in the band when the band ends.
 

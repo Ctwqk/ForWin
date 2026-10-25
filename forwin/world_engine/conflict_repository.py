@@ -38,10 +38,6 @@ class WorldConflictRepository:
         required_decider: ConflictDecider,
         options: Sequence[ConflictOption],
     ) -> WorldPlanConflictRow:
-        if draft.source == "chapter_extraction" and draft.origin_key:
-            existing = self.open_for_origin(draft.project_id, draft.origin_key)
-            if existing is not None:
-                return existing
         row = WorldPlanConflictRow(
             project_id=draft.project_id,
             source=draft.source,
@@ -95,6 +91,7 @@ class WorldConflictRepository:
         )
 
     def open_by_origin(self, project_id: str, origin_keys: Sequence[str]) -> list[WorldPlanConflictRow]:
+        origin_keys = [key for key in origin_keys if key]
         if not origin_keys:
             return []
         return list(self.session.scalars(
@@ -107,6 +104,8 @@ class WorldConflictRepository:
         ))
 
     def open_for_origin(self, project_id: str, origin_key: str) -> WorldPlanConflictRow | None:
+        if not origin_key:
+            return None
         return self.session.scalar(
             select(WorldPlanConflictRow).where(
                 WorldPlanConflictRow.project_id == project_id,

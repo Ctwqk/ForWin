@@ -78,7 +78,7 @@ class ResolutionUnavailable(RuntimeError):
 def review_draft(
     candidate: TickCandidate, *, context: TickContext, runtime: BookStateRuntime,
     milestone_refs: frozenset[str] = frozenset(),
-    tick_id: str = "",
+    tick_id: str,
 ) -> HeldForReview | None:
     """The conflict that holds ``candidate`` back: it breaks a narrative boundary in the next chapter, or
     its impact is major or above."""

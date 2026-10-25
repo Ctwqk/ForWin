@@ -128,6 +128,46 @@ def test_review_empty_extraction_trace_keeps_candidate_usable(audit_sessions, mo
         assert not list(session.scalars(select(DecisionEvent)))
 
 
+@pytest.mark.parametrize("prompt_trace", [
+    {},
+    {
+        "stage_key": "chapter_delta_extraction",
+        "input_snapshot": {"project_id": "pending-project", "chapter_number": 1},
+        "attempts": [],
+    },
+], ids=["empty-mapping", "zero-attempts"])
+def test_zero_attempt_trace_preserves_caller_error_with_pending_project(prompt_trace):
+    engine = create_engine("sqlite:///:memory:")
+
+    @event.listens_for(engine, "connect")
+    def enable_foreign_keys(connection, _record):
+        connection.execute("PRAGMA foreign_keys=ON")
+
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        with factory() as session:
+            project = Project(id="pending-project", title="Pending", genre="test", premise="test")
+            session.add(project)
+            original_error = RuntimeError("candidate failed")
+            with pytest.raises(RuntimeError) as raised:
+                try:
+                    raise original_error
+                except RuntimeError:
+                    trace_id = save_world_prompt_trace(session, prompt_trace, independent=True)
+                    raise
+
+            assert raised.value is original_error
+            assert trace_id == ""
+            assert project in session.new
+            with factory() as observer:
+                assert observer.get(Project, "pending-project") is None
+                assert not list(observer.scalars(select(PromptTrace)))
+                assert not list(observer.scalars(select(DecisionEvent)))
+    finally:
+        engine.dispose()
+
+
 def test_review_extraction_trace_survives_rollback(audit_sessions, monkeypatch):
     from types import SimpleNamespace
     from forwin.generation.pipeline_core import review_autofix

@@ -1083,6 +1083,9 @@ def save_world_prompt_trace(
     """Save a role's trace and events, optionally through the independent audit writer."""
     if not prompt_trace:
         return ""
+    if independent and not prompt_trace.get("attempts"):
+        # No model attempt needs preserving before the caller's parent rows commit.
+        return ""
     snapshot = prompt_trace.get("input_snapshot")
     snapshot = snapshot if isinstance(snapshot, Mapping) else {}
     project_id = str(snapshot.get("project_id") or "")

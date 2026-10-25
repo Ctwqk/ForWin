@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field
 
 from forwin.planning.checkpoints import NextBandSummary
 from forwin.planning.constraints import NarrativeConstraintInfo
-from forwin.planning.contracts import PlanTaskItem
 from forwin.world_view.types import ChapterWorldView
 
 from .experience import (
@@ -194,13 +193,11 @@ class ChapterContextPack(BaseModel):
     reader_promise: ReaderPromise | None = None
     arc_payoff_map: ArcPayoffMap | None = None
     band_delight_schedule: BandDelightSchedule | None = None
-    band_task_contract: list[PlanTaskItem] = Field(default_factory=list)
     chapter_experience_plan: ChapterExperiencePlan | None = None
     active_subworlds: list[SubWorldSummary] = Field(default_factory=list)
     allowed_entities: list[str] = Field(default_factory=list)
     chapter_entry_targets: list[ChapterEntryTarget] = Field(default_factory=list)
     entity_admission_rule: str = ""
-    chapter_task_contract: list[PlanTaskItem] = Field(default_factory=list)
     active_future_constraints: list[NarrativeConstraintInfo] = Field(
         default_factory=list
     )
@@ -235,9 +232,7 @@ class ReviewContextPack(BaseModel):
     reader_promise: ReaderPromise | None = None
     arc_payoff_map: ArcPayoffMap | None = None
     band_delight_schedule: BandDelightSchedule | None = None
-    band_task_contract: list[PlanTaskItem] = Field(default_factory=list)
     chapter_experience_plan: ChapterExperiencePlan | None = None
-    chapter_task_contract: list[PlanTaskItem] = Field(default_factory=list)
     active_future_constraints: list[NarrativeConstraintInfo] = Field(
         default_factory=list
     )

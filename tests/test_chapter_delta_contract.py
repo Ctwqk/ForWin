@@ -242,7 +242,6 @@ def test_build_input_collects_entities_locations_targets_secrets() -> None:
                 NarrativeObligationRow(id="legacy", project_id=project.id, summary="Legacy obligation"),
                 ChapterPlan(project_id=project.id, arc_plan_id=arc.id, chapter_number=1,
                             goals_json=json.dumps(["Reach the site"]),
-                            task_contract_json=json.dumps({"obligations_to_resolve": ["owed"]}),
                             experience_plan_json=json.dumps({"planned_reward_tags": ["mystery"], "obligations_to_resolve": ["legacy", "owed"]})),
             ])
             session.flush()
@@ -396,8 +395,7 @@ def test_input_offers_unplanned_active_and_current_chapter_obligations(with_plan
                 session.flush()
                 session.add(ChapterPlan(
                     project_id=project.id, arc_plan_id=arc.id, chapter_number=3,
-                    task_contract_json=json.dumps({"obligations_to_resolve": ["listed", "listed"]}),
-                    experience_plan_json=json.dumps({"obligations_to_resolve": ["listed"]}),
+                    experience_plan_json=json.dumps({"obligations_to_resolve": ["listed", "listed"]}),
                 ))
             session.flush()
 

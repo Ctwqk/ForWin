@@ -5,7 +5,6 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from forwin.audit.events import DecisionEventInfo
-from forwin.planning.contracts import PlanTaskItem
 
 
 CheckpointStatus = Literal["pending", "pass", "warn", "fail", "error", "overridden"]
@@ -94,7 +93,6 @@ class NextBandSummary(BaseModel):
     chapter_start: int = 0
     chapter_end: int = 0
     chapter_titles: list[str] = Field(default_factory=list)
-    band_task_contract: list[PlanTaskItem] = Field(default_factory=list)
 
 
 def band_is_first_chapter(band_start: int, chapter_number: int) -> bool:

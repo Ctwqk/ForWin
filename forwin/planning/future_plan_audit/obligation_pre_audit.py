@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from forwin.models.project import ChapterPlan
+from .helpers import plan_text
 from forwin.narrative_obligations.types import NarrativeObligation
 
 
@@ -68,31 +69,12 @@ def _eligible_plans(
 
 
 def _plan_already_covers_obligation(plan: ChapterPlan, obligation: NarrativeObligation) -> bool:
-    text = _plan_text(plan)
+    text = plan_text(plan)
     obligation_id = str(obligation.id or "").strip()
     payoff_test = str(obligation.payoff_test or "").strip()
     if obligation_id and obligation_id in text:
         return True
     return bool(payoff_test and payoff_test in text)
-
-
-def _plan_text(plan: ChapterPlan) -> str:
-    payload = {
-        "title": str(plan.title or ""),
-        "one_line": str(plan.one_line or ""),
-        "goals": _loads(plan.goals_json, []),
-        "task_contract": _loads(plan.task_contract_json, []),
-        "experience_plan": _loads(plan.experience_plan_json, {}),
-    }
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
-
-
-def _loads(raw: str, default: Any) -> Any:
-    try:
-        value = json.loads(raw or "")
-    except (TypeError, json.JSONDecodeError):
-        return default
-    return value if value is not None else default
 
 
 def _form_obligation_signals_to_obligations(

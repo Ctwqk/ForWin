@@ -13,7 +13,6 @@ from forwin.book_state.extraction.chapter_delta_schema import (
 from forwin.book_state.extraction.chapter_input import _fulfillment_targets
 from forwin.models.project import ChapterPlan
 from forwin.planning.constraints import NarrativeConstraintInfo
-from forwin.planning.contracts import PlanTaskItem
 from forwin.review.plan_reviewer import PlanContractReviewer
 from forwin.runtime.policy import RuntimePolicy
 
@@ -77,9 +76,6 @@ def test_keyword_module_is_gone() -> None:
 
 def test_done_goals_ignore_wording_and_other_target_types() -> None:
     context = _context(["A description absent from the prose"])
-    context.chapter_task_contract = [PlanTaskItem(
-        task_type="plot_advance", required_keywords=["not in the prose"],
-    )]
     context.active_future_constraints = [NarrativeConstraintInfo(
         id="legacy", constraint_type="secret_withhold", level="hard",
         subject_name="packet", payload={"forbidden_keywords": ["packet"]},

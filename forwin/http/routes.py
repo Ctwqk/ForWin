@@ -94,7 +94,6 @@ from forwin.api_schema import (
     UploadAttemptResultResponse,
     UploadAttemptStateResponse,
     StartWritingResponse,
-    TaskContractResponse,
     TaskMutationResponse,
     TaskResponse,
     TaskCenterItemResponse,
@@ -782,30 +781,6 @@ def register_api_routes(
             ["POST"],
             handlers["approve_band_checkpoint"],
             {"response_model": BandCheckpointDetail},
-        ),
-        (
-            "/api/projects/{project_id}/chapters/{chapter_number}/task-contract",
-            ["GET"],
-            handlers["get_chapter_task_contract"],
-            {"response_model": TaskContractResponse},
-        ),
-        (
-            "/api/projects/{project_id}/chapters/{chapter_number}/task-contract",
-            ["PUT"],
-            handlers["update_chapter_task_contract"],
-            {"response_model": TaskContractResponse},
-        ),
-        (
-            "/api/projects/{project_id}/bands/{band_id}/task-contract",
-            ["GET"],
-            handlers["get_band_task_contract"],
-            {"response_model": TaskContractResponse},
-        ),
-        (
-            "/api/projects/{project_id}/bands/{band_id}/task-contract",
-            ["PUT"],
-            handlers["update_band_task_contract"],
-            {"response_model": TaskContractResponse},
         ),
         (
             "/api/projects/{project_id}/constraints",

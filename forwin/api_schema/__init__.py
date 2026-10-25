@@ -7,7 +7,6 @@ from forwin.planning.checkpoints import (
 )
 from forwin.audit.events import DecisionEventInfo
 from forwin.planning.constraints import NarrativeConstraintInfo
-from forwin.planning.contracts import PlanTaskItem
 from forwin.protocol.subworld import SubWorldSummary
 
 from .world_conflicts import WorldConflictInfo, WorldConflictResolveRequest
@@ -188,8 +187,6 @@ from .project_control import (
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
     NarrativeConstraintsResponse,
-    TaskContractUpdateRequest,
-    TaskContractResponse,
     ProjectAutomationUpdateRequest,
     ProjectAutomationUpdateResponse,
 )
@@ -224,7 +221,6 @@ __all__ = [
     "BlockingReasonInfo",
     "DecisionEventInfo",
     "NarrativeConstraintInfo",
-    "PlanTaskItem",
     "SubWorldSummary",
     "ModelProfile",
     "RuntimeCatalogResponse",
@@ -371,8 +367,6 @@ __all__ = [
     "NarrativeConstraintCreateRequest",
     "NarrativeConstraintUpdateRequest",
     "NarrativeConstraintsResponse",
-    "TaskContractUpdateRequest",
-    "TaskContractResponse",
     "ProjectAutomationUpdateRequest",
     "ProjectAutomationUpdateResponse",
     "ChapterDetail",

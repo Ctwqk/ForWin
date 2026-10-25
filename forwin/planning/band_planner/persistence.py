@@ -234,7 +234,7 @@ def plan_fingerprint(plan: ChapterPlan) -> str:
         "hook": str(plan.hook or ""),
     }
     for field in (
-        "goals_json", "task_contract_json", "experience_plan_json", "onstage_refs_json",
+        "goals_json", "experience_plan_json", "onstage_refs_json",
         "location_refs_json", "world_bindings_json", "reveal_directives_json",
         "hint_directives_json", "intended_changes_json", "milestone_ids_json",
     ):

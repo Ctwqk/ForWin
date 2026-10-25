@@ -379,10 +379,10 @@ def _reward_beats_in_plan(plan: ChapterPlan | None) -> int | None:
     if plan is None:
         return None
     beats = 0
-    for item in _json_loads(getattr(plan, "task_contract_json", "[]"), []):
-        if not isinstance(item, dict):
+    for item in _json_loads(getattr(plan, "goals_json", "[]"), []):
+        if not isinstance(item, str):
             continue
-        text = json.dumps(item, ensure_ascii=False)
+        text = item
         if any(
             keyword in text
             for keyword in ("experience_delivery", "payoff", "reward", "爽点", "收益")

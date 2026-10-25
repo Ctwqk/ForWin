@@ -13,10 +13,6 @@ from forwin.audience.feedback import (
 )
 from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.planning.checkpoints import NextBandSummary
-from forwin.planning.contracts import (
-    PlanTaskItem,
-    load_plan_task_contract,
-)
 from forwin.models import (
     ArcPlanVersion,
     BandCheckpoint,
@@ -232,15 +228,6 @@ class StateRepository:
             return None
         return ChapterExperiencePlan.model_validate(payload)
 
-    def get_chapter_task_contract(
-        self,
-        project_id: str,
-        chapter_number: int,
-    ) -> list[PlanTaskItem]:
-        plan = self.get_chapter_plan(project_id, chapter_number)
-        if plan is None:
-            return []
-        return load_plan_task_contract(getattr(plan, "task_contract_json", "[]"))
 
     def get_band_row_for_chapter(
         self,
@@ -275,15 +262,6 @@ class StateRepository:
             return None
         return BandDelightSchedule.model_validate(payload)
 
-    def get_band_task_contract_for_chapter(
-        self,
-        project_id: str,
-        chapter_number: int,
-    ) -> list[PlanTaskItem]:
-        row = self.get_band_row_for_chapter(project_id, chapter_number)
-        if row is None:
-            return []
-        return load_plan_task_contract(getattr(row, "task_contract_json", "[]"))
 
     def get_next_band_summary(
         self,
@@ -328,9 +306,6 @@ class StateRepository:
             chapter_titles=[
                 str(plan.title or "") for plan in plans if str(plan.title or "").strip()
             ],
-            band_task_contract=load_plan_task_contract(
-                getattr(row, "task_contract_json", "[]")
-            ),
         )
 
     def get_latest_band_checkpoint(

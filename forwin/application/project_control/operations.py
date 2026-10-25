@@ -22,8 +22,6 @@ from forwin.api_schema import (
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
     NarrativeConstraintsResponse,
-    TaskContractResponse,
-    TaskContractUpdateRequest,
     TropeRegistrySummaryResponse,
     TropeTemplateInfo,
     TropeTemplateValidationRequest,
@@ -41,17 +39,13 @@ from forwin.observability.cost_ledger import (
     CostLedgerService,
     render_cost_ledger_markdown,
 )
-from forwin.planning.contracts import (
-    load_plan_task_contract,
-    plan_task_contract_to_json,
-)
 from forwin.models.base import Base
 from forwin.models.planning_control import (
     BandCheckpoint,
     NarrativeConstraint,
 )
 from forwin.models.phase import BandExperiencePlan
-from forwin.models.project import ChapterPlan, Project
+from forwin.models.project import Project
 from forwin.protocol.experience import BandDelightSchedule
 from forwin.protocol.trope_library import (
     load_trope_template_library,
@@ -328,173 +322,6 @@ def approve_band_checkpoint(
         session.commit()
         session.refresh(row)
         return serialize_band_checkpoint(row, session=session)
-    finally:
-        session.close()
-
-
-def get_chapter_task_contract(
-    project_id: str,
-    chapter_number: int,
-    *,
-    get_session,
-) -> TaskContractResponse:
-    session = get_session()
-    try:
-        plan = session.execute(
-            select(ChapterPlan).where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number == chapter_number,
-            )
-        ).scalar_one_or_none()
-        if plan is None:
-            raise HTTPException(404, f"第{chapter_number}章不存在")
-        return TaskContractResponse(
-            project_id=project_id,
-            scope="chapter",
-            chapter_number=chapter_number,
-            items=load_plan_task_contract(getattr(plan, "task_contract_json", "[]")),
-            message="已读取 chapter task contract。",
-        )
-    finally:
-        session.close()
-
-
-def update_chapter_task_contract(
-    project_id: str,
-    chapter_number: int,
-    req: TaskContractUpdateRequest,
-    *,
-    get_session,
-    require_reason,
-    log_decision_event,
-) -> TaskContractResponse:
-    session = get_session()
-    try:
-        plan = session.execute(
-            select(ChapterPlan).where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number == chapter_number,
-            )
-        ).scalar_one_or_none()
-        if plan is None:
-            raise HTTPException(404, f"第{chapter_number}章不存在")
-        reason = require_reason(req.reason, action="更新 chapter task contract")
-        plan.task_contract_json = plan_task_contract_to_json(req.items)
-        session.add(plan)
-        session.flush()
-        log_decision_event(
-            session,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            event_family="audit_action",
-            event_type=DecisionEventType.PLAN_TASK_CONTRACT_UPDATED,
-            actor_type="manual_ui",
-            scope="chapter",
-            summary=f"第{chapter_number}章 task contract 已更新。",
-            reason=reason,
-            payload={"scope": "chapter", "item_count": len(req.items)},
-            related_object_type="chapter_plan",
-            related_object_id=plan.id,
-        )
-        session.commit()
-        return TaskContractResponse(
-            project_id=project_id,
-            scope="chapter",
-            chapter_number=chapter_number,
-            items=list(req.items),
-            message="chapter task contract 已保存。",
-        )
-    finally:
-        session.close()
-
-
-def get_band_task_contract(
-    project_id: str,
-    band_id: str,
-    *,
-    get_session,
-) -> TaskContractResponse:
-    session = get_session()
-    try:
-        row = session.execute(
-            select(BandExperiencePlan)
-            .where(
-                BandExperiencePlan.project_id == project_id,
-                BandExperiencePlan.band_id == band_id,
-            )
-            .order_by(
-                BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc()
-            )
-            .limit(1)
-        ).scalar_one_or_none()
-        if row is None:
-            raise HTTPException(404, "band 不存在")
-        return TaskContractResponse(
-            project_id=project_id,
-            scope="band",
-            band_id=band_id,
-            items=load_plan_task_contract(getattr(row, "task_contract_json", "[]")),
-            message="已读取 band task contract。",
-        )
-    finally:
-        session.close()
-
-
-def update_band_task_contract(
-    project_id: str,
-    band_id: str,
-    req: TaskContractUpdateRequest,
-    *,
-    get_session,
-    require_reason,
-    log_decision_event,
-) -> TaskContractResponse:
-    session = get_session()
-    try:
-        row = session.execute(
-            select(BandExperiencePlan)
-            .where(
-                BandExperiencePlan.project_id == project_id,
-                BandExperiencePlan.band_id == band_id,
-            )
-            .order_by(
-                BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc()
-            )
-            .limit(1)
-        ).scalar_one_or_none()
-        if row is None:
-            raise HTTPException(404, "band 不存在")
-        reason = require_reason(req.reason, action="更新 band task contract")
-        row.task_contract_json = plan_task_contract_to_json(req.items)
-        session.add(row)
-        session.flush()
-        log_decision_event(
-            session,
-            project_id=project_id,
-            band_id=band_id,
-            event_family="audit_action",
-            event_type=DecisionEventType.PLAN_TASK_CONTRACT_UPDATED,
-            actor_type="manual_ui",
-            scope="band",
-            summary=f"{band_id} task contract 已更新。",
-            reason=reason,
-            payload={
-                "scope": "band",
-                "item_count": len(req.items),
-                "chapter_start": int(row.chapter_start or 0),
-                "chapter_end": int(row.chapter_end or 0),
-            },
-            related_object_type="band_experience_plan",
-            related_object_id=row.id,
-        )
-        session.commit()
-        return TaskContractResponse(
-            project_id=project_id,
-            scope="band",
-            band_id=band_id,
-            items=list(req.items),
-            message="band task contract 已保存。",
-        )
     finally:
         session.close()
 

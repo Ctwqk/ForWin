@@ -22,7 +22,7 @@ from forwin.planning.future_plan_audit.signal_pre_audit import (
 from .helpers import (
     _chapter_plan_contract,
     _open_signal_constraints,
-    _plan_text,
+    plan_text,
 )
 from .models import FuturePlanAuditIssue
 
@@ -339,7 +339,7 @@ class FuturePlanObligationMixin:
     ) -> tuple[FuturePlanAuditIssue | None, NarrativePlanPatch | None]:
         if obligation.status not in {"active", "planned"}:
             return None, None
-        text = _plan_text(plan)
+        text = plan_text(plan)
         if obligation.id and obligation.id in text and obligation.payoff_test and obligation.payoff_test in text:
             return None, None
         chapter_number = int(plan.chapter_number or 0)

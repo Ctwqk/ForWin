@@ -724,22 +724,6 @@ justification = "未填写占位“待填写”"
 max_literals = 1
 
 [[entry]]
-path = "forwin/planning/band_plan_patcher.py"
-symbol = "_required_keywords"
-checks = ["cjk_regex", "cjk_membership"]
-category = "language_lexicon"
-justification = "解析“第N章前必须给出…”措辞"
-max_literals = 4
-
-[[entry]]
-path = "forwin/planning/contracts.py"
-symbol = "is_derived_goal_control_instruction"
-checks = ["cjk_inline_iteration"]
-category = "language_lexicon"
-justification = "派生目标里“承接 canon / 连续性护栏”类控制指令的识别措辞（题材中立）"
-max_literals = 8
-
-[[entry]]
 path = "forwin/protocol/trope_library.py"
 symbol = "_CATEGORY_DEFAULTS"
 checks = ["cjk_collection"]

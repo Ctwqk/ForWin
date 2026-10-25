@@ -9,7 +9,6 @@ from forwin.api_schema import (
     ManualCheckpointRequest,
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
-    TaskContractUpdateRequest,
     TropeTemplateValidationRequest,
 )
 
@@ -83,46 +82,6 @@ def _build_operations(
             require_reason=require_reason,
             log_decision_event=log_decision_event,
             serialize_band_checkpoint=serialize_band_checkpoint,
-        )
-
-    def get_chapter_task_contract(project_id: str, chapter_number: int):
-        return operations.get_chapter_task_contract(
-            project_id,
-            chapter_number,
-            get_session=get_session,
-        )
-
-    def update_chapter_task_contract(
-        project_id: str,
-        chapter_number: int,
-        req: TaskContractUpdateRequest,
-    ):
-        return operations.update_chapter_task_contract(
-            project_id,
-            chapter_number,
-            req,
-            get_session=get_session,
-            require_reason=require_reason,
-            log_decision_event=log_decision_event,
-        )
-
-    def get_band_task_contract(project_id: str, band_id: str):
-        return operations.get_band_task_contract(
-            project_id,
-            band_id,
-            get_session=get_session,
-        )
-
-    def update_band_task_contract(
-        project_id: str, band_id: str, req: TaskContractUpdateRequest
-    ):
-        return operations.update_band_task_contract(
-            project_id,
-            band_id,
-            req,
-            get_session=get_session,
-            require_reason=require_reason,
-            log_decision_event=log_decision_event,
         )
 
     def list_project_constraints(project_id: str):
@@ -280,10 +239,6 @@ def _build_operations(
         "create_manual_checkpoint": create_manual_checkpoint,
         "get_band_checkpoint": get_band_checkpoint,
         "approve_band_checkpoint": approve_band_checkpoint,
-        "get_chapter_task_contract": get_chapter_task_contract,
-        "update_chapter_task_contract": update_chapter_task_contract,
-        "get_band_task_contract": get_band_task_contract,
-        "update_band_task_contract": update_band_task_contract,
         "list_project_constraints": list_project_constraints,
         "create_project_constraint": create_project_constraint,
         "update_project_constraint": update_project_constraint,

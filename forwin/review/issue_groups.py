@@ -21,7 +21,6 @@ _FACT_CONFLICT_HINTS = {
 _DIRECTOR_IMBALANCE_HINTS = {
     "director_imbalance",
     "plan_task_fulfillment",
-    "chapter_task_contract",
     "band_task_completion",
     "future_resource_preservation",
     "payoff",

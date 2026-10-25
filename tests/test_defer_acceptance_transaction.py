@@ -176,7 +176,6 @@ def test_defer_acceptance_transaction_applies_band_plan_patch_and_allows_commit(
                 chapter_end=14,
                 stall_guard_max_gap=1,
                 schedule_json=schedule.model_dump_json(),
-                task_contract_json="[]",
             )
             session.add(band_row)
             session.flush()
@@ -233,7 +232,8 @@ def test_defer_acceptance_transaction_applies_band_plan_patch_and_allows_commit(
             assert stored_patch.applied is True
             assert updated_band is not None
             assert "obl-band-tx" in updated_band.schedule_json
-            assert "narrative_obligation" in updated_band.task_contract_json
+            updated_schedule = BandDelightSchedule.model_validate_json(updated_band.schedule_json)
+            assert updated_schedule.band_obligation_contract.open_obligations == [result.obligation.id]
     finally:
         engine.dispose()
 

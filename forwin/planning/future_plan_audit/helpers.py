@@ -25,12 +25,18 @@ def _chapter_plan_contract(plan: ChapterPlan) -> dict[str, Any]:
         "title": str(plan.title or ""),
         "one_line": str(plan.one_line or ""),
         "goals": _loads(plan.goals_json, []),
-        "task_contract": _loads(plan.task_contract_json, []),
+        "world_bindings": [
+            {"how": binding.get("how", "")}
+            for binding in _loads(plan.world_bindings_json, [])
+            if isinstance(binding, dict)
+        ],
+        "intended_changes": _loads(plan.intended_changes_json, []),
+        "hook": str(plan.hook or ""),
         "experience_plan": _loads(plan.experience_plan_json, {}),
     }
 
 
-def _plan_text(plan: ChapterPlan) -> str:
+def plan_text(plan: ChapterPlan) -> str:
     payload = _chapter_plan_contract(plan)
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 

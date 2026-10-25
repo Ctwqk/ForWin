@@ -23,7 +23,6 @@ def _plan(number: int, *, one_line: str, goals: list[str] | None = None) -> Chap
         title=f"第{number}章",
         one_line=one_line,
         goals_json=json.dumps(goals or [], ensure_ascii=False),
-        task_contract_json="[]",
         experience_plan_json="{}",
         status="planned",
     )
@@ -139,7 +138,6 @@ def test_future_plan_auditor_generates_band_binding_patch_for_band_obligation() 
         chapter_start=11,
         chapter_end=14,
         schedule_json=schedule.model_dump_json(),
-        task_contract_json="[]",
     )
     obligation = NarrativeObligation(
         id="obl-band",
@@ -201,7 +199,6 @@ def test_future_plan_auditor_skips_chapter_binding_when_band_contract_covers_obl
         chapter_start=11,
         chapter_end=14,
         schedule_json=json.dumps(schedule_payload, ensure_ascii=False),
-        task_contract_json="[]",
     )
     deadline_plan = _plan(14, one_line="兑现审计窗口。")
     obligation = NarrativeObligation(
@@ -352,3 +349,31 @@ def test_patched_signal_with_escaped_description_is_not_reselected(description: 
 
 def test_empty_signal_description_does_not_match_unrelated_plan() -> None:
     assert not _plan_mentions_signal(_plan(14, one_line="Follow the evidence."), signal_id="", description="")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("title", "covered-marker"),
+    ("one_line", "covered-marker"),
+    ("goals_json", '["covered-marker"]'),
+    ("world_bindings_json", '[{"kind": "intent", "ref": "intent-1", "how": "covered-marker"}]'),
+    ("intended_changes_json", '[{"description": "covered-marker"}]'),
+    ("hook", "covered-marker"),
+    ("experience_plan_json", '{"obligations_to_resolve": ["covered-marker"]}'),
+])
+def test_plan_text_coverage_is_shared_by_obligation_and_signal_audits(field, value) -> None:
+    from forwin.planning.future_plan_audit.helpers import plan_text
+    from forwin.planning.future_plan_audit.obligation_pre_audit import select_urgent_obligation_targets
+
+    plan = _plan(2, one_line="Continue")
+    setattr(plan, field, value)
+    obligation = NarrativeObligation(
+        id="covered-marker", project_id="project-1", status="active",
+        origin_chapter_number=1, obligation_type="motivation_gap", payoff_test="Resolve the debt",
+        must_resolve_now=True, deadline_chapter=2, summary="Resolve the debt",
+    )
+
+    assert "covered-marker" in plan_text(plan)
+    assert select_urgent_obligation_targets(
+        obligations=[obligation], plans=[plan], current_chapter=1, include_current=False,
+    ) == []
+    assert _plan_mentions_signal(plan, signal_id="covered-marker", description="")

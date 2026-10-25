@@ -5,7 +5,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from forwin.planning.constraints import NarrativeConstraintInfo
-from forwin.planning.contracts import PlanTaskItem
 from .project import ProjectAutomationPublishSettings, ProjectAutomationSettings
 
 
@@ -52,21 +51,6 @@ class NarrativeConstraintsResponse(BaseModel):
     items: list[NarrativeConstraintInfo] = Field(default_factory=list)
 
 
-class TaskContractUpdateRequest(BaseModel):
-    items: list[PlanTaskItem] = Field(default_factory=list)
-    reason: str = ""
-
-
-class TaskContractResponse(BaseModel):
-    ok: bool = True
-    project_id: str
-    scope: str
-    chapter_number: int = 0
-    band_id: str = ""
-    items: list[PlanTaskItem] = Field(default_factory=list)
-    message: str = ""
-
-
 class ProjectAutomationUpdateRequest(BaseModel):
     enabled: bool = False
     daily_start_time: str = "09:00"
@@ -94,8 +78,6 @@ __all__ = [
     "NarrativeConstraintCreateRequest",
     "NarrativeConstraintUpdateRequest",
     "NarrativeConstraintsResponse",
-    "TaskContractUpdateRequest",
-    "TaskContractResponse",
     "ProjectAutomationUpdateRequest",
     "ProjectAutomationUpdateResponse",
 ]

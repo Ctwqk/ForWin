@@ -35,10 +35,6 @@ from forwin.generation.review_auto_retry import (
     reset_chapter_for_auto_review_retry,
 )
 from forwin.audit.events import DecisionEventType
-from forwin.planning.contracts import (
-    derive_chapter_task_contract,
-    plan_task_contract_to_json,
-)
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ChapterPlan, Project
@@ -998,9 +994,6 @@ def retry_chapter_review(
             ]
             if cleaned_goals != goals_payload:
                 plan.goals_json = json.dumps(cleaned_goals, ensure_ascii=False)
-                plan.task_contract_json = plan_task_contract_to_json(
-                    derive_chapter_task_contract(cleaned_goals)
-                )
         session.add(plan)
         if previous_status != "accepted":
             log_decision_event(

@@ -57,7 +57,6 @@ _EXTERNAL_REQUEST_EVENT_TYPES = frozenset(
         DecisionEventType.CONSTRAINT_CREATED,
         DecisionEventType.CONSTRAINT_UPDATED,
         DecisionEventType.CONSTRAINT_ARCHIVED,
-        DecisionEventType.PLAN_TASK_CONTRACT_UPDATED,
         DecisionEventType.PAUSE_REQUESTED,
         DecisionEventType.TERMINATE_REQUESTED,
         DecisionEventType.REVIEW_APPROVED,

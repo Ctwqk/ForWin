@@ -155,7 +155,6 @@ def _plan(chapter_number: int, *, one_line: str) -> ChapterPlan:
         title=f"第{chapter_number}章",
         one_line=one_line,
         goals_json="[]",
-        task_contract_json="[]",
         experience_plan_json="{}",
         status="planned",
     )

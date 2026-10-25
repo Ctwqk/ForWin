@@ -26,6 +26,7 @@ def test_task_center_drawer_controls_and_bulk_delete(
     expect(page.locator("#drawer_body")).not_to_contain_text("Replan 可触发")
     expect(page.locator("#drawer_body")).not_to_contain_text("距 replan 可触发")
     expect(page.locator("#drawer_body")).not_to_contain_text("undefined")
+    expect(page.locator("#drawer_body")).not_to_contain_text("Task Contract")
 
     page.get_by_role("button", name="安全暂停").click()
     expect(page.locator("#global_status")).to_contain_text("已发送安全暂停请求")

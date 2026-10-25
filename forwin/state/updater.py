@@ -10,11 +10,6 @@ from sqlalchemy.orm import Session
 from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 from forwin.planning.checkpoints import BandCheckpointDetail
 from forwin.audit.events import DecisionEventInfo
-from forwin.planning.contracts import (
-    derive_band_task_contract,
-    derive_chapter_task_contract,
-    plan_task_contract_to_json,
-)
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.observability.redaction import redact_payload
 from forwin.models import (
@@ -161,13 +156,9 @@ class StateUpdater:
         one_line: str,
         goals: list[str],
         experience_plan: ChapterExperiencePlan | None = None,
-        task_contract=None,
     ) -> ChapterPlan:
         """Create a chapter plan."""
         normalized_goals = _normalize_goals_payload(goals)
-        resolved_task_contract = task_contract or derive_chapter_task_contract(
-            normalized_goals
-        )
         plan = ChapterPlan(
             id=new_id(),
             project_id=project_id,
@@ -180,7 +171,6 @@ class StateUpdater:
                 (experience_plan or ChapterExperiencePlan()).model_dump(mode="json"),
                 ensure_ascii=False,
             ),
-            task_contract_json=plan_task_contract_to_json(resolved_task_contract),
             status="planned",
         )
         self.session.add(plan)
@@ -214,7 +204,6 @@ class StateUpdater:
         plan.title = rebase_generic_numeric_chapter_title(title, plan.chapter_number)
         plan.one_line = one_line
         plan.goals_json = json.dumps(normalized_goals, ensure_ascii=False)
-        plan.task_contract_json = plan_task_contract_to_json(derive_chapter_task_contract(normalized_goals))
         plan.pov_ref = pov_ref
         plan.onstage_refs_json = json.dumps(onstage_refs, ensure_ascii=False)
         plan.location_refs_json = json.dumps(location_refs, ensure_ascii=False)
@@ -422,9 +411,7 @@ class StateUpdater:
         project_id: str,
         arc_id: str,
         schedule: BandDelightSchedule,
-        task_contract=None,
     ) -> BandExperiencePlan:
-        resolved_task_contract = task_contract or derive_band_task_contract(schedule)
         self.session.query(BandExperiencePlan).filter(
             BandExperiencePlan.project_id == project_id,
             BandExperiencePlan.arc_id == arc_id,
@@ -441,7 +428,6 @@ class StateUpdater:
             schedule_json=json.dumps(
                 schedule.model_dump(mode="json"), ensure_ascii=False
             ),
-            task_contract_json=plan_task_contract_to_json(resolved_task_contract),
         )
         self.session.add(row)
         self.session.flush()

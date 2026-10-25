@@ -1,14 +1,8 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
-from forwin.planning.contracts import (
-    PlanTaskItem,
-    load_plan_task_contract,
-    plan_task_contract_to_json,
-)
 from forwin.models.base import new_id
 from forwin.models.phase import BandExperiencePlan
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
@@ -77,12 +71,6 @@ class BandPlanPatcher:
         schedule.band_obligation_contract = _merge_contracts(existing, incoming)
         row.schedule_json = json.dumps(
             schedule.model_dump(mode="json"), ensure_ascii=False
-        )
-        row.task_contract_json = plan_task_contract_to_json(
-            _merge_task_contracts(
-                load_plan_task_contract(row.task_contract_json),
-                obligations=obligations,
-            )
         )
 
 
@@ -187,63 +175,6 @@ def _merge_contracts(
     return result
 
 
-def _merge_task_contracts(
-    existing: list[PlanTaskItem],
-    *,
-    obligations: list[NarrativeObligation],
-) -> list[PlanTaskItem]:
-    result = [
-        item
-        for item in existing
-        if not (
-            str(item.source or "") == "narrative_obligation"
-            and any(
-                _task_matches_obligation(item, obligation) for obligation in obligations
-            )
-        )
-    ]
-    for obligation in obligations:
-        if not obligation.id:
-            continue
-        result.append(
-            PlanTaskItem(
-                task_type="plot_advance",
-                description=obligation.payoff_test or obligation.summary,
-                target_name=obligation.id,
-                required_keywords=_required_keywords(
-                    obligation.payoff_test or obligation.summary
-                ),
-                source="narrative_obligation",
-            )
-        )
-    return result
-
-
-def _task_matches_obligation(
-    task: PlanTaskItem, obligation: NarrativeObligation
-) -> bool:
-    obligation_id = str(obligation.id or "")
-    return bool(
-        obligation_id
-        and (task.target_name == obligation_id or obligation_id in task.description)
-    )
-
-
-def _required_keywords(text: str) -> list[str]:
-    cleaned = re.sub(
-        r"^第\d+章[前内]?(必须|需要)?", "", str(text or "").strip("。；; ")
-    )
-    cleaned = re.sub(r"^(必须|需要|给出|兑现|解释|补足)+", "", cleaned)
-    if "给出" in cleaned:
-        cleaned = cleaned.split("给出", 1)[1]
-    parts = [
-        part.strip(" ，,。；;：:")
-        for part in re.split(r"的|、|，|,|；|;", cleaned)
-        if len(part.strip(" ，,。；;：:")) >= 2
-    ]
-    return list(dict.fromkeys(parts[:3]))
-
-
 def _future_band_chapters(
     *, chapter_start: int, chapter_end: int, current_chapter: int
 ) -> list[int]:
@@ -263,10 +194,6 @@ def _band_contract_snapshot(row: BandExperiencePlan) -> dict[str, Any]:
         "band_obligation_contract": schedule.band_obligation_contract.model_dump(
             mode="json"
         ),
-        "task_contract": [
-            item.model_dump(mode="json")
-            for item in load_plan_task_contract(row.task_contract_json)
-        ],
     }
 
 

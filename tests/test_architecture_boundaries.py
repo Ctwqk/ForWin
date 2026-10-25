@@ -22,6 +22,22 @@ from forwin.http.routes import (
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+def test_task_contract_storage_and_routes_are_gone() -> None:
+    from fastapi.testclient import TestClient
+    from forwin.http import create_app
+
+    assert not (ROOT / "forwin/planning/contracts.py").exists()
+    client = TestClient(create_app())
+    for scope in ("chapters/1", "bands/band-1"):
+        path = f"/api/projects/project-1/{scope}/task-contract"
+        for method in ("GET", "PUT"):
+            assert client.request(method, path).status_code in {404, 405}
+    client.close()
+    editor = _read("forwin/ui_assets/home/app_task_control.js")
+    assert "Task" + "Contract" not in editor
+    assert "task-contract" not in editor
+
 LEGACY_ALIAS_IMPORT_ALLOWLIST = {
     "forwin/book_state/legacy_import.py",
 }
@@ -783,7 +799,7 @@ def test_legacy_governance_namespace_is_replaced_by_real_domain_owners() -> None
         assert removed not in production_source
 
     assert (ROOT / "forwin/audit/events.py").exists()
-    assert (ROOT / "forwin/planning/contracts.py").exists()
+    assert not (ROOT / "forwin/planning/contracts.py").exists()
     assert (ROOT / "forwin/planning/constraints.py").exists()
     assert (ROOT / "forwin/planning/checkpoints.py").exists()
     assert (ROOT / "forwin/review/plan_checks.py").exists()
@@ -1191,6 +1207,7 @@ def test_application_read_models_have_one_current_owner() -> None:
 
 
 P4A_REMOVED_PATHS = (
+    "forwin/planning/contracts.py",
     "forwin/simulation",
     "forwin/models/phase4.py",
     "forwin/retrieval/broker_core/helpers.py",

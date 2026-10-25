@@ -793,27 +793,6 @@ class MockForWinBackend:
             self.capture(route, payload)
             json_reply(route, {"message": "constraint updated"})
             return
-        if method == "PUT" and re.fullmatch(
-            r"/api/projects/[^/]+/(?:bands/[^/]+|chapters/\d+)/task-contract", path
-        ):
-            payload = read_json(route)
-            self.capture(route, payload)
-            json_reply(
-                route,
-                {
-                    "items": payload.get("items") or [],
-                    "message": "task contract updated",
-                },
-            )
-            return
-        if method == "GET" and re.fullmatch(
-            r"/api/projects/[^/]+/(?:bands/[^/]+|chapters/\d+)/task-contract", path
-        ):
-            json_reply(
-                route,
-                {"items": [{"task_type": "plot_advance", "description": "推进主线"}]},
-            )
-            return
         if method == "POST" and re.fullmatch(
             r"/api/projects/[^/]+/bands/[^/]+/checkpoint/approve", path
         ):

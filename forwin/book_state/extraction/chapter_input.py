@@ -105,7 +105,6 @@ def _fulfillment_targets(
     *, judged_obligations: Sequence[NarrativeObligation] = (),
 ) -> tuple[FulfillmentTarget, ...]:
     goals = _loads(plan.goals_json, []) if plan else []
-    contract = _loads(plan.task_contract_json, {}) if plan else {}
     experience = _loads(plan.experience_plan_json, {}) if plan else {}
     targets = [
         FulfillmentTarget(target_id, goal)
@@ -122,11 +121,9 @@ def _fulfillment_targets(
                         json.dumps(directive, ensure_ascii=False, sort_keys=True),
                     ))
     obligation_ids: list[str] = []
-    # Existing obligation patches store this key in the experience plan.
-    for payload in (contract, experience):
-        refs = payload.get("obligations_to_resolve", []) if isinstance(payload, dict) else []
-        if isinstance(refs, list):
-            obligation_ids.extend(ref for ref in refs if isinstance(ref, str) and ref)
+    refs = experience.get("obligations_to_resolve", []) if isinstance(experience, dict) else []
+    if isinstance(refs, list):
+        obligation_ids.extend(ref for ref in refs if isinstance(ref, str) and ref)
     if obligation_ids:
         obligations = {
             row.id: row for row in session.scalars(select(NarrativeObligationRow).where(

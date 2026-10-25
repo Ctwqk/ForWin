@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from forwin.models.project import ChapterPlan
+from .helpers import plan_text
 
 
 def select_stale_signal_targets(
@@ -64,29 +65,10 @@ def _first_eligible_plan(
 
 
 def _plan_mentions_signal(plan: ChapterPlan, *, signal_id: str, description: str) -> bool:
-    text = _plan_text(plan)
+    text = plan_text(plan)
     if signal_id and signal_id in text:
         return True
     return bool(description and json.dumps(description[:80], ensure_ascii=False)[1:-1] in text)
-
-
-def _plan_text(plan: ChapterPlan) -> str:
-    payload = {
-        "title": str(plan.title or ""),
-        "one_line": str(plan.one_line or ""),
-        "goals": _loads(plan.goals_json, []),
-        "task_contract": _loads(plan.task_contract_json, []),
-        "experience_plan": _loads(plan.experience_plan_json, {}),
-    }
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
-
-
-def _loads(raw: str, default: Any) -> Any:
-    try:
-        value = json.loads(raw or "")
-    except (TypeError, json.JSONDecodeError):
-        return default
-    return value if value is not None else default
 
 
 def _payload(signal: dict[str, Any]) -> dict[str, Any]:

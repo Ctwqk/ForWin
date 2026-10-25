@@ -1247,13 +1247,6 @@ def _apply_repair_patch(
             goal_patch = patch.get("goals")
         if isinstance(goal_patch, list):
             chapter_plan.goals_json = json.dumps(goal_patch, ensure_ascii=False)
-        task_contract_patch = patch.get("chapter_task_contract")
-        if not isinstance(task_contract_patch, list):
-            task_contract_patch = patch.get("task_contract")
-        if isinstance(task_contract_patch, list):
-            chapter_plan.task_contract_json = json.dumps(
-                task_contract_patch, ensure_ascii=False
-            )
         session.add(chapter_plan)
         session.flush()
         return (

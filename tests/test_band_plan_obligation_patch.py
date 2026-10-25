@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 
-from forwin.planning.contracts import load_plan_task_contract
 from forwin.models.phase import BandExperiencePlan
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.planning.band_plan_patcher import BandPlanPatcher
@@ -25,7 +24,6 @@ def _band_row() -> BandExperiencePlan:
         chapter_end=14,
         stall_guard_max_gap=1,
         schedule_json=json.dumps(schedule.model_dump(mode="json"), ensure_ascii=False),
-        task_contract_json="[]",
     )
 
 
@@ -46,7 +44,7 @@ def _obligation() -> NarrativeObligation:
     )
 
 
-def test_band_plan_patcher_writes_obligation_contract_and_band_task_contract() -> None:
+def test_band_plan_patcher_writes_obligation_contract() -> None:
     row = _band_row()
     obligation = _obligation()
     patcher = BandPlanPatcher()
@@ -72,16 +70,6 @@ def test_band_plan_patcher_writes_obligation_contract_and_band_task_contract() -
         contract.reviewer_context_injections[0]["payoff_test"] == obligation.payoff_test
     )
 
-    tasks = load_plan_task_contract(row.task_contract_json)
-    assert [
-        (task.source, task.description, task.required_keywords) for task in tasks
-    ] == [
-        (
-            "narrative_obligation",
-            obligation.payoff_test,
-            ["审计窗口真相", "实质证据"],
-        )
-    ]
 
 
 def test_band_plan_patcher_is_idempotent_for_same_obligation() -> None:
@@ -101,5 +89,5 @@ def test_band_plan_patcher_is_idempotent_for_same_obligation() -> None:
 
     schedule = BandDelightSchedule.model_validate(json.loads(row.schedule_json))
     assert schedule.band_obligation_contract.open_obligations == ["obl-band"]
-    tasks = load_plan_task_contract(row.task_contract_json)
-    assert [task.source for task in tasks].count("narrative_obligation") == 1
+    assert len(schedule.band_obligation_contract.writer_context_injections) == 1
+    assert len(schedule.band_obligation_contract.reviewer_context_injections) == 1

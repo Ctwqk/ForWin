@@ -16,7 +16,6 @@ def test_future_plan_auditor_binds_deadline_plan_to_missing_obligation() -> None
         title="第十一章",
         one_line="韩砚继续协助陆明。",
         goals_json=json.dumps(["推进核心系统线索"], ensure_ascii=False),
-        task_contract_json="[]",
         experience_plan_json="{}",
         status="planned",
     )

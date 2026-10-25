@@ -32,6 +32,15 @@ from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 
 
+def _plan_columns_snapshot(plan: ChapterPlan) -> dict[str, object]:
+    return {
+        "world_bindings": _load_json_list(plan.world_bindings_json),
+        "reveal_directives": _load_json_list(plan.reveal_directives_json),
+        "intended_changes": _load_json_list(plan.intended_changes_json),
+        "hook": str(plan.hook or ""),
+    }
+
+
 def _apply_canon_name_drift_autofix(
     writer_output: WriterOutput,
     review: ReviewVerdict,
@@ -392,9 +401,7 @@ class ReviewWorkflowStage:
             "title": str(chapter_plan.title or ""),
             "one_line": str(chapter_plan.one_line or ""),
             "goals": self._load_json_list(getattr(chapter_plan, "goals_json", "[]")),
-            "task_contract": self._load_json_list(
-                getattr(chapter_plan, "task_contract_json", "[]")
-            ),
+            "plan_columns": _plan_columns_snapshot(chapter_plan),
             "experience_plan": (
                 live_experience_plan.model_dump(mode="json")
                 if live_experience_plan is not None
@@ -432,9 +439,14 @@ class ReviewWorkflowStage:
                 getattr(row, "chapter_end", getattr(live_schedule, "chapter_end", 0))
                 or 0
             ),
-            "task_contract": self._load_json_list(
-                getattr(row, "task_contract_json", "[]")
-            ),
+            "plan_columns": {
+                str(number): _plan_columns_snapshot(plan)
+                for number in range(
+                    int(getattr(row, "chapter_start", getattr(live_schedule, "chapter_start", 0)) or 0),
+                    int(getattr(row, "chapter_end", getattr(live_schedule, "chapter_end", 0)) or 0) + 1,
+                )
+                if (plan := repo.get_chapter_plan(project_id, number)) is not None
+            },
             "schedule": live_schedule.model_dump(mode="json")
             if live_schedule is not None
             else {},

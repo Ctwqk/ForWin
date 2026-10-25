@@ -81,7 +81,6 @@ class _FakeRepo:
     def get_current_timeline(self, project_id: str):
         return None
 
-
     def get_reader_promise(self, project_id: str, *, arc_plan_id=None):
         return ReaderPromise(genre_promise="玄幻网文", core_pleasures=["查谜", "升级"])
 
@@ -102,12 +101,6 @@ class _FakeRepo:
 
     def get_audience_hints(self, project_id: str, before_chapter: int):
         return None
-
-    def get_chapter_task_contract(self, project_id: str, chapter_number: int):
-        return []
-
-    def get_band_task_contract_for_chapter(self, project_id: str, chapter_number: int):
-        return []
 
     def future_constraints_enabled(self, project_id: str):
         return False

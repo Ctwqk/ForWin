@@ -451,79 +451,6 @@
       });
     }
 
-    function normalizeTaskContractItems(rawText) {
-      let parsed = [];
-      try {
-        parsed = JSON.parse(String(rawText || '[]'));
-      } catch (error) {
-        throw new Error('Task contract 必须是 JSON 数组。');
-      }
-      if (!Array.isArray(parsed)) {
-        throw new Error('Task contract 必须是 JSON 数组。');
-      }
-      return parsed.map((item) => ({
-        task_type: String(item?.task_type || 'plot_advance').trim(),
-        description: String(item?.description || '').trim(),
-        target_name: String(item?.target_name || '').trim(),
-        required_keywords: Array.isArray(item?.required_keywords) ? item.required_keywords.map((entry) => String(entry || '').trim()).filter(Boolean) : [],
-        forbidden_keywords: Array.isArray(item?.forbidden_keywords) ? item.forbidden_keywords.map((entry) => String(entry || '').trim()).filter(Boolean) : [],
-        source: String(item?.source || 'manual').trim() || 'manual',
-      }));
-    }
-
-    async function executeUpdateTaskContract(projectId, scope, identifier, items, reason) {
-      const url = scope === 'band'
-        ? `/api/projects/${projectId}/bands/${encodeURIComponent(identifier)}/task-contract`
-        : `/api/projects/${projectId}/chapters/${Number(identifier || 0)}/task-contract`;
-      await requestJson(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items, reason }),
-      });
-      setGlobalStatus('task contract 已更新。', '治理设置');
-      await loadBooks();
-      if (currentDrawerTask?.project_id === projectId) {
-        await openTaskDrawer(currentDrawerTask.task_kind, currentDrawerTask.task_id);
-      }
-    }
-
-    async function editTaskContractFromDrawer(projectId, scope, identifier) {
-      if (!projectId || !identifier) {
-        setGlobalStatus('缺少 task contract 目标。', '治理设置');
-        return;
-      }
-      const url = scope === 'band'
-        ? `/api/projects/${projectId}/bands/${encodeURIComponent(identifier)}/task-contract`
-        : `/api/projects/${projectId}/chapters/${Number(identifier || 0)}/task-contract`;
-      try {
-        const current = await requestJson(url);
-        openProjectControlActionModal({
-          title: scope === 'band' ? `编辑 Band Task Contract · ${identifier}` : `编辑 Chapter Task Contract · 第${identifier}章`,
-          description: '填写 PlanTaskItem JSON 数组。修改会进入决策时间线，review/checkpoint 会使用这份合同判断规划履约。',
-          confirmLabel: '保存 Task Contract',
-          errorTitle: 'task contract 更新失败',
-          fields: [
-            {
-              name: 'items_json',
-              label: 'PlanTaskItem JSON',
-              type: 'textarea',
-              rows: 10,
-              value: JSON.stringify(current.items || [], null, 2),
-            },
-          ],
-          onSubmit: ({ reason, items_json }) => executeUpdateTaskContract(
-            projectId,
-            scope,
-            identifier,
-            normalizeTaskContractItems(items_json),
-            reason
-          ),
-        });
-      } catch (error) {
-        setGlobalStatus(error.message || String(error), 'task contract 读取失败');
-      }
-    }
-
     async function executeApproveBandCheckpoint(projectId, bandId, status, reason) {
       try {
         await requestJson(`/api/projects/${projectId}/bands/${bandId}/checkpoint/approve`, {
@@ -819,13 +746,6 @@
         boundary_kind: latestCheckpoint?.boundary_kind || 'band_end',
         boundary_chapter: latestCheckpoint?.boundary_chapter || item.current_chapter || 0,
       }), 'secondary'));
-      const contractChapter = Number(item.current_chapter || project.generation_control?.next_chapter || 0);
-      if (contractChapter > 0) {
-        actions.appendChild(createButton('编辑本章 Task Contract', () => editTaskContractFromDrawer(item.project_id, 'chapter', contractChapter), 'ghost'));
-      }
-      if (latestCheckpoint?.band_id) {
-        actions.appendChild(createButton('编辑 Band Task Contract', () => editTaskContractFromDrawer(item.project_id, 'band', latestCheckpoint.band_id), 'ghost'));
-      }
       actions.appendChild(createButton('新增 Constraint', () => createNarrativeConstraintFromDrawer(item.project_id), 'ghost'));
       if (latestCheckpoint?.band_id && ['warn', 'fail', 'pending', 'error'].includes(String(latestCheckpoint.status || ''))) {
         actions.appendChild(createButton('Override Checkpoint', () => approveBandCheckpointFromDrawer(item.project_id, latestCheckpoint.band_id, 'overridden'), 'ghost'));

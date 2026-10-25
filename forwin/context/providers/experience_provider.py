@@ -26,10 +26,6 @@ class ExperienceContextProvider:
             repo, "get_band_experience_plan_for_chapter", None
         )
         chapter_experience_getter = getattr(repo, "get_chapter_experience_plan", None)
-        chapter_task_contract_getter = getattr(repo, "get_chapter_task_contract", None)
-        band_task_contract_getter = getattr(
-            repo, "get_band_task_contract_for_chapter", None
-        )
         constraints_enabled_getter = getattr(repo, "future_constraints_enabled", None)
         constraints_enabled = (
             bool(constraints_enabled_getter(project_id))
@@ -93,18 +89,6 @@ class ExperienceContextProvider:
                     else None
                 ),
                 "chapter_experience_plan": chapter_experience_plan,
-                "chapter_task_contract": (
-                    chapter_task_contract_getter(
-                        project_id, chapter_plan.chapter_number
-                    )
-                    if callable(chapter_task_contract_getter)
-                    else []
-                ),
-                "band_task_contract": (
-                    band_task_contract_getter(project_id, chapter_plan.chapter_number)
-                    if callable(band_task_contract_getter)
-                    else []
-                ),
                 "active_constraints": (
                     active_constraints_getter(
                         project_id, chapter_number=chapter_plan.chapter_number

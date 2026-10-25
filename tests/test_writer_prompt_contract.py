@@ -61,7 +61,7 @@ def test_secret_countdown_stays_hidden_in_persisting_writer_constraints_and_plan
     constraint_text = "\n".join(section.text for section in sections)
     plan = ChapterPlan(
         id="plan-5", project_id="p1", arc_plan_id="arc-1", chapter_number=5,
-        title="Next chapter", one_line="Continue.", goals_json="[]", task_contract_json="[]",
+        title="Next chapter", one_line="Continue.", goals_json="[]",
         experience_plan_json="{}", status="planned",
     )
     auditor = FuturePlanAuditor()

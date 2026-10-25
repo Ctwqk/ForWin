@@ -1824,5 +1824,18 @@
         }
       ]
     }
+  },
+  "p4b": {
+    "death_evidence": "蒲念安突然倒下，气息断绝，当场死亡。",
+    "drift_summary": "辖区巡防升至下一档。",
+    "new_actor": {
+      "key": "arrival",
+      "node_type": "character",
+      "name": "夜班快递员方宁",
+      "role_hint": "contact",
+      "location_id": "@site:市立档案馆",
+      "affiliation_refs": [],
+      "summary": "夜班快递员方宁来到此地，开始值守。"
+    }
   }
 }

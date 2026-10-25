@@ -1775,5 +1775,18 @@
         }
       ]
     }
+  },
+  "p4b": {
+    "death_evidence": "祁长烬突然倒下，气息断绝，当场死亡。",
+    "drift_summary": "山门戒备升至下一档。",
+    "new_actor": {
+      "key": "arrival",
+      "node_type": "character",
+      "name": "山门信使陆青",
+      "role_hint": "contact",
+      "location_id": "@site:栖云山门",
+      "affiliation_refs": [],
+      "summary": "山门信使陆青来到此地，开始值守。"
+    }
   }
 }

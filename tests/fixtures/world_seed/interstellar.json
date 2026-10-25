@@ -1738,5 +1738,18 @@
         }
       ]
     }
+  },
+  "p4b": {
+    "death_evidence": "应潮生突然倒下，气息断绝，当场死亡。",
+    "drift_summary": "舰队补给升至下一档。",
+    "new_actor": {
+      "key": "arrival",
+      "node_type": "character",
+      "name": "补给站技师洛文",
+      "role_hint": "contact",
+      "location_id": "@site:曙光轨道站",
+      "affiliation_refs": [],
+      "summary": "补给站技师洛文来到此地，开始值守。"
+    }
   }
 }

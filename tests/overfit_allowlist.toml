@@ -624,7 +624,7 @@ symbol = "_GENESIS_STAGE_HARD_RULES"
 checks = ["cjk_collection"]
 category = "prompt_text"
 justification = "Genesis 各阶段发给 LLM 的说明文字与阶段标签"
-max_literals = 29
+max_literals = 30
 
 [[entry]]
 path = "forwin/genesis/constants.py"
@@ -997,4 +997,11 @@ path = "forwin/writer/prompt_core/rule_predicates.py"
 checks = ["cjk_collection"]
 category = "prompt_text"
 justification = "Structural predicate descriptions for world_seed; no story-specific vocabulary."
+max_literals = 5
+
+[[entry]]
+path = "forwin/writer/prompt_core/world_seed.py"
+checks = ["cjk_collection"]
+category = "prompt_text"
+justification = "Structural world-variable seed shape and enum instructions; scale labels come from Genesis."
 max_literals = 5

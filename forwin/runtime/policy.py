@@ -109,6 +109,8 @@ class CanonPolicy(FrozenPolicyModel):
 
 
 class WorldPolicy(FrozenPolicyModel):
+    drift_every_story_minutes: int = Field(default=10080, ge=0)
+    max_drift_variables_per_tick: int = Field(default=3, ge=0)
     enabled: bool = True
     max_actor_turns_per_tick: int = Field(default=6, ge=1)
     actor_turn_batch_size: int = Field(default=1, ge=1)
@@ -121,7 +123,7 @@ class WorldPolicy(FrozenPolicyModel):
     @classmethod
     def for_profile(cls, quality_profile: str) -> WorldPolicy:
         if quality_profile == "pulp":
-            return cls(max_actor_turns_per_tick=3)
+            return cls(max_actor_turns_per_tick=3, drift_every_story_minutes=0)
         return cls()
 
 
@@ -153,8 +155,9 @@ class RuntimePolicy(FrozenPolicyModel):
             return data
         profile = data.get("quality_profile", "standard")
         loaded = dict(data)
-        if "world" not in loaded:
-            loaded["world"] = WorldPolicy.for_profile(profile).model_dump()
+        world = data.get("world", {})
+        if isinstance(world, dict):
+            loaded["world"] = {**WorldPolicy.for_profile(profile).model_dump(), **world}
         if isinstance(data.get("planning"), dict):
             defaults = PlanningPolicy.for_profile(profile)
             loaded["planning"] = {

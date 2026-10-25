@@ -31,6 +31,10 @@ ALIVE_STATUSES = ("alive", "dead", "unknown")
 RESTRAINT_STATES = ("free", "restrained", "imprisoned")
 ACTOR_TIERS = ("major", "minor", "background")
 RULE_HARDNESS = ("hard", "soft")
+WORLD_VARIABLE_SOURCE_KINDS = ("institution", "resource_economy")
+WORLD_VARIABLE_TRENDS = ("rising", "falling", "stable")
+WORLD_VARIABLE_TENDENCIES = ("rising", "falling", "stable", "volatile")
+WORLD_VARIABLE_VISIBILITY = ("public", "secret")
 ENDED_STATUSES = frozenset({"destroyed", "dissolved", "disbanded", "inactive"})
 GROUP_STATUSES = ("active", *sorted(ENDED_STATUSES))
 SITE_STATUSES = ("active", "normal", "open", "closed", "sealed", "occupied", *sorted(ENDED_STATUSES))
@@ -55,6 +59,11 @@ _V46_GENERIC_STATE_FIELDS = {
 }
 
 WORLD_NODE_FIELDS: dict[str, dict[str, set[str]]] = {
+    "world_variable": {
+        "profile": {"label", "source_kind", "source_profile_id", "scale", "scope_refs", "holder_refs",
+                    "visibility", "drift_tendency", "summary"},
+        "state": {"level", "trend", "last_drift_at", "status", "state_summary"},
+    },
     "agenda": {
         "profile": {"owner_ref", "goal", "motivation", "horizon"},
         "state": {"status", "priority", "means_refs", "constraints", "secrecy_refs"},
@@ -542,6 +551,12 @@ def _v6_value_issues(
         issues.append(_issue("error", "invalid_field_value", f"{target}:{path}", message))
 
     enum_fields = {
+        "world_variable": (
+            ("profile", "source_kind", WORLD_VARIABLE_SOURCE_KINDS),
+            ("profile", "visibility", WORLD_VARIABLE_VISIBILITY),
+            ("profile", "drift_tendency", WORLD_VARIABLE_TENDENCIES),
+            ("state", "trend", WORLD_VARIABLE_TRENDS),
+        ),
         "agenda": (("state", "status", AGENDA_STATUSES),),
         "intent": (
             ("state", "status", INTENT_STATUSES),
@@ -565,6 +580,7 @@ def _v6_value_issues(
             invalid(f"{section}.{field}", f"{section}.{field} must be one of {values!r}")
 
     integer_fields = {
+        "world_variable": (("level", 0, None), ("last_drift_at", 0, None)),
         "agenda": (("priority", 1, 5),),
         "intent": (("scheduled_at", 0, None), ("slip_count", 0, None)),
         "clock": (("due_at", 0, None),),
@@ -578,6 +594,13 @@ def _v6_value_issues(
         if type(value) is not int or value < minimum or (maximum is not None and value > maximum):
             bounds = f"{minimum}–{maximum}" if maximum is not None else f">= {minimum}"
             invalid(f"state.{field}", f"state.{field} must be an int {bounds}")
+
+    if node_type == "world_variable" and "scale" in profile:
+        scale = profile["scale"]
+        if (not isinstance(scale, list) or not 2 <= len(scale) <= 7
+                or any(not isinstance(label, str) or not label.strip() for label in scale)
+                or len(set(scale)) != len(scale)):
+            invalid("profile.scale", "profile.scale must contain 2–7 distinct nonempty labels")
 
     if node_type == "character" and "restraint" in state:
         restraint = state["restraint"]
@@ -604,6 +627,7 @@ def _v6_value_issues(
 
 def _v6_required_field_issues(node: WorldNode) -> list[BookStateSchemaIssue]:
     required = {
+        "world_variable": (("profile", "label"), ("profile", "scale"), ("state", "level")),
         "agenda": (("profile", "owner_ref"), ("profile", "goal")),
         "intent": (("profile", "owner_ref"), ("profile", "action_type"), ("state", "scheduled_at")),
         "clock": (("profile", "label"), ("state", "due_at")),

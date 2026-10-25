@@ -26,6 +26,9 @@ from forwin.book_state.schema import (
     IMPACT_LEVELS,
     INTENT_ACTION_TYPES,
     RULE_HARDNESS,
+    WORLD_VARIABLE_SOURCE_KINDS,
+    WORLD_VARIABLE_TENDENCIES,
+    WORLD_VARIABLE_VISIBILITY,
 )
 from forwin.book_state.story_clock import (
     StoryClockError,
@@ -41,7 +44,7 @@ from forwin.map.genesis_adapter import buildable_atlas_node_ids
 
 WORLD_SEED_KEYS: tuple[str, ...] = (
     "calendar", "lexicon", "actors", "relations", "facts", "knowledge",
-    "rules", "clocks", "reader_promises", "reveal_candidates",
+    "rules", "clocks", "reader_promises", "reveal_candidates", "world_variables",
 )
 FACT_SENSITIVITIES = ("public", "hidden", "secret")
 RELATION_VISIBILITIES = ("public", "secret")
@@ -208,12 +211,20 @@ def normalize_world_seed(
                             for item in _objects(payload.get("reader_promises"))],
         "reveal_candidates": [{**_texts(item, "fact_id", "note"), "arc_number": _integer(item.get("arc_number"))}
                               for item in _objects(payload.get("reveal_candidates"))],
+        "world_variables": [{
+            **_texts(item, "id", "source_profile_id", "source_kind", "label", "visibility", "drift_tendency", "summary"),
+            "scale": _strings(item.get("scale")),
+            "level": item.get("level"),
+            "scope_refs": _strings(item.get("scope_refs")),
+            "holder_refs": _strings(item.get("holder_refs")),
+        } for item in _objects(payload.get("world_variables"))],
     }
 
 
 def validate_world_seed(
     seed: Mapping, *, story_engine: Mapping, map_atlas: Mapping,
     arc_numbers: Collection[int],
+    world_profiles: Mapping[str, str] | None = None,
 ) -> list[WorldSeedIssue]:
     """Return issues in input order; validation never repairs or mutates the seed."""
     issues: list[WorldSeedIssue] = []
@@ -360,6 +371,40 @@ def validate_world_seed(
         reference(item.get("fact_id"), fact_refs, "unknown_fact_ref", f"{path}.fact_id")
         enum(item, "state", KNOWLEDGE_STATES, "invalid_knowledge_state", path)
         enum(item, "channel", ("seeded",), "invalid_channel", path)
+
+    profiles = world_profiles or {}
+    seen_variable_ids: set[str] = set()
+    seen_profiles: set[str] = set()
+    for index, variable in enumerate(_objects(seed.get("world_variables"))):
+        path = f"world_variables[{index}]"
+        unique_id(variable, seen_variable_ids, path)
+        profile_id = _text(variable.get("source_profile_id"))
+        reference(profile_id, profiles, "unknown_world_profile", f"{path}.source_profile_id")
+        kind = variable.get("source_kind")
+        if kind not in WORLD_VARIABLE_SOURCE_KINDS or (profile_id in profiles and profiles[profile_id] != kind):
+            issue("invalid_source_kind", f"{path}.source_kind", "source_kind must match the source profile")
+        if profile_id in seen_profiles:
+            issue("duplicate_world_variable_profile", f"{path}.source_profile_id", "A profile may have at most one variable")
+        seen_profiles.add(profile_id)
+        scale = variable.get("scale")
+        if (not isinstance(scale, list) or not 2 <= len(scale) <= 7
+                or any(not isinstance(label, str) or not label.strip() for label in scale)
+                or len(set(scale)) != len(scale)):
+            issue("invalid_world_variable_scale", f"{path}.scale", "scale must contain 2–7 distinct nonempty labels")
+        level = variable.get("level")
+        if type(level) is not int or not isinstance(scale, list) or not 0 <= level < len(scale):
+            issue("invalid_world_variable_level", f"{path}.level", "level must be an integer indexing scale")
+        if not isinstance(variable.get("label"), str) or not variable["label"].strip():
+            issue("invalid_world_variable_label", f"{path}.label", "label must be nonempty")
+        for key, known in (("scope_refs", set(actor_refs) | location_refs), ("holder_refs", actor_refs)):
+            for ref_index, ref in enumerate(_list(variable.get(key))):
+                reference(ref, known, "unknown_scope_ref" if key == "scope_refs" else "unknown_holder_ref",
+                          f"{path}.{key}[{ref_index}]")
+        enum(variable, "visibility", WORLD_VARIABLE_VISIBILITY, "invalid_visibility", path)
+        enum(variable, "drift_tendency", WORLD_VARIABLE_TENDENCIES, "invalid_drift_tendency", path)
+    for profile_id in profiles:
+        if profile_id not in seen_profiles:
+            issue("missing_world_variable", "world_variables", f"Profile has no world variable: {profile_id}", "warning")
 
     scope = _rule_scope(seed, story_engine, map_atlas)
     predicates: list[RulePredicate] = []

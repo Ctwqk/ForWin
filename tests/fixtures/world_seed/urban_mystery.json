@@ -21,6 +21,20 @@
       ]
     },
     "world": {
+      "institution_profiles": [
+        {
+          "id": "institution-1",
+          "name": "辖区巡防",
+          "scope_ref": {
+            "type": "node",
+            "id": "node-precinct"
+          },
+          "applies_to": {
+            "type": "faction",
+            "id": "faction-precinct"
+          }
+        }
+      ],
       "world_bible": {
         "overview": "滨河市的旧港区在改建中被半遗忘，档案馆、诊所与末班地铁是仅存的公共纽带。",
         "axioms": [
@@ -282,6 +296,30 @@
       ]
     },
     "world_seed": {
+      "world_variables": [
+        {
+          "id": "variable-1",
+          "label": "辖区巡防",
+          "source_kind": "institution",
+          "source_profile_id": "institution-1",
+          "scale": [
+            "巡逻稀疏",
+            "轮班常态",
+            "街区戒严"
+          ],
+          "level": 1,
+          "scope_refs": [
+            "node-precinct",
+            "faction-precinct"
+          ],
+          "holder_refs": [
+            "faction-precinct"
+          ],
+          "visibility": "public",
+          "drift_tendency": "stable",
+          "summary": "辖区巡防"
+        }
+      ],
       "calendar": {
         "epoch_label": "",
         "opening_minute": 14260,

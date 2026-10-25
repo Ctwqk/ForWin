@@ -1236,3 +1236,93 @@ def test_group_status_enum_rejects_invented_status(monkeypatch, node_type, opera
         assert verdict.accepted is (status != "invented-status"), verdict.issues
         if status == "invented-status":
             assert ("error", "invalid_field_value") in _codes(verdict)
+
+
+@pytest.mark.parametrize("patches,accepted", [
+    ([("state.level", 2)], True),
+    ([("state.level", 3)], False),
+    ([("profile.scale", ["low", "high"])], False),
+    ([("state.level", 1), ("profile.scale", ["low", "high"])], True),
+    ([("profile.scale", ["low", "high"]), ("state.level", 1)], True),
+    ([("profile", {"label": "Supply", "scale": ["low", "high"]})], False),
+    ([("state", {"level": 3})], False),
+    ([("profile.scale", ["low", "low", "high"])], False),
+])
+def test_world_variable_gate_uses_stored_and_patched_scale(patches, accepted):
+    from copy import deepcopy
+    from tests.test_world_constraints import _runtime
+    from forwin.protocol.book_state import WorldNode
+
+    runtime = _runtime()
+    variable = WorldNode(id="variable", node_type="world_variable", project_id="p",
+                         profile={"label": "Supply", "scale": ["low", "normal", "high"]}, state={"level": 2})
+    runtime.world.nodes_by_id[variable.id] = variable
+    before = deepcopy(variable.model_dump())
+    delta = GraphDelta(id="change", project_id="p", chapter_number=4, source_type="manual", node_patches=[
+        NodePatch(node_id="variable", node_type="world_variable", op="set", field_path=field,
+                  old_value=2 if field == "state.level" else None, new_value=value)
+        for field, value in patches
+    ])
+    verdict = BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta]), base_chapter=3, runtime=runtime)
+    assert verdict.accepted is accepted, verdict.issues
+    assert variable.model_dump() == before
+
+
+@pytest.mark.parametrize("scale,level,accepted", [
+    (["low", "high"], 1, True), (["low"], 0, False),
+    (list("abcdefgh"), 0, False), (["low", "low"], 0, False),
+    (["low", "high"], 2, False), (["low", "high"], -1, False),
+])
+def test_world_variable_gate_create(scale, level, accepted):
+    from tests.test_world_constraints import _runtime
+
+    delta = GraphDelta(id="create", project_id="p", chapter_number=4, source_type="manual", node_patches=[
+        NodePatch(node_id="variable", node_type="world_variable", op="create",
+                  new_value={"project_id": "p", "profile": {"label": "Supply", "scale": scale}, "state": {"level": level}})])
+    verdict = BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta]), base_chapter=3, runtime=_runtime())
+    assert verdict.accepted is accepted, verdict.issues
+
+
+@pytest.mark.parametrize("op,path,value,accepted", [
+    ("merge", "state", {"level": 3}, False),
+    ("merge", "profile", {"scale": ["low", "high"]}, False),
+    ("append", "profile.scale", "high", False),
+    ("append", "profile.scale", "peak", True),
+    ("remove", "profile.scale", "normal", False),
+    ("remove", "state.level", None, False),
+])
+def test_world_variable_gate_checks_result_of_collection_and_section_patches(op, path, value, accepted):
+    from tests.test_world_constraints import _runtime
+    from forwin.protocol.book_state import WorldNode
+
+    runtime = _runtime()
+    runtime.world.nodes_by_id["variable"] = WorldNode(
+        id="variable", project_id="p", node_type="world_variable",
+        profile={"label": "Supply", "scale": ["low", "normal", "high"]}, state={"level": 0})
+    runtime.world.states_by_node_id["variable"] = {"level": 2}
+    delta = GraphDelta(id="patch", project_id="p", chapter_number=4, source_type="manual", node_patches=[
+        NodePatch(node_id="variable", node_type="world_variable", op=op, field_path=path,
+                  old_value=2 if path == "state.level" else None, new_value=value)])
+    verdict = BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=4, graph_deltas=[delta]), base_chapter=3, runtime=runtime)
+    assert verdict.accepted is accepted, verdict.issues
+    assert runtime.world.states_by_node_id["variable"] == {"level": 2}
+
+
+@pytest.mark.parametrize("section,field,value", [
+    ("profile", "source_kind", "unknown"), ("profile", "visibility", "hidden"),
+    ("profile", "drift_tendency", "unknown"), ("state", "trend", "volatile"),
+    ("state", "last_drift_at", -1), ("state", "last_drift_at", 1.5),
+    ("state", "level", True), ("state", "level", 1.5),
+])
+def test_world_variable_schema_rejects_invalid_fields(section, field, value):
+    from forwin.book_state.schema import validate_world_node
+    from forwin.protocol.book_state import WorldNode
+
+    payload = {"profile": {"label": "Supply", "scale": ["low", "high"]}, "state": {"level": 0}}
+    payload[section][field] = value
+    report = validate_world_node(WorldNode(id="v", project_id="p", node_type="world_variable", **payload))
+    assert any(issue.code == "invalid_field_value" and issue.target.endswith(f":{section}.{field}")
+               for issue in report.errors)

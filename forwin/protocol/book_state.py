@@ -40,6 +40,7 @@ class WorldNodeType(_StrEnum):
     AGENDA = "agenda"
     INTENT = "intent"
     CLOCK = "clock"
+    WORLD_VARIABLE = "world_variable"
 
 
 class WorldEdgeFamily(_StrEnum):

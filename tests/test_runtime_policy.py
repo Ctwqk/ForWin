@@ -144,6 +144,8 @@ def test_stored_empty_writer_section_uses_profile_defaults(profile, expected_bud
 def test_world_and_models_defaults_per_profile(profile, actor_turns) -> None:
     policy = RuntimePolicy.for_profile(profile)
     assert policy.world.model_dump() == {
+        "drift_every_story_minutes": 0 if profile == "pulp" else 10080,
+        "max_drift_variables_per_tick": 3,
         "enabled": True,
         "max_actor_turns_per_tick": actor_turns,
         "actor_turn_batch_size": 1,
@@ -361,3 +363,23 @@ def test_band_payload_budget_loads_defaults_and_preserves_override(profile):
     stored["planning"]["band_payload_budget_chars"] = 0
     with pytest.raises(ValidationError):
         RuntimePolicy.model_validate(stored)
+
+
+@pytest.mark.parametrize("profile,every", [("standard", 10080), ("pulp", 0)])
+def test_world_policy_drift_defaults_and_merge(profile, every):
+    stored = RuntimePolicy.for_profile(profile).model_dump(mode="json")
+    stored["world"] = {"conflict_delegate": "human"}
+    original = json.dumps(stored)
+    loaded = RuntimePolicy.model_validate(stored)
+    assert loaded.world.drift_every_story_minutes == every
+    assert loaded.world.max_drift_variables_per_tick == 3
+    assert loaded.world.max_actor_turns_per_tick == (3 if profile == "pulp" else 6)
+    assert loaded.world.conflict_delegate == "human"
+    assert json.dumps(stored) == original
+    stored["world"].update(drift_every_story_minutes=17, max_drift_variables_per_tick=0)
+    custom = RuntimePolicy.model_validate(stored)
+    assert custom.world.drift_every_story_minutes == 17
+    assert custom.world.max_drift_variables_per_tick == 0
+    for field in ("drift_every_story_minutes", "max_drift_variables_per_tick"):
+        with pytest.raises(ValidationError):
+            WorldPolicy.model_validate({field: -1})

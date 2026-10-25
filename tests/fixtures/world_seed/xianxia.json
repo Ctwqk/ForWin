@@ -21,6 +21,20 @@
       ]
     },
     "world": {
+      "institution_profiles": [
+        {
+          "id": "institution-1",
+          "name": "山门戒备",
+          "scope_ref": {
+            "type": "node",
+            "id": "node-gate"
+          },
+          "applies_to": {
+            "type": "faction",
+            "id": "faction-pavilion"
+          }
+        }
+      ],
       "world_bible": {
         "overview": "灵气沿山脉流动，宗门依山势分层而居，山腹之下压着一条未死的魔脉。",
         "axioms": [
@@ -272,6 +286,30 @@
       ]
     },
     "world_seed": {
+      "world_variables": [
+        {
+          "id": "variable-1",
+          "label": "山门戒备",
+          "source_kind": "institution",
+          "source_profile_id": "institution-1",
+          "scale": [
+            "门禁宽松",
+            "巡山常备",
+            "封山严查"
+          ],
+          "level": 1,
+          "scope_refs": [
+            "node-gate",
+            "faction-pavilion"
+          ],
+          "holder_refs": [
+            "faction-pavilion"
+          ],
+          "visibility": "public",
+          "drift_tendency": "stable",
+          "summary": "山门戒备"
+        }
+      ],
       "calendar": {
         "epoch_label": "栖云纪",
         "opening_minute": 1614870,

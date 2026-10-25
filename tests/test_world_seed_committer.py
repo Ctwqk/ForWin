@@ -5,11 +5,14 @@ from copy import deepcopy
 
 import pytest
 from sqlalchemy import func, select, text
+from sqlalchemy.orm import Session
 
 from forwin.audit.events import DecisionEventInfo, DecisionEventType
 from forwin.book_state import BookStateProjection, BookStateRepository
 from forwin.book_state.lexicon import lexicon_from_payload
+from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.query import BookStateQuery
+from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
 from forwin.book_state.story_clock import calendar_from_payload
 from forwin.canon import CanonAdmissionService, CanonStaleVersion
 from forwin.genesis.handoff.commands import HandoffStageError
@@ -617,3 +620,84 @@ def test_commit_world_seed_rejects_invalid_seed_without_writes(pack) -> None:
         assert [issue.split(" ", 1)[0] for issue in raised.value.issues] == ["missing_actor"]
         counts = _row_counts(session, project_id)
         assert (counts["story_calendars"], counts["book_lexicons"], counts["graph_deltas"]) == (0, 0, 0)
+
+
+def _add_world_variable(pack):
+    pack["world"]["institution_profiles"] = [{"id": "institution-1"}]
+    pack["world_seed"]["world_variables"] = [{
+        "id": "variable-1", "label": "Enforcement", "source_kind": "institution",
+        "source_profile_id": "institution-1", "scale": ["low", "normal", "high"], "level": 1,
+        "scope_refs": ["node-1", "faction-1"], "holder_refs": ["cast-1"],
+        "visibility": "public", "drift_tendency": "stable", "summary": "Enforcement condition",
+    }]
+
+
+def test_build_world_variables_remaps_refs(pack, seed, story_engine):
+    _add_world_variable(pack)
+    world, _, _ = _build(seed, story_engine)
+    variable = _patches_by_type(world)["world_variable"][0]
+    assert variable.new_value["profile"]["scope_refs"] == [
+        "loc-db-1", seed_ref_id("project-1", "faction", "faction-1")]
+    assert variable.new_value["profile"]["holder_refs"] == [seed_ref_id("project-1", "character", "cast-1")]
+    assert variable.new_value["profile"]["summary"] == "Enforcement condition"
+    assert variable.new_value["state"] == {"level": 1, "trend": "stable", "last_drift_at": OPENING, "status": "active"}
+    seed["world_variables"][0]["holder_refs"] = ["unknown"]
+    with pytest.raises(WorldSeedCommitError, match="holder_refs"):
+        _build(seed, story_engine)
+
+
+@pytest.mark.parametrize("opening_minute", [0, 4440, 12345])
+def test_build_world_variable_state_reaches_runtime_projection(pack, seed, story_engine, opening_minute):
+    _add_world_variable(pack)
+    seed["calendar"]["opening_minute"] = opening_minute
+    world, _, _ = _build(seed, story_engine)
+    variable_id = seed_ref_id("project-1", "world_variable", "variable-1")
+    expected = {"level": 1, "trend": "stable", "last_drift_at": opening_minute, "status": "active"}
+    variable_patch = _patches_by_type(world)["world_variable"][0]
+    assert variable_patch.op == "create"
+    assert variable_patch.new_value["state"] == expected
+    assert world.story_time_start == world.story_time_end == opening_minute
+
+    runtime = BookStateRuntime(
+        project_id="project-1", as_of_chapter=0,
+        world=ObjectiveWorldGraph(), map_graph=MapGraph(),
+    )
+    # An unbound session keeps the real projection's in-memory delta path database-free.
+    with Session() as session:
+        BookStateProjection(session).apply_delta_to_runtime(
+            runtime, GraphDelta.model_validate_json(world.model_dump_json()),
+        )
+    assert runtime.world.get_state(variable_id) == expected
+    assert runtime.world.get_state(seed_ref_id("project-1", "clock", "clock-1")) == {
+        "due_at": opening_minute + 180, "status": "running",
+    }
+    assert runtime.world.get_state(seed_ref_id("project-1", "intent", "cast-1/intent-1")) == {
+        "status": "planned", "scheduled_at": opening_minute + 2880, "slip_count": 0,
+    }
+
+
+def test_seed_world_variables_validate_and_commit(pack):
+    _add_world_variable(pack)
+    Session = _session_factory()
+    with Session.begin() as session:
+        project_id, revision_id = _setup_project(session, pack)
+        for change in ({"scale": ["low"]}, {"scale": list("abcdefgh")}, {"level": 3}):
+            invalid = deepcopy(pack)
+            invalid["world_seed"]["world_variables"][0].update(change)
+            with pytest.raises(WorldSeedCommitError):
+                _commit(session, project_id, revision_id, invalid)
+        invalid = deepcopy(pack)
+        invalid["world_seed"]["world_variables"].append(dict(invalid["world_seed"]["world_variables"][0], id="second"))
+        with pytest.raises(WorldSeedCommitError, match="duplicate_world_variable_profile"):
+            _commit(session, project_id, revision_id, invalid)
+        summary = _commit(session, project_id, revision_id, pack)
+        assert summary.world_variable_count == 1
+    with Session() as session:
+        runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=0)
+        variable = runtime.world.nodes_by_id[seed_ref_id(project_id, "world_variable", "variable-1")]
+        assert variable.profile["scope_refs"] == [f"loc-db-1-{project_id}", seed_ref_id(project_id, "faction", "faction-1")]
+        assert variable.profile["holder_refs"] == [seed_ref_id(project_id, "character", "cast-1")]
+        assert runtime.world.get_state(variable.id) == {
+            "level": 1, "trend": "stable", "last_drift_at": OPENING, "status": "active",
+        }
+        assert BookStateQuery(session).current_story_minute(project_id, as_of_chapter=0) == OPENING

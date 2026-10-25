@@ -19,6 +19,7 @@ from forwin.book_state.schema import (
     RULE_HARDNESS,
 )
 from forwin.models.project import Project
+from forwin.writer.prompt_core.world_seed import WORLD_VARIABLE_OUTPUT_REQUIREMENTS, WORLD_PROFILE_SECTION_TITLE
 from forwin.protocol.book_state import MAP_SUBMAP_SCOPES, MapEdgeType, WORLD_EDGE_TYPES
 from forwin.genesis.helpers import (
     _book_arc_list,
@@ -80,6 +81,7 @@ def _world_seed_output_requirement() -> str:
         "reader_promises 每项为 {id, summary, promise_type, expected_payoff_window}；reveal_candidates 每项为 {fact_id, arc_number, note}。"
         "means_refs、secrecy_refs、target_refs、related_refs 只能引用行动者 ref 或 facts 的 id；travel_mode_ids 引用 lexicon.travel_modes 的 id；"
         "intents.agenda_id 引用同一行动者的 agenda id；clocks.owner_ref 为空或引用行动者 ref。"
+        + "".join(WORLD_VARIABLE_OUTPUT_REQUIREMENTS)
     )
 
 
@@ -180,6 +182,10 @@ def _build_stage_generation_messages(
             ("项目 genre", project.genre),
             ("WorldBible", world_bible),
             ("地图节点表", _map_node_table(map_atlas)),
+            (WORLD_PROFILE_SECTION_TITLE, {
+                "institution_profiles": world_root.get("institution_profiles", []),
+                "resource_economy_profiles": world_root.get("resource_economy_profiles", []),
+            }),
             ("StoryEngine", story_engine),
             ("卷列表", _book_arc_list(pack)),
             ("当前 WorldSeed", current_payload),

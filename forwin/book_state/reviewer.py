@@ -26,13 +26,14 @@ from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.protections import MILESTONE_KIND, DeltaBoundaryViolation, delta_boundary_violations
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
 from forwin.book_state.runtime import BookStateRuntime, require_runtime_as_of
-from forwin.book_state.schema import validate_graph_delta
+from forwin.book_state.schema import validate_graph_delta, validate_world_node
 from forwin.models.project import ChapterPlan
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
     GraphDelta,
     NodePatch,
     ObserverType,
+    WorldNode,
 )
 
 
@@ -102,7 +103,7 @@ class BookStateReviewGate:
             )
         else:
             require_runtime_as_of(runtime, changes.project_id, base_chapter)
-        issues: list[BookStateReviewIssue] = []
+        issues = _world_variable_issues(runtime, changes.graph_deltas)
         for delta in changes.graph_deltas:
             issues.extend(_canon_permission_issues(delta))
             issues.extend(_schema_issues(delta))
@@ -174,6 +175,48 @@ def _plan_constraint_issues(runtime: BookStateRuntime, delta: GraphDelta) -> lis
                 or any(not isinstance(value, str) or not value.strip() for value in required)):
             invalid(patch.target_ref, "invalid protection kind, expiry or required fields")
         nodes[ref] = node
+    return issues
+
+
+def _world_variable_issues(
+    runtime: BookStateRuntime, deltas: Iterable[GraphDelta],
+) -> list[BookStateReviewIssue]:
+    """Check the resulting variable state, including partial and combined patches."""
+    nodes: dict[str, dict[str, Any]] = {}
+    for delta in deltas:
+        for patch in delta.node_patches:
+            stored = runtime.world.nodes_by_id.get(patch.node_id)
+            if (patch.node_type != "world_variable" and patch.node_id not in nodes
+                    and (stored is None or stored.node_type != "world_variable")):
+                continue
+            if str(patch.op) == "create":
+                payload = patch.new_value if isinstance(patch.new_value, dict) else {}
+                nodes[patch.node_id] = {**deepcopy(payload), "id": patch.node_id, "node_type": "world_variable"}
+            else:
+                if patch.node_id not in nodes:
+                    nodes[patch.node_id] = stored.model_dump(mode="json") if stored is not None else {
+                        "id": patch.node_id, "node_type": "world_variable",
+                    }
+                    if stored is not None:
+                        nodes[patch.node_id]["state"] = deepcopy(
+                            runtime.world.states_by_node_id.get(stored.id, stored.state))
+                apply_path_patch(nodes[patch.node_id], patch.field_path, deepcopy(patch.new_value), op=str(patch.op))
+    issues: list[BookStateReviewIssue] = []
+    for ref, payload in nodes.items():
+        try:
+            node = WorldNode.model_validate(payload)
+        except ValueError as exc:
+            issues.append(BookStateReviewIssue(severity="error", code="invalid_field_value",
+                                               target_ref=f"node:{ref}", message=str(exc)))
+            continue
+        issues.extend(BookStateReviewIssue(severity=i.severity, code=i.code, target_ref=i.target, message=i.message)
+                      for i in validate_world_node(node).issues)
+        scale, level = node.profile.get("scale"), node.state.get("level")
+        if isinstance(scale, list) and type(level) is int and not 0 <= level < len(scale):
+            issues.append(BookStateReviewIssue(
+                severity="error", code="world_variable_level_out_of_range", target_ref=f"node:{ref}:state.level",
+                message="state.level must index the resulting profile.scale",
+            ))
     return issues
 
 

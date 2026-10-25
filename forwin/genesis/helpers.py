@@ -223,6 +223,12 @@ def _world_seed_validation_issues(pack: dict[str, Any]) -> list[WorldSeedIssue]:
         _pack_stage_payload(pack, "world_seed"),
         **_world_seed_references(pack),
         arc_numbers={arc["arc_number"] for arc in _book_arc_list(pack) if type(arc["arc_number"]) is int},
+        world_profiles={
+            str(profile["id"]): kind
+            for key, kind in (("institution_profiles", "institution"), ("resource_economy_profiles", "resource_economy"))
+            for profile in (_pack_stage_payload(pack, "world").get(key) or [])
+            if isinstance(profile, dict) and profile.get("id")
+        },
     )
 
 

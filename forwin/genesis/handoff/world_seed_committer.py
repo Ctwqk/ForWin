@@ -77,6 +77,7 @@ class WorldSeedCommitSummary:
     knowledge_count: int
     rule_count: int
     promise_count: int
+    world_variable_count: int
 
 
 def seed_ref_id(project_id: str, kind: str, ref: str) -> str:
@@ -239,6 +240,7 @@ def _seed_counts(seed: Mapping[str, Any]) -> dict[str, int]:
         "knowledge_count": len(seed["knowledge"]),
         "rule_count": len(seed["rules"]),
         "promise_count": len(seed["reader_promises"]),
+        "world_variable_count": len(seed["world_variables"]),
     }
 
 
@@ -403,6 +405,23 @@ class _SeedDeltaBuilder:
                     "scope": clock["scope"], "on_expire": clock["on_expire"],
                 },
                 state={"due_at": self._minutes_after_opening(clock["due_in"]), "status": "running"},
+            ))
+        for index, variable in enumerate(self.seed["world_variables"]):
+            path = f"world_variables[{index}]"
+            profile = {key: variable[key] for key in (
+                "label", "source_kind", "source_profile_id", "scale", "visibility", "drift_tendency", "summary",
+            )}
+            profile["scope_refs"] = [
+                self._actor(ref, f"{path}.scope_refs[{i}]") if ref in self.actor_ids
+                else self._location(ref, f"{path}.scope_refs[{i}]")
+                for i, ref in enumerate(variable["scope_refs"])
+            ]
+            profile["holder_refs"] = [self._actor(ref, f"{path}.holder_refs[{i}]")
+                                      for i, ref in enumerate(variable["holder_refs"])]
+            node_patches.append(self._node(
+                "world_variable", self._item_id(variable, path), name=variable["label"],
+                profile=profile, state={"level": variable["level"], "trend": "stable",
+                                        "last_drift_at": self.opening, "status": "active"},
             ))
         return {
             "node_patches": node_patches,

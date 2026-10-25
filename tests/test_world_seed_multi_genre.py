@@ -137,6 +137,7 @@ def seed_counts(seed: dict[str, Any]) -> dict[str, int]:
         "knowledge_count": len(seed["knowledge"]),
         "rule_count": len(seed["rules"]),
         "promise_count": len(seed["reader_promises"]),
+        "world_variable_count": len(seed["world_variables"]),
     }
 
 
@@ -152,6 +153,9 @@ def test_fixture_world_seed_is_valid(genre: str) -> None:
         story_engine=pack["world"]["story_engine"],
         map_atlas=pack["world"]["map_atlas"],
         arc_numbers=arc_numbers(pack),
+        world_profiles={item["id"]: kind
+                        for key, kind in (("institution_profiles", "institution"), ("resource_economy_profiles", "resource_economy"))
+                        for item in pack["world"].get(key, [])},
     )
 
     assert [issue for issue in issues if issue.severity == "error"] == []
@@ -165,6 +169,7 @@ def test_fixture_covers_the_required_seed_shapes(genre: str) -> None:
     facts = {fact["id"]: fact for fact in seed["facts"]}
     major_actors = [actor for actor in seed["actors"] if actor["actor_tier"] == "major"]
 
+    assert seed["world_variables"]
     assert len(seed["actors"]) >= 3 and "faction" in kinds.values()
     assert major_actors and all(actor["agendas"] for actor in major_actors)
     assert sum(len(actor["intents"]) for actor in seed["actors"]) >= 2
@@ -250,6 +255,7 @@ def test_fixture_flows_from_genesis_to_chapter_zero_book_state(genre: str, sessi
         runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=0)
         node_types = Counter(str(node.node_type) for node in runtime.world.nodes_by_id.values())
         counts = seed_counts(seed)
+        assert node_types["world_variable"] == counts["world_variable_count"]
 
         # Every seed section arrives in chapter-0 BookState with the fixture's own cardinality.
         assert sum(node_types[kind] for kind in ACTOR_NODE_TYPES) == counts["actor_count"]

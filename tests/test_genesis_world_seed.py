@@ -434,7 +434,7 @@ def test_normalize_coerces_shapes_without_judging_refs(seed, story_engine, map_a
     result = normalize_world_seed(seed, story_engine=story_engine, map_atlas=map_atlas)
     assert tuple(result) == WORLD_SEED_KEYS == (
         "calendar", "lexicon", "actors", "relations", "facts", "knowledge",
-        "rules", "clocks", "reader_promises", "reveal_candidates",
+        "rules", "clocks", "reader_promises", "reveal_candidates", "world_variables",
     )
     assert result["rules"] == []
     assert len(result["actors"]) == 3 and len(result["relations"]) == 1
@@ -624,3 +624,78 @@ def test_seed_review_panel_names_refs_and_shows_invalid_checkable(seed, story_en
     assert "include_children=true" in lines[0]
     assert "invalid_checkable" in lines[1] and "unknown_rule_predicate" in lines[1]
     assert "proposition" not in result.stdout
+
+
+@pytest.fixture
+def variable_seed(seed):
+    seed["world_variables"] = [{
+        "id": "variable-1", "label": "Supply", "source_kind": "resource_economy",
+        "source_profile_id": "economy-1", "scale": ["low", "normal", "high"], "level": 1,
+        "scope_refs": ["node-1", "faction-1"], "holder_refs": ["cast-1"],
+        "visibility": "public", "drift_tendency": "volatile", "summary": "Supply condition",
+    }]
+    return seed
+
+
+def test_seed_world_variables_normalize_and_validate(variable_seed, story_engine, map_atlas):
+    normalized = normalize_world_seed(variable_seed, story_engine=story_engine, map_atlas=map_atlas)
+    assert normalized["world_variables"] == variable_seed["world_variables"]
+    assert validate_world_seed(normalized, story_engine=story_engine, map_atlas=map_atlas,
+                               arc_numbers={1}, world_profiles={"economy-1": "resource_economy"}) == []
+    assert fallback_world_seed(story_engine)["world_variables"] == []
+
+
+@pytest.mark.parametrize("change,code", [
+    ({"scale": ["low"]}, "invalid_world_variable_scale"),
+    ({"scale": list("abcdefgh")}, "invalid_world_variable_scale"),
+    ({"scale": ["low", "low"]}, "invalid_world_variable_scale"),
+    ({"scale": ["low", " "]}, "invalid_world_variable_scale"),
+    ({"level": 3}, "invalid_world_variable_level"),
+    ({"level": -1}, "invalid_world_variable_level"),
+    ({"level": True}, "invalid_world_variable_level"),
+    ({"level": 1.5}, "invalid_world_variable_level"),
+    ({"source_profile_id": "missing"}, "unknown_world_profile"),
+    ({"source_kind": "institution"}, "invalid_source_kind"),
+    ({"scope_refs": ["fact-1"]}, "unknown_scope_ref"),
+    ({"holder_refs": ["node-1"]}, "unknown_holder_ref"),
+    ({"visibility": "hidden"}, "invalid_visibility"),
+    ({"drift_tendency": "unknown"}, "invalid_drift_tendency"),
+])
+def test_seed_world_variables_reject_invalid(variable_seed, story_engine, map_atlas, change, code):
+    variable_seed["world_variables"][0].update(change)
+    normalized = normalize_world_seed(variable_seed, story_engine=story_engine, map_atlas=map_atlas)
+    for seed in (variable_seed, normalized):
+        issues = validate_world_seed(seed, story_engine=story_engine, map_atlas=map_atlas,
+                                     arc_numbers={1}, world_profiles={"economy-1": "resource_economy"})
+        assert code in [issue.code for issue in issues if issue.severity == "error"]
+
+
+def test_seed_world_variables_unique_profile_and_missing_warning(variable_seed, story_engine, map_atlas):
+    from forwin.genesis.helpers import _world_seed_validation_issues
+
+    pack = {"world": {"story_engine": story_engine, "map_atlas": map_atlas,
+                       "resource_economy_profiles": [{"id": "economy-1"}],
+                       "institution_profiles": [{"id": "institution-1"}]},
+            "world_seed": variable_seed, "book_arc_blueprint": {"arcs": [{"arc_number": 1}]}}
+    assert [(i.code, i.severity) for i in _world_seed_validation_issues(pack)] == [
+        ("missing_world_variable", "warning")]
+    variable_seed["world_variables"].append(dict(variable_seed["world_variables"][0], id="variable-2"))
+    assert "duplicate_world_variable_profile" in [i.code for i in _world_seed_validation_issues(pack)]
+    variable_seed["world_variables"][1]["id"] = "variable-1"
+    assert "duplicate_ref" in [i.code for i in _world_seed_validation_issues(pack)]
+
+
+def test_world_variable_prompt_receives_profiles(variable_seed, story_engine, map_atlas):
+    from forwin.genesis.messages import _build_stage_generation_messages
+    from forwin.models.project import Project
+
+    pack = {"world": {"story_engine": story_engine, "map_atlas": map_atlas,
+                       "institution_profiles": [{"id": "institution-input"}],
+                       "resource_economy_profiles": [{"id": "economy-input"}]},
+            "world_seed": variable_seed}
+    content = _build_stage_generation_messages(
+        None, project=Project(id="p", title="t", premise="p", genre="g"),
+        pack=pack, stage_key="world_seed", fallback={})[-1]["content"]
+    assert "institution-input" in content and "economy-input" in content
+    for field in ("world_variables", "source_profile_id", "scale", "level", "scope_refs", "holder_refs", "drift_tendency"):
+        assert field in content

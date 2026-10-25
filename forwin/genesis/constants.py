@@ -145,6 +145,7 @@ _GENESIS_STAGE_HARD_RULES = {
     ],
     "world_seed": [
         "checkable 只能使用输出要求所列的五种 kind；不能用这些 kind 表达的规则 checkable 填 null。",
+        "每个 institution / resource_economy profile 至多一个 world_variable；scale 是 2–7 个按本书题材自拟的有序档位；level 是当前档位下标；scope_refs 只引用地图节点或行动者，holder_refs 只引用行动者。",
         "actors 必须为 story_engine 中每个 core_cast、opposition、factions 条目各给出一项，ref 等于该实体 id；不得新增、遗漏或重复实体，所有引用只使用上游已有的 id。",
         "major 行动者必须有 1–3 个 agenda；角色为 major 时必须给出 location_ref，为 minor 时也应给出；location_ref 只能取地图节点表中的 id。",
         "所有时长（intents.scheduled_in、clocks.due_in）都写成 {amount, unit}：amount 为非负数，unit 只能是本书 calendar.units 或 lexicon.time_unit_aliases 中的名称；单位名称按本书题材自拟。",

@@ -21,6 +21,20 @@
       ]
     },
     "world": {
+      "resource_economy_profiles": [
+        {
+          "id": "resource_economy-1",
+          "name": "舰队补给",
+          "scope_ref": {
+            "type": "node",
+            "id": "node-dock"
+          },
+          "applies_to": {
+            "type": "faction",
+            "id": "faction-fleet"
+          }
+        }
+      ],
       "world_bible": {
         "overview": "人类沿跃迁航线殖民了边境星区，航线之间只有信号延迟与舰队法令。",
         "axioms": [
@@ -272,6 +286,30 @@
       ]
     },
     "world_seed": {
+      "world_variables": [
+        {
+          "id": "variable-1",
+          "label": "舰队补给",
+          "source_kind": "resource_economy",
+          "source_profile_id": "resource_economy-1",
+          "scale": [
+            "储备不足",
+            "配给平衡",
+            "仓储充盈"
+          ],
+          "level": 1,
+          "scope_refs": [
+            "node-dock",
+            "faction-fleet"
+          ],
+          "holder_refs": [
+            "faction-fleet"
+          ],
+          "visibility": "public",
+          "drift_tendency": "stable",
+          "summary": "舰队补给"
+        }
+      ],
       "calendar": {
         "epoch_label": "联邦星历",
         "opening_minute": 45888900,

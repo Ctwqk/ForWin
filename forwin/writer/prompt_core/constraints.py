@@ -187,18 +187,6 @@ def _invariant_constraint_sections(items: list[dict]) -> list[ConstraintSection]
         current_value = item.get("current_value")
         if not invariant_key:
             continue
-        if kind == "deadline":
-            lines.append(
-                f"    · {label}：当前截止状态为 {_compact_value(current_value)}；"
-                "本章不得把截止条件静默延后、取消或改名；如要改变，必须写出明确桥接事件、代价或授权来源。"
-            )
-            continue
-        if kind == "state_transition":
-            lines.append(
-                f"    · {label}：当前状态为 {_compact_value(current_value)}；"
-                "本章必须承接该状态，状态改变需要明确桥接事件。"
-            )
-            continue
         if kind == "active_rule":
             definition = _compact_value(current_value)
             lines.append(
@@ -219,9 +207,6 @@ def _invariant_constraint_sections(items: list[dict]) -> list[ConstraintSection]
                 "不得提前完成、重排、否定或改写锚点结果。"
             )
             continue
-        lines.append(
-            f"    · {label}：当前强状态为 {_compact_value(current_value)}；本章必须承接，改写需要明确桥接事件。"
-        )
     return [ConstraintSection(key="invariants", priority=18, must_inject=True, text="\n".join(lines))]
 
 

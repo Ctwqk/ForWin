@@ -45,6 +45,7 @@ from forwin.planning.feasibility import (
 )
 from forwin.planning.beat_sheet.types import READER_OBSERVER
 from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.repository import BookStateRepository
 from forwin.models.project import Project
 from sqlalchemy.orm import Session
 from forwin.state.updater import StateUpdater
@@ -930,6 +931,19 @@ class AuditControlStage:
                         str(item.get("issue_type") or item.get("rule_name") or "")
                         for item in review_issues
                         if isinstance(item, dict)
+                    ]
+                    review_meta["thread_beat_types"] = [
+                        str(beat.get("beat_type") or "")
+                        for delta in BookStateRepository(session).list_graph_deltas(
+                            project_id,
+                            after_chapter=int(plan.chapter_number or 0) - 1,
+                            through_chapter=int(plan.chapter_number or 0),
+                        )
+                        if plan.status == "accepted"
+                        and delta.source_type == "chapter_extraction"
+                        and delta.allowed_for_canon
+                        for beat in (delta.metadata.get("thread_beats") or [])
+                        if isinstance(beat, dict)
                     ]
                     review_metas.append(review_meta)
         if any(plan.status != "accepted" for plan in band_plans):

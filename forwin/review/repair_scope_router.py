@@ -34,7 +34,6 @@ SIGNAL_KIND_TO_SCOPE: dict[str, RepairScopeKind] = {
     SignalKind.faction_relation_reversal.value: RepairScopeKind.CHAPTER_PLAN,
     SignalKind.protagonist_resource_debt_mismatch.value: RepairScopeKind.CHAPTER_PLAN,
     SignalKind.form_countdown_inconsistency.value: RepairScopeKind.CHAPTER_PLAN,
-    SignalKind.form_invariant_drift.value: RepairScopeKind.CHAPTER_PLAN,
     SignalKind.countdown_non_monotonic.value: RepairScopeKind.ACTIVE_RULES,
     SignalKind.active_rule_missing.value: RepairScopeKind.ACTIVE_RULES,
     SignalKind.form_open_signal_persisting.value: RepairScopeKind.DRAFT,

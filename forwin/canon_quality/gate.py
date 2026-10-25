@@ -16,7 +16,6 @@ _FATAL_ONLY_SIGNAL_TYPES = {
     "countdown_non_monotonic",
     "terminal_state_active_conflict",
     "form_countdown_inconsistency",
-    "form_invariant_drift",
     "form_final_chapter_unresolved",
     "appellation_referent_conflict",
     "internal_key_leakage_v2",

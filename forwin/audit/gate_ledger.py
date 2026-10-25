@@ -589,15 +589,8 @@ class GateLedgerService:
                     if issue_group:
                         issue_group_counter[issue_group] += 1
                     warn_allowed_counter[code] += 1
-                    if code in {
-                        "future_constraint",
-                        "future_resource_preservation",
-                        "next_band_compatibility",
-                    }:
+                    if code == "future_constraint":
                         constraint_counter[code] += 1
-                    category = str(issue.get("category") or "").strip()
-                    if category:
-                        warn_allowed_counter[category] += 1
                 recent_examples.append(
                     {
                         **self._example(row),
@@ -1005,26 +998,6 @@ class GateLedgerService:
                     "count": override_counter["band_checkpoint_override"],
                 }
             )
-        future_resource_keys = {
-            "character_locked_out",
-            "thread_closed_too_early",
-            "relationship_closed_too_early",
-            "secret_over_explained",
-            "growth_arc_completed_too_early",
-        }
-        if warn_allowed_counter.get("future_resource_preservation", 0) or any(
-            key in warn_allowed_counter for key in future_resource_keys
-        ):
-            recommendations.append(
-                {
-                    "type": "review_future_preservation_warns",
-                    "target": "future_resource_preservation",
-                    "reason": "未来资源保留 warn 多次被人工放行，建议复查风险分类和证据阈值。",
-                    "count": warn_allowed_counter.get(
-                        "future_resource_preservation", 0
-                    ),
-                }
-            )
         if forced_accept_frequency:
             recommendations.append(
                 {
@@ -1048,7 +1021,7 @@ class GateLedgerService:
             (
                 "director_imbalance",
                 "review_director_imbalance_rules",
-                "导演失衡类问题较多，建议复查 task contract、payoff 和 future preservation 口径。",
+                "导演失衡类问题较多，建议复查 plan goals 和 payoff 口径。",
             ),
             (
                 "fact_conflict",

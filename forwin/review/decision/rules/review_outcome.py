@@ -21,7 +21,6 @@ _CHAPTER_DEFER_TYPES = {
     "transition_bridge_needed",
     "foreshadowing_payoff",
     "form_countdown_inconsistency",
-    "form_invariant_drift",
 }
 _BAND_DEFER_TYPES = {
     "reader_promise_payoff",

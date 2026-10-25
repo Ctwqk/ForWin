@@ -1518,7 +1518,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     summary="band checkpoint 需要人工处理。",
                     issues=[
                         BandCheckpointIssueInfo(
-                            code="next_band_compatibility",
+                            code="band_not_fully_accepted",
                             severity="warning",
                             description="下一 band 前提存在风险。",
                         )
@@ -1537,7 +1537,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(fetched.id, checkpoint_id)
         self.assertEqual(fetched.status, "warn")
-        self.assertEqual(fetched.issues[0]["code"], "next_band_compatibility")
+        self.assertEqual(fetched.issues[0]["code"], "band_not_fully_accepted")
 
         approved = self._load_model(
             BandCheckpointView,

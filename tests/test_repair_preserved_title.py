@@ -109,8 +109,8 @@ def _run_title_repair(
                 verdict="fail",
                 issues=[
                     ContinuityIssue(
-                        rule_name="form_invariant_drift",
-                        issue_type="form_invariant_drift",
+                        rule_name="form_countdown_inconsistency",
+                        issue_type="form_countdown_inconsistency",
                         severity="error",
                         description="交割时间必须是辰正二刻。",
                         evidence_refs=["draft:body_head"],

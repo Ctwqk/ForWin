@@ -103,25 +103,6 @@ def test_engine_routes_form_countdown_inconsistency_to_chapter_plan_patch() -> N
     assert decision.sub_action["blocking_signal_ids"] == ["sig-countdown"]
 
 
-def test_engine_routes_form_invariant_drift_to_chapter_plan_patch() -> None:
-    signal = CanonQualitySignal(
-        signal_id="sig-invariant",
-        project_id="project-1",
-        chapter_number=10,
-        signal_type="form_invariant_drift",
-        severity="error",
-        target_scope="chapter",
-        description="strong state contradicted prior canon",
-    )
-
-    decision = _decision(_input(review=ReviewVerdict(verdict="warn"), signals=[signal]))
-
-    assert decision.outcome == "chapter_patch"
-    assert decision.sub_action["review_action"] == "defer_with_chapter_plan_patch"
-    assert decision.sub_action["minimum_scope"] == "chapter_plan"
-    assert decision.sub_action["blocking_signal_ids"] == ["sig-invariant"]
-
-
 def test_engine_routes_identity_failure_to_arc_patch() -> None:
     decision = _decision(
         _input(

@@ -6,7 +6,6 @@ from forwin.planning.checkpoints import IssueGroup
 _FACT_CONFLICT_HINTS = {
     "continuity",
     "future_constraint",
-    "next_band_compatibility",
     "timeline",
     "state",
     "state_conflict",
@@ -21,8 +20,6 @@ _FACT_CONFLICT_HINTS = {
 _DIRECTOR_IMBALANCE_HINTS = {
     "director_imbalance",
     "plan_task_fulfillment",
-    "band_task_completion",
-    "future_resource_preservation",
     "payoff",
     "pacing",
     "experience",
@@ -53,9 +50,21 @@ _OPERATOR_ACTION_HINTS = {
 }
 
 
+_PLAN_FEASIBILITY_GROUPS: dict[str, IssueGroup] = {
+    "onstage_unavailable": "fact_conflict",
+    "location_unreachable": "fact_conflict",
+    "reveal_too_early": "fact_conflict",
+    "milestone_uncovered": "director_imbalance",
+}
+
+
 def issue_group_for_issue(
     *, issue_type: str = "", rule_name: str = "", code: str = ""
 ) -> IssueGroup:
+    for part in (issue_type, rule_name, code):
+        group = _PLAN_FEASIBILITY_GROUPS.get(str(part or "").strip().lower())
+        if group:
+            return group
     text = " ".join(str(part or "") for part in (issue_type, rule_name, code)).lower()
     if not text.strip():
         return ""

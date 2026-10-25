@@ -14,9 +14,7 @@ _HARD_ISSUE_TYPES = {
     "entity_admission_plan_conflict",
     "entity_admission_plan_invalid",
     "future_constraint",
-    "future_resource_preservation",
     "intra_band_consistency",
-    "next_band_compatibility",
     "world_consistency",
 }
 _SOFT_ISSUE_TYPES = {

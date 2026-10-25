@@ -9,9 +9,6 @@ from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.planning.band_plan_patcher import BandPlanPatcher
-from forwin.planning.future_plan_audit.ledger_state_drift_pre_audit import (
-    select_ledger_state_drift_targets,
-)
 from forwin.planning.future_plan_audit.obligation_pre_audit import (
     select_urgent_obligation_targets,
 )
@@ -39,18 +36,6 @@ class FuturePlanObligationMixin:
         include_current: bool,
     ) -> list[tuple[FuturePlanAuditIssue, NarrativePlanPatch]]:
         result: list[tuple[FuturePlanAuditIssue, NarrativePlanPatch]] = []
-        open_signals = _open_signal_constraints(canon_quality_context)
-        for candidate in select_ledger_state_drift_targets(open_signals):
-            plan = _first_eligible_plan(plans, current_chapter=current_chapter, include_current=include_current)
-            if plan is None:
-                continue
-            issue, patch = self._ledger_state_drift_patch(
-                project_id=project_id,
-                current_chapter=current_chapter,
-                plan=plan,
-                candidate=candidate,
-            )
-            result.append((issue, patch))
         for candidate in select_urgent_obligation_targets(
             obligations=obligations,
             plans=plans,
@@ -87,92 +72,6 @@ class FuturePlanObligationMixin:
             )
             result.append((issue, patch))
         return result
-
-    def _ledger_state_drift_patch(
-        self,
-        *,
-        project_id: str,
-        current_chapter: int,
-        plan: ChapterPlan,
-        candidate: Any,
-    ) -> tuple[FuturePlanAuditIssue, NarrativePlanPatch]:
-        chapter_number = int(plan.chapter_number or 0)
-        task = str(candidate.task or "").strip()
-        suppression_key = str(candidate.suppression_key or "").strip()
-        source_signal_id = str(candidate.source_signal_id or "").strip()
-        metadata = {
-            "patch_kind": "ledger_state_drift",
-            "invariant_key": candidate.invariant_key,
-            "invariant_kind": candidate.kind,
-            "subject_key": candidate.subject_key,
-            "current_chapter": current_chapter,
-            "suppression_key": suppression_key,
-            "source_signal_id": source_signal_id,
-            "source_mode": str(candidate.source_mode or "chapter_review_form"),
-            "plan_patchable": True,
-            "expected": candidate.expected,
-            "observed": candidate.observed,
-            "allowed_bridges": candidate.allowed_bridges,
-        }
-        issue = FuturePlanAuditIssue(
-            issue_type="ledger_state_drift_pre_write_required",
-            severity="error",
-            target_chapter=chapter_number,
-            target_plan_id=str(plan.id or ""),
-            description=task,
-            evidence_refs=[f"signal:{source_signal_id}", f"chapter_plan:{chapter_number}"] if source_signal_id else [
-                f"chapter_plan:{chapter_number}"
-            ],
-            patch_type="ledger_state_drift_pre_write",
-            metadata=metadata,
-        )
-        patch = NarrativePlanPatch(
-            id=new_id(),
-            project_id=project_id,
-            patch_type="ledger_state_drift_pre_write",
-            target_scope="chapter",
-            target_plan_id=str(plan.id or ""),
-            target_arc_id=str(plan.arc_plan_id or ""),
-            affected_chapters=[chapter_number],
-            source_signal_ids=[source_signal_id] if source_signal_id else [],
-            old_contract=_chapter_plan_contract(plan),
-            new_contract={
-                "ledger_state_drift_task": task,
-                "suppression_key": suppression_key,
-                "invariant_key": candidate.invariant_key,
-                "invariant_kind": candidate.kind,
-                "expected": candidate.expected,
-                "observed": candidate.observed,
-            },
-            diff_summary=task,
-            must_preserve=[str(plan.title or ""), str(plan.one_line or "")],
-            must_not_change=["drop ledger state drift handling without explicit evidence"],
-            writer_context_injections=[
-                {
-                    "type": "ledger_state_drift_resolution",
-                    "instruction": task,
-                    "suppression_key": suppression_key,
-                    "invariant_key": candidate.invariant_key,
-                    "invariant_kind": candidate.kind,
-                    "expected": candidate.expected,
-                    "observed": candidate.observed,
-                    "source_signal_id": source_signal_id,
-                }
-            ],
-            reviewer_context_injections=[
-                {
-                    "type": "ledger_state_drift_resolution",
-                    "payoff_test": task,
-                    "source_signal_id": source_signal_id,
-                    "invariant_key": candidate.invariant_key,
-                }
-            ],
-            expected_resolution_tests=[task],
-            validation_status="pending",
-            metadata=metadata,
-        )
-        return issue, patch
-
 
     def _must_resolve_obligation_patch(
         self,
@@ -442,21 +341,6 @@ class FuturePlanObligationMixin:
 
 
 __all__ = ["FuturePlanObligationMixin"]
-
-
-def _first_eligible_plan(
-    plans: list[ChapterPlan],
-    *,
-    current_chapter: int,
-    include_current: bool,
-) -> ChapterPlan | None:
-    eligible = [
-        plan
-        for plan in plans
-        if (include_current or int(plan.chapter_number or 0) > int(current_chapter or 0))
-        and str(plan.status or "") != "accepted"
-    ]
-    return min(eligible, key=lambda plan: int(plan.chapter_number or 0), default=None)
 
 
 def _source_metadata(raw: Any) -> dict[str, Any]:

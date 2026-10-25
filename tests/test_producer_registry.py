@@ -13,7 +13,6 @@ SIGNAL_PRODUCERS: dict[str, str] = {
     "countdown_non_monotonic": "forwin.canon_quality.active_rule_store",
     "terminal_state_active_conflict": "forwin.canon_quality.chapter_review_form.canon_projector",
     "form_countdown_inconsistency": "forwin.canon_quality.chapter_review_form.canon_projector",
-    "form_invariant_drift": "forwin.canon_quality.chapter_review_form.canon_projector",
     "form_final_chapter_unresolved": "forwin.canon_quality.chapter_review_form.canon_projector",
     "appellation_referent_conflict": "forwin.canon_quality.readability",
     "internal_key_leakage_v2": "forwin.canon_quality.readability",

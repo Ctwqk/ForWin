@@ -68,7 +68,6 @@ ISSUE_TO_SCOPE: dict[str, IssueScope] = {
     "countdown_state_drift": "active_rules",
     "countdown_non_monotonic": "active_rules",
     "form_countdown_inconsistency": "chapter_plan",
-    "form_invariant_drift": "chapter_plan",
     "active_rule_missing": "active_rules",
     "form_schema_invalid": "operator",
     "form_llm_unavailable": "operator",

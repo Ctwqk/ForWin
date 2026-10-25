@@ -271,7 +271,7 @@ def test_band_checkpoint_gate_outcome_preserves_issue_identity() -> None:
         status="fail",
         issues=[
             BandCheckpointIssueInfo(
-                code="next_band_compatibility",
+                code="band_not_fully_accepted",
                 severity="error",
                 issue_group="fact_conflict",
                 detail="plan:13",
@@ -284,7 +284,7 @@ def test_band_checkpoint_gate_outcome_preserves_issue_identity() -> None:
     assert outcome.fired is True
     assert outcome.decision == "block"
     assert outcome.blocked is True
-    assert outcome.issue_keys == ["next_band_compatibility"]
+    assert outcome.issue_keys == ["band_not_fully_accepted"]
     assert outcome.issue_groups == ["fact_conflict"]
     assert outcome.evidence_refs == ["plan:13"]
 

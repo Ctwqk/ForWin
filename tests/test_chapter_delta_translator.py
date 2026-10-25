@@ -653,6 +653,10 @@ def test_events_threads_and_intents_translate() -> None:
         {"intent_id": intent, "effect": "advanced", "evidence": "e4"},
         {"intent_id": intent, "effect": "fulfilled", "evidence": "e5"},
     ]
+    assert delta.metadata["thread_beats"] == [
+        {"thread_id": thread, "beat_type": "setup"},
+        {"thread_id": thread, "beat_type": "advance"},
+    ]
     assert delta.metadata["plan_fulfillment"] == [{"target_id": "goal:1", "status": "missing", "evidence": ""}]
     _commit(Session, world, 1, result)
 
@@ -660,6 +664,7 @@ def test_events_threads_and_intents_translate() -> None:
         {"thread_ref": thread, "beat_type": "resolution", "evidence": "e6"},
     ]})
     append, status = resolved.delta.narrative_patches
+    assert resolved.delta.metadata["thread_beats"] == [{"thread_id": thread, "beat_type": "resolution"}]
     assert (str(append.op), append.field_path, len(append.old_value)) == ("append", "payload.beats", 2)
     assert (str(status.op), status.field_path, status.old_value, status.new_value) == ("set", "status", "active", "resolved")
     _commit(Session, world, 2, resolved)
@@ -990,6 +995,32 @@ def test_location_entity_change_is_skipped_when_the_entity_has_a_movement() -> N
         (world.loc(1), world.loc(2), "e2"),
     ]
     engine.dispose()
+
+
+def test_thread_beats_metadata_records_resolved_ids_without_database():
+    from forwin.book_state.extraction.translator import _DeltaBuilder
+    from forwin.book_state.lexicon import BookLexicon
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+
+    runtime = BookStateRuntime(
+        project_id="p", as_of_chapter=0, world=ObjectiveWorldGraph(), map_graph=MapGraph(),
+    )
+    builder = _DeltaBuilder(
+        project_id="p", chapter_number=1, runtime=runtime, calendar=None,
+        lexicon=BookLexicon(), start=0,
+        admission_plan=EntityAdmissionPlan(project_id="p", chapter_number=1, candidate_fingerprint="f"),
+    )
+    result = builder.build(_extraction(1, {"thread_beats": [
+        {"new_thread_title": "missing parcel", "beat_type": beat_type, "evidence": "evidence"}
+        for beat_type in ("setup", "advance", "resolution")
+    ]}), chapter_summary="", review_verdict_id="")
+    assert result.delta is not None
+    thread_id = result.delta.narrative_patches[0].target_ref.removeprefix("plot_thread:")
+    assert result.delta.metadata["thread_beats"] == [
+        {"thread_id": thread_id, "beat_type": beat_type}
+        for beat_type in ("setup", "advance", "resolution")
+    ]
 
 
 def test_reused_runtime_must_match_project_and_as_of_chapter():

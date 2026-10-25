@@ -26,7 +26,7 @@ def test_bookstate_query_interface_projects_active_rules_to_invariants() -> None
                     status="active",
                     payload={
                     "invariant": {
-                        "kind": "deadline",
+                        "kind": "active_rule",
                         "subject_key": "city_renovation",
                         "current_value": {"deadline_chapter": 8},
                         "constraints": {"cannot_extend_without_bridge": True},
@@ -46,7 +46,7 @@ def test_bookstate_query_interface_projects_active_rules_to_invariants() -> None
     assert "countdowns" not in snapshot.model_dump()
     assert not hasattr(query, "get_current_countdown_values")
     invariant = invariants["city_renovation_deadline"]
-    assert invariant.kind == "deadline"
+    assert invariant.kind == "active_rule"
     assert invariant.subject_key == "city_renovation"
     assert invariant.current_value == {"deadline_chapter": 8}
     assert invariant.constraints["cannot_extend_without_bridge"] is True

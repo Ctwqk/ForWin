@@ -23,6 +23,27 @@ from forwin.http.routes import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_dead_review_signals_and_drift_module_are_removed() -> None:
+    import forwin.planning.checkpoints as checkpoints
+    from typing import get_args
+    from forwin.canon_quality.invariants import InvariantKind
+
+    forbidden = (
+        "band_task_completion", "future_resource_preservation", "next_band_compatibility",
+        "OverClosureRiskCategory", "future_resource_keys", "form_invariant_drift",
+        "InvariantDriftTarget", "ledger_state_drift",
+    )
+    offenders = [
+        (path.relative_to(ROOT).as_posix(), token)
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+        for token in forbidden if token in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+    assert not (ROOT / "forwin/planning/future_plan_audit/ledger_state_drift_pre_audit.py").exists()
+    assert "category" not in checkpoints.BandCheckpointIssueInfo.model_fields
+    assert not {"deadline", "state_transition"} & set(get_args(InvariantKind))
+
+
 def test_task_contract_storage_and_routes_are_gone() -> None:
     from fastapi.testclient import TestClient
     from forwin.http import create_app
@@ -1121,7 +1142,6 @@ def test_future_plan_pre_audits_are_owner_local() -> None:
 
     owner = ROOT / "forwin/planning/future_plan_audit"
     for module_name in (
-        "ledger_state_drift_pre_audit.py",
         "obligation_pre_audit.py",
         "signal_pre_audit.py",
     ):

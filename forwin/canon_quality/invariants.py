@@ -6,9 +6,7 @@ from pydantic import BaseModel, Field
 
 InvariantKind = Literal[
     "monotonic_numeric",
-    "deadline",
     "terminal_state",
-    "state_transition",
     "set_count",
     "active_rule",
     "custom",
@@ -45,21 +43,6 @@ class CanonInvariant(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
-class InvariantDriftTarget(BaseModel):
-    patch_kind: str = "ledger_state_drift"
-    suppression_key: str = ""
-    invariant_key: str
-    kind: InvariantKind = "custom"
-    subject_key: str = ""
-    label: str = ""
-    task: str = ""
-    expected: dict[str, Any] = Field(default_factory=dict)
-    observed: dict[str, Any] = Field(default_factory=dict)
-    allowed_bridges: list[str] = Field(default_factory=list)
-    source_signal_id: str = ""
-    source_mode: str = "chapter_review_form"
-
-
 def invariant_from_active_rule(rule: Any) -> CanonInvariant:
     payload = dict(getattr(rule, "payload", {}) or {})
     raw_invariant = payload.get("invariant") if isinstance(payload, dict) else {}
@@ -90,9 +73,7 @@ def _normalize_kind(value: Any) -> InvariantKind:
     normalized = str(value or "").strip()
     allowed = {
         "monotonic_numeric",
-        "deadline",
         "terminal_state",
-        "state_transition",
         "set_count",
         "active_rule",
         "custom",
@@ -115,7 +96,6 @@ def _normalize_status(value: Any) -> InvariantStatus:
 
 __all__ = [
     "CanonInvariant",
-    "InvariantDriftTarget",
     "InvariantKind",
     "InvariantStatus",
     "invariant_from_active_rule",

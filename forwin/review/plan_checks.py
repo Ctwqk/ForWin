@@ -180,6 +180,7 @@ def evaluate_director_imbalance(
     }
     has_experience_evidence = any(
         bool(meta.get("delivered_reward_tags"))
+        or bool(meta.get("thread_beat_types"))
         or bool(
             experience_issue_types
             & {str(item) for item in (meta.get("issue_types") or [])}
@@ -212,8 +213,8 @@ def evaluate_director_imbalance(
             for item in (meta.get("delivered_reward_tags") or [])
             if str(item).strip()
         }
-        issue_types = {
-            str(item) for item in (meta.get("issue_types") or []) if str(item).strip()
+        thread_beat_types = {
+            str(item) for item in (meta.get("thread_beat_types") or []) if str(item).strip()
         }
         if delivered:
             reward_chapters.append(chapter_number)
@@ -246,7 +247,7 @@ def evaluate_director_imbalance(
             planned_social_or_emotion.append(chapter_number)
         if delivered & {"social", "emotion"}:
             delivered_social_or_emotion.add(chapter_number)
-        if "setup" in issue_types:
+        if "setup" in thread_beat_types:
             setup_like_count += 1
 
     if len(reward_chapters) >= 2:

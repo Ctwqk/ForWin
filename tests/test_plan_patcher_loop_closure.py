@@ -73,28 +73,6 @@ def test_form_signals_are_plan_patchable() -> None:
     assert payload_by_type["form_final_chapter_unresolved"]["suppression_key"] == "final:main_crisis"
 
 
-def test_future_plan_auditor_preserves_form_invariant_drift_patch() -> None:
-    plan = _plan(13, one_line="角色A继续处理事件-1。")
-
-    result = FuturePlanAuditor().audit_plans(
-        project_id="p1",
-        current_chapter=12,
-        trigger_stage="pre_write",
-        plans=[plan],
-        canon_quality_context={"open_signals": [_form_signal("form_invariant_drift", "rule-1")]},
-        obligations=[],
-        target_total_chapters=20,
-        include_current=False,
-    )
-
-    assert [issue.issue_type for issue in result.issues] == ["ledger_state_drift_pre_write_required"]
-    assert result.plan_patches[0].patch_type == "ledger_state_drift_pre_write"
-    assert result.plan_patches[0].writer_context_injections[0]["type"] == "ledger_state_drift_resolution"
-    assert result.metadata["suppressed_prompt_constraint_keys"] == ["invariant:rule-1"]
-    assert result.metadata["form_plan_patch_signals_consumed"] == 1
-    assert result.issues[0].metadata["source_signal_id"] == "sig-form_invariant_drift"
-
-
 def test_form_obligation_signal_behaves_like_urgent_obligation_patch() -> None:
     plan = _plan(13, one_line="角色A继续处理事件-1。")
 
@@ -162,12 +140,10 @@ def _plan(chapter_number: int, *, one_line: str) -> ChapterPlan:
 
 def _form_signal(signal_type: str, subject_key: str) -> dict[str, object]:
     patch_kind_by_type = {
-        "form_invariant_drift": "ledger_state_drift",
         "form_obligation_unresolved": "obligation_unresolved",
         "form_open_signal_persisting": "signal_persisting",
     }
     prefix_by_type = {
-        "form_invariant_drift": "invariant",
         "form_obligation_unresolved": "obligation",
         "form_open_signal_persisting": "signal",
     }

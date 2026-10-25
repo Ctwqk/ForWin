@@ -31,16 +31,6 @@ BlockingReasonCode = Literal[
 ]
 
 
-OverClosureRiskCategory = Literal[
-    "",
-    "character_locked_out",
-    "thread_closed_too_early",
-    "relationship_closed_too_early",
-    "secret_over_explained",
-    "growth_arc_completed_too_early",
-]
-
-
 IssueGroup = Literal[
     "",
     "fact_conflict",
@@ -62,7 +52,6 @@ class BlockingReasonInfo(BaseModel):
 class BandCheckpointIssueInfo(BaseModel):
     code: str = ""
     severity: str = "info"
-    category: OverClosureRiskCategory = ""
     issue_group: IssueGroup = ""
     description: str = ""
     detail: str = ""
@@ -125,7 +114,6 @@ __all__ = [
     "CheckpointStatus",
     "IssueGroup",
     "NextBandSummary",
-    "OverClosureRiskCategory",
     "band_is_first_chapter",
     "chapter_blocking_message",
     "normalize_checkpoint_status",

@@ -308,7 +308,7 @@ def test_writer_prompt_includes_generic_invariant_constraints() -> None:
             "invariant_constraints": [
                 {
                     "invariant_key": "deadline:public_hearing",
-                    "kind": "deadline",
+                    "kind": "active_rule",
                     "subject_key": "public_hearing",
                     "label": "公开听证期限",
                     "current_value": {"deadline_chapter": 16},
@@ -325,7 +325,7 @@ def test_writer_prompt_includes_generic_invariant_constraints() -> None:
     assert "倒计时 ledger" not in content
     assert "不同倒计时各自独立" not in content
     assert "公开听证期限" in content
-    assert "截止" in content
+    assert "active rule" in content
     assert "桥接" in content
 
 
@@ -415,7 +415,7 @@ def test_writer_prompt_suppresses_generic_invariant_constraint_promoted_to_plan_
             "invariant_constraints": [
                 {
                     "invariant_key": "deadline:public_hearing",
-                    "kind": "deadline",
+                    "kind": "active_rule",
                     "subject_key": "public_hearing",
                     "label": "公开听证期限",
                     "current_value": {"deadline_chapter": 16},

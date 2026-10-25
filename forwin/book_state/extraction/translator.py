@@ -172,6 +172,7 @@ class _DeltaBuilder:
         self.holders: dict[str, str] = {}
         self.movers: set[str] = set()
         self.movements: list[dict[str, Any]] = []
+        self.thread_beats: list[dict[str, str]] = []
         self.knowledge_tags: list[dict[str, Any]] = []
         self.flashback_refs: list[dict[str, Any]] = []
         self.item_transfers: list[dict[str, Any]] = []
@@ -237,6 +238,7 @@ class _DeltaBuilder:
             metadata={
                 "extraction_path": SOURCE_TYPE,
                 "movements": self.movements,
+                "thread_beats": self.thread_beats,
                 "knowledge_tags": self.knowledge_tags,
                 "flashback_refs": self.flashback_refs,
                 "item_transfers": self.item_transfers,
@@ -1029,6 +1031,7 @@ class _DeltaBuilder:
         thread_id = self._thread(beat, path)
         if thread_id is None:
             return
+        self.thread_beats.append({"thread_id": thread_id, "beat_type": beat.beat_type})
         entry = {
             "chapter_number": self.chapter,
             "beat_type": beat.beat_type,

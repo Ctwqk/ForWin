@@ -114,6 +114,10 @@ def upgrade() -> None:
     op.drop_table("project_stage_analyses")
     op.drop_table("project_replan_events")
     op.drop_column("arc_plan_versions", "macro_progression_json")
+    op.add_column("world_plan_conflicts", sa.Column("origin_key", sa.String(), server_default="", nullable=False))
+    op.create_index(
+        "ix_world_plan_conflicts_project_origin", "world_plan_conflicts", ["project_id", "origin_key"], unique=False,
+    )
 
 
 def _drop_simulation_from_policies() -> None:
@@ -140,6 +144,8 @@ def _drop_simulation_from_policies() -> None:
 
 def downgrade() -> None:
     """Revert schema; the maintenance step data rewrite is not reversed."""
+    op.drop_index("ix_world_plan_conflicts_project_origin", table_name="world_plan_conflicts")
+    op.drop_column("world_plan_conflicts", "origin_key")
     _restore_subworld_character_paths()
     _restore_retired_arc_planner_tables()
     op.create_table(

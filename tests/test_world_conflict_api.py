@@ -233,7 +233,47 @@ def test_resolve_route_reports_missing_policy(mock_conflict_api):
     session.commit.assert_not_called()
 
 
-@pytest.mark.parametrize("status", ["typo", "", "expired"])
+def test_list_route_accepts_expired(mock_conflict_api):
+    from types import SimpleNamespace
+    from forwin.api_schema.world_conflicts import WorldConflictInfo
+
+    client, _, _, _, repo = mock_conflict_api
+    info = WorldConflictInfo(
+        id="c1", project_id="p1", source="world_tick", detected_after_chapter=3, story_time=0,
+        violated="impact_review", impact_level="major", required_decider="human",
+        blocks_from_chapter=4, status="expired", summary="Expired change", origin_key="tick-1",
+    )
+    values = info.model_dump()
+    for field in ("involved_refs", "proposed_change", "options", "decision", "result_refs"):
+        values[field + "_json"] = json.dumps(values.pop(field))
+    repo.list.return_value = [SimpleNamespace(**values)]
+    response = client.get("/api/projects/p1/world-conflicts", params={"status": "expired"})
+    assert response.status_code == 200
+    assert response.json()[0]["origin_key"] == "tick-1"
+    assert response.json()[0]["status"] == "expired"
+    repo.list.assert_called_once_with("p1", status="expired")
+
+
+def test_mcp_list_preserves_expired_filter_and_origin():
+    import asyncio
+    import httpx
+    from forwin.mcp.client import ForWinAPIClient
+
+    def handler(request):
+        assert request.url.params["status"] == "expired"
+        return httpx.Response(200, json=[{
+            "id": "c1", "project_id": "p1", "source": "world_tick", "origin_key": "tick-1",
+            "detected_after_chapter": 3, "story_time": 0, "violated": "impact_review",
+            "impact_level": "major", "required_decider": "human", "blocks_from_chapter": 4,
+            "status": "expired", "summary": "Expired change",
+        }])
+
+    client = ForWinAPIClient(base_url="http://forwin.invalid", transport=httpx.MockTransport(handler))
+    [row] = asyncio.run(client.world_conflict_list(project_id="p1", status="expired"))
+    assert row.status == "expired" and row.origin_key == "tick-1"
+
+
+@pytest.mark.parametrize("status", ["typo", ""])
 def test_list_route_rejects_invalid_status(mock_conflict_api, status):
     client, _, _, _, repo = mock_conflict_api
     response = client.get("/api/projects/p1/world-conflicts", params={"status": status})

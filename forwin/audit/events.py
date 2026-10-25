@@ -39,6 +39,7 @@ class DecisionEventType:
     WORLD_CONFLICT_DETECTED = "world_conflict_detected"
     WORLD_CONFLICT_ESCALATED = "world_conflict_escalated"
     WORLD_CONFLICT_RESOLVED = "world_conflict_resolved"
+    WORLD_CONFLICT_EXPIRED = "world_conflict_expired"
     WORLD_CONFLICT_AMEND_FAILED = "world_conflict_amend_failed"
     PROMPT_TRACE_RECORDED = "prompt_trace_recorded"
 

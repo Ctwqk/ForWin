@@ -646,6 +646,7 @@ class ForWinAPIClient:
         return WorldModelPageView.model_validate(payload)
 
     async def world_conflict_list(self, *, project_id: str, status: str | None = None) -> list[WorldConflictView]:
+        """List conflicts, optionally filtered by open, resolved or expired status."""
         payload = await self._request_json(
             "GET", f"/api/projects/{project_id}/world-conflicts",
             params={"status": status} if status is not None else None,

@@ -10,6 +10,7 @@ class WorldConflictInfo(BaseModel):
     id: str
     project_id: str
     source: str
+    origin_key: str = ""
     detected_after_chapter: int
     story_time: int
     involved_refs: list[str] = Field(default_factory=list)

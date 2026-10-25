@@ -673,18 +673,23 @@ def test_world_conflict_table_matches_migration_0005(monkeypatch: pytest.MonkeyP
     assert set(tables) == {"world_plan_conflicts"}
     assert hasattr(models, "WorldPlanConflictRow")
     orm = _table("world_plan_conflicts")
-    assert set(orm.c.keys()) == {
+    # 0006 adds origin_key and its index; tests/test_planning_v6_schema.py pins them.
+    added_in_0006 = {"origin_key"}
+    assert set(orm.c.keys()) - added_in_0006 == {
         "id", "project_id", "source", "detected_after_chapter", "story_time",
         "involved_refs_json", "violated", "proposed_change_json", "impact_level",
         "options_json", "required_decider", "blocks_from_chapter", "status",
         "decision_json", "result_refs_json", "summary", "intent_ref", "actor_ref",
         "created_at", "updated_at",
     }
-    assert _column_shape(tables[orm.name]) == _column_shape(orm)
+    assert _column_shape(tables[orm.name]) == [
+        shape for shape in _column_shape(orm) if shape[0] not in added_in_0006
+    ]
     assert _foreign_keys(tables[orm.name]) == _foreign_keys(orm)
     assert indexes[orm.name] == {
         (index.name, tuple(column.name for column in index.columns), index.unique)
         for index in orm.indexes
+        if not added_in_0006 & {column.name for column in index.columns}
     } == {
         ("ix_world_plan_conflicts_project_status", ("project_id", "status"), False),
         ("ix_world_plan_conflicts_project_blocks", ("project_id", "blocks_from_chapter"), False),

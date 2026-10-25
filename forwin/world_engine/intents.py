@@ -106,6 +106,7 @@ def onstage_bookkeeping(
     bound_intent_refs: frozenset[str],
     band_ended: bool,
     band_bound_intent_refs: frozenset[str],
+    tick_id: str = "",
 ) -> OnstageResult:
     """Slip missed plan bindings, or due intents never bound in the band when the band ends.
 
@@ -148,6 +149,7 @@ def onstage_bookkeeping(
         conflicts.append(ConflictDraft(
             project_id=runtime.project_id,
             source="world_tick",
+            origin_key=tick_id,
             detected_after_chapter=chapter_number,
             story_time=now,
             involved_refs=[ref for ref in (intent.id, owner) if ref],

@@ -426,7 +426,7 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
 
     @register_read_tool(
         "world_conflict_list",
-        "List world-plan conflicts for a project. Use this when checking pending human decisions or resolved world changes.",
+        "List world-plan conflicts for a project, optionally filtered by open, resolved or expired status. Use this when checking pending human decisions or past world changes.",
     )
     async def world_conflict_list(project_id: str, status: str | None = None):
         return WorldConflictListView(conflicts=await client.world_conflict_list(project_id=project_id, status=status))

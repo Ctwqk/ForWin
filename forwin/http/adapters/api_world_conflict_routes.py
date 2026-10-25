@@ -30,7 +30,7 @@ def _conflict_info(row: WorldPlanConflictRow) -> WorldConflictInfo:
         options=json.loads(row.options_json), required_decider=row.required_decider,
         blocks_from_chapter=row.blocks_from_chapter, status=row.status, summary=row.summary,
         decision=json.loads(row.decision_json), result_refs=json.loads(row.result_refs_json),
-        intent_ref=row.intent_ref, actor_ref=row.actor_ref,
+        intent_ref=row.intent_ref, actor_ref=row.actor_ref, origin_key=row.origin_key,
         created_at=row.created_at, updated_at=row.updated_at,
     )
 
@@ -43,8 +43,8 @@ def build_handlers(
     def list_project_world_conflicts(project_id: str, status: str | None = None) -> list[WorldConflictInfo]:
         with get_session() as session:
             require_project(session, project_id)
-            if status is not None and status not in {"open", "resolved"}:
-                raise HTTPException(status_code=400, detail="status must be open or resolved")
+            if status is not None and status not in {"open", "resolved", "expired"}:
+                raise HTTPException(status_code=400, detail="status must be open, resolved or expired")
             return [_conflict_info(row) for row in WorldConflictRepository(session).list(project_id, status=status)]
 
     def get_project_world_conflict(project_id: str, conflict_id: str) -> WorldConflictInfo:

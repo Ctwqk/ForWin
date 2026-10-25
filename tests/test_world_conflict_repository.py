@@ -116,6 +116,127 @@ def test_open_blocking_ignores_auto_codex_and_later_chapters(session):
     assert repo.open_blocking("project-1", next_chapter=8).id == later.id
 
 
+def test_expire_only_open_rows_and_hides_from_blocking(session):
+    from forwin.application.read_models.generation import (
+        _derive_blocking_reason, load_open_world_conflicts, load_open_world_conflicts_by_project,
+    )
+    from forwin.world_engine.conflict_repository import ConflictNotOpen, WorldConflictRepository
+
+    repo = WorldConflictRepository(session)
+    row = repo.create(_draft(origin_key="tick-1"), required_decider="human", options=["veto_world"])
+    assert repo.open_blocking("project-1", next_chapter=4).id == row.id
+    repo.expire(row, reason="chapter rewritten")
+    session.commit()
+    session.expire_all()
+    assert row.status == "expired"
+    assert row.origin_key == "tick-1"
+    assert row.decision_json == '{"reason":"chapter rewritten"}'
+    assert repo.list("project-1", status="expired") == [row]
+    assert repo.open_blocking("project-1", next_chapter=4) is None
+    assert load_open_world_conflicts(session, "project-1") == []
+    grouped = load_open_world_conflicts_by_project(session, ["project-1"])
+    assert grouped == {"project-1": []}
+    assert _derive_blocking_reason(
+        plans=[], latest_band_checkpoint=None, open_world_conflicts=grouped["project-1"], next_chapter=4,
+    ).code != "world_conflict_pending"
+    with pytest.raises(ConflictNotOpen):
+        repo.expire(row, reason="again")
+    assert row.decision_json == '{"reason":"chapter rewritten"}'
+    resolved = repo.create(_draft(), required_decider="human", options=["veto_world"])
+    repo.mark_resolved(resolved, decision=_decision(), result_refs=["delta-1"])
+    decision_json = resolved.decision_json
+    with pytest.raises(ConflictNotOpen):
+        repo.expire(resolved, reason="closed")
+    assert resolved.status == "resolved" and resolved.decision_json == decision_json
+
+
+def test_origin_lookups_are_project_scoped_open_and_oldest_first(session):
+    from forwin.world_engine.conflict_repository import WorldConflictRepository
+
+    repo = WorldConflictRepository(session)
+    rows = []
+    for index, origin in enumerate(["tick-1", "tick-1", "tick-2"]):
+        row = repo.create(_draft(origin_key=origin), required_decider="human", options=["veto_world"])
+        row.created_at = datetime(2026, 10, 22) + timedelta(seconds=index)
+        rows.append(row)
+    repo.create(_draft(project_id="project-2", origin_key="tick-1"), required_decider="human", options=[])
+    assert repo.open_for_origin("project-1", "tick-1") == rows[0]
+    assert repo.open_by_origin("project-1", ["tick-2", "tick-1", "tick-1"]) == rows
+    assert repo.open_by_origin("project-1", []) == []
+    assert repo.open_for_origin("project-1", "missing") is None
+    repo.expire(rows[0], reason="retired")
+    repo.mark_resolved(rows[1], decision=_decision(), result_refs=[])
+    assert repo.open_by_origin("project-1", ["tick-1", "tick-2"]) == [rows[2]]
+    assert repo.open_for_origin("project-1", "tick-1") is None
+
+
+def test_pending_chapter_resumes_filters_and_orders_unconsumed_decisions(session):
+    from forwin.world_engine.conflict_repository import WorldConflictRepository
+
+    repo = WorldConflictRepository(session)
+
+    def resolved(*, option="rewrite_chapter", refs=(), **overrides):
+        row = repo.create(_draft(**{"source": "chapter_extraction", **overrides}),
+                          required_decider="human", options=[option])
+        repo.mark_resolved(row, decision=_decision(option), result_refs=refs)
+        return row
+
+    newer = resolved(option="amend_plan", refs=["plan_patch:1"])
+    newer.created_at = datetime(2026, 10, 23)
+    older = resolved()
+    older.created_at = datetime(2026, 10, 22)
+    resolved(refs=["plan_patch:2", "candidate:done"])
+    resolved(project_id="project-2")
+    resolved(blocks_from_chapter=5)
+    resolved(source="world_tick")
+    resolved(option="veto_world")
+    closed = resolved()
+    closed.status = "expired"
+    repo.create(_draft(source="chapter_extraction"), required_decider="human", options=["rewrite_chapter"])
+    assert repo.pending_chapter_resumes("project-1", chapter_number=4) == [older, newer]
+    older.result_refs_json = '{"candidate:invalid_shape":true}'
+    assert repo.pending_chapter_resumes("project-1", chapter_number=4) == [older, newer]
+    repo.attach_result_refs(older, ["candidate:done"])
+    assert repo.pending_chapter_resumes("project-1", chapter_number=4) == [newer]
+
+
+def test_chapter_origin_creation_reuses_only_open_rows(session):
+    from forwin.world_engine.conflict_repository import WorldConflictRepository
+
+    repo = WorldConflictRepository(session)
+    draft = _draft(source="chapter_extraction", origin_key="chapter_extraction:4:protection-1")
+    first = repo.create(draft, required_decider="human", options=["rewrite_chapter"])
+    assert repo.create(draft, required_decider="codex", options=["amend_plan"]) is first
+    assert first.required_decider == "human"
+    repo.expire(first, reason="replaced")
+    second = repo.create(draft, required_decider="human", options=["amend_plan"])
+    assert second.id != first.id
+    repo.mark_resolved(second, decision=_decision("amend_plan"), result_refs=[])
+    third = repo.create(draft, required_decider="human", options=["rewrite_chapter"])
+    assert third.id not in {first.id, second.id}
+
+
+def test_tick_and_slip_drafts_carry_tick_origin():
+    from forwin.world_engine.intents import onstage_bookkeeping, select_due_intents
+    from forwin.world_engine.tick_conflicts import review_draft
+    from forwin.world_engine.types import TickCandidate, TickContext, WorldEffects
+    from tests.test_world_tick_steps import NOW, _actor, _intent, _runtime
+
+    runtime = _runtime(_actor("actor-1"), _intent("intent-1", "actor-1", at=NOW, onstage=True))
+    context = TickContext(project_id=runtime.project_id, chapter_number=3, now=NOW, window_start=0, seed=1)
+    held = review_draft(TickCandidate(
+        candidate_id="candidate-1", origin="adjudication", actor_id="actor-1", intent_id="intent-1",
+        summary="A major change.", effects=WorldEffects(), impact_level="major",
+    ), context=context, runtime=runtime, tick_id="tick-1")
+    assert held.draft.origin_key == "tick-1"
+    result = onstage_bookkeeping(
+        runtime, onstage_due=select_due_intents(runtime, now=NOW).onstage, already_due=[],
+        interactions=[], now=NOW, max_slips=0, chapter_number=3, tick_id="tick-1",
+        bound_intent_refs=frozenset({"intent-1"}), band_ended=False, band_bound_intent_refs=frozenset(),
+    )
+    assert [draft.origin_key for draft in result.conflicts] == ["tick-1"]
+
+
 def test_conflict_readers_break_timestamp_ties_by_id(session):
     from forwin.application.read_models.generation import (
         _derive_blocking_reason, load_open_world_conflicts,

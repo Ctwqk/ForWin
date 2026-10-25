@@ -38,9 +38,14 @@ class WorldConflictRepository:
         required_decider: ConflictDecider,
         options: Sequence[ConflictOption],
     ) -> WorldPlanConflictRow:
+        if draft.source == "chapter_extraction" and draft.origin_key:
+            existing = self.open_for_origin(draft.project_id, draft.origin_key)
+            if existing is not None:
+                return existing
         row = WorldPlanConflictRow(
             project_id=draft.project_id,
             source=draft.source,
+            origin_key=draft.origin_key,
             detected_after_chapter=draft.detected_after_chapter,
             story_time=draft.story_time,
             involved_refs_json=json.dumps(draft.involved_refs, ensure_ascii=False),
@@ -88,6 +93,48 @@ class WorldConflictRepository:
             .order_by(WorldPlanConflictRow.blocks_from_chapter, WorldPlanConflictRow.created_at, WorldPlanConflictRow.id)
             .limit(1)
         )
+
+    def open_by_origin(self, project_id: str, origin_keys: Sequence[str]) -> list[WorldPlanConflictRow]:
+        if not origin_keys:
+            return []
+        return list(self.session.scalars(
+            select(WorldPlanConflictRow).where(
+                WorldPlanConflictRow.project_id == project_id,
+                WorldPlanConflictRow.origin_key.in_(origin_keys),
+                WorldPlanConflictRow.status == "open",
+            ).order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id)
+            .with_for_update().execution_options(populate_existing=True)
+        ))
+
+    def open_for_origin(self, project_id: str, origin_key: str) -> WorldPlanConflictRow | None:
+        return self.session.scalar(
+            select(WorldPlanConflictRow).where(
+                WorldPlanConflictRow.project_id == project_id,
+                WorldPlanConflictRow.origin_key == origin_key,
+                WorldPlanConflictRow.status == "open",
+            ).order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id).limit(1)
+            .with_for_update().execution_options(populate_existing=True)
+        )
+
+    def expire(self, row: WorldPlanConflictRow, *, reason: str) -> None:
+        if row.status != "open":
+            raise ConflictNotOpen(f"Conflict {row.id} is {row.status}")
+        row.decision_json = serialize_conflict_decision({"reason": reason})
+        row.status = "expired"
+        self.session.flush()
+
+    def pending_chapter_resumes(self, project_id: str, *, chapter_number: int) -> list[WorldPlanConflictRow]:
+        rows = self.session.scalars(
+            select(WorldPlanConflictRow).where(
+                WorldPlanConflictRow.project_id == project_id,
+                WorldPlanConflictRow.source == "chapter_extraction",
+                WorldPlanConflictRow.blocks_from_chapter == chapter_number,
+                WorldPlanConflictRow.status == "resolved",
+            ).order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id)
+        )
+        return [row for row in rows
+                if json.loads(row.decision_json or "{}").get("option") in {"rewrite_chapter", "amend_plan"}
+                and not any(ref.startswith("candidate:") for ref in conflict_result_refs(row))]
 
     def mark_resolved(
         self,

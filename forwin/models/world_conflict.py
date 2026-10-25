@@ -14,11 +14,13 @@ class WorldPlanConflictRow(Base):
     __table_args__ = (
         Index("ix_world_plan_conflicts_project_status", "project_id", "status"),
         Index("ix_world_plan_conflicts_project_blocks", "project_id", "blocks_from_chapter"),
+        Index("ix_world_plan_conflicts_project_origin", "project_id", "origin_key"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     source: Mapped[str] = mapped_column(String, nullable=False)
+    origin_key: Mapped[str] = mapped_column(String, nullable=False, default="", server_default="")
     detected_after_chapter: Mapped[int] = mapped_column(Integer, nullable=False)
     story_time: Mapped[int] = mapped_column(BigInteger, nullable=False)
     involved_refs_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")

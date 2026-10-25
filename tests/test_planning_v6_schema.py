@@ -78,6 +78,15 @@ def _assert_planning_schema(engine: sa.Engine) -> None:
     assert str(brief["default"]).split("::")[0] == "''"
     assert {c["name"] for c in inspector.get_columns("band_plans")} == BAND_PLAN_COLUMNS
     assert PLANNING_COLUMNS <= {c["name"] for c in inspector.get_columns("chapter_plans")}
+    conflict_columns = {c["name"]: c for c in inspector.get_columns("world_plan_conflicts")}
+    assert {"origin_key"} <= conflict_columns.keys()
+    assert conflict_columns["origin_key"]["nullable"] is False
+    assert str(conflict_columns["origin_key"]["default"]).split("::")[0] == "''"
+    conflict_indexes = {i["name"]: i for i in inspector.get_indexes("world_plan_conflicts")}
+    assert {"ix_world_plan_conflicts_project_status", "ix_world_plan_conflicts_project_blocks",
+            "ix_world_plan_conflicts_project_origin"} == conflict_indexes.keys()
+    assert conflict_indexes["ix_world_plan_conflicts_project_origin"]["column_names"] == ["project_id", "origin_key"]
+    assert not conflict_indexes["ix_world_plan_conflicts_project_origin"]["unique"]
     assert ("arc_plan_id", "version") in {
         tuple(c["column_names"]) for c in inspector.get_unique_constraints("arc_beat_sheets")
     }
@@ -113,10 +122,42 @@ def test_0006_creates_beat_sheet_and_band_plan_tables(legacy_database) -> None:
     inspector = sa.inspect(engine)
     assert {"arc_beat_sheets", "band_plans"}.isdisjoint(inspector.get_table_names())
     assert PLANNING_COLUMNS.isdisjoint(c["name"] for c in inspector.get_columns("chapter_plans"))
+    assert "origin_key" not in {c["name"] for c in inspector.get_columns("world_plan_conflicts")}
+    assert "ix_world_plan_conflicts_project_origin" not in {
+        i["name"] for i in inspector.get_indexes("world_plan_conflicts")
+    }
     index = next(i for i in inspector.get_indexes("chapter_plans") if i["name"] == "ix_chapter_plans_project_chapter")
     assert not index["unique"]
     command.upgrade(config, "0006_planning_v6")
     _assert_planning_schema(engine)
+
+
+def test_0006_conflict_origin_backfills_and_round_trips(legacy_database) -> None:
+    config, engine = legacy_database
+    with Session(engine) as session, session.begin():
+        session.add(models.Project(id="project-1", title="title", premise="premise", genre="genre"))
+        session.flush()
+        table = sa.Table("world_plan_conflicts", sa.MetaData(), autoload_with=session.connection())
+        session.execute(table.insert().values(
+            id="conflict-1", project_id="project-1", source="world_tick", detected_after_chapter=1,
+            story_time=60, involved_refs_json="[]", violated="impact_review", proposed_change_json="{}",
+            impact_level="major", options_json="[]", required_decider="human", blocks_from_chapter=2,
+            status="open", decision_json="{}", result_refs_json="[]", summary="A held change.",
+            intent_ref="", actor_ref="", created_at=datetime(2026, 10, 22), updated_at=datetime(2026, 10, 22),
+        ))
+    command.upgrade(config, "0006_planning_v6")
+    _assert_planning_schema(engine)
+    with Session(engine) as session, session.begin():
+        row = session.get(models.WorldPlanConflictRow, "conflict-1")
+        assert row.origin_key == ""
+        row.origin_key = "tick-1"
+    command.downgrade(config, "0005_world_plan_conflicts")
+    assert "origin_key" not in {c["name"] for c in sa.inspect(engine).get_columns("world_plan_conflicts")}
+    command.upgrade(config, "0006_planning_v6")
+    _assert_planning_schema(engine)
+    with Session(engine) as session:
+        row = session.get(models.WorldPlanConflictRow, "conflict-1")
+        assert row.origin_key == "" and row.status == "open"
 
 
 def test_chapter_plans_gain_planning_columns_and_unique_chapter(legacy_database) -> None:

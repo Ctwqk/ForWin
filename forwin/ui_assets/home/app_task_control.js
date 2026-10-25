@@ -587,22 +587,41 @@
       const card = createNode('section', '', 'detail-card');
       card.id = 'world_conflicts_card';
       card.appendChild(createNode('div', '世界冲突', 'task-id'));
-      try {
-        const conflicts = await requestJson(`/api/projects/${item.project_id}/world-conflicts?status=open`);
-        const open = conflicts.filter((conflict) => conflict.status === 'open');
-        if (!open.length) card.appendChild(createNode('div', '当前没有待处理的世界冲突。', 'meta-line'));
-        open.forEach((conflict) => {
-          const row = createNode('div', '', 'chapter-row');
-          row.appendChild(createNode('strong', conflict.summary));
-          row.appendChild(createNode('div', `impact：${conflict.impact_level} | violated：${conflict.violated} | blocks_from_chapter：${conflict.blocks_from_chapter}`, 'meta-line'));
-          const decide = createButton('决定', () => decideWorldConflictFromDrawer(item.project_id, conflict), 'ghost');
-          decide.disabled = !Array.isArray(conflict.options) || !conflict.options.length;
-          row.appendChild(decide);
-          card.appendChild(row);
-        });
-      } catch (error) {
-        card.appendChild(createNode('div', error.message || String(error), 'meta-line'));
-      }
+      const statusSelect = document.createElement('select');
+      [['open', '待处理'], ['resolved', '已解决'], ['expired', '已过期']].forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        statusSelect.appendChild(option);
+      });
+      card.appendChild(createLabeledField('状态', statusSelect));
+      const rows = createNode('div');
+      card.appendChild(rows);
+      const loadConflicts = async () => {
+        statusSelect.disabled = true;
+        rows.replaceChildren();
+        try {
+          const conflicts = await requestJson(`/api/projects/${item.project_id}/world-conflicts?status=${statusSelect.value}`);
+          if (!conflicts.length) rows.appendChild(createNode('div', statusSelect.value === 'open' ? '当前没有待处理的世界冲突。' : '当前没有此状态的世界冲突。', 'meta-line'));
+          conflicts.forEach((conflict) => {
+            const row = createNode('div', '', 'chapter-row');
+            row.appendChild(createNode('strong', conflict.summary));
+            row.appendChild(createNode('div', `impact：${conflict.impact_level} | violated：${conflict.violated} | blocks_from_chapter：${conflict.blocks_from_chapter}`, 'meta-line'));
+            if (conflict.status === 'open') {
+              const decide = createButton('决定', () => decideWorldConflictFromDrawer(item.project_id, conflict), 'ghost');
+              decide.disabled = !Array.isArray(conflict.options) || !conflict.options.length;
+              row.appendChild(decide);
+            }
+            rows.appendChild(row);
+          });
+        } catch (error) {
+          rows.appendChild(createNode('div', error.message || String(error), 'meta-line'));
+        } finally {
+          statusSelect.disabled = false;
+        }
+      };
+      statusSelect.addEventListener('change', loadConflicts);
+      await loadConflicts();
       return card;
     }
 

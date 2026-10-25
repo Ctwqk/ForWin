@@ -24,6 +24,7 @@ ConflictDecider = Literal["auto", "codex", "human"]
 class ConflictDraft(BaseModel):
     project_id: str
     source: ConflictSource
+    origin_key: str = ""
     detected_after_chapter: int
     story_time: int
     involved_refs: list[str]

@@ -259,6 +259,7 @@ class _Tick:
             # Interactions mirror chapter text that is already canon: there is nothing to hold back.
             review = None if candidate.origin == "intent_interaction" else review_draft(
                 candidate, context=self.context, runtime=self.runtime, milestone_refs=milestone_refs,
+                tick_id=self.tick_id,
             )
             if review is not None:
                 held.add(candidate.candidate_id)
@@ -318,6 +319,7 @@ class _Tick:
             bound_intent_refs=bound_intent_refs,
             band_ended=band_ended,
             band_bound_intent_refs=band_bound_intent_refs,
+            tick_id=self.tick_id,
         )
         # A slip past the cap comes back only as a conflict draft holding the slip.
         self.slip_conflicts = onstage.conflicts

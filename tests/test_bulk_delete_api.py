@@ -196,6 +196,59 @@ class BulkDeleteApiTests(unittest.TestCase):
             self.assertEqual(session.query(ChapterRewriteAttempt).count(), 0)
             self.assertEqual(session.query(ChapterReview).count(), 0)
 
+    def test_delete_project_removes_canon_commit_chain_before_candidates(self) -> None:
+        # Production purge failed here: canon commits, post-Canon runs, projection checkpoints and
+        # upload jobs point at the candidate (directly or through the commit) and must go first.
+        from forwin.models.canon import CanonCommitRecord
+        from forwin.models.maintenance import PostCanonMaintenanceRun
+        from forwin.models.projection import ProjectionCheckpoint
+
+        project_id = new_id()
+        with self.session_factory() as session:
+            session.add(Project(id=project_id, title="提交链删除", premise="测试 premise", genre="玄幻",
+                                setting_summary=""))
+            session.flush()
+            arc = ArcPlanVersion(id=new_id(), project_id=project_id, arc_synopsis="测试弧线", status="active")
+            session.add(arc)
+            session.flush()
+            plan = ChapterPlan(id=new_id(), project_id=project_id, arc_plan_id=arc.id, chapter_number=1,
+                               title="第一章", status="accepted")
+            session.add(plan)
+            session.flush()
+            draft = ChapterDraft(id=new_id(), chapter_plan_id=plan.id, version=1, body_text="正文。" * 500,
+                                 summary="摘要", char_count=1500)
+            session.add(draft)
+            session.flush()
+            review = ChapterReview(id=new_id(), draft_id=draft.id, verdict="pass", issues_json="[]")
+            session.add(review)
+            session.flush()
+            candidate = CandidateDraftRecord(id=new_id(), project_id=project_id, chapter_plan_id=plan.id,
+                                             chapter_number=1, candidate_draft_id=draft.id, review_id=review.id)
+            session.add(candidate)
+            session.flush()
+            commit = CanonCommitRecord(id=new_id(), idempotency_key=new_id(), candidate_id=candidate.id,
+                                       project_id=project_id, chapter_number=1)
+            session.add(commit)
+            session.flush()
+            session.add(PostCanonMaintenanceRun(canon_commit_id=commit.id, project_id=project_id,
+                                                chapter_number=1, candidate_id=candidate.id, step_name="world",
+                                                idempotency_key=new_id()))
+            session.add(ProjectionCheckpoint(project_id=project_id, projection_kind="obsidian",
+                                             projected_canon_commit_id=commit.id,
+                                             target_canon_commit_id=commit.id))
+            session.add(PublisherUploadJob(project_id=project_id, chapter_number=1, canon_commit_id=commit.id,
+                                           platform_id="fanqie", body_text="正文", status="succeeded"))
+            session.commit()
+
+        response = api_module.delete_project(project_id)
+
+        self.assertTrue(response.ok)
+        with self.session_factory() as session:
+            self.assertIsNone(session.get(Project, project_id))
+            for model in (CanonCommitRecord, PostCanonMaintenanceRun, ProjectionCheckpoint, PublisherUploadJob,
+                          CandidateDraftRecord, ChapterReview, ChapterDraft):
+                self.assertEqual(session.query(model).count(), 0, model.__tablename__)
+
     def test_delete_project_removes_publisher_child_rows_and_project_outbox_events(
         self,
     ) -> None:

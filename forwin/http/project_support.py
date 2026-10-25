@@ -16,7 +16,10 @@ from forwin.generation.task_repository import GenerationTaskRepository
 import forwin.http.tasks as task_support
 from forwin.outbox.store import delete_project_outbox_events
 from forwin.models.base import Base
+from forwin.models.canon import CanonCommitRecord
+from forwin.models.maintenance import PostCanonMaintenanceRun
 from forwin.models.project import Project, ChapterPlan
+from forwin.models.projection import ProjectionCheckpoint
 from forwin.models.publisher import (
     PublisherMilestone,
     PublisherOperatorAction,
@@ -55,6 +58,13 @@ logger = logging.getLogger(__name__)
 
 
 def _delete_project(session, project_id: str) -> None:
+    # Candidates must go before the drafts and reviews they point at, so everything that points at a
+    # candidate or a canon commit goes first: publisher uploads, projection checkpoints, post-Canon runs
+    # and the canon commits themselves.
+    _delete_publisher_upload_rows(session, project_id)
+    for model in (ProjectionCheckpoint, PostCanonMaintenanceRun, CanonCommitRecord):
+        session.execute(delete(model).where(model.project_id == project_id))
+
     chapter_plan_ids = (
         session.execute(
             select(ChapterPlan.id).where(ChapterPlan.project_id == project_id)
@@ -88,33 +98,8 @@ def _delete_project(session, project_id: str) -> None:
             )
             session.execute(delete(ChapterDraft).where(ChapterDraft.id.in_(draft_ids)))
 
-    # These tables have no project_id column, so the generic loop below cannot
-    # reach them; their foreign keys would otherwise block the parent deletes.
-    upload_job_ids = (
-        session.execute(
-            select(PublisherUploadJob.id).where(
-                PublisherUploadJob.project_id == project_id
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if upload_job_ids:
-        session.execute(
-            delete(PublisherUploadReceipt).where(
-                PublisherUploadReceipt.upload_job_id.in_(upload_job_ids)
-            )
-        )
-        session.execute(
-            delete(PublisherUploadAttempt).where(
-                PublisherUploadAttempt.upload_job_id.in_(upload_job_ids)
-            )
-        )
-        session.execute(
-            delete(PublisherOperatorAction).where(
-                PublisherOperatorAction.upload_job_id.in_(upload_job_ids)
-            )
-        )
+    # This table has no project_id column, so the generic loop below cannot
+    # reach it; its foreign key would otherwise block the parent delete.
     work_binding_ids = (
         session.execute(
             select(PublisherWorkBinding.id).where(
@@ -138,6 +123,25 @@ def _delete_project(session, project_id: str) -> None:
         session.execute(delete(table).where(table.c.project_id == project_id))
 
     session.execute(delete(Project).where(Project.id == project_id))
+
+
+def _delete_publisher_upload_rows(session, project_id: str) -> None:
+    """Delete a project's upload jobs with their receipts, attempts and operator actions, which have no
+    project_id column of their own."""
+    upload_job_ids = (
+        session.execute(
+            select(PublisherUploadJob.id).where(
+                PublisherUploadJob.project_id == project_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not upload_job_ids:
+        return
+    for model in (PublisherUploadReceipt, PublisherUploadAttempt, PublisherOperatorAction):
+        session.execute(delete(model).where(model.upload_job_id.in_(upload_job_ids)))
+    session.execute(delete(PublisherUploadJob).where(PublisherUploadJob.id.in_(upload_job_ids)))
 
 
 def _apply_locked_task_update(

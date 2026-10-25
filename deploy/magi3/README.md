@@ -141,3 +141,7 @@ ports. All published ports on magi3 bind its loopback interface.
 ## Embeddings
 
 The `embedding` service (deploy/magi3/embedding-gateway, copied from Constructure) serves all-MiniLM-L6-v2 at 384 dimensions on CPU, the same model infra-150 served on GPU. The model is baked into the image at build time through `HF_ENDPOINT` (default https://hf-mirror.com), so the service starts without network access.
+
+## colima DNS on magi3
+
+The colima VM image has no systemd-resolved, so its /etc/resolv.conf symlink dangles and containers cannot resolve external names. `~/.colima/default/colima.yaml` on magi3 carries a `provision` script that writes `nameserver 192.168.10.1` and `nameserver 223.5.5.5` on every boot; keep it when recreating the VM.

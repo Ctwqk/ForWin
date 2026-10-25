@@ -115,6 +115,10 @@ services:
       FORWIN_PUBLISHER_COVER_DIR: "/app/data/publisher_covers"
     ports:
       - "127.0.0.1:8899:8899"
+    networks:
+      default:
+        # The publisher extension in the migrated Chrome profile still calls the Swarm-era name.
+        aliases: ["forwin-app-swarm"]
     volumes:
       - forwin-data:/app/data
     depends_on:

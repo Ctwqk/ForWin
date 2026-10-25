@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import create_engine
 
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
 from forwin.book_state.cognition import CognitionView
@@ -13,7 +14,7 @@ from forwin.book_state.knowledge import (
     knowledge_evidence_ref,
 )
 from forwin.book_state.schema import validate_graph_delta
-from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.base import Base, get_engine, get_session_factory, init_db
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
     CognitionOverlay,
@@ -70,15 +71,29 @@ def _delta(project_id: str, chapter: int, delta_id: str, patches: list[Cognition
 def test_knowledge_event_to_patch_shape() -> None:
     event = KnowledgeEvent("character", "c1", "fact:f1", "believes", "told", "c2", 600)
 
-    patch = knowledge_event_to_patch(event)
+    patch = knowledge_event_to_patch(event, knowledge_by_ref={})
 
     assert patch.observer_type == "character"
     assert patch.observer_id == "c1"
     assert str(patch.op) == "merge"
     assert patch.field_path == "knowledge_by_ref"
+    assert patch.old_value == {"fact:f1": None}
     assert patch.new_value == {"fact:f1": "believes"}
     assert patch.evidence_refs == ["knowledge:told:c2:600"]
     assert knowledge_evidence_ref(event) == "knowledge:told:c2:600"
+
+
+def test_knowledge_event_reads_only_touched_ref_from_observer_snapshot() -> None:
+    known = {"fact:f1": "heard", "fact:f2": "knows"}
+    patch = knowledge_event_to_patch(
+        KnowledgeEvent("character", "c1", "fact:f1", "believes", "told"),
+        knowledge_by_ref=known,
+    )
+    assert patch.old_value == {"fact:f1": "heard"}
+    assert patch.new_value == {"fact:f1": "believes"}
+    assert known == {"fact:f1": "heard", "fact:f2": "knows"}
+    known["fact:f1"] = "knows"
+    assert patch.old_value == {"fact:f1": "heard"}
 
 
 def test_knowledge_evidence_ref_marks_missing_source_and_time() -> None:
@@ -108,7 +123,7 @@ def test_knowledge_vocabularies() -> None:
 )
 def test_knowledge_event_rejects_unknown_state_channel_and_ref(event: KnowledgeEvent) -> None:
     with pytest.raises(ValueError):
-        knowledge_event_to_patch(event)
+        knowledge_event_to_patch(event, knowledge_by_ref={})
 
 
 def test_knowledge_state_defaults_follow_sensitivity() -> None:
@@ -188,7 +203,7 @@ def test_knowledge_events_compile_and_replay() -> None:
                         project_id,
                         0,
                         "delta-knowledge-0",
-                        [knowledge_event_to_patch(event) for event in events],
+                        [knowledge_event_to_patch(event, knowledge_by_ref={}) for event in events],
                     )
                 ],
             )
@@ -215,9 +230,13 @@ def test_knowledge_events_compile_and_replay() -> None:
     assert overlays[("reader", "reader")].knowledge_by_ref == {"fact:f1": "knows"}
 
 
-def test_knowledge_updates_accumulate_across_chapters_without_double_evidence() -> None:
-    engine = get_engine(postgres_test_url())
-    init_db(engine)
+@pytest.mark.parametrize("backend", ["sqlite", "postgresql"])
+def test_knowledge_updates_accumulate_across_chapters_without_double_evidence(backend: str) -> None:
+    engine = create_engine("sqlite://") if backend == "sqlite" else get_engine(postgres_test_url())
+    if backend == "sqlite":
+        Base.metadata.create_all(engine)
+    else:
+        init_db(engine)
     Session = get_session_factory(engine)
 
     with Session.begin() as session:
@@ -226,6 +245,10 @@ def test_knowledge_updates_accumulate_across_chapters_without_double_evidence() 
             (0, KnowledgeEvent("character", "c1", "fact:f1", "heard", "rumor", "", 10)),
             (1, KnowledgeEvent("character", "c1", "fact:f1", "believes", "told", "c2", 700)),
         ):
+            runtime = BookStateProjection(session).load_runtime_as_of(
+                project_id, as_of_chapter=max(chapter - 1, 0),
+            )
+            view = runtime.cognition_by_observer.get((event.observer_type, event.observer_id))
             result = BookStateCompiler(session).compile(
                 ApprovedGraphDeltaSet(
                     project_id=project_id,
@@ -235,7 +258,9 @@ def test_knowledge_updates_accumulate_across_chapters_without_double_evidence() 
                             project_id,
                             chapter,
                             f"delta-knowledge-{chapter}",
-                            [knowledge_event_to_patch(event)],
+                            [knowledge_event_to_patch(
+                                event, knowledge_by_ref=view.knowledge_by_ref if view is not None else {},
+                            )],
                         )
                     ],
                 )
@@ -252,16 +277,22 @@ def test_knowledge_updates_accumulate_across_chapters_without_double_evidence() 
     old_view = earlier.cognition_by_observer[("character", "c1")]
     assert old_view.knowledge_by_ref == {"fact:f1": "heard"}
     assert old_view.evidence_by_ref == {"fact:f1": ["knowledge:rumor:-:10"]}
+    engine.dispose()
 
 
-def test_knowledge_patch_old_value_is_compared_per_ref() -> None:
-    engine = get_engine(postgres_test_url())
-    init_db(engine)
+@pytest.mark.parametrize("backend", ["sqlite", "postgresql"])
+def test_knowledge_patch_old_value_is_compared_per_ref(backend: str) -> None:
+    engine = create_engine("sqlite://") if backend == "sqlite" else get_engine(postgres_test_url())
+    if backend == "sqlite":
+        Base.metadata.create_all(engine)
+    else:
+        init_db(engine)
     Session = get_session_factory(engine)
 
     def compile_patch(session, project_id: str, chapter: int, fact_ref: str, old_value):
         patch = knowledge_event_to_patch(
-            KnowledgeEvent("character", "c1", fact_ref, "knows", "witnessed", "scene", 900)
+            KnowledgeEvent("character", "c1", fact_ref, "knows", "witnessed", "scene", 900),
+            knowledge_by_ref={},
         ).model_copy(update={"old_value": old_value})
         return BookStateCompiler(session).compile(
             ApprovedGraphDeltaSet(
@@ -284,10 +315,12 @@ def test_knowledge_patch_old_value_is_compared_per_ref() -> None:
                         "delta-cas-seed",
                         [
                             knowledge_event_to_patch(
-                                KnowledgeEvent("character", "c1", "fact:f1", "suspects", "inferred")
+                                KnowledgeEvent("character", "c1", "fact:f1", "suspects", "inferred"),
+                                knowledge_by_ref={},
                             ),
                             knowledge_event_to_patch(
-                                KnowledgeEvent("character", "c1", "fact:f2", "heard", "rumor")
+                                KnowledgeEvent("character", "c1", "fact:f2", "heard", "rumor"),
+                                knowledge_by_ref={},
                             ),
                         ],
                     )
@@ -311,6 +344,7 @@ def test_knowledge_patch_old_value_is_compared_per_ref() -> None:
         already_known = compile_patch(session, project_id, 3, "fact:f9", {"fact:f9": None})
         assert already_known.committed is False
         assert any("old_value mismatch" in reason for reason in already_known.blocked_reasons)
+    engine.dispose()
 
 
 def _knowledge_delta(new_value: object, *, op: str = "merge") -> GraphDelta:

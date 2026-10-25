@@ -21,7 +21,7 @@ from forwin.book_state.map_graph import MapGraph
 from forwin.book_state.narrative import (
     PLAN_CONSTRAINT_SOURCE_TYPE, PROTECTION_KINDS, PROTECTION_STATUS_PATH, RELEASED_PROTECTION_STATUS,
 )
-from forwin.book_state.path_patch import apply_path_patch
+from forwin.book_state.path_patch import apply_path_patch, current_path_value
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.protections import MILESTONE_KIND, DeltaBoundaryViolation, delta_boundary_violations
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
@@ -159,9 +159,8 @@ def _missing_old_value_issues(runtime: BookStateRuntime, delta: GraphDelta) -> l
         # P2 R8 keeps first node-state writes as leaf sets; state is snapshot-backed.
         if (isinstance(patch, NodePatch) and str(patch.op) == "set"
                 and patch.field_path.startswith("state.") and "old_value" in patch.model_fields_set):
-            current = runtime.world.get_state(patch.node_id)
-            for part in patch.field_path.removeprefix("state.").split("."):
-                current = current.get(part) if isinstance(current, dict) else None
+            current = current_path_value(
+                runtime.world.get_state(patch.node_id), patch.field_path.removeprefix("state."))
             if current is None:
                 continue
         # An existing thread may receive its first beat without changing the append shape.

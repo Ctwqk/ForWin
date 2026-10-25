@@ -432,7 +432,10 @@ class _TickBuilder:
             return
         payload = self.world.nodes_by_id[node_id].model_dump(mode="json")
         payload["state"] = self.world.get_state(node_id)
-        leaf = _leaf_patch(payload, field_path, value)
+        leaf = (
+            ("set", field_path, _current_node_value(self.runtime, node_id, field_path), value)
+            if field_path.startswith("state.") else _leaf_patch(payload, field_path, value)
+        )
         if leaf is None:
             # Historical rewind restores non-state fields from old_value.
             self._issue("error", "missing_old_value", f"{node_id}:{field_path} has no current value or parent")
@@ -948,9 +951,8 @@ class _TickBuilder:
         patch = knowledge_event_to_patch(KnowledgeEvent(
             observer_type=observer_type, observer_id=observer_id, fact_ref=resolved_fact,
             state=state, channel=channel, source_ref=source_id, at=self.context.now,
-        ))
+        ), knowledge_by_ref=view.knowledge_by_ref if view is not None else {})
         self.cognition_patches.append(patch.model_copy(update={
-            "old_value": {resolved_fact: view.knowledge_by_ref.get(resolved_fact) if view is not None else None},
             "reason": self.reason,
         }))
         self.knowledge_tags.append({

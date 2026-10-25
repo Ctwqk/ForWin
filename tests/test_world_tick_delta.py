@@ -599,7 +599,7 @@ def test_gate_rejects_reader_knowledge_in_world_engine_delta() -> None:
     })])
     reader_patch = knowledge_event_to_patch(KnowledgeEvent(
         observer_type="reader", observer_id="reader", fact_ref=public, state="knows", channel="inferred",
-    ))
+    ), knowledge_by_ref={})
     leaky = delta.model_copy(update={"cognition_patches": [*delta.cognition_patches, reader_patch]})
     chapter_reveal = _delta(Session, world, 2, {"knowledge_events": [_knowledge("reader", public, channel="inferred")]})
     reader_observer = _build(Session, context, [_candidate("c-2", effects={

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -37,7 +38,10 @@ def knowledge_evidence_ref(event: KnowledgeEvent) -> str:
     return f"knowledge:{event.channel}:{event.source_ref or '-'}:{at}"
 
 
-def knowledge_event_to_patch(event: KnowledgeEvent) -> CognitionPatch:
+def knowledge_event_to_patch(
+    event: KnowledgeEvent, *, knowledge_by_ref: Mapping[str, str],
+) -> CognitionPatch:
+    """Compare the touched ref against the observer's pre-delta recorded knowledge."""
     if event.state not in KNOWLEDGE_STATES:
         raise ValueError(f"unknown knowledge state: {event.state!r}")
     if event.channel not in KNOWLEDGE_CHANNELS:
@@ -51,7 +55,7 @@ def knowledge_event_to_patch(event: KnowledgeEvent) -> CognitionPatch:
         observer_id=event.observer_id,
         op="merge",
         field_path="knowledge_by_ref",
-        old_value={event.fact_ref: None},
+        old_value={event.fact_ref: knowledge_by_ref.get(event.fact_ref)},
         new_value={event.fact_ref: event.state},
         evidence_refs=[knowledge_evidence_ref(event)],
     )

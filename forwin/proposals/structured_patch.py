@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -12,7 +13,7 @@ from forwin.book_state.narrative import (
     promise_node_payload,
     reader_promise_from_node,
 )
-from forwin.book_state.path_patch import apply_path_patch, cas_patch_fields
+from forwin.book_state.path_patch import apply_path_patch, cas_patch_fields, path_parts
 from forwin.book_state.projection import BookStateProjection
 from forwin.models.base import new_id
 from forwin.models.knowledge import KnowledgeEditProposalRow
@@ -80,7 +81,7 @@ def proposal_to_graph_delta(
             "set_personality_loadout",
             "append_personality_note",
         }:
-            node_patches.append(_node_patch(operation, row, runtime, reason=reason))
+            node_patches.append(_node_patch(operation, row, runtime, reason=reason, pending=node_patches))
         elif op in {"create_edge", "set_edge_field", "deactivate_edge"}:
             edge_patches.append(
                 _edge_patch(
@@ -90,6 +91,7 @@ def proposal_to_graph_delta(
                     reason=reason,
                     source_refs=source_refs,
                     chapter=chapter,
+                    pending=edge_patches,
                 )
             )
         elif op in {
@@ -101,7 +103,7 @@ def proposal_to_graph_delta(
         }:
             map_patches.append(
                 _map_patch(
-                    operation, row, runtime, reason=reason, source_refs=source_refs
+                    operation, row, runtime, reason=reason, source_refs=source_refs, pending=map_patches
                 )
             )
         elif op in {"create_fact", "set_fact_field"}:
@@ -113,6 +115,7 @@ def proposal_to_graph_delta(
                     reason=reason,
                     source_refs=source_refs,
                     chapter=chapter,
+                    pending=fact_patches,
                 )
             )
         elif op in {
@@ -138,6 +141,7 @@ def proposal_to_graph_delta(
                     reason=reason,
                     source_refs=source_refs,
                     chapter=chapter,
+                    pending=narrative_patches,
                 )
             )
         else:
@@ -295,7 +299,7 @@ def _normalize_operations(candidate: Any) -> list[dict[str, Any]]:
 
 
 def _node_patch(
-    operation: dict[str, Any], row: KnowledgeEditProposalRow, runtime, *, reason: str
+    operation: dict[str, Any], row: KnowledgeEditProposalRow, runtime, *, reason: str, pending: Sequence[NodePatch] = ()
 ) -> NodePatch:
     op = str(operation.get("op") or "")
     node_id = str(operation.get("node_id") or getattr(row, "target_node_id", "") or "")
@@ -344,7 +348,8 @@ def _node_patch(
     return NodePatch(
         node_id=node_id,
         node_type=node.node_type,
-        **_operator_patch_fields(operation, payload, field_path, new_value, op=patch_op),
+        **_operator_patch_fields(operation, payload, field_path, new_value, op=patch_op,
+                                 pending=[patch for patch in pending if patch.node_id == node_id]),
         reason=reason or str(operation.get("reason") or row.reason or ""),
         visibility_default=str(
             operation.get("visibility_default")
@@ -362,6 +367,7 @@ def _edge_patch(
     reason: str,
     source_refs: list[str],
     chapter: int,
+    pending: Sequence[EdgePatch] = (),
 ) -> EdgePatch:
     op = str(operation.get("op") or "")
     if op == "create_edge":
@@ -423,7 +429,8 @@ def _edge_patch(
         target_id=edge.target_id,
         edge_type=edge.edge_type,
         edge_family=edge.edge_family,
-        **_operator_patch_fields(operation, edge.model_dump(mode="json"), field_path, operation.get("new_value")),
+        **_operator_patch_fields(operation, edge.model_dump(mode="json"), field_path, operation.get("new_value"),
+                                 pending=[patch for patch in pending if patch.edge_id == edge_id]),
         reason=reason or str(operation.get("reason") or row.reason or ""),
     )
 
@@ -435,6 +442,7 @@ def _map_patch(
     *,
     reason: str,
     source_refs: list[str],
+    pending: Sequence[MapPatch] = (),
 ) -> MapPatch:
     op = str(operation.get("op") or "")
     if op == "create_map_node":
@@ -533,7 +541,9 @@ def _map_patch(
     return MapPatch(
         target_type=target_type,
         target_id=target_id,
-        **_operator_patch_fields(operation, current.model_dump(mode="json"), field_path, operation.get("new_value")),
+        **_operator_patch_fields(operation, current.model_dump(mode="json"), field_path, operation.get("new_value"),
+                                 pending=[patch for patch in pending
+                                          if patch.target_type == target_type and patch.target_id == target_id]),
         reason=reason or str(operation.get("reason") or row.reason or ""),
         visibility_default=str(
             operation.get("visibility_default")
@@ -550,6 +560,7 @@ def _fact_patch(
     reason: str,
     source_refs: list[str],
     chapter: int,
+    pending: Sequence[FactPatch] = (),
 ) -> FactPatch:
     op = str(operation.get("op") or "")
     if op == "create_fact":
@@ -592,7 +603,8 @@ def _fact_patch(
         raise ValueError("set_fact_field requires field_path")
     return FactPatch(
         fact_id=fact_id,
-        **_operator_patch_fields(operation, fact.model_dump(mode="json"), field_path, operation.get("new_value")),
+        **_operator_patch_fields(operation, fact.model_dump(mode="json"), field_path, operation.get("new_value"),
+                                 pending=[patch for patch in pending if patch.fact_id == fact_id]),
         reason=reason or str(operation.get("reason") or row.reason or ""),
         proposition=fact.proposition,
         truth_value=fact.truth_value,
@@ -652,6 +664,7 @@ def _promise_narrative_patches(
     reason: str,
     source_refs: list[str],
     chapter: int,
+    pending: Sequence[NarrativePatch] = (),
 ) -> list[NarrativePatch]:
     op = str(operation.get("op") or "")
     promise_id = str(operation.get("promise_id") or operation.get("target_id") or "")
@@ -728,6 +741,7 @@ def _promise_narrative_patches(
                     operation if op != "resolve_reader_promise" or field == "status" else {},
                     node.model_dump(mode="json"), node_path,
                     new_value if "." in field else validated[field],
+                    pending=[patch for patch in [*pending, *patches] if patch.target_ref == target_ref],
                 ),
                 reason=patch_reason,
                 evidence_refs=evidence_refs,
@@ -813,8 +827,20 @@ def _cognition_current(
 
 def _operator_patch_fields(
     operation: dict[str, Any], payload: dict[str, Any], field_path: str,
-    new_value: Any, *, op: str = "set",
+    new_value: Any, *, op: str = "set", pending: Sequence[Any] = (),
 ) -> dict[str, Any]:
     if "old_value" in operation:
         return dict(op=op, field_path=field_path, old_value=operation["old_value"], new_value=new_value)
-    return cas_patch_fields(payload, field_path, new_value, op=op)
+    field_path = ".".join(path_parts(field_path))
+    fields = cas_patch_fields(payload, field_path, new_value, op=op)
+    if fields["field_path"] != field_path:
+        # Accumulate proposed changes while keeping CAS values from original canon.
+        updated = deepcopy(payload)
+        for patch in pending:
+            apply_path_patch(updated, patch.field_path, deepcopy(patch.new_value), op=str(patch.op))
+        apply_path_patch(updated, field_path, deepcopy(new_value), op=op)
+        parent_path = fields["field_path"]
+        leaf = field_path[len(parent_path) + 1:].split(".", 1)[0]
+        parent = _get_path(updated, parent_path)
+        fields["new_value"] = {leaf: parent[leaf]} if leaf in parent else {}
+    return fields

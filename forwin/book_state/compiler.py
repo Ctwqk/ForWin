@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.cognition import CognitionView
 from forwin.book_state.narrative import OPEN_PROTECTION_UNTIL, PROTECTION_STATUS_PATH, PROTECTION_UNTIL_PATH
+from forwin.book_state.path_patch import current_path_value
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository, _as_jsonable, _world_edge_as_of
 from forwin.book_state.runtime import INACTIVE_SPANS_KEY, BookStateRuntime
@@ -225,7 +226,8 @@ class BookStateCompiler:
         return [
             (label, patch, current)
             for label, patch, current in self._iter_patch_current_values(runtime, delta)
-            if (getattr(patch, "old_value", None) is not None
+            if str(patch.op) != "create"
+            and ("old_value" in patch.model_fields_set
                 # An absent protection status is active, and its explicit None must still participate in CAS.
                 or (isinstance(patch, NarrativePatch) and str(patch.op) != "create"
                     and patch.field_path == PROTECTION_STATUS_PATH))
@@ -470,14 +472,7 @@ def _split_target_ref(target_ref: str) -> tuple[str, str]:
 
 
 def _get_path(payload: dict[str, Any], field_path: str) -> Any:
-    if not field_path:
-        return payload
-    cursor: Any = payload
-    for part in [part for part in field_path.split(".") if part]:
-        if not isinstance(cursor, dict) or part not in cursor:
-            return None
-        cursor = cursor[part]
-    return cursor
+    return current_path_value(payload, field_path)
 
 
 def _with_inactive_spans(metadata: dict[str, Any], stored: WorldEdge) -> dict[str, Any]:

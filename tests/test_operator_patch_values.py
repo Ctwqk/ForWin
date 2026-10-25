@@ -80,5 +80,5 @@ def test_supplied_old_value_is_preserved(runtime, old):
 def test_seeded_knowledge_patch_compares_absent_fact():
     from forwin.book_state.knowledge import KnowledgeEvent, knowledge_event_to_patch
     patch = knowledge_event_to_patch(KnowledgeEvent(observer_type="reader", observer_id="reader",
-        fact_ref="fact:f", state="knows", channel="seeded"))
+        fact_ref="fact:f", state="knows", channel="seeded"), knowledge_by_ref={})
     assert patch.old_value == {"fact:f": None}

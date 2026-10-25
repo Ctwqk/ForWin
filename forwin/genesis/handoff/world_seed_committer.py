@@ -588,7 +588,7 @@ class _SeedDeltaBuilder:
                 state=item["state"],
                 channel="seeded",
                 at=self.opening,
-            )))
+            ), knowledge_by_ref={}))
         return patches
 
     def narrative_patches(self) -> list[NarrativePatch]:

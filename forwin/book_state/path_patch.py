@@ -4,6 +4,20 @@ from copy import deepcopy
 from typing import Any
 
 
+def path_parts(field_path: str) -> list[str]:
+    return [part for part in field_path.split(".") if part]
+
+
+def current_path_value(payload: Any, field_path: str) -> Any:
+    """Read a leaf or the non-mapping ancestor a write would replace."""
+    current = payload
+    for part in path_parts(field_path):
+        if not isinstance(current, dict):
+            return current
+        current = current.get(part)
+    return current
+
+
 def apply_path_patch(
     payload: dict[str, Any],
     field_path: str,
@@ -11,7 +25,7 @@ def apply_path_patch(
     *,
     op: str = "set",
 ) -> None:
-    parts = [part for part in field_path.split(".") if part]
+    parts = path_parts(field_path)
     if not parts:
         return
     cursor = payload
@@ -48,7 +62,8 @@ def cas_patch_fields(
     payload: dict[str, Any], field_path: str, new_value: Any, *, op: str = "set",
 ) -> dict[str, Any]:
     """Read a CAS value, or merge a first write into its existing parent."""
-    parts = field_path.split(".")
+    parts = path_parts(field_path)
+    field_path = ".".join(parts)
     current: Any = payload
     parents = []
     for index, part in enumerate(parts):
@@ -71,4 +86,4 @@ def cas_patch_fields(
                 new_value={leaf: updated[leaf]} if leaf in updated else {})
 
 
-__all__ = ["apply_path_patch", "cas_patch_fields"]
+__all__ = ["apply_path_patch", "cas_patch_fields", "current_path_value", "path_parts"]

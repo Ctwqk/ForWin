@@ -824,9 +824,8 @@ class _DeltaBuilder:
         patch = knowledge_event_to_patch(KnowledgeEvent(
             observer_type=observer_type, observer_id=observer_id, fact_ref=fact_ref,
             state=item.state, channel=item.channel, source_ref=source_id, at=self.start,
-        ))
+        ), knowledge_by_ref=view.knowledge_by_ref if view is not None else {})
         self.cognition_patches.append(patch.model_copy(update={
-            "old_value": {fact_ref: view.knowledge_by_ref.get(fact_ref) if view is not None else None},
             "reason": item.evidence,
         }))
         self.knowledge_tags.append({

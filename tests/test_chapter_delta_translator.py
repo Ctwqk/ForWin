@@ -444,6 +444,36 @@ def test_knowledge_events_compile_with_tags_and_reader_observer() -> None:
     engine.dispose()
 
 
+def test_knowledge_producer_accumulates_across_two_chapters_sqlite() -> None:
+    from sqlalchemy import create_engine
+    from forwin.models.base import Base
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    Session = get_session_factory(engine)
+    world = _seed_world(Session)
+    fact_ref = world.fact("fact-2")
+    secret_ref = world.fact("fact-1")
+    for chapter, state, old in ((1, "heard", None), (2, "believes", "heard")):
+        event = {"observer_ref": world.hero, "fact_ref": fact_ref, "state": state,
+                 "channel": "rumor" if chapter == 1 else "witnessed", "evidence": "observed"}
+        result = _translate(Session, world, chapter, {"knowledge_events": [event]})
+        assert result.delta is not None, result.issues
+        assert result.issues == ()
+        assert [patch.old_value for patch in result.delta.cognition_patches] == [
+            {fact_ref: old},
+        ]
+        _commit(Session, world, chapter, result)
+        view = _runtime(Session, world, chapter).cognition_by_observer[("character", world.hero)]
+        assert view.knowledge_by_ref == {secret_ref: "knows", fact_ref: state}
+        assert view.evidence_by_ref[fact_ref] == [
+            f"knowledge:rumor:-:{OPENING}", f"knowledge:witnessed:-:{OPENING}",
+        ][:chapter]
+    earlier = _runtime(Session, world, 1).cognition_by_observer[("character", world.hero)]
+    assert earlier.knowledge_by_ref == {secret_ref: "knows", fact_ref: "heard"}
+    engine.dispose()
+
+
 def test_flashback_entity_change_emits_no_state_patch() -> None:
     engine, Session = _session_factory()
     world = _seed_world(Session)

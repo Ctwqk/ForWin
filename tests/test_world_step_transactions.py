@@ -70,9 +70,11 @@ def _world_row(session, commit_id):
     ))
 
 
-def test_world_llm_has_no_transaction_or_project_lock(db, monkeypatch):
+@pytest.mark.parametrize("expire_on_commit", [True, False])
+def test_world_llm_has_no_transaction_or_project_lock(db, monkeypatch, expire_on_commit):
     engine, factory = db
     world, chapter, llm, maintenance, commit_id = _setup(factory, monkeypatch)
+    factory.configure(expire_on_commit=expire_on_commit)
     active = []
     runner = maintenance._run_world_step
 
@@ -104,6 +106,111 @@ def test_world_llm_has_no_transaction_or_project_lock(db, monkeypatch):
         row = _world_row(session, commit_id)
         assert row.status == "succeeded"
         assert json.loads(row.result_json)["graph_delta_ids"]
+
+
+@pytest.mark.parametrize("expire_on_commit", [True, False])
+def test_world_conflict_options_refresh_project_after_adjudication(db, monkeypatch, expire_on_commit):
+    _, factory = db
+    world, _, llm, maintenance, commit_id = _setup(factory, monkeypatch)
+    factory.configure(expire_on_commit=expire_on_commit)
+    runner = maintenance._run_world_step
+    active = []
+
+    def run(session, commit):
+        active.append(session)
+        return runner(session, commit)
+
+    maintenance._step_runners["world"] = run
+    adjudicate = llm.handlers["adjudicate"]
+
+    def update_total(*args):
+        assert not active[0].in_transaction()
+        with factory.begin() as other:
+            other.get(Project, world.project_id).target_total_chapters = 1
+        return adjudicate(*args)
+
+    llm.handlers["adjudicate"] = update_total
+    delegate = maintenance.world_tick.conflict_delegate.decide
+    offered = []
+
+    def inspect_options(**kwargs):
+        assert not active[0].in_transaction()
+        with factory() as other:
+            assert other.get(Project, world.project_id).target_total_chapters == 1
+        offered.append(json.loads(kwargs["conflict"].options_json))
+        return delegate(**kwargs)
+
+    monkeypatch.setattr(maintenance.world_tick.conflict_delegate, "decide", inspect_options)
+    maintenance.run(canon_commit_id=commit_id, worker_id="test")
+    assert offered
+    assert all("plot_responds" not in options for options in offered)
+
+
+def test_chapter_ticks_follow_sequence_when_timestamps_and_ids_disagree(db):
+    from datetime import datetime, timedelta
+    from forwin.world_engine.tick import _chapter_ticks
+
+    _, factory = db
+    with factory.begin() as session:
+        session.add(Project(id="tick-order", title="Order", genre="test", premise="test"))
+        session.flush()
+        stamp = datetime(2026, 10, 22)
+        for delta_id, tick_id, created_at in [
+            ("z-first", "tick-first", stamp),
+            ("a-second", "tick-second", stamp - timedelta(seconds=1)),
+        ]:
+            session.add(GraphDeltaRow(
+                id=delta_id, project_id="tick-order", chapter_number=1, source_type="world_engine",
+                created_at=created_at, metadata_json=json.dumps({"tick_id": tick_id}),
+            ))
+            session.flush()
+        assert _chapter_ticks(session, "tick-order", 1) == [
+            ("z-first", "tick-first"), ("a-second", "tick-second"),
+        ]
+
+
+@pytest.mark.parametrize("changed", ["project", "plan"])
+def test_world_final_unit_refreshes_side_effect_inputs(db, monkeypatch, changed):
+    from forwin.world_engine import tick_conflicts
+
+    _, factory = db
+    world, _, llm, maintenance, commit_id = _setup(factory, monkeypatch)
+    factory.configure(expire_on_commit=False)
+    with factory.begin() as session:
+        arc = session.scalar(select(ArcPlanVersion).where(ArcPlanVersion.project_id == world.project_id))
+        session.add(ChapterPlan(id="next-plan", project_id=world.project_id, arc_plan_id=arc.id,
+                                chapter_number=2, title="Next", status="planned"))
+    retained = []
+    snapshot = tick_conflicts.build_conflict_context_snapshot
+
+    def retain_inputs(session, **kwargs):
+        retained.extend([session.get(Project, world.project_id), session.get(ChapterPlan, "next-plan")])
+        return snapshot(session, **kwargs)
+
+    monkeypatch.setattr(tick_conflicts, "build_conflict_context_snapshot", retain_inputs)
+    binding = {"kind": "intent", "ref": "concurrent-intent", "how": "concurrent binding"}
+
+    def decide(*_args):
+        with factory.begin() as other:
+            if changed == "project":
+                other.get(Project, world.project_id).target_total_chapters = 1
+            else:
+                other.get(ChapterPlan, "next-plan").world_bindings_json = json.dumps([binding])
+        return {"option": "plot_responds", "rationale": "Respond", "risk_level": "low", "evidence": []}
+
+    llm.handlers["review"] = decide
+    maintenance.run(canon_commit_id=commit_id, worker_id="test")
+    assert retained
+    with factory() as session:
+        conflict = session.scalars(select(WorldPlanConflictRow)).one()
+        bindings = json.loads(session.get(ChapterPlan, "next-plan").world_bindings_json)
+        if changed == "project":
+            assert conflict.status == "open" and conflict.required_decider == "human"
+            assert not bindings
+        else:
+            assert conflict.status == "resolved"
+            assert binding in bindings
+            assert any(item["ref"] == conflict.intent_ref for item in bindings)
 
 
 @pytest.mark.parametrize("failure", ["stale", "llm_phase", "completion"])

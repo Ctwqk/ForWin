@@ -2,7 +2,8 @@ from functools import partial
 import json
 
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, event, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
 from forwin.canon.admission import CanonAdmissionService  # noqa: F401
@@ -23,6 +24,9 @@ def audit_sessions(request, tmp_path):
         engine = create_engine(postgres_test_url("independent-llm-audit"))
     else:
         engine = create_engine(f"sqlite:///{tmp_path / 'audit.db'}")
+        @event.listens_for(engine, "connect")
+        def enable_foreign_keys(connection, _record):
+            connection.execute("PRAGMA foreign_keys=ON")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     with factory.begin() as session:
@@ -82,7 +86,7 @@ def test_classifier_owns_attempts_and_survives_rollback(audit_sessions, response
 
 
 @pytest.mark.parametrize("failure", ["runtime", "transaction"])
-def test_band_audit_error_survives_rollback(audit_sessions, failure):
+def test_band_audit_error_survives_rollback(audit_sessions, failure, caplog):
     from tests.test_band_planner import _book, _band, _planner, _plan_band
 
     class RaisingAudit:
@@ -94,12 +98,34 @@ def test_band_audit_error_survives_rollback(audit_sessions, failure):
     world, arc_id, sheet_id = _book(audit_sessions)
     client = StubLLM(_band(world, range(1, 5)))
     from forwin.planning.band_planner.types import BandPlanningAuditError
-    with pytest.raises(BandPlanningAuditError):
+    with pytest.raises(BandPlanningAuditError) as raised:
         _plan_band(audit_sessions, _planner(client, RaisingAudit()), world, arc_id, sheet_id)
+    if failure == "transaction":
+        assert isinstance(raised.value.__cause__, DBAPIError)
+        assert "could not save the failed band audit trace" in caplog.text
     with audit_sessions() as session:
         trace = session.scalars(select(PromptTrace).where(PromptTrace.stage_key == "plan.band")).one()
         assert json.loads(trace.output_summary_json)["failure_reason"] == "audit_error"
         assert session.scalars(select(DecisionEvent).where(DecisionEvent.related_object_id == trace.id)).all()
+
+
+def test_review_empty_extraction_trace_keeps_candidate_usable(audit_sessions, monkeypatch):
+    from forwin.generation.pipeline_core.review_autofix import ReviewWorkflowStage
+    from tests.chapter_delta_helpers import stub_chapter_delta_extraction
+
+    stub_chapter_delta_extraction(monkeypatch)
+    output = WriterOutput(project_id="audit-project", chapter_number=1, title="Title", body="Body",
+                          end_of_chapter_summary="Summary")
+    stage = ReviewWorkflowStage()
+    stage.llm_client = StubLLM()
+    with audit_sessions() as session:
+        planned = stage._plan_writer_output_entities(
+            session=session, project_id="audit-project", chapter_number=1, writer_output=output,
+        )
+        assert planned.chapter_delta is not None
+        assert planned.body == output.body
+        assert not list(session.scalars(select(PromptTrace)))
+        assert not list(session.scalars(select(DecisionEvent)))
 
 
 def test_review_extraction_trace_survives_rollback(audit_sessions, monkeypatch):

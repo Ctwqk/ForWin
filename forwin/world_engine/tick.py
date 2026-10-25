@@ -679,6 +679,7 @@ class _Tick:
         if self.committed_units:
             # Close the last read unit; everything below shares the completion transaction.
             self.session.commit()
+            self.session.expire_all()
         self.committing = True
         self.conflicts.persist()
         self.session.add_all(self.pending_events)
@@ -778,8 +779,9 @@ class _Tick:
         From here on no other canon writer can commit; the lock comes after the conflict rows' locks.
         """
         self.session.execute(
-            select(Project.id).where(Project.id == self.context.project_id).with_for_update(key_share=True)
-        )
+            select(Project).where(Project.id == self.context.project_id).with_for_update(key_share=True)
+            .execution_options(populate_existing=True)
+        ).scalar_one()
         self._check_snapshot()
 
     def _check_snapshot(self) -> None:
@@ -795,6 +797,8 @@ class _Tick:
             raise CanonStaleVersion(f"Canon moved under world tick {self.tick_id}")
         if self.committed_units and not self.committing:
             self.session.commit()
+            # Production sessions do not expire on commit; subsequent units must re-read ORM state.
+            self.session.expire_all()
 
     def _news(self, candidates: Sequence[TickCandidate], queue: Sequence[NewsItem]) -> PropagatedNews:
         """One propagation of the chapter's events, the events that will commit, and the queue."""
@@ -907,7 +911,7 @@ def _chapter_ticks(session: Session, project_id: str, chapter_number: int) -> li
             GraphDeltaRow.chapter_number == chapter_number,
             GraphDeltaRow.source_type == WORLD_ENGINE_SOURCE_TYPE,
         )
-        .order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
+        .order_by(GraphDeltaRow.seq)
     ).all()
     ticks = []
     for delta_id, metadata_json in rows:

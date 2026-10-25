@@ -1081,6 +1081,8 @@ def save_world_prompt_trace(
     independent: bool = False,
 ) -> str:
     """Save a role's trace and events, optionally through the independent audit writer."""
+    if not prompt_trace:
+        return ""
     snapshot = prompt_trace.get("input_snapshot")
     snapshot = snapshot if isinstance(snapshot, Mapping) else {}
     project_id = str(snapshot.get("project_id") or "")

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from forwin.book_state.book_frame_repository import StoryCalendarRepository
@@ -256,6 +257,12 @@ class BandPlanner:
                               beat_sheet=beat_sheet, policy=policy)
         if call.error is not None:
             # An audit failure may abort the caller's transaction; spent calls still need their audit trail.
+            if isinstance(call.error, DBAPIError):
+                logger.warning(
+                    "Project %s: could not save the failed band audit trace in the failed audit unit; "
+                    "attempting independent persistence after database error: %s",
+                    project_id, call.error,
+                )
             try:
                 self.save_trace(session, self._prompt_trace(call, trace, BandPlanOutcome(band_plan_id=None)), independent=True)
             except Exception:  # noqa: BLE001 - preserve the audit error if independent persistence also fails

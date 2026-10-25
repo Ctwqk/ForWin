@@ -18,6 +18,8 @@ from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
+from forwin.world_engine.chapter_conflicts import ChapterConflictRecorder
+from forwin.world_engine.conflict_delegate import WorldConflictDelegate
 from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.world_engine.conflict_types import ConflictDecision, ConflictDraft
 from tests.http_runtime_harness import HttpRuntimeHarness
@@ -82,7 +84,7 @@ def runtime():
 
 
 def _run_chapters(factory, monkeypatch, *, chapters, block_at):
-    from forwin.generation.pipeline_core import project_chapters
+    from forwin.generation.pipeline_core import chapter_conflicts, project_chapters
 
     events = []
     written = []
@@ -105,9 +107,9 @@ def _run_chapters(factory, monkeypatch, *, chapters, block_at):
             session.commit()
             return SimpleNamespace(blocked=False, commit_id=f"commit-{number}")
 
-        monkeypatch.setattr(project_chapters, "CandidateDraftRepository", lambda _session: SimpleNamespace(
-            latest_for_chapter=lambda **_kwargs: SimpleNamespace(id="candidate"),
-        ))
+        candidates = lambda _session: SimpleNamespace(latest_for_chapter=lambda **_kwargs: SimpleNamespace(id="candidate"))
+        monkeypatch.setattr(project_chapters, "CandidateDraftRepository", candidates)
+        monkeypatch.setattr(chapter_conflicts, "CandidateDraftRepository", candidates)
         monkeypatch.setattr(project_chapters, "handle_chapter_review_gate", lambda *_args, **_kwargs: SimpleNamespace(
             pause_required=False, gate_approved=False,
         ))
@@ -130,6 +132,9 @@ def _run_chapters(factory, monkeypatch, *, chapters, block_at):
             repair_execution=SimpleNamespace(),
             _review_issue_payloads=lambda _verdict: [],
             _review_canon_risk=lambda _verdict: "low",
+            _chapter_conflict_recorder=lambda session, policy: ChapterConflictRecorder(
+                session, policy=policy, delegate=WorldConflictDelegate(None), audit_writer_factory=lambda: None,
+            ),
             canon_preparation=SimpleNamespace(prepare=lambda **kwargs: SimpleNamespace(blocked=False, plan=kwargs["chapter_number"])),
             canon_preparation_context=SimpleNamespace(),
             canon_admission=SimpleNamespace(commit_plan=commit),

@@ -575,6 +575,7 @@ class CanonPreparationService:
             return CanonPreparationOutcome(
                 blocked_path=outcome.blocked_path,
                 block_kind="book_state",
+                book_state_review=outcome.review_verdict,
             )
         return outcome
 

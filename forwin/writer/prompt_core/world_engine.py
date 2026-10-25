@@ -80,6 +80,18 @@ CONFLICT_REVIEW_INSTRUCTIONS = (
     "risk_level 表示所选选项对规划的风险。完整输出结构如下。",
 )
 
+# The review of a chapter conflict: repaired chapter text still breaks a protection or a milestone of the plan.
+CHAPTER_CONFLICT_REVIEW_INSTRUCTIONS = (
+    "你替用户审一条正文与规划的冲突：本章正文经过修复，仍然违反规划设下的叙事保护或里程碑。从 options 中选择一个处理选项，"
+    "返回 JSON 对象，不输出正文或 Markdown。",
+    "只依据输入：冲突记录（proposed_change.boundary 是被违反的约束与正文证据）、涉及引用在检测章节时的世界状态、"
+    "当前卷规划与接下来的章节计划。不要假设输入之外的人物、地点或事实，不要编造正文、补丁或新的计划。",
+    "选项含义：rewrite_chapter 把正文退回修复，改写到遵守这条约束；amend_plan 接受正文并解除这条约束，须由用户确认。",
+    "优先保住当前卷的目标、赌注与回报方向，以及接下来章节计划仍然可写；正文改写后仍能完成本章计划时选择 rewrite_chapter。",
+    "option 必须是 options 中的一项；rationale 用一两句话说明理由；evidence 只列输入中支持判断的引用 id 或字段名；"
+    "risk_level 表示所选选项对规划的风险。完整输出结构如下。",
+)
+
 # The chapter-plan goal plot_responds adds to the next unwritten chapter; the change's public events follow it.
 PLOT_RESPONSE_GOAL_PREFIX = "回应已经发生的世界变化："
 # The response to an accepted change with no public event: it names nothing the reader may not know yet.
@@ -363,14 +375,16 @@ def _compact_slice(item: dict) -> dict:
 
 def build_conflict_review_messages(
     *, context_snapshot: Mapping[str, Any], options: Sequence[str], output_schema: Mapping[str, Any],
+    instructions: Sequence[str] = CONFLICT_REVIEW_INSTRUCTIONS,
 ) -> list[dict]:
     """One conflict for the reviewer: its record, the involved refs' state, the volume plan and the next chapters.
 
-    Over the guard, the BookState slices drop their default-valued fields first, then each chapter-plan
-    goal is cut to MAX_CONFLICT_REVIEW_GOAL_CHARS; the caller rejects a prompt that is still over.
+    ``instructions`` are the ones for the conflict's source. Over the guard, the BookState slices drop their
+    default-valued fields first, then each chapter-plan goal is cut to MAX_CONFLICT_REVIEW_GOAL_CHARS; the
+    caller rejects a prompt that is still over.
     """
     payload = {**copy.deepcopy(dict(context_snapshot)), "options": list(options)}
-    system = "\n".join(CONFLICT_REVIEW_INSTRUCTIONS) + "\n" + json.dumps(output_schema, ensure_ascii=False)
+    system = "\n".join(instructions) + "\n" + json.dumps(output_schema, ensure_ascii=False)
     user = json.dumps(payload, ensure_ascii=False)
     if len(user) > MAX_CONFLICT_REVIEW_PROMPT_CHARS and "book_state" in payload:
         payload["book_state"] = [_compact_slice(item) for item in payload["book_state"]]

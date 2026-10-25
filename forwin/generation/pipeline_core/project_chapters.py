@@ -14,6 +14,7 @@ from forwin.generation.pipeline_core.chapter_review_gate import (
 from forwin.generation.pipeline_core import chapter_execution_support
 from forwin.generation.pipeline_core.result import RunResult
 from forwin.generation.pipeline_core.audit_control import PlanFeasibilityBlocked
+from forwin.generation.pipeline_core.chapter_conflicts import ChapterConflictBlocked, ChapterConflicts, ChapterConflictStage
 from forwin.audit.events import DecisionEventType
 from forwin.audit.gate_outcome import attach_gate_outcome
 from forwin.generation.pipeline_core.common import TransientLLMChapterFailure
@@ -32,7 +33,7 @@ from forwin.review.repair.service import (
 logger = logging.getLogger(__name__)
 
 
-class ChapterExecutionStage:
+class ChapterExecutionStage(ChapterConflictStage):
     """Owns the project chapters stage behavior."""
 
     def _run_project_chapters(
@@ -405,6 +406,10 @@ class ChapterExecutionStage:
                         writer_output=writer_output,
                     )
                 )
+                conflicts = ChapterConflicts(self, session=session, repo=repo, updater=updater, checker=checker,
+                                             policy=policy, chapter_plan=chapter_plan, context=context)
+                writer_output, verdict, force_accept_applied, _ = conflicts.record(
+                    writer_output, verdict, force_accept_applied)
                 repair_attempt_count = int(
                     chapter_plan.repair_attempt_count or 0
                 )
@@ -604,6 +609,7 @@ class ChapterExecutionStage:
                                 blocked_path=preparation.blocked_path,
                                 block_kind=preparation.block_kind,
                                 canon_gate_result=preparation.canon_gate_result,
+                                book_state_review=preparation.book_state_review,
                             )
                         else:
                             session.commit()
@@ -655,6 +661,13 @@ class ChapterExecutionStage:
                             force_accept_applied = (
                                 force_accept_applied or canon_force_accept_applied
                             )
+                            continue
+                    if canon_outcome.book_state_review is not None:
+                        writer_output, verdict, force_accept_applied, repaired = conflicts.record(
+                            writer_output, verdict, force_accept_applied, gate=canon_outcome.book_state_review)
+                        if repaired and verdict.verdict != "fail":
+                            repair_attempt_count, residual_review_issues, canon_risk_level = conflicts.review_state(
+                                verdict)
                             continue
                     if (
                         canon_outcome.block_kind == "canon_quality"
@@ -957,7 +970,7 @@ class ChapterExecutionStage:
                         current_chapter=chapter_num,
                     )
 
-            except PlanFeasibilityBlocked as exc:
+            except (PlanFeasibilityBlocked, ChapterConflictBlocked) as exc:
                 session.rollback()
                 paused_chapters.append(chapter_num)
                 pause_reason = "world_conflict"

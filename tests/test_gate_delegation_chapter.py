@@ -33,6 +33,8 @@ from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
+from forwin.world_engine.chapter_conflicts import ChapterConflictRecorder
+from forwin.world_engine.conflict_delegate import WorldConflictDelegate
 from tests.postgres import postgres_test_url
 
 
@@ -316,6 +318,9 @@ def test_spark_approval_runs_real_chapter_pipeline_through_canon(
             _write_chapter_with_attention_fallback=lambda **_kwargs: writer_output,
             _review_issue_payloads=lambda _verdict: [],
             _review_canon_risk=lambda _verdict: "low",
+            _chapter_conflict_recorder=lambda session, policy: ChapterConflictRecorder(
+                session, policy=policy, delegate=WorldConflictDelegate(None), audit_writer_factory=lambda: None,
+            ),
             _resolve_gate_delegation=lambda **kwargs: (
                 delegation_calls.append(kwargs["gate_kind"])
                 or GateResolution(

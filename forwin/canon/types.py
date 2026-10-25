@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from forwin.canon_quality.signals import CanonAdmissionGateResult
 
 if TYPE_CHECKING:
+    from forwin.book_state.reviewer import BookStateReviewVerdict
     from forwin.canon.plan import CanonCommitPlan
     from forwin.protocol.book_state import BookStateCompileResult
 
@@ -31,6 +32,9 @@ class CanonPreparationOutcome:
     canon_gate_result: CanonAdmissionGateResult | None = None
     # Review error codes a human accept passed because canon extracted the chapter again.
     accepted_past_extraction_errors: tuple[str, ...] = ()
+    # The BookState review gate's verdict when it blocked the candidate; the chapter stage records its
+    # boundary violations as conflicts.
+    book_state_review: BookStateReviewVerdict | None = None
 
     @property
     def blocked(self) -> bool:
@@ -50,6 +54,8 @@ class CanonAdmissionOutcome:
     stale: bool = False
     failure_reason: str = ""
     compile_result: BookStateCompileResult | None = None
+    # The BookState review gate's verdict when it blocked canon preparation.
+    book_state_review: BookStateReviewVerdict | None = None
 
     @property
     def blocked(self) -> bool:

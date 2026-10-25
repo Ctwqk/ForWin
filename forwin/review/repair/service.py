@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.models.project import ChapterPlan
+from forwin.models.world_conflict import WorldPlanConflictRow
 import json
 from forwin.generation.pipeline_core.common import logger
 from forwin.protocol.review import ReviewVerdict
@@ -1373,6 +1374,29 @@ class RepairService:
             writer_output=writer_output,
             gate_result=gate_result,
         )
+
+    def repair_world_conflict(
+        self,
+        *,
+        execution: RepairExecution,
+        session: Session,
+        repo: StateRepository,
+        updater: StateUpdater,
+        checker: ContinuityChecker,
+        project_id: str,
+        chapter_plan: ChapterPlan,
+        context,
+        writer_output: WriterOutput,
+        verdict: ReviewVerdict,
+        conflicts: Sequence[WorldPlanConflictRow],
+    ) -> tuple[WriterOutput, ReviewVerdict, bool]:
+        """The full-draft repair pass a decided rewrite_chapter buys, with the conflicts' constraints as must_fix.
+
+        Not wired yet: the draft and its verdict come back unchanged, so a violation Codex sent back stays
+        residual and the chapter stage hands its conflict to a human.
+        """
+        del execution, session, repo, updater, checker, project_id, chapter_plan, context, conflicts
+        return writer_output, verdict, False
 
 
 __all__ = ["RepairExecution", "RepairService"]

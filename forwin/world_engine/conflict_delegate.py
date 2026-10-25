@@ -27,7 +27,12 @@ from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.planning.goals import load_goals_json
 from forwin.planning.query import PlanningQuery
 from forwin.runtime.policy import RuntimePolicy, role_models
-from forwin.writer.prompt_core.world_engine import MAX_CONFLICT_REVIEW_PROMPT_CHARS, build_conflict_review_messages
+from forwin.writer.prompt_core.world_engine import (
+    CHAPTER_CONFLICT_REVIEW_INSTRUCTIONS,
+    CONFLICT_REVIEW_INSTRUCTIONS,
+    MAX_CONFLICT_REVIEW_PROMPT_CHARS,
+    build_conflict_review_messages,
+)
 
 from .conflict_types import ConflictOption
 
@@ -38,6 +43,11 @@ UPCOMING_CHAPTER_LIMIT = 3
 _GATE_KIND = "world_conflict"
 # Only the user amends the plan, so Codex choosing it hands the conflict to a human.
 _ESCALATING_OPTIONS = frozenset({"amend_plan"})
+# The review instructions and template id by conflict source; the rest are reviewed as world-tick conflicts.
+_REVIEW_PROMPTS: dict[str, tuple[tuple[str, ...], str]] = {
+    "chapter_extraction": (CHAPTER_CONFLICT_REVIEW_INSTRUCTIONS, "world_engine:chapter_conflict_review"),
+}
+_DEFAULT_REVIEW_PROMPT = (CONFLICT_REVIEW_INSTRUCTIONS, "world_engine:conflict_review")
 # The review records no requested or completed event; a failed call escalates.
 _EVENT_TYPES = CodexCallEventTypes(
     requested="", completed="", failed=DecisionEventType.WORLD_CONFLICT_ESCALATED,
@@ -208,8 +218,10 @@ class WorldConflictDelegate:
             )
             return WorldConflictDelegation(rationale=rationale, failure_reason="no_options")
         output_schema = _output_schema(options)
+        instructions, template_id = _REVIEW_PROMPTS.get(conflict.source, _DEFAULT_REVIEW_PROMPT)
         messages = build_conflict_review_messages(
             context_snapshot=context_snapshot, options=options, output_schema=output_schema,
+            instructions=instructions,
         )
         prompt_chars = len(messages[-1]["content"])
         if prompt_chars > MAX_CONFLICT_REVIEW_PROMPT_CHARS:
@@ -254,7 +266,7 @@ class WorldConflictDelegate:
             input_snapshot=context_snapshot,
             verdict=lambda result: _escalation_verdict(conflict, result),
             trace_scope="world_engine",
-            template_id="world_engine:conflict_review",
+            template_id=template_id,
             label="Codex review",
         )
         answer = cast(_ConflictReviewAnswer | None, outcome.parsed)

@@ -1,0 +1,524 @@
+"""Residual chapter-text boundary violations become chapter_extraction conflicts and pause the chapter."""
+
+from __future__ import annotations
+
+import json
+from copy import deepcopy
+from dataclasses import asdict
+from types import SimpleNamespace
+
+import pytest
+from sqlalchemy import select
+
+from forwin.audit.events import DecisionEventType
+from forwin.book_state.protections import DeltaBoundaryViolation
+from forwin.book_state.repository import BookStateRepository
+from forwin.book_state.reviewer import BookStateReviewIssue, BookStateReviewVerdict
+from forwin.candidate_drafts import CandidateDraftRepository, candidate_plan_revision
+from forwin.canon.preparation import BookStatePreparationOutcome, CanonPreparationService
+from forwin.canon.types import CanonPreparationOutcome
+from forwin.generation.pipeline_core.project_chapters import ChapterExecutionStage
+from forwin.models.audit import DecisionEvent
+from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.world_conflict import WorldPlanConflictRow
+from forwin.protocol.book_state import FactNode, WorldNode
+from forwin.protocol.review import ContinuityIssue, ReviewVerdict
+from forwin.protocol.writer import WriterOutput
+from forwin.runtime.policy import RuntimePolicy
+from forwin.state.repo import StateRepository
+from forwin.state.updater import StateUpdater
+from forwin.world_engine.chapter_conflicts import (
+    CHAPTER_CONFLICT_OPTIONS,
+    ChapterConflictRecorder,
+    chapter_conflict_draft,
+    violations_from_gate,
+    violations_from_verdict,
+)
+from forwin.world_engine.conflict_delegate import WorldConflictDelegation
+from forwin.world_engine.conflict_repository import WorldConflictRepository
+from forwin.writer.prompt_core.world_view import UNNAMED_ACTOR_LABEL
+from tests.postgres import postgres_test_url
+
+
+PROJECT_ID = "chapter-conflict-project"
+CHAPTER = 3
+HERO = "hero"
+SHADOW = "shadow"
+SECRET = "secret-1"
+HERO_NAME = "Hero-Name"
+SHADOW_NAME = "Shadow-Name"
+PROPOSITION = "PROPOSITION-OF-THE-SECRET"
+PROTECTION = "protection-hero"
+HUMAN = RuntimePolicy.for_profile("standard").with_user_settings(world_conflict_delegate="human")
+CODEX = RuntimePolicy.for_profile("standard").with_user_settings(world_conflict_delegate="codex")
+
+
+@pytest.fixture
+def factory():
+    engine = get_engine(postgres_test_url("chapter-extraction-conflicts"))
+    init_db(engine)
+    factory = get_session_factory(engine)
+    with factory.begin() as session:
+        session.add(Project(
+            id=PROJECT_ID, title="Test", premise="Test", genre="test",
+            creation_status="writing", target_total_chapters=4,
+        ))
+        session.flush()
+        session.add(ArcPlanVersion(
+            id="chapter-conflict-arc", project_id=PROJECT_ID, arc_synopsis="Test",
+            status="active", chapter_start=1, chapter_end=4,
+        ))
+        session.flush()
+        session.add_all([
+            ChapterPlan(
+                id=f"chapter-conflict-plan-{number}", project_id=PROJECT_ID, arc_plan_id="chapter-conflict-arc",
+                chapter_number=number, title=f"Chapter {number}", status="accepted" if number < CHAPTER else "planned",
+            )
+            for number in range(1, 5)
+        ])
+        repo = BookStateRepository(session)
+        repo.create_world_node(
+            WorldNode(id=HERO, project_id=PROJECT_ID, node_type="character", name=HERO_NAME),
+            version_chapter=0, version_state={"alive_status": "alive"},
+        )
+        repo.create_world_node(
+            WorldNode(id=SHADOW, project_id=PROJECT_ID, node_type="character", name=SHADOW_NAME,
+                      profile={"visibility_level": "hidden"}),
+            version_chapter=0, version_state={"alive_status": "alive"},
+        )
+        repo.create_fact_node(FactNode(
+            id=SECRET, project_id=PROJECT_ID, proposition=PROPOSITION, related_node_refs=[HERO, SHADOW],
+            sensitivity_level="secret",
+        ))
+    yield factory
+    engine.dispose()
+
+
+def _violation(**overrides) -> DeltaBoundaryViolation:
+    return DeltaBoundaryViolation(**{
+        "protection_node_id": PROTECTION, "milestone_ref": "", "kind": "must_be_alive", "ref": HERO,
+        "observer_ref": "", "fact_ref": "", "field": "", "value": None, "until_chapter": 6,
+        "source": "beat_sheet", "impact_level": "major", "evidence": "the hero falls",
+        **overrides,
+    })
+
+
+def _boundary_issue(violation: DeltaBoundaryViolation) -> ContinuityIssue:
+    return ContinuityIssue(
+        rule_name="protection_violated", severity="error", description="d", reviewer="world_consistency",
+        issue_type="world_consistency", blocking=True,
+        original_result={"code": "protection_violated", "boundary": asdict(violation)},
+    )
+
+
+def _failing(*violations: DeltaBoundaryViolation) -> ReviewVerdict:
+    return ReviewVerdict(verdict="fail", issues=[_boundary_issue(violation) for violation in violations])
+
+
+PASSING = ReviewVerdict(verdict="pass", issues=[])
+
+
+class FakeDelegate:
+    def __init__(self, option: str = "rewrite_chapter", *, escalate: bool = False) -> None:
+        self.option = option
+        self.escalate = escalate
+        self.calls: list[str] = []
+
+    def decide(self, *, conflict, context_snapshot, policy, audit_writer):
+        self.calls.append(conflict.id)
+        assert context_snapshot["conflict"]["id"] == conflict.id
+        return WorldConflictDelegation(
+            option=self.option, rationale="Codex rationale.", trace_id="trace-1", escalate=self.escalate,
+        )
+
+
+def _recorder(session, *, policy=HUMAN, delegate=None) -> ChapterConflictRecorder:
+    return ChapterConflictRecorder(
+        session, policy=policy, delegate=delegate or FakeDelegate(), audit_writer_factory=lambda: None,
+    )
+
+
+def _rows(session) -> list[WorldPlanConflictRow]:
+    return list(session.scalars(
+        select(WorldPlanConflictRow).where(WorldPlanConflictRow.project_id == PROJECT_ID)
+        .order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id)
+        .execution_options(populate_existing=True)
+    ))
+
+
+def _events(session, event_type: str) -> list[DecisionEvent]:
+    return list(session.scalars(select(DecisionEvent).where(
+        DecisionEvent.project_id == PROJECT_ID, DecisionEvent.event_type == event_type,
+    ).order_by(DecisionEvent.created_at, DecisionEvent.id)))
+
+
+# drafts and conversions
+
+
+def test_chapter_conflict_draft_fields() -> None:
+    protection = _violation()
+    milestone = _violation(protection_node_id="", milestone_ref=SHADOW, kind="milestone", ref=SHADOW,
+                           field="state.alive_status", value="dead", impact_level="critical")
+
+    draft = chapter_conflict_draft(
+        protection, project_id=PROJECT_ID, chapter_number=CHAPTER, story_time=900, candidate_id="candidate-1",
+    )
+    milestone_draft = chapter_conflict_draft(milestone, project_id=PROJECT_ID, chapter_number=CHAPTER, story_time=900)
+
+    assert (draft.source, draft.violated, draft.impact_level) == ("chapter_extraction", "protection", "major")
+    assert (draft.detected_after_chapter, draft.blocks_from_chapter, draft.story_time) == (CHAPTER - 1, CHAPTER, 900)
+    assert draft.origin_key == f"chapter_extraction:{CHAPTER}:{PROTECTION}"
+    assert draft.involved_refs == [HERO]
+    assert (draft.intent_ref, draft.actor_ref) == ("", "")
+    assert draft.proposed_change == {
+        "kind": "chapter_boundary", "chapter": CHAPTER, "boundary": asdict(protection), "candidate_id": "candidate-1",
+    }
+    assert (milestone_draft.violated, milestone_draft.impact_level) == ("milestone", "critical")
+    assert milestone_draft.origin_key == f"chapter_extraction:{CHAPTER}:milestone:{SHADOW}"
+    # Without names every entity gets the neutral label, never its id.
+    assert HERO not in draft.summary and UNNAMED_ACTOR_LABEL in draft.summary
+
+
+def test_violations_come_from_the_review_boundary_and_the_gate_detail() -> None:
+    protection = _violation()
+    milestone = _violation(protection_node_id="", milestone_ref=SHADOW, kind="milestone", ref=SHADOW,
+                           impact_level="critical")
+    plain = ContinuityIssue(rule_name="movement_too_fast", severity="error", description="d", reviewer="r",
+                            original_result={"code": "movement_too_fast"})
+    verdict = ReviewVerdict(verdict="fail", issues=[plain, _boundary_issue(protection)])
+    gate = BookStateReviewVerdict(project_id=PROJECT_ID, chapter_number=CHAPTER, verdict_id="v", accepted=False, issues=[
+        BookStateReviewIssue(severity="error", code="movement_too_fast", target_ref="node:hero", message="m"),
+        BookStateReviewIssue(severity="error", code="milestone_ref_ended", target_ref=f"node:{SHADOW}", message="m",
+                             detail=asdict(milestone)),
+    ])
+
+    assert violations_from_verdict(verdict) == [protection]
+    assert violations_from_gate(gate) == [milestone]
+
+
+def test_chapter_conflict_summary_has_no_proposition(factory) -> None:
+    keep_secret = _violation(protection_node_id="keep-secret", kind="must_not_know", ref=HERO, observer_ref=HERO,
+                             fact_ref=f"fact:{SECRET}")
+    keep_shadow = _violation(protection_node_id="keep-shadow", ref=SHADOW)
+    with factory() as session:
+        outcome = _recorder(session).record(
+            project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-1",
+            violations=[keep_secret, keep_shadow],
+        )
+        session.commit()
+        rows = {row.id: row for row in _rows(session)}
+        detected = _events(session, DecisionEventType.WORLD_CONFLICT_DETECTED)
+
+    # Rows inserted in one transaction share created_at: look them up in the outcome's violation order.
+    secret_row, shadow_row = (rows[conflict_id] for conflict_id in outcome.conflict_ids)
+    assert len(rows) == 2
+    assert secret_row.origin_key == f"chapter_extraction:{CHAPTER}:keep-secret"
+    for row in (secret_row, shadow_row):
+        assert PROPOSITION not in row.summary
+        assert SHADOW_NAME not in row.summary
+    # The observer and the secret's visible subject are named; the concealed subject is left out.
+    assert secret_row.summary.count(HERO_NAME) == 2
+    assert UNNAMED_ACTOR_LABEL in shadow_row.summary
+    assert sorted(event.summary for event in detected) == sorted([secret_row.summary, shadow_row.summary])
+    # Operators read the violation itself in proposed_change.
+    assert json.loads(secret_row.proposed_change_json)["boundary"] == asdict(keep_secret)
+
+
+# routing and idempotency
+
+
+def test_residual_conflict_reuses_its_open_row(factory) -> None:
+    violation = _violation()
+    with factory() as session:
+        first = _recorder(session).record(
+            project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-1", violations=[violation],
+        )
+        session.commit()
+        second = _recorder(session).record(
+            project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-2", violations=[violation, violation],
+        )
+        session.commit()
+        (row,) = _rows(session)
+        detected = _events(session, DecisionEventType.WORLD_CONFLICT_DETECTED)
+
+    assert first.conflict_ids == second.conflict_ids == (row.id,)
+    assert first.blocking_conflict_id == second.blocking_conflict_id == row.id
+    assert (row.status, row.required_decider, row.origin_key) == ("open", "human", f"chapter_extraction:{CHAPTER}:{PROTECTION}")
+    assert json.loads(row.options_json) == list(CHAPTER_CONFLICT_OPTIONS) == ["rewrite_chapter", "amend_plan"]
+    assert [event.related_object_id for event in detected] == [row.id]
+
+
+@pytest.mark.parametrize(("impact_level", "policy", "decider"), [
+    ("moderate", HUMAN, "human"),
+    ("major", HUMAN, "human"),
+    ("critical", HUMAN, "human"),
+    ("critical", CODEX, "human"),
+])
+def test_recorder_keeps_residual_conflicts_from_auto(factory, impact_level, policy, decider) -> None:
+    delegate = FakeDelegate()
+    with factory() as session:
+        outcome = _recorder(session, policy=policy, delegate=delegate).record(
+            project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-1",
+            violations=[_violation(impact_level=impact_level)],
+        )
+        session.commit()
+        (row,) = _rows(session)
+
+    assert (row.status, row.required_decider) == ("open", decider)
+    assert outcome.blocking_conflict_id == row.id
+    assert outcome.codex_rewrite_ids == ()
+    assert delegate.calls == []
+
+
+def test_codex_amend_plan_hands_the_conflict_to_a_human(factory) -> None:
+    delegate = FakeDelegate("amend_plan", escalate=True)
+    with factory() as session:
+        outcome = _recorder(session, policy=CODEX, delegate=delegate).record(
+            project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-1", violations=[_violation()],
+        )
+        session.commit()
+        (row,) = _rows(session)
+
+    assert delegate.calls == [row.id]
+    assert (row.status, row.required_decider) == ("open", "human")
+    assert outcome.blocking_conflict_id == row.id
+    assert outcome.codex_rewrite_ids == ()
+
+
+def test_open_row_no_longer_violated_resolves_as_auto_rewrite(factory) -> None:
+    with factory() as session:
+        recorded = _recorder(session).record(
+            project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-1", violations=[_violation()],
+        )
+        session.commit()
+        outcome = _recorder(session).record(
+            project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-2", violations=[],
+        )
+        session.commit()
+        (row,) = _rows(session)
+        resolved = _events(session, DecisionEventType.WORLD_CONFLICT_RESOLVED)
+
+    assert outcome.conflict_ids == () and outcome.blocking_conflict_id == ""
+    assert row.id == recorded.blocking_conflict_id
+    assert row.status == "resolved"
+    decision = json.loads(row.decision_json)
+    assert (decision["option"], decision["decided_by"]) == ("rewrite_chapter", "auto")
+    assert json.loads(row.result_refs_json) == ["candidate:candidate-2"]
+    assert [event.related_object_id for event in resolved] == [row.id]
+
+
+# the chapter stage
+
+
+def _writer_output(body: str = "The chapter body.") -> WriterOutput:
+    return WriterOutput(
+        project_id=PROJECT_ID, chapter_number=CHAPTER, title="Chapter three", body=body, char_count=len(body),
+        end_of_chapter_summary="The chapter ends.",
+    )
+
+
+def _persist_candidate(session, output: WriterOutput, verdict: ReviewVerdict) -> str:
+    plan = StateRepository(session).get_chapter_plan(PROJECT_ID, CHAPTER)
+    version = len(list(session.scalars(select(ChapterDraft).where(ChapterDraft.chapter_plan_id == plan.id)))) + 1
+    draft = ChapterDraft(chapter_plan_id=plan.id, version=version, body_text=output.body,
+                         summary=output.end_of_chapter_summary, char_count=output.char_count)
+    session.add(draft)
+    session.flush()
+    review = ChapterReview(draft_id=draft.id, verdict=verdict.verdict, issues_json="[]",
+                           review_meta_json=json.dumps({"verdict": verdict.verdict}))
+    session.add(review)
+    session.flush()
+    candidate = CandidateDraftRepository(session).create_reviewed_version(
+        project_id=PROJECT_ID, chapter_plan=plan, draft=draft, review=review, writer_output=output,
+        plan_revision=candidate_plan_revision(plan), policy_version=1,
+    )
+    StateUpdater(session).mark_chapter_status(PROJECT_ID, CHAPTER, "drafted")
+    return candidate.id
+
+
+class FakeRepair:
+    """Persists each draft as the repair service does; the verdicts stand in for review and the extra pass."""
+
+    def __init__(self, review: ReviewVerdict, *, after_extra_pass: ReviewVerdict | None = None) -> None:
+        self.review = review
+        self.after_extra_pass = after_extra_pass
+        self.extra_passes: list[list[str]] = []
+
+    def review_candidate(self, **kwargs):
+        _persist_candidate(kwargs["session"], kwargs["writer_output"], self.review)
+        return kwargs["writer_output"], self.review, False
+
+    def repair_world_conflict(self, **kwargs):
+        self.extra_passes.append([row.id for row in kwargs["conflicts"]])
+        output = _writer_output("The repaired chapter body.")
+        _persist_candidate(kwargs["session"], output, self.after_extra_pass)
+        return output, self.after_extra_pass, False
+
+
+def _run(factory, monkeypatch, *, repair, policy=HUMAN, delegate=None, canon_preparation=None):
+    from forwin.generation.pipeline_core import project_chapters
+
+    events: list[tuple[str, dict]] = []
+    written: list[int] = []
+    monkeypatch.setattr(project_chapters, "handle_chapter_review_gate", lambda *_args, **_kwargs: SimpleNamespace(
+        pause_required=False, gate_approved=False,
+    ))
+    monkeypatch.setattr(project_chapters, "save_accepted_trope_usage_for_chapter", lambda *_args, **_kwargs: None)
+    with factory() as session:
+        repo, updater = StateRepository(session), StateUpdater(session)
+
+        def write(**kwargs):
+            written.append(kwargs["chapter_number"])
+            return _writer_output()
+
+        def commit(_plan):
+            updater.mark_chapter_status(PROJECT_ID, CHAPTER, "accepted")
+            session.commit()
+            return SimpleNamespace(blocked=False, commit_id="commit-3")
+
+        stage = SimpleNamespace(
+            policy=SimpleNamespace(canon=SimpleNamespace(hard_floor=False)),
+            _project_policy=lambda *_args: policy,
+            _abort_requested=lambda: False,
+            _pause_requested=lambda: False,
+            _recover_post_canon_before_chapter=lambda **_kwargs: None,
+            _ensure_chapter_plan=lambda **kwargs: repo.get_chapter_plan(kwargs["project_id"], kwargs["chapter_number"]),
+            _strict_progression_block=lambda **_kwargs: ("", "", ""),
+            _manual_boundary_checkpoint=lambda *_args, **_kwargs: None,
+            _emit_progress=lambda event, **payload: events.append((event, deepcopy(payload))),
+            retrieval_broker=SimpleNamespace(last_observability_summary={}, build_chapter_context=lambda *_args: SimpleNamespace()),
+            _audit_current_plan_before_write=lambda **kwargs: kwargs["context"],
+            _write_chapter_with_attention_fallback=write,
+            repair=repair,
+            repair_execution=SimpleNamespace(),
+            _review_issue_payloads=lambda verdict: [issue.model_dump(mode="json") for issue in verdict.issues],
+            _review_canon_risk=lambda _verdict: "low",
+            _chapter_conflict_recorder=lambda session, policy: _recorder(session, policy=policy, delegate=delegate),
+            canon_preparation=canon_preparation or SimpleNamespace(
+                prepare=lambda **kwargs: SimpleNamespace(blocked=False, plan=kwargs["chapter_number"]),
+            ),
+            canon_preparation_context=SimpleNamespace(),
+            canon_admission=SimpleNamespace(commit_plan=commit),
+            _make_state_helpers=lambda _session: (repo, updater, SimpleNamespace()),
+            _run_phase3_pass=lambda **_kwargs: {"run_ids": {}},
+            _run_post_canon_order_controls=lambda **_kwargs: {},
+        )
+        result = ChapterExecutionStage._run_project_chapters(
+            stage, session=session, repo=repo, updater=updater, checker=SimpleNamespace(),
+            project_id=PROJECT_ID, chapter_numbers=[CHAPTER], requested_chapters=1,
+        )
+    with factory() as session:
+        status = session.get(ChapterPlan, f"chapter-conflict-plan-{CHAPTER}").status
+        drafts = len(list(session.scalars(select(ChapterDraft).where(
+            ChapterDraft.chapter_plan_id == f"chapter-conflict-plan-{CHAPTER}",
+        ))))
+    paused = [payload["payload"] for _event, payload in events if payload.get("stage") == "paused_for_review"]
+    return SimpleNamespace(result=result, written=written, status=status, drafts=drafts, paused=paused)
+
+
+def test_violation_fixed_in_repair_loop_stores_no_row(factory, monkeypatch) -> None:
+    run = _run(factory, monkeypatch, repair=FakeRepair(PASSING))
+
+    assert run.result.completed_chapters == [CHAPTER]
+    assert run.result.pause_reason == ""
+    assert run.status == "accepted"
+    with factory() as session:
+        assert _rows(session) == []
+        assert _events(session, DecisionEventType.WORLD_CONFLICT_DETECTED) == []
+
+
+def test_residual_violation_creates_one_conflict_and_pauses_mid_chapter(factory, monkeypatch) -> None:
+    repair = FakeRepair(_failing(_violation()))
+
+    first = _run(factory, monkeypatch, repair=repair)
+    with factory() as session:
+        (row,) = _rows(session)
+    second = _run(factory, monkeypatch, repair=repair)
+
+    for run in (first, second):
+        assert run.result.pause_reason == "world_conflict"
+        assert run.result.paused_chapters == [CHAPTER]
+        assert run.result.completed_chapters == []
+        assert run.paused == [{"reason": "world_conflict", "conflict_id": row.id}]
+        # The draft stays as the chapter's latest candidate.
+        assert (run.status, run.drafts) == ("needs_review", 1)
+    # The second run stops before writing: the open conflict blocks the chapter.
+    assert (first.written, second.written) == ([CHAPTER], [])
+    with factory() as session:
+        assert [stored.id for stored in _rows(session)] == [row.id]
+        assert (row.status, row.required_decider, row.source) == ("open", "human", "chapter_extraction")
+        assert len(_events(session, DecisionEventType.WORLD_CONFLICT_DETECTED)) == 1
+        residual = json.loads(session.get(ChapterPlan, f"chapter-conflict-plan-{CHAPTER}").residual_review_issues_json)
+        assert [issue["rule_name"] for issue in residual] == ["protection_violated"]
+
+
+@pytest.mark.parametrize("fixed", [False, True], ids=["still_residual", "fixed_by_extra_pass"])
+def test_codex_rewrite_gets_one_more_pass_then_human(factory, monkeypatch, fixed) -> None:
+    violation = _violation(impact_level="moderate")
+    repair = FakeRepair(_failing(violation), after_extra_pass=PASSING if fixed else _failing(violation))
+    delegate = FakeDelegate("rewrite_chapter")
+
+    run = _run(factory, monkeypatch, repair=repair, policy=CODEX, delegate=delegate)
+
+    with factory() as session:
+        rows = _rows(session)
+        repaired = CandidateDraftRepository(session).latest_for_chapter(project_id=PROJECT_ID, chapter_number=CHAPTER)
+        pending = WorldConflictRepository(session).pending_chapter_resumes(PROJECT_ID, chapter_number=CHAPTER)
+    codex_row = rows[0]
+    assert delegate.calls == [codex_row.id]
+    assert repair.extra_passes == [[codex_row.id]]
+    decision = json.loads(codex_row.decision_json)
+    assert (codex_row.status, decision["option"], decision["decided_by"]) == ("resolved", "rewrite_chapter", "codex")
+    # The extra pass ran on the repaired candidate, so the decision is no pending resume.
+    assert json.loads(codex_row.result_refs_json) == ["trace-1", f"candidate:{repaired.id}"]
+    assert pending == []
+    if fixed:
+        assert len(rows) == 1
+        assert run.result.completed_chapters == [CHAPTER]
+        assert run.status == "accepted"
+        return
+    # Codex decides once per boundary: the still-residual violation goes straight to a human.
+    human_row = rows[1]
+    assert len(rows) == 2
+    assert human_row.origin_key == codex_row.origin_key
+    assert (human_row.status, human_row.required_decider) == ("open", "human")
+    assert run.result.pause_reason == "world_conflict"
+    assert run.paused == [{"reason": "world_conflict", "conflict_id": human_row.id}]
+    assert (run.status, run.drafts) == ("needs_review", 2)
+
+
+def test_canon_preparation_outcome_carries_the_gate_verdict(factory) -> None:
+    gate = BookStateReviewVerdict(project_id=PROJECT_ID, chapter_number=CHAPTER, verdict_id="v", accepted=False)
+    preparer = SimpleNamespace(prepare=lambda **_kwargs: BookStatePreparationOutcome(
+        blocked_path="book-state-review-gate-blocked", review_verdict=gate,
+    ))
+    with factory() as session:
+        outcome = CanonPreparationService(book_state_preparer=preparer)._prepare_book_state(
+            context=None, session=session, candidate_id="missing", project_id=PROJECT_ID, chapter_number=CHAPTER,
+            writer_output=None, verdict=None, entity_admission_plan=None,
+        )
+
+    assert (outcome.block_kind, outcome.book_state_review) == ("book_state", gate)
+
+
+def test_canon_prep_violation_creates_conflict(factory, monkeypatch) -> None:
+    violation = _violation(impact_level="critical")
+    gate = BookStateReviewVerdict(project_id=PROJECT_ID, chapter_number=CHAPTER, verdict_id="v", accepted=False, issues=[
+        BookStateReviewIssue(severity="error", code="protection_violated", target_ref=f"review_constraint:{PROTECTION}",
+                             message="m", detail=asdict(violation)),
+    ])
+    preparation = SimpleNamespace(prepare=lambda **_kwargs: CanonPreparationOutcome(
+        blocked_path="book-state-review-gate-blocked", block_kind="book_state", book_state_review=gate,
+    ))
+
+    run = _run(factory, monkeypatch, repair=FakeRepair(PASSING), canon_preparation=preparation)
+
+    with factory() as session:
+        (row,) = _rows(session)
+    assert (row.status, row.required_decider, row.impact_level) == ("open", "human", "critical")
+    assert row.origin_key == f"chapter_extraction:{CHAPTER}:{PROTECTION}"
+    assert run.result.pause_reason == "world_conflict"
+    assert run.paused == [{"reason": "world_conflict", "conflict_id": row.id}]
+    assert (run.status, run.drafts) == ("needs_review", 1)

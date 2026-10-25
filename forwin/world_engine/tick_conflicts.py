@@ -34,7 +34,7 @@ from .conflict_resolution import (
     option_candidates,
     record_option_side_effects,
 )
-from .conflict_routing import AUTO_OPTION, available_options, live_intent, route_conflict
+from .conflict_routing import auto_option, available_options, live_intent, route_conflict
 from .conflict_types import ConflictDecision, ConflictDraft
 from .constraints import check_narrative_boundaries, milestone_change_references
 from .types import TickCandidate, TickContext
@@ -176,7 +176,7 @@ class TickConflicts:
         self.conflict_ids.append(row.id)
         if decider == "auto":
             self._decide(row.id, ConflictDecision(
-                option=AUTO_OPTION, decided_by="auto", rationale=AUTO_RATIONALE, decided_at=_utcnow(),
+                option=auto_option(draft), decided_by="auto", rationale=AUTO_RATIONALE, decided_at=_utcnow(),
             ))
         elif decider == "codex":
             delegation = self.delegate.decide(

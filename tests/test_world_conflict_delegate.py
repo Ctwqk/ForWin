@@ -279,6 +279,46 @@ def test_amend_plan_choice_escalates(session: Session) -> None:
     assert conflict.status == "open"
 
 
+@pytest.mark.parametrize(
+    ("source", "instructions", "template_id"),
+    [
+        ("world_tick", world_engine_prompts.CONFLICT_REVIEW_INSTRUCTIONS, "world_engine:conflict_review"),
+        ("chapter_extraction", world_engine_prompts.CHAPTER_CONFLICT_REVIEW_INSTRUCTIONS,
+         "world_engine:chapter_conflict_review"),
+    ],
+)
+def test_review_instructions_follow_the_conflict_source(
+    session: Session, source: str, instructions: tuple[str, ...], template_id: str,
+) -> None:
+    updater = RecordingUpdater()
+    option = "rewrite_chapter" if source == "chapter_extraction" else "veto_world"
+    llm = FakeCodexLLM(_answer(option))
+    overrides = (
+        {"source": source, "violated": "protection", "intent_ref": "", "actor_ref": ""}
+        if source == "chapter_extraction" else {}
+    )
+
+    _conflict_row, delegation = _decide(session, llm, updater, impact_level="moderate", **overrides)
+
+    system = llm.calls[0]["messages"][0]["content"]
+    assert system.startswith("\n".join(instructions))
+    assert updater.traces[0]["template_id"] == template_id
+    # Codex rewriting the chapter needs no user; only amend_plan escalates.
+    assert (delegation.option, delegation.escalate) == (option, False)
+
+
+def test_chapter_conflict_amend_plan_escalates(session: Session) -> None:
+    updater = RecordingUpdater()
+    llm = FakeCodexLLM(_answer("amend_plan"))
+
+    _conflict_row, delegation = _decide(
+        session, llm, updater, source="chapter_extraction", violated="protection", intent_ref="", actor_ref="",
+    )
+
+    assert (delegation.option, delegation.escalate) == ("amend_plan", True)
+    assert updater.event_types() == ["prompt_trace_recorded", "world_conflict_escalated"]
+
+
 def test_prompt_too_large_escalates_without_calling_codex(session: Session) -> None:
     updater = RecordingUpdater()
     llm = FakeCodexLLM(_answer("veto_world"))

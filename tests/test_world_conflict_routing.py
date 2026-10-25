@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from forwin.runtime.policy import RuntimePolicy
-from forwin.world_engine.conflict_routing import AUTO_OPTION, available_options, route_conflict
+from forwin.world_engine.conflict_routing import auto_option, available_options, route_conflict
 from forwin.world_engine.conflict_types import ConflictDraft
 
 
@@ -48,8 +48,44 @@ def test_route_table(source: str, impact_level: str, expected: dict[str, str], d
 
 
 def test_auto_route_defaults_to_veto() -> None:
-    assert AUTO_OPTION == "veto_world"
-    assert AUTO_OPTION in available_options(_draft(impact_level="minor"))
+    draft = _draft(impact_level="minor")
+    assert auto_option(draft) == "veto_world"
+    assert auto_option(draft) in available_options(draft)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("world_tick", "veto_world"),
+        ("chapter_extraction", "rewrite_chapter"),
+        ("historical_rewrite", None),
+        ("plan_feasibility", None),
+        ("band_planning", None),
+    ],
+)
+def test_auto_option_by_source(source: str, expected: str | None) -> None:
+    assert auto_option(_draft(source=source, violated="protection")) == expected
+
+
+@pytest.mark.parametrize("delegate", ["codex", "human"])
+@pytest.mark.parametrize(
+    ("impact_level", "expected"),
+    [
+        ("minor", {"codex": "codex", "human": "human"}),
+        ("moderate", {"codex": "codex", "human": "human"}),
+        ("major", {"codex": "codex", "human": "human"}),
+        ("critical", {"codex": "human", "human": "human"}),
+    ],
+)
+@pytest.mark.parametrize("violated", ["protection", "milestone"])
+def test_routing_matrix_for_chapter_conflicts(
+    violated: str, impact_level: str, expected: dict[str, str], delegate: str,
+) -> None:
+    """A residual chapter conflict is never auto-routed; its text is rewritten or the plan amended around it."""
+    draft = _draft(source="chapter_extraction", impact_level=impact_level, violated=violated)
+
+    assert route_conflict(draft, policy=_policy(delegate)) == expected[delegate]
+    assert available_options(draft, live_intent=True) == ("rewrite_chapter", "amend_plan")
 
 
 @pytest.mark.parametrize(

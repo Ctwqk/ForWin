@@ -686,14 +686,15 @@ def test_stale_held_change_keeps_conflict_open(monkeypatch) -> None:
     engine.dispose()
 
 
-def test_rewrite_chapter_unavailable_in_p3(monkeypatch) -> None:
+def test_rewrite_chapter_needs_a_chapter_conflict(monkeypatch) -> None:
     engine, Session = _session_factory()
     book = _book(Session, monkeypatch)
     conflict_id = _conflict(
         Session, book, proposed_change=_held(book).model_dump(mode="json"), options=["veto_world", "rewrite_chapter"],
     )
 
-    _resolve_failing(Session, book, conflict_id, "rewrite_chapter", ConflictOptionUnavailable)
+    # Only chapter text is rewritten: a world conflict refuses it even where a stale row offers it.
+    _resolve_failing(Session, book, conflict_id, "rewrite_chapter", ConflictOptionUnavailable, match="chapter's text")
     # An option the conflict does not offer is a bad request, whatever the option.
     _resolve_failing(Session, book, conflict_id, "plot_responds", ValueError)
     with pytest.raises(ConflictOptionUnavailable):
@@ -2489,3 +2490,140 @@ def test_superseded_veto_does_not_cap_rerolls(pending_side_effect_session):
     )
     assert repo.reroll_count(retired.project_id, actor_ref="actor") == 1
     assert recent_vetoes(session, retired.project_id, actor_ids=["actor"])["actor"] == [kept]
+
+
+# chapter conflicts
+
+
+def _chapter_violation(**overrides: Any):
+    from forwin.book_state.protections import DeltaBoundaryViolation
+
+    return DeltaBoundaryViolation(**{
+        "protection_node_id": "protect-hero", "milestone_ref": "", "kind": "must_be_alive", "ref": "", "observer_ref": "",
+        "fact_ref": "", "field": "", "value": None, "until_chapter": 0, "source": "test", "impact_level": "major",
+        "evidence": "the hero falls", **overrides,
+    })
+
+
+def _chapter_conflict(Session, project_id: str, violation, *, chapter: int = 2, status: str = "needs_review") -> str:
+    """The open conflict a residual boundary violation left on chapter ``chapter``, paused in ``status``."""
+    from sqlalchemy import update
+
+    from forwin.world_engine.chapter_conflicts import CHAPTER_CONFLICT_OPTIONS, chapter_conflict_draft
+
+    with Session.begin() as session:
+        row = WorldConflictRepository(session).create(
+            chapter_conflict_draft(violation, project_id=project_id, chapter_number=chapter, story_time=0),
+            required_decider="human", options=CHAPTER_CONFLICT_OPTIONS,
+        )
+        session.execute(update(ChapterPlan).where(
+            ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == chapter,
+        ).values(status=status))
+        return row.id
+
+
+def _plan_status(Session, project_id: str, chapter: int) -> str:
+    with Session() as session:
+        return session.scalar(select(ChapterPlan.status).where(
+            ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == chapter,
+        ))
+
+
+def test_chapter_conflict_waits_for_its_paused_chapter(monkeypatch) -> None:
+    from forwin.models.task import GenerationTask
+    from forwin.world_engine.conflict_resolution import ChapterNotAwaitingConflict
+
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    violation = _chapter_violation(ref=book.world.hero)
+    conflict_id = _chapter_conflict(Session, book.project_id, violation, status="planned")
+
+    # The chapter left needs_review: nothing waits for the decision.
+    _resolve_failing(Session, book, conflict_id, "rewrite_chapter", ChapterNotAwaitingConflict, match="not needs_review")
+    with Session.begin() as session:
+        session.get(ChapterPlan, book.plans[2]).status = "needs_review"
+        session.add(GenerationTask(id=f"task-{book.project_id}", project_id=book.project_id, status="running"))
+    _resolve_failing(Session, book, conflict_id, "rewrite_chapter", ChapterNotAwaitingConflict, match="generation task")
+    _resolve_failing(Session, book, conflict_id, "amend_plan", ValueError, decided_by="codex")
+    with Session.begin() as session:
+        session.get(GenerationTask, f"task-{book.project_id}").status = "paused"
+
+    result = _resolve(Session, book, conflict_id, "rewrite_chapter")
+
+    assert result == ConflictResolutionResult(graph_delta_ids=(), obligation_id="", plan_patch_id="")
+    assert _row(Session, book, conflict_id) == ("resolved", [], "rewrite_chapter")
+    assert _plan_status(Session, book.project_id, 2) == "planned"
+    assert _world_engine_delta_count(Session, book) == 0
+    [(actor_type, payload)] = _resolved_events(Session, book, conflict_id)
+    assert (actor_type, payload["source"], payload["option"]) == ("manual_ui", "chapter_extraction", "rewrite_chapter")
+    with Session() as session:
+        assert session.scalar(select(DecisionEvent.chapter_number).where(
+            DecisionEvent.event_type == DecisionEventType.WORLD_CONFLICT_RESOLVED,
+            DecisionEvent.related_object_id == conflict_id,
+        )) == 2
+    engine.dispose()
+
+
+def test_chapter_waits_in_needs_review_until_its_last_conflict_is_decided(monkeypatch) -> None:
+    engine, Session = _session_factory()
+    book = _book(Session, monkeypatch)
+    first = _chapter_conflict(Session, book.project_id, _chapter_violation(ref=book.world.hero))
+    second = _chapter_conflict(Session, book.project_id, _chapter_violation(
+        protection_node_id="protect-rival", ref=book.world.rival,
+    ))
+
+    _resolve(Session, book, first, "rewrite_chapter")
+
+    assert _plan_status(Session, book.project_id, 2) == "needs_review"
+    _resolve(Session, book, second, "rewrite_chapter")
+    assert _plan_status(Session, book.project_id, 2) == "planned"
+    assert [_row(Session, book, conflict_id)[0] for conflict_id in (first, second)] == ["resolved", "resolved"]
+    engine.dispose()
+
+
+def test_amend_plan_on_a_chapter_milestone_revises_the_beat_sheet() -> None:
+    from sqlalchemy import update
+
+    from forwin.planning.beat_sheet.repository import ArcBeatSheetRepository
+    from tests.test_arc_beat_sheet import StubLLM, _sheet
+    from tests.test_band_planner import HookedLLM
+
+    engine, Session = _session_factory()
+    world, arc_id, band_plan_id = _band_world(Session)
+    violation = _chapter_violation(protection_node_id="", milestone_ref=world.hero, kind="milestone", ref=world.hero,
+                                   field="state.alive_status", value="dead", impact_level="critical")
+    conflict_id = _chapter_conflict(Session, world.project_id, violation, chapter=3)
+    with Session() as session:
+        third = session.scalar(select(ChapterPlan).where(
+            ChapterPlan.project_id == world.project_id, ChapterPlan.chapter_number == 3,
+        ))
+        third_plan = (third.id, third.title, third.band_plan_id)
+
+    with Session() as session:
+        with pytest.raises(ConflictOptionUnavailable, match="plan amender"):
+            _service(session).resolve(project_id=world.project_id, conflict_id=conflict_id,
+                                      decision=_decision("amend_plan"))
+    revised = _sheet(world, bands=((1, 4), (5, 8), (9, 12)))
+    revised["milestones"][0]["description"] = "revised-milestone"
+    # No lock lasts through the revision's model call.
+    sheet_client = HookedLLM(_unlocked(Session, world.project_id, conflict_id), revised)
+    band_client = StubLLM()
+
+    result = _amend(Session, world.project_id, conflict_id, _amender(band_client, sheet_client))
+
+    revision = sheet_client.payload(0)["revision"]
+    assert revision["reason"] == f"conflict:{conflict_id}" and "rationale-1" in revision["conflict_summary"]
+    # The chapter keeps its plan and its draft: nothing is planned again before it is canon.
+    assert band_client.calls == []
+    with Session() as session:
+        sheet = ArcBeatSheetRepository(session).active_for_arc(arc_id)
+        assert (sheet.id, sheet.version) == (result.beat_sheet_id, 2)
+        third = session.get(ChapterPlan, third_plan[0])
+        assert (third.id, third.title, third.band_plan_id) == third_plan and third.status == "planned"
+        plan_constraints = session.scalars(select(GraphDeltaRow.source_id).where(
+            GraphDeltaRow.project_id == world.project_id, GraphDeltaRow.source_type == "plan_constraint",
+        )).all()
+    assert f"conflict:{conflict_id}" not in plan_constraints
+    assert _conflict_row(Session, world.project_id, conflict_id) == ("resolved", [f"beat_sheet:{result.beat_sheet_id}"])
+    assert band_plan_id
+    engine.dispose()

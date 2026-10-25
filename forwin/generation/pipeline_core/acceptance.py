@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.canon.review_recovery import reopen_failed_historical_candidate_for_review
+from forwin.generation.pipeline_core.chapter_conflicts import ChapterConflictPending
+from forwin.world_engine.conflict_repository import WorldConflictRepository
 from forwin.audit.events import DecisionActorType, DecisionEventType
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.maintenance.deferred import (
@@ -41,6 +43,12 @@ class AcceptanceStage:
                     f"第{chapter_number}章不是可接受状态（当前 "
                     f"{chapter_status or 'unknown'}）"
                 )
+            # Canon preparation's gate would block the text again and send the chapter back to needs_review.
+            conflict = WorldConflictRepository(session).open_chapter_conflict(
+                project_id, chapter_number=chapter_number
+            )
+            if conflict is not None:
+                raise ChapterConflictPending(chapter_number, conflict.id)
 
             latest_draft = (
                 session.query(ChapterDraft)

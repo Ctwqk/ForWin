@@ -3,11 +3,13 @@
 After draft review, and again when canon preparation's review gate blocks the candidate, the stage records the
 candidate's residual boundary violations. A Codex rewrite_chapter buys one more repair pass per chapter run, after
 which every conflict goes to a human; a conflict a human decides pauses the chapter mid-way, with its draft kept as
-the latest candidate.
+the latest candidate. Once that conflict is decided, the next run resumes the chapter from the saved draft instead
+of writing it again.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
@@ -17,6 +19,7 @@ from forwin.book_state.reviewer import BookStateReviewVerdict
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.checker.rules import ContinuityChecker
 from forwin.maintenance.post_canon import own_transaction_audit_writer
+from forwin.models.draft import ChapterDraft
 from forwin.models.project import ChapterPlan
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
@@ -39,6 +42,15 @@ class ChapterConflictBlocked(RuntimeError):
 
     def __init__(self, conflict_id: str) -> None:
         super().__init__(f"world_conflict:{conflict_id}")
+        self.conflict_id = conflict_id
+
+
+class ChapterConflictPending(ValueError):
+    """A chapter's review cannot be accepted while a conflict over its text is open; the HTTP layer answers 409."""
+
+    def __init__(self, chapter_number: int, conflict_id: str) -> None:
+        super().__init__(f"第{chapter_number}章有待处理的世界冲突 {conflict_id}，请先处理冲突")
+        self.chapter_number = chapter_number
         self.conflict_id = conflict_id
 
 
@@ -77,6 +89,44 @@ class ChapterConflicts:
     context: Any
     # Codex decides once per chapter run: after its extra repair pass every conflict goes to a human.
     codex_pass_used: bool = False
+
+    def resume(self) -> tuple[WriterOutput, ReviewVerdict, bool] | None:
+        """Continue the chapter from its saved draft when decided chapter conflicts wait for it; None otherwise.
+
+        A rewrite_chapter decision repairs the latest draft with its boundaries as must_fix; amend_plan alone
+        reviews the same text again, since the boundary it broke is released. No new draft is written either way.
+        The candidate this leaves goes into each decision's result_refs, so the decisions resume the chapter once.
+        """
+        session, project_id = self.session, self.chapter_plan.project_id
+        chapter_number = int(self.chapter_plan.chapter_number)
+        conflicts = WorldConflictRepository(session)
+        pending = conflicts.pending_chapter_resumes(project_id, chapter_number=chapter_number)
+        if not pending:
+            return None
+        candidates = CandidateDraftRepository(session)
+        candidate = candidates.latest_for_chapter(project_id=project_id, chapter_number=chapter_number)
+        draft = session.get(ChapterDraft, candidate.candidate_draft_id) if candidate is not None else None
+        if draft is None:
+            # Nothing was saved to resume from: the chapter is written again.
+            return None
+        writer_output = self.stage._load_writer_output_from_meta(draft.llm_raw_response)
+        helpers = {
+            "execution": self.stage.repair_execution, "session": session, "repo": self.repo, "updater": self.updater,
+            "checker": self.checker, "project_id": project_id, "chapter_plan": self.chapter_plan,
+            "context": self.context, "writer_output": writer_output,
+        }
+        rewrites = [row for row in pending if _decided_option(row) == "rewrite_chapter"]
+        resumed = (self.stage.repair.repair_world_conflict(**helpers, conflicts=rewrites) if rewrites
+                   else self.stage.repair.review_candidate(**helpers))
+        candidate = candidates.latest_for_chapter(project_id=project_id, chapter_number=chapter_number)
+        # Lock order: the conflict rows come before the chapter plan the review just wrote.
+        session.commit()
+        for row in pending:
+            conflicts.attach_result_refs(
+                conflicts.get(project_id, row.id, for_update=True), [f"candidate:{candidate.id}"],
+            )
+        session.commit()
+        return resumed
 
     def record(
         self,
@@ -118,13 +168,16 @@ class ChapterConflicts:
             writer_output, verdict, repair_force_accept = self.stage.repair.repair_world_conflict(
                 execution=self.stage.repair_execution, session=session, repo=self.repo, updater=self.updater,
                 checker=self.checker, project_id=project_id, chapter_plan=self.chapter_plan, context=self.context,
-                writer_output=writer_output, verdict=verdict, conflicts=rows,
+                writer_output=writer_output, conflicts=rows,
             )
             force_accept_applied = force_accept_applied or repair_force_accept
             candidate = candidates.latest_for_chapter(project_id=project_id, chapter_number=chapter_number)
+            # Lock order again: the pass wrote the chapter plan, and the conflict rows come first.
+            session.commit()
             # The repair the decision asked for ran on this candidate, so the decision is no pending resume.
             for row in rows:
-                conflicts.attach_result_refs(row, [f"candidate:{candidate.id}"])
+                conflicts.attach_result_refs(conflicts.get(project_id, row.id, for_update=True),
+                                             [f"candidate:{candidate.id}"])
             # A draft row never closes a gate row, so on the gate path the repaired draft's violations are recorded
             # too: canon preparation would refuse its failing review before the gate runs.
             draft_violations = violations_from_verdict(verdict)
@@ -153,4 +206,14 @@ class ChapterConflicts:
         )
 
 
-__all__ = ["ChapterConflictBlocked", "ChapterConflictStage", "ChapterConflicts", "RecordedChapterConflicts"]
+def _decided_option(row) -> str:
+    return str(json.loads(row.decision_json or "{}").get("option") or "")
+
+
+__all__ = [
+    "ChapterConflictBlocked",
+    "ChapterConflictPending",
+    "ChapterConflictStage",
+    "ChapterConflicts",
+    "RecordedChapterConflicts",
+]

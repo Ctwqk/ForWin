@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass
 from typing import Any
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.models.project import ChapterPlan
@@ -43,6 +43,10 @@ from forwin.generation.pipeline_core.repair_budget_events import (
 from forwin.generation.pipeline_core.quality_gates import (
     _latest_draft_and_review_for_chapter,
 )
+from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.protections import MILESTONE_KIND, DeltaBoundaryViolation
+from forwin.world_engine.chapter_conflicts import WORLD_CONFLICT_REPAIR_PHASE, boundary_fix_names
+from forwin.writer.prompt_core.world_repair import protection_repair_fix
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +261,51 @@ def _review_from_canon_gate_block(gate_result) -> ReviewVerdict:
         reviewer_mode="canon_repair",
         repair_instruction=repair_instruction,
         residual_review_issues=[issue],
+    )
+
+
+def _review_from_world_conflicts(
+    conflicts: Sequence[WorldPlanConflictRow], *, names: Mapping[str, Mapping[str, str]],
+) -> ReviewVerdict:
+    """A failing review whose must_fix is each conflict's boundary, for the repair a decided rewrite_chapter runs.
+
+    ``names`` maps a conflict id to the names its fix is written with (``boundary_fix_names``). Each issue is a
+    world-consistency error that keeps the boundary in original_result, as draft review reports it, so a repair
+    that leaves the boundary broken is recorded again as a chapter conflict. The text names entities and the
+    fact's topic, never its proposition.
+    """
+    issues = []
+    for conflict in conflicts:
+        boundary = DeltaBoundaryViolation(**json.loads(conflict.proposed_change_json or "{}")["boundary"])
+        fix = protection_repair_fix(boundary.kind, names.get(conflict.id, {}))
+        issues.append(ContinuityIssue(
+            rule_name="milestone_ref_ended" if boundary.kind == MILESTONE_KIND else "protection_violated",
+            severity="error",
+            description=fix,
+            reviewer="world_consistency",
+            issue_type="world_consistency",
+            target_scope="draft",
+            suggested_fix=fix,
+            source_layer="book_state",
+            blocking=True,
+            original_result={"boundary": asdict(boundary), "conflict_id": conflict.id},
+        ))
+    conflict_ids = [conflict.id for conflict in conflicts]
+    return ReviewVerdict(
+        verdict="fail",
+        issues=issues,
+        recommended_action="rewrite",
+        review_summary="world conflict decided rewrite_chapter",
+        reviewer_mode=WORLD_CONFLICT_REPAIR_PHASE,
+        repair_instruction=RepairInstruction(
+            repair_scope="draft",
+            failure_type="mixed",
+            must_fix=list(dict.fromkeys(issue.description for issue in issues)),
+            must_preserve=[],
+            scope_reason="world conflict decided rewrite_chapter",
+            design_patch={"world_conflict_ids": conflict_ids},
+        ),
+        residual_review_issues=issues,
     )
 
 
@@ -548,6 +597,77 @@ def _repair_canon_block(
         current_review_trace_id="",
         current_review_event=current_review_event,
         repair_phase=CANON_REPAIR_PHASE,
+    )
+
+
+def _repair_world_conflict(
+    self: RepairExecution,
+    *,
+    session: Session,
+    repo: StateRepository,
+    updater: StateUpdater,
+    checker: ContinuityChecker,
+    project_id: str,
+    chapter_plan: ChapterPlan,
+    context,
+    writer_output: WriterOutput,
+    conflicts: Sequence[WorldPlanConflictRow],
+) -> tuple[WriterOutput, ReviewVerdict, bool]:
+    """Repair the chapter's latest draft with the conflicts' boundaries as must_fix, in the world_conflict_repair
+    phase and its own attempt budget; the repaired drafts are reviewed as any repair's are."""
+    chapter_number = int(chapter_plan.chapter_number)
+    runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=chapter_number - 1)
+    synthetic_review = _review_from_world_conflicts(conflicts, names={
+        conflict.id: boundary_fix_names(runtime, DeltaBoundaryViolation(
+            **json.loads(conflict.proposed_change_json or "{}")["boundary"],
+        ))
+        for conflict in conflicts
+    })
+    latest_draft, _latest_review = _latest_draft_and_review_for_chapter(
+        session=session, project_id=project_id, chapter_number=chapter_number,
+    )
+    if latest_draft is None:
+        current_output, current_draft, current_review_row = self._persist_draft_and_review(
+            session=session,
+            updater=updater,
+            chapter_plan=chapter_plan,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            writer_output=writer_output,
+            review=synthetic_review,
+        )
+    else:
+        current_output = writer_output
+        current_draft = latest_draft
+        current_review_row = updater.save_review(latest_draft.id, synthetic_review)
+    current_review_event = self._record_decision_event(
+        updater=updater,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        event_family="evaluation_verdict",
+        event_type=DecisionEventType.REVIEW_VERDICT_RECORDED,
+        scope="chapter",
+        summary=f"第{chapter_number}章 world conflict promoted review to fail for {WORLD_CONFLICT_REPAIR_PHASE}.",
+        related_object_type="chapter_review",
+        related_object_id=current_review_row.id,
+        payload=self._review_event_payload(synthetic_review),
+    )
+    return _run_repair_loop_for_phase(
+        self,
+        session=session,
+        repo=repo,
+        updater=updater,
+        checker=checker,
+        project_id=project_id,
+        chapter_plan=chapter_plan,
+        current_context=context,
+        current_output=current_output,
+        current_draft=current_draft,
+        current_review=synthetic_review,
+        current_review_row=current_review_row,
+        current_review_trace_id="",
+        current_review_event=current_review_event,
+        repair_phase=WORLD_CONFLICT_REPAIR_PHASE,
     )
 
 
@@ -1387,16 +1507,21 @@ class RepairService:
         chapter_plan: ChapterPlan,
         context,
         writer_output: WriterOutput,
-        verdict: ReviewVerdict,
         conflicts: Sequence[WorldPlanConflictRow],
     ) -> tuple[WriterOutput, ReviewVerdict, bool]:
-        """The full-draft repair pass a decided rewrite_chapter buys, with the conflicts' constraints as must_fix.
-
-        Not wired yet: the draft and its verdict come back unchanged, so a violation Codex sent back stays
-        residual and the chapter stage hands its conflict to a human.
-        """
-        del execution, session, repo, updater, checker, project_id, chapter_plan, context, conflicts
-        return writer_output, verdict, False
+        """The full-draft repair pass a decided rewrite_chapter buys, with the conflicts' constraints as must_fix."""
+        return _repair_world_conflict(
+            execution,
+            session=session,
+            repo=repo,
+            updater=updater,
+            checker=checker,
+            project_id=project_id,
+            chapter_plan=chapter_plan,
+            context=context,
+            writer_output=writer_output,
+            conflicts=conflicts,
+        )
 
 
 __all__ = ["RepairExecution", "RepairService"]

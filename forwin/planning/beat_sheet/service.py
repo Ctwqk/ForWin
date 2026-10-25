@@ -187,7 +187,7 @@ class ArcBeatSheetService:
             return active
         row = repo.create(project_id, arc_plan.id, data, source=source, reason=reason)
         CanonAdmissionService().commit_plan_constraints(
-            session=session, project_id=project_id, beat_sheet_id=row.id, creates=data.protections, releases=[],
+            session=session, project_id=project_id, constraint_set_id=row.id, creates=data.protections, releases=[],
             release_sheet_id=active.id if active is not None else None,
         )
         self.save_trace(session, self._prompt_trace(

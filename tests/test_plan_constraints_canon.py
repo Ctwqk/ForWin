@@ -167,6 +167,20 @@ def test_constraints_follow_seed_and_prior_sheet_in_one_transaction(Session):
                                           next_chapter=1) == []
 
 
+def test_constraint_set_id_names_the_set_and_beat_sheet_id_stays_an_alias(Session):
+    world, _ = _book(Session)
+    spec = ProtectionSpec(ref=world.hero, kind="must_be_alive", until_chapter=8)
+    with Session.begin() as session:
+        service = CanonAdmissionService()
+        kwargs = dict(session=session, project_id=world.project_id, creates=[spec], releases=[])
+        first = service.commit_plan_constraints(constraint_set_id="set-1", **kwargs)
+        again = service.commit_plan_constraints(beat_sheet_id="set-1", **kwargs)
+        assert again.idempotent and again.graph_delta_ids == first.graph_delta_ids
+        for names in ({}, {"constraint_set_id": "set-2", "beat_sheet_id": "set-2"}):
+            with pytest.raises(TypeError, match="exactly one"):
+                service.commit_plan_constraints(**names, **kwargs)
+
+
 def _plan_gate(payload=None, *, patches=None, runtime=None):
     from forwin.book_state.reviewer import BookStateReviewGate
     from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta, NarrativePatch

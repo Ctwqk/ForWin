@@ -14,6 +14,7 @@ from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.runtime.policy_store import ProjectPolicyMissing, ProjectPolicyStore
 from forwin.world_engine.conflict_repository import ConflictNotOpen, WorldConflictRepository
 from forwin.world_engine.conflict_resolution import (
+    ChapterNotAwaitingConflict,
     ConflictOptionUnavailable,
     ConflictResolutionService,
     ConflictStale,
@@ -80,7 +81,9 @@ def build_handlers(
                     session, admission=CanonAdmissionService(), policy=policy,
                     plan_amender=get_plan_amender() if decision.option == "amend_plan" else None,
                 ).resolve(project_id=project_id, conflict_id=conflict_id, decision=decision)
-            except (ConflictNotOpen, ConflictStale) as exc:
+            except (ConflictNotOpen, ConflictStale, ChapterNotAwaitingConflict) as exc:
+                # A chapter conflict waits for a paused chapter: a running generation task or a chapter that moved
+                # on refuses the decision as a conflict of state, not a bad request.
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             except CanonWriteFailure as exc:
                 raise HTTPException(status_code=409, detail=f"canon refused the change: {exc}") from exc

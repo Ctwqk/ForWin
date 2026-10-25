@@ -31,19 +31,19 @@ from forwin.protocol.book_state import ObserverType
 from forwin.protocol.review import ReviewVerdict
 from forwin.runtime.policy import RuntimePolicy
 from forwin.world_view.builder import _subject_names
-from forwin.writer.prompt_core.world_view import UNNAMED_ACTOR_LABEL
+from forwin.writer.prompt_core.world_repair import READER_OBSERVER_LABEL
+from forwin.writer.prompt_core.world_view import UNNAMED_ACTOR_LABEL, forbidden_topic_text
 
 from .conflict_delegate import WorldConflictDelegate, build_conflict_context_snapshot
 from .conflict_events import conflict_detected_event
 from .conflict_repository import WorldConflictRepository
 from .conflict_resolution import conflict_resolved_event
-from .conflict_routing import CHAPTER_CONFLICT_OPTIONS, available_options, route_conflict
+from .conflict_routing import CHAPTER_CONFLICT_OPTIONS, CHAPTER_CONFLICT_SOURCE, available_options, route_conflict
 from .conflict_types import ConflictDecider, ConflictDecision, ConflictDraft
 
 
 # The repair phase, with its own attempt budget, that rewrites a chapter for a decided rewrite_chapter.
 WORLD_CONFLICT_REPAIR_PHASE = "world_conflict_repair"
-CHAPTER_CONFLICT_SOURCE = "chapter_extraction"
 # The proposed_change kind of a chapter conflict: the chapter, the broken boundary and the candidate that broke it.
 CHAPTER_BOUNDARY_CHANGE = "chapter_boundary"
 # Why an open chapter conflict closed on its own: a later candidate no longer breaks the boundary.
@@ -90,7 +90,7 @@ def chapter_conflict_draft(
     """The conflict for a boundary chapter ``chapter_number``'s text still breaks, as ``detected_by`` found it.
 
     ``names`` maps the violation's entity refs to display names and its fact ref to the names of the fact's
-    subjects; a ref it does not name gets the neutral label.
+    subjects; a ref it does not name gets the neutral label. The console shows them beside the boundary.
     """
     return ConflictDraft(
         project_id=project_id,
@@ -104,7 +104,7 @@ def chapter_conflict_draft(
         summary=_summary(v, chapter_number=chapter_number, names=names or {}),
         proposed_change={
             "kind": CHAPTER_BOUNDARY_CHANGE, "chapter": chapter_number, "boundary": asdict(v),
-            "candidate_id": candidate_id, "detected_by": detected_by,
+            "candidate_id": candidate_id, "detected_by": detected_by, "names": dict(names or {}),
         },
         blocks_from_chapter=chapter_number,
     )
@@ -121,6 +121,27 @@ def boundary_names(runtime: BookStateRuntime, violation: DeltaBoundaryViolation)
     if fact is not None:
         names[violation.fact_ref] = ", ".join(_subject_names(runtime, fact))
     return names
+
+
+def boundary_fix_names(runtime: BookStateRuntime, violation: DeltaBoundaryViolation) -> dict[str, str]:
+    """The names a writer-facing fix for the violation is written with: ``name`` for the protected entity,
+    ``observer`` for who may not learn the fact, and ``topic`` for the fact as its subjects' names show it.
+
+    Concealed entities get the neutral label; the fact's proposition never fills them.
+    """
+    fact = runtime.world.facts_by_id.get(violation.fact_ref.removeprefix(FACT_REF_PREFIX))
+    observer = violation.observer_ref
+    return {
+        "name": _entity_name(runtime, violation.ref) if violation.ref else "",
+        "observer": (READER_OBSERVER_LABEL if observer == _READER
+                     else _entity_name(runtime, observer) if observer else ""),
+        "topic": forbidden_topic_text(_subject_names(runtime, fact)) if fact is not None else "",
+    }
+
+
+def conflict_detected_by(row: WorldPlanConflictRow) -> str:
+    """Which check found the chapter conflict's violation: DRAFT_REVIEW_DETECTION or CANON_GATE_DETECTION."""
+    return str(json.loads(row.proposed_change_json or "{}").get("detected_by") or "")
 
 
 def _entity_name(runtime: BookStateRuntime, ref: str) -> str:
@@ -196,7 +217,8 @@ class ChapterConflictRecorder:
     ) -> ChapterConflictOutcome:
         """Record ``candidate_id``'s violations of chapter ``chapter_number`` that ``detected_by`` found.
 
-        Each boundary reuses its open conflict or gets a new one with its DETECTED event. Open conflicts the same
+        Each boundary reuses the open conflict this check found earlier, or gets a new one with its DETECTED event:
+        a conflict the other check found stays that check's to close. Open conflicts the same
         check found earlier, whose boundary the candidate no longer breaks, are resolved as an automatic
         rewrite_chapter. Without ``allow_codex`` every conflict goes to a human. Codex reviews each conflict routed
         to it after a commit, so no conflict row stays locked across the model call; the caller commits the rest.
@@ -242,7 +264,10 @@ class ChapterConflictRecorder:
     def _open_or_create(
         self, draft: ConflictDraft, *, chapter_number: int, allow_codex: bool,
     ) -> WorldPlanConflictRow:
-        row = self.repo.open_for_origin(draft.project_id, draft.origin_key)
+        # Only the check that found a row may find its boundary gone, so a row is reused by that check alone.
+        found_by = draft.proposed_change["detected_by"]
+        row = next((row for row in self.repo.open_by_origin(draft.project_id, [draft.origin_key])
+                    if conflict_detected_by(row) == found_by), None)
         if row is not None:
             if not allow_codex and row.required_decider == "codex":
                 self.repo.escalate(row)
@@ -277,7 +302,7 @@ class ChapterConflictRecorder:
             .with_for_update().execution_options(populate_existing=True)
         )
         for row in rows:
-            if row.origin_key in kept or json.loads(row.proposed_change_json or "{}").get("detected_by") != detected_by:
+            if row.origin_key in kept or conflict_detected_by(row) != detected_by:
                 continue
             self.repo.mark_resolved(row, decision=ConflictDecision(
                 option="rewrite_chapter", decided_by="auto", rationale=NO_LONGER_VIOLATED_RATIONALE,
@@ -328,9 +353,11 @@ __all__ = [
     "WORLD_CONFLICT_REPAIR_PHASE",
     "ChapterConflictOutcome",
     "ChapterConflictRecorder",
+    "boundary_fix_names",
     "boundary_names",
     "chapter_conflict_draft",
     "chapter_origin_key",
+    "conflict_detected_by",
     "violations_from_gate",
     "violations_from_verdict",
 ]

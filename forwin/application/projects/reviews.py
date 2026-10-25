@@ -26,6 +26,7 @@ from forwin.api_schema import (
     LintSignalInfo,
     RepairVerificationInfo,
 )
+from forwin.generation.pipeline_core.chapter_conflicts import ChapterConflictPending
 from forwin.generation.continue_workset import (
     build_continue_generation_workset,
 )
@@ -780,6 +781,8 @@ def approve_chapter_review(
             chapter_number,
             **accept_kwargs,
         )
+    except ChapterConflictPending as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except FileNotFoundError as exc:

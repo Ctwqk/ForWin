@@ -937,12 +937,23 @@
         };
       }
 
-      const worldConflictPending = control.blocking_reason?.code === 'world_conflict_pending'
-        || project?.blocking_reason?.code === 'world_conflict_pending';
+      const conflictBlock = [control.blocking_reason, project?.blocking_reason]
+        .find((reason) => reason?.code === 'world_conflict_pending');
+      const worldConflictPending = Boolean(conflictBlock);
+      // A chapter conflict paused a drafted chapter mid-way: its review stays listed beside the conflict.
+      const chapterConflict = conflictBlock?.conflict_source === 'chapter_extraction';
       if (worldConflictPending || reviewChapters.length || item.status === 'needs_review') {
         const first = reviewChapters[0];
         const chapterLabel = first?.chapter_number ? `第 ${first.chapter_number} 章` : '待 review 章节';
+        const conflictChapter = Number(conflictBlock?.chapter_number || first?.chapter_number || 0);
         const copy = {
+          chapter_conflict: {
+            eyebrow: '正文冲突阻塞',
+            title: `第 ${conflictChapter} 章正文与规划保护冲突`,
+            description: '该章草稿违反了规划保护，已暂停并保留草稿。接受该章 Review 会被拒绝，直到在世界冲突卡片中作出决定。',
+            next: '在世界冲突卡片中决定：退回修复正文，或接受正文并解除保护',
+            safety: '处理冲突后再继续生成，该章从保存的草稿续写，不会重新写作。',
+          },
           world_conflict: {
             eyebrow: '世界冲突阻塞',
             title: '世界与计划冲突需要处理',
@@ -957,11 +968,12 @@
             next: '查看 Review 并决定是否接受',
             safety: '接受并继续会新建 continue task，不会重写已 accepted 章节。',
           },
-        }[worldConflictPending ? 'world_conflict' : 'review'];
+        }[chapterConflict ? 'chapter_conflict' : worldConflictPending ? 'world_conflict' : 'review'];
         return {
           tone: 'blocked',
           ...copy,
-          reviewChapters: worldConflictPending ? [] : reviewChapters,
+          chapterConflictChapter: chapterConflict ? conflictChapter : 0,
+          reviewChapters: worldConflictPending && !chapterConflict ? [] : reviewChapters,
           failedChapters,
           completed: accepted,
           accepted,
@@ -1154,6 +1166,9 @@
           chapter.canon_risk_level ? `canon risk=${chapter.canon_risk_level}` : '',
         ].filter(Boolean).join(' · ');
         main.appendChild(createNode('span', reviewLabels));
+        if (guidance.chapterConflictChapter && Number(chapter.chapter_number) === guidance.chapterConflictChapter) {
+          main.appendChild(createNode('span', '正文冲突待处理：接受会被拒绝，请先在世界冲突卡片中作出决定。', 'chapter-conflict-note'));
+        }
         row.appendChild(main);
         const actions = createNode('div', '', 'queue-actions');
         const canReview = Boolean(item.project_id && chapter.chapter_number && chapter.has_review);

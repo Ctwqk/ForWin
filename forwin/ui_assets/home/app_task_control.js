@@ -480,14 +480,36 @@
       });
     }
 
+    // A chapter conflict's options act on the paused chapter's text, so they read differently from a world change's.
+    const CHAPTER_CONFLICT_OPTION_LABELS = {
+      rewrite_chapter: '退回修复正文',
+      amend_plan: '接受正文并解除保护',
+    };
+    const WORLD_CONFLICT_SOURCE_LABELS = {
+      world_tick: '世界推演',
+      chapter_extraction: '章节正文',
+      historical_rewrite: '历史重写',
+      plan_feasibility: '计划可行性',
+      band_planning: '分段规划',
+    };
+    // Concealed or unnamed entities: the server sends no name for them.
+    const UNNAMED_ENTITY_LABEL = '一名未具名的角色';
+
+    function isChapterConflict(conflict) {
+      return conflict?.source === 'chapter_extraction';
+    }
+
     function decideWorldConflictFromDrawer(projectId, conflict) {
       openProjectControlActionModal({
-        title: '世界冲突决定',
+        title: isChapterConflict(conflict) ? '正文冲突决定' : '世界冲突决定',
         description: conflict.summary,
         confirmLabel: '提交决定',
         errorTitle: '世界冲突处理失败',
         fields: [
-          { name: 'option', label: '处理选项', type: 'select', options: conflict.options, value: conflict.options[0] },
+          {
+            name: 'option', label: '处理选项', type: 'select', options: conflict.options, value: conflict.options[0],
+            optionLabels: isChapterConflict(conflict) ? CHAPTER_CONFLICT_OPTION_LABELS : {},
+          },
           { name: 'rationale', label: '决定说明', type: 'textarea', rows: 3 },
         ],
         onSubmit: async ({ option, reason, rationale }) => {
@@ -508,6 +530,29 @@
           }
         },
       });
+    }
+
+    function renderWorldConflictDetail(row, conflict) {
+      const change = conflict.proposed_change || {};
+      const boundary = change.boundary;
+      if (isChapterConflict(conflict) && boundary && typeof boundary === 'object') {
+        // Names only: the server names concealed entities neutrally and never sends a fact's proposition.
+        const names = change.names || {};
+        const until = Number(boundary.until_chapter || 0);
+        row.appendChild(createNode('div', `保护类型：${boundary.kind || '未知'} | 引用名：${names[boundary.ref] || UNNAMED_ENTITY_LABEL} | until_chapter：${until ? `第 ${until} 章` : '未设截止'}`, 'meta-line'));
+        if (boundary.evidence) row.appendChild(createNode('div', `证据引文：「${boundary.evidence}」`, 'meta-line'));
+        return;
+      }
+      const events = Array.isArray(change.effects?.events) ? change.effects.events : [];
+      if (!change.effects) return;
+      // The held change: what the plan may tell the writer (public) apart from what only the author sees.
+      const publicEvents = events.filter((event) => event.visibility === 'public').map((event) => event.summary);
+      const secretParts = [
+        change.summary,
+        ...events.filter((event) => event.visibility !== 'public').map((event) => event.summary),
+      ].filter(Boolean);
+      row.appendChild(createNode('div', `所持变化（公开）：${publicEvents.join('；') || '无'}`, 'meta-line'));
+      row.appendChild(createNode('div', `所持变化（秘密，仅作者可见）：${secretParts.join('；') || '无'}`, 'meta-line'));
     }
 
     async function renderWorldConflictsCard(item) {
@@ -532,8 +577,11 @@
           if (!conflicts.length) rows.appendChild(createNode('div', statusSelect.value === 'open' ? '当前没有待处理的世界冲突。' : '当前没有此状态的世界冲突。', 'meta-line'));
           conflicts.forEach((conflict) => {
             const row = createNode('div', '', 'chapter-row');
+            row.id = `world_conflict_${conflict.id}`;
             row.appendChild(createNode('strong', conflict.summary));
-            row.appendChild(createNode('div', `impact：${conflict.impact_level} | violated：${conflict.violated} | blocks_from_chapter：${conflict.blocks_from_chapter}`, 'meta-line'));
+            const source = WORLD_CONFLICT_SOURCE_LABELS[conflict.source] || conflict.source || '未知';
+            row.appendChild(createNode('div', `来源：${source} | impact：${conflict.impact_level} | violated：${conflict.violated} | blocks_from_chapter：${conflict.blocks_from_chapter}`, 'meta-line'));
+            renderWorldConflictDetail(row, conflict);
             if (conflict.status === 'open') {
               const decide = createButton('决定', () => decideWorldConflictFromDrawer(item.project_id, conflict), 'ghost');
               decide.disabled = !Array.isArray(conflict.options) || !conflict.options.length;

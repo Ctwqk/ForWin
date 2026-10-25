@@ -47,6 +47,10 @@ class BlockingReasonInfo(BaseModel):
     band_id: str = ""
     decision_event_id: str = ""
     detail: str = ""
+    # For world_conflict_pending: the blocking conflict and its source, so a chapter_extraction conflict that
+    # paused a chapter mid-way reads apart from a world_tick one.
+    conflict_id: str = ""
+    conflict_source: str = ""
 
 
 class BandCheckpointIssueInfo(BaseModel):

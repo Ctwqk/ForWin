@@ -275,13 +275,16 @@ def test_world_conflict_reason_precedes_plan_and_checkpoint_reasons(status):
         )],
         open_world_conflicts=[
             WorldConflictBlockInfo(conflict_id="later", blocks_from_chapter=4, summary="Later"),
-            WorldConflictBlockInfo(conflict_id="blocking", blocks_from_chapter=3, summary="Human decision"),
+            WorldConflictBlockInfo(conflict_id="blocking", blocks_from_chapter=3, summary="Human decision",
+                                   source="chapter_extraction"),
         ],
     )
     assert reason.code == "world_conflict_pending"
     assert reason.chapter_number == 3
     assert "blocking" in reason.detail
     assert "Human decision" in reason.detail
+    # The console tells a conflict that paused the chapter mid-way from a world tick's without parsing detail.
+    assert (reason.conflict_id, reason.conflict_source) == ("blocking", "chapter_extraction")
 
 
 @pytest.mark.parametrize("plans", [[], [SimpleNamespace(chapter_number=3, status="accepted")], [SimpleNamespace(chapter_number=2, status="planned")]])
@@ -334,7 +337,8 @@ def test_world_conflict_read_model_loads_only_open_human_rows(monkeypatch):
 
     repository = Mock()
     repository.list.return_value = [
-        SimpleNamespace(id=decider, blocks_from_chapter=3, summary="Conflict", required_decider=decider, created_at=datetime(2026, 1, 1))
+        SimpleNamespace(id=decider, blocks_from_chapter=3, summary="Conflict", required_decider=decider,
+                        created_at=datetime(2026, 1, 1), source="chapter_extraction")
         for decider in ("human", "codex", "auto")
     ]
     monkeypatch.setattr(generation, "WorldConflictRepository", lambda _session: repository)
@@ -342,6 +346,7 @@ def test_world_conflict_read_model_loads_only_open_human_rows(monkeypatch):
     repository.list.assert_called_once_with("project", status="open")
     assert [item.conflict_id for item in conflicts] == ["human"]
     assert conflicts[0].created_at == datetime(2026, 1, 1)
+    assert conflicts[0].source == "chapter_extraction"
 
 
 def test_world_conflict_reason_blocks_next_arc_before_plans_exist():

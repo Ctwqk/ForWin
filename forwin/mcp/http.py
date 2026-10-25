@@ -440,7 +440,10 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
 
     @register_write_tool(
         "world_conflict_resolve",
-        "Resolve a world-plan conflict with a human decision and required reason. Use this when the user has chosen an offered option.",
+        "Resolve a world-plan conflict with a human decision and required reason. Use this when the user has chosen an offered option. "
+        "A chapter_extraction conflict offers rewrite_chapter (repair the paused chapter's saved draft) and amend_plan "
+        "(accept the text and release the protection); it returns 409 while a generation task runs. "
+        "Afterwards reread the project and task state before continuing generation.",
     )
     async def world_conflict_resolve(project_id: str, conflict_id: str, option: str, rationale: str, reason: str):
         return await client.world_conflict_resolve(

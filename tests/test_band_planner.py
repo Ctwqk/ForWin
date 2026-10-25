@@ -895,6 +895,51 @@ def test_first_band_plan_over_a_written_chapter_lists_the_whole_band(Session) ->
         )
 
 
+def test_replan_skips_chapter_with_pending_resume(Session) -> None:
+    world, arc_id, sheet_id = _book(Session)
+    client = StubLLM(
+        _band(world, range(1, 5)),
+        {"chapters": [_chapter(world, 2, title="title-2b"), _chapter(world, 4, title="title-4b")]},
+        {"chapters": [_chapter(world, number, title=f"title-{number}c") for number in (2, 3, 4)]},
+    )
+    planner = _planner(client)
+    outcome = _plan_band(Session, planner, world, arc_id, sheet_id)
+    with Session.begin() as session:
+        _plans(session, world.project_id)[1].status = "accepted"
+        # Chapter 3 paused on a chapter conflict a human decided: it resumes from its saved draft.
+        repo = WorldConflictRepository(session)
+        row = repo.create(ConflictDraft(
+            project_id=world.project_id, source="chapter_extraction", origin_key="chapter_extraction:3:protection-1",
+            detected_after_chapter=2, story_time=OPENING, involved_refs=[world.hero], violated="protection",
+            impact_level="major", summary="summary-chapter-conflict", proposed_change={}, blocks_from_chapter=3,
+        ), required_decider="human", options=("rewrite_chapter", "amend_plan"))
+        repo.mark_resolved(row, decision=ConflictDecision(
+            option="rewrite_chapter", decided_by="human", rationale="rationale", decided_at=datetime.now(UTC),
+        ), result_refs=[])
+        conflict_id = row.id
+
+    def replan():
+        with Session.begin() as session:
+            return planner.replan_remaining(
+                session, project_id=world.project_id, band_plan_id=outcome.band_plan_id, from_chapter=2,
+                policy=POLICY, notes=[],
+            )
+
+    replan()
+
+    # The planned chapter waiting to resume keeps its plan.
+    assert client.payload(1)["chapters_to_plan"] == [2, 4]
+    with Session() as session:
+        plans = _plans(session, world.project_id)
+        assert [plans[number].title for number in (2, 3, 4)] == ["title-2b", "title-3", "title-4b"]
+    # Once the resume took its candidate, the chapter is the planner's again.
+    with Session.begin() as session:
+        repo = WorldConflictRepository(session)
+        repo.attach_result_refs(repo.get(world.project_id, conflict_id, for_update=True), ["candidate:candidate-3"])
+    replan()
+    assert client.payload(2)["chapters_to_plan"] == [2, 3, 4]
+
+
 @pytest.mark.parametrize("undo", ["superseded_resolution", "conflict_not_resolved"])
 def test_replan_does_not_reapply_a_patch_no_longer_in_force(Session, undo) -> None:
     world, arc_id, sheet_id = _book(Session)

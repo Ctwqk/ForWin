@@ -20,8 +20,9 @@ chapter's story minutes from its start (``window_start``) to its end (``now``):
 
 A rewritten chapter's world step expires the open conflicts the rewrite took the ground from
 (conflict_revalidation). For the latest chapter, the tick that replaces the retired one leaves the retired
-tick's conflicts out of its open set and expires them when it commits, so no conflict row stays locked through
-its LLM calls. For an earlier chapter, the step expires the ones whose held change no longer stands, then stops.
+tick's conflicts out of its open set and expires them, with the chapter conflicts over a drafted next chapter,
+when it commits, so no conflict row stays locked through its LLM calls. For an earlier chapter, the step expires
+the ones whose held change no longer stands, then stops.
 
 An LLM outage never fails the tick: the node is skipped and the deterministic rest still commits. Canon
 that moved under the tick ends it with CanonStaleVersion: before each LLM phase, at the commit, and for
@@ -61,7 +62,11 @@ from .conflict_repository import WorldConflictRepository
 from .conflict_resolution import (
     PropagatedNews, next_tick_minute, propagation_candidate, reconcile_plot_responses, unprotected_news,
 )
-from .conflict_revalidation import expire_retired_tick_conflicts, expire_stale_open_conflicts
+from .conflict_revalidation import (
+    expire_next_chapter_conflicts,
+    expire_retired_tick_conflicts,
+    expire_stale_open_conflicts,
+)
 from .conflict_types import ConflictDraft
 from .constraints import ConstraintIssue, apply_budgets, classify_impact
 from .delta_builder import WorldTickDeltaBuilder
@@ -164,15 +169,18 @@ class WorldTickService:
 
     def run(self, session: Session, commit: CanonCommitRecord, *, policy: RuntimePolicy) -> WorldTickResult:
         tick_id = f"{TICK_ID_PREFIX}{commit.id}"
-        if not policy.world.enabled:
-            return _skipped(tick_id, "world_disabled")
         number = int(commit.chapter_number or 0)
+        latest = BookStateRepository(session).latest_canon_chapter(commit.project_id) or 0
+        if not policy.world.enabled:
+            if number == latest and _rewritten(commit):
+                # No tick follows, so no model call: the next chapter's stale conflicts can expire right away.
+                expire_next_chapter_conflicts(session, project_id=commit.project_id, chapter_number=number)
+            return _skipped(tick_id, "world_disabled")
         project = session.get(Project, commit.project_id)
         total = int(project.target_total_chapters or 0) if project is not None else 0
         book_complete = 0 < total <= number
         # A rewritten chapter's world step runs after later chapters landed: the world already moved on, so
         # only the open conflicts the rewrite took the ground from go.
-        latest = BookStateRepository(session).latest_canon_chapter(commit.project_id) or 0
         if number != latest:
             expire_stale_open_conflicts(
                 session, project_id=commit.project_id, from_chapter=number, policy=policy,
@@ -189,7 +197,8 @@ class WorldTickService:
             )
         # Rewriting the latest chapter retired the tick that ran after it, and this tick moves the world on in
         # its place; the retired tick's open conflicts expire when this one commits.
-        tick = _Tick(self, session, commit, policy=policy, tick_id=tick_id, retired_tick_ids=_retired_tick_ids(commit))
+        tick = _Tick(self, session, commit, policy=policy, tick_id=tick_id, retired_tick_ids=_retired_tick_ids(commit),
+                     rewritten=_rewritten(commit))
         return tick.finish_holds() if book_complete else tick.run()
 
 
@@ -198,7 +207,7 @@ class _Tick:
 
     def __init__(
         self, service: WorldTickService, session: Session, commit: CanonCommitRecord, *, policy: RuntimePolicy,
-        tick_id: str, retired_tick_ids: Sequence[str] = (),
+        tick_id: str, retired_tick_ids: Sequence[str] = (), rewritten: bool = False,
     ) -> None:
         self.service = service
         self.session = session
@@ -206,6 +215,8 @@ class _Tick:
         self.tick_id = tick_id
         # The ticks a rewrite of this chapter retired: this tick replaces them.
         self.retired_tick_ids = tuple(retired_tick_ids)
+        # Whether a historical rewrite replaced this chapter's text.
+        self.rewritten = rewritten
         project_id, number = commit.project_id, int(commit.chapter_number)
         self.chapter = _chapter_delta(session, commit)
         self.onstage_refs = _chapter_onstage_refs(session, project_id, number, self.chapter)
@@ -636,14 +647,14 @@ class _Tick:
             if not changes and not self.conflicts.resolutions and not self.responses:
                 # A quiet tick takes no project lock and holds none through the rest of the world step, but the
                 # conflicts it raised still rest on the canon it read (Ruling P27).
-                self._expire_retired_conflicts()
+                self._expire_rewrite_conflicts()
                 self._check_snapshot()
                 return [], warnings
             # Lifecycle rows follow the same conflict-before-project lock order as decisions.
             repo = WorldConflictRepository(self.session)
             responses = [repo.get(context.project_id, row.id, for_update=True)
                          for row in sorted(self.responses, key=lambda row: row.id)]
-            self._expire_retired_conflicts()
+            self._expire_rewrite_conflicts()
             self._lock_fresh_canon()
             try:
                 with self.session.begin_nested():
@@ -665,8 +676,9 @@ class _Tick:
                 continue
             return list(graph_delta_ids), warnings
 
-    def _expire_retired_conflicts(self) -> None:
-        """Expire the retired ticks' open conflicts, locking their rows only now, after the tick's last LLM call.
+    def _expire_rewrite_conflicts(self) -> None:
+        """Expire the retired ticks' open conflicts, and after a rewrite the chapter conflicts over a drafted next
+        chapter, locking their rows only now, after the tick's last LLM call.
 
         A conflict resolved meanwhile is no longer open and stays as it was decided.
         """
@@ -674,6 +686,10 @@ class _Tick:
             expire_retired_tick_conflicts(
                 self.session, project_id=self.context.project_id, chapter_number=self.context.chapter_number,
                 tick_ids=self.retired_tick_ids,
+            )
+        if self.rewritten:
+            expire_next_chapter_conflicts(
+                self.session, project_id=self.context.project_id, chapter_number=self.context.chapter_number,
             )
 
     def _lock_fresh_canon(self) -> None:
@@ -813,6 +829,12 @@ def _chapter_ticks(session: Session, project_id: str, chapter_number: int) -> li
         tick_id = metadata.get("tick_id") if isinstance(metadata, dict) else None
         ticks.append((delta_id, tick_id if isinstance(tick_id, str) else ""))
     return ticks
+
+
+def _rewritten(commit: CanonCommitRecord) -> bool:
+    """Whether the commit replaced the chapter's earlier canon through a historical rewrite."""
+    result = json.loads(commit.result_json or "{}")
+    return isinstance(result, dict) and isinstance(result.get("historical_rewrite"), dict)
 
 
 def _retired_tick_ids(commit: CanonCommitRecord) -> list[str]:

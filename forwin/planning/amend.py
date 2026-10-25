@@ -25,7 +25,7 @@ from forwin.planning.feasibility import FeasibilityAuditor, band_for_chapter, op
 from forwin.runtime.policy import RuntimePolicy
 from forwin.world_engine.conflict_repository import WorldConflictRepository, conflict_result_refs
 from forwin.world_engine.conflict_resolution import ConflictOptionUnavailable
-from forwin.world_engine.conflict_routing import PLAN_CONFLICT_SOURCES
+from forwin.world_engine.conflict_routing import CHAPTER_CONFLICT_SOURCE, PLAN_CONFLICT_SOURCES
 from forwin.world_engine.conflict_types import ConflictDecision
 
 
@@ -87,11 +87,17 @@ class PlanAmender:
 
         For a world-tick conflict, once its change committed, the unwritten chapters of the band holding the next
         chapter are planned again with the conflict's summary as a note.
+
+        For a chapter conflict whose text ends a ref a later milestone needs, the beat sheet of the arc holding the
+        chapter is revised; the chapter keeps its plan and its draft, and the plan step replans what follows once
+        the chapter is canon.
         """
         if conflict.source in PLAN_CONFLICT_SOURCES:
             result = self._amend_plan_conflict(session, conflict, decision, policy)
             if result.failed:
                 self._record_plan_amendment_failure(session, conflict, result.issues)
+        elif conflict.source == CHAPTER_CONFLICT_SOURCE:
+            result = self._revise_for_chapter_conflict(session, conflict, decision, policy)
         else:
             result = self._replan_after_world_change(session, conflict, policy)
         refs = [
@@ -210,6 +216,23 @@ class PlanAmender:
             if errors:
                 return AmendResult(band_plan_id=None, beat_sheet_id=beat_sheet_id, issues=errors)
         return AmendResult(band_plan_id=outcome.band_plan_id, beat_sheet_id=beat_sheet_id, issues=tuple(outcome.issues))
+
+    def _revise_for_chapter_conflict(
+        self, session: Session, conflict: WorldPlanConflictRow, decision: ConflictDecision, policy: RuntimePolicy,
+    ) -> AmendResult:
+        """Revise the beat sheet around the milestone the chapter's text broke, once per conflict: a retry plans
+        from the revision the conflict already lists."""
+        arc_plan, sheet_row = _arc_with_sheet(session, conflict.project_id, int(conflict.blocks_from_chapter))
+        session.refresh(conflict)
+        if f"{BEAT_SHEET_REF_PREFIX}{sheet_row.id}" not in conflict_result_refs(conflict):
+            sheet_row = self.beat_sheet_service.revise(
+                session, project_id=conflict.project_id, arc_plan=arc_plan, policy=policy,
+                reason=f"conflict:{conflict.id}",
+                conflict_summary="\n".join(text for text in (conflict.summary, decision.rationale) if text.strip()),
+            )
+            # End the revision's project row lock before the conflict row is locked to record it.
+            session.commit()
+        return AmendResult(band_plan_id=None, beat_sheet_id=sheet_row.id)
 
     @staticmethod
     def _record_plan_amendment_failure(session: Session, conflict: WorldPlanConflictRow,

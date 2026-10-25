@@ -341,27 +341,45 @@ class ChapterExecutionStage(ChapterConflictStage):
                         frozen_artifacts=frozen_artifacts,
                         current_chapter=chapter_num,
                     )
-                self._emit_progress(
-                    "stage_changed",
-                    stage="writing_chapter",
-                    project_id=project_id,
-                    requested_chapters=requested_chapters,
-                    current_chapter=chapter_num,
-                    completed_chapters=completed_chapters,
-                    failed_chapters=failed_chapters,
-                    paused_chapters=paused_chapters,
-                )
-                writer_output = self._write_chapter_with_attention_fallback(
-                    context=context,
-                    project_id=project_id,
-                    chapter_number=chapter_num,
-                    updater=updater,
-                    paused_chapters=paused_chapters,
-                    frozen_artifacts=frozen_artifacts,
-                )
-                if writer_output is None:
-                    if self._abort_requested():
-                        return self._cancelled_result(
+                conflicts = ChapterConflicts(self, session=session, repo=repo, updater=updater, checker=checker,
+                                             policy=policy, chapter_plan=chapter_plan, context=context)
+                # A decided chapter conflict resumes the chapter from its saved draft; otherwise it is written.
+                resumed = conflicts.resume()
+                if resumed is None:
+                    self._emit_progress(
+                        "stage_changed",
+                        stage="writing_chapter",
+                        project_id=project_id,
+                        requested_chapters=requested_chapters,
+                        current_chapter=chapter_num,
+                        completed_chapters=completed_chapters,
+                        failed_chapters=failed_chapters,
+                        paused_chapters=paused_chapters,
+                    )
+                    writer_output = self._write_chapter_with_attention_fallback(
+                        context=context,
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                        updater=updater,
+                        paused_chapters=paused_chapters,
+                        frozen_artifacts=frozen_artifacts,
+                    )
+                    if writer_output is None:
+                        if self._abort_requested():
+                            return self._cancelled_result(
+                                project_id,
+                                requested_chapters,
+                                completed_chapters=completed_chapters,
+                                failed_chapters=failed_chapters,
+                                paused_chapters=paused_chapters,
+                                frozen_artifacts=frozen_artifacts,
+                                current_chapter=chapter_num,
+                            )
+                        session.commit()
+                        break
+                    if self._pause_requested():
+                        session.commit()
+                        return self._paused_result(
                             project_id,
                             requested_chapters,
                             completed_chapters=completed_chapters,
@@ -370,46 +388,20 @@ class ChapterExecutionStage(ChapterConflictStage):
                             frozen_artifacts=frozen_artifacts,
                             current_chapter=chapter_num,
                         )
-                    session.commit()
-                    break
-                if self._pause_requested():
-                    session.commit()
-                    return self._paused_result(
-                        project_id,
-                        requested_chapters,
+                    self._emit_progress(
+                        "stage_changed",
+                        stage="continuity_review",
+                        project_id=project_id,
+                        requested_chapters=requested_chapters,
+                        current_chapter=chapter_num,
                         completed_chapters=completed_chapters,
                         failed_chapters=failed_chapters,
                         paused_chapters=paused_chapters,
-                        frozen_artifacts=frozen_artifacts,
-                        current_chapter=chapter_num,
                     )
-                self._emit_progress(
-                    "stage_changed",
-                    stage="continuity_review",
-                    project_id=project_id,
-                    requested_chapters=requested_chapters,
-                    current_chapter=chapter_num,
-                    completed_chapters=completed_chapters,
-                    failed_chapters=failed_chapters,
-                    paused_chapters=paused_chapters,
-                )
-                writer_output, verdict, force_accept_applied = (
-                    self.repair.review_candidate(
-                        execution=self.repair_execution,
-                        session=session,
-                        repo=repo,
-                        updater=updater,
-                        checker=checker,
-                        project_id=project_id,
-                        chapter_plan=chapter_plan,
-                        context=context,
-                        writer_output=writer_output,
-                    )
-                )
-                conflicts = ChapterConflicts(self, session=session, repo=repo, updater=updater, checker=checker,
-                                             policy=policy, chapter_plan=chapter_plan, context=context)
-                writer_output, verdict, force_accept_applied, _ = conflicts.record(
-                    writer_output, verdict, force_accept_applied)
+                    resumed = self.repair.review_candidate(
+                        execution=self.repair_execution, session=session, repo=repo, updater=updater, checker=checker,
+                        project_id=project_id, chapter_plan=chapter_plan, context=context, writer_output=writer_output)
+                writer_output, verdict, force_accept_applied, _ = conflicts.record(*resumed)
                 repair_attempt_count = int(
                     chapter_plan.repair_attempt_count or 0
                 )

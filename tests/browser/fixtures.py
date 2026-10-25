@@ -1178,6 +1178,64 @@ def sample_generation_control(*, can_resume: bool = False) -> dict[str, Any]:
     }
 
 
+def sample_chapter_conflict(
+    project_id: str = "project-1", *, chapter_number: int = 2
+) -> dict[str, Any]:
+    """An open chapter_extraction conflict that paused a drafted chapter mid-way."""
+    return {
+        "id": "chapter-conflict-1",
+        "project_id": project_id,
+        "source": "chapter_extraction",
+        "origin_key": f"chapter_extraction:{chapter_number}:protection-1",
+        "status": "open",
+        "summary": f"Chapter {chapter_number} kills 林夜; the plan keeps them alive through chapter 5.",
+        "impact_level": "major",
+        "violated": "protection",
+        "detected_after_chapter": chapter_number - 1,
+        "blocks_from_chapter": chapter_number,
+        "options": ["rewrite_chapter", "amend_plan"],
+        "required_decider": "human",
+        "proposed_change": {
+            "kind": "chapter_boundary",
+            "chapter": chapter_number,
+            "candidate_id": f"candidate-{chapter_number}",
+            "detected_by": "draft_review",
+            "names": {"hero": "林夜"},
+            "boundary": {
+                "protection_node_id": "protection-1",
+                "milestone_ref": "",
+                "kind": "must_be_alive",
+                "ref": "hero",
+                "observer_ref": "",
+                "fact_ref": "",
+                "field": "",
+                "value": None,
+                "until_chapter": 5,
+                "source": "beat_sheet",
+                "impact_level": "major",
+                "evidence": "林夜倒在雾港码头。",
+            },
+        },
+        "decision": {},
+        "result_refs": [],
+    }
+
+
+def sample_chapter_conflict_control(conflict: dict[str, Any]) -> dict[str, Any]:
+    """Generation control while a chapter conflict blocks its chapter, which stays in the review queue."""
+    return {
+        **sample_generation_control(can_resume=False),
+        "blocking_reason": {
+            "code": "world_conflict_pending",
+            "message": "存在待处理的世界冲突",
+            "chapter_number": conflict["blocks_from_chapter"],
+            "detail": f"conflict_id={conflict['id']}: {conflict['summary']}",
+            "conflict_id": conflict["id"],
+            "conflict_source": conflict["source"],
+        },
+    }
+
+
 def sample_generation_task(
     task_id: str, project_id: str = "project-1"
 ) -> dict[str, Any]:

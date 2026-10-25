@@ -5,28 +5,40 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from dataclasses import asdict
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+from fastapi import HTTPException
+from sqlalchemy import event, select
 
+from forwin.api_schema import ChapterReviewApproveRequest
+from forwin.application.projects.reviews import approve_chapter_review
 from forwin.audit.events import DecisionEventType
+from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.protections import DeltaBoundaryViolation
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.reviewer import BookStateReviewIssue, BookStateReviewVerdict
 from forwin.candidate_drafts import CandidateDraftRepository, candidate_plan_revision
+from forwin.canon.admission import CanonAdmissionService
 from forwin.canon.eligibility import candidate_ineligibility_reason
 from forwin.canon.preparation import BookStatePreparationOutcome, CanonPreparationService
 from forwin.canon.types import CanonPreparationOutcome
+from forwin.generation.pipeline_core.acceptance import AcceptanceStage
+from forwin.generation.pipeline_core.chapter_conflicts import ChapterConflictPending
 from forwin.generation.pipeline_core.project_chapters import ChapterExecutionStage
 from forwin.models.audit import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.book_state import GraphDeltaRow
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.world_conflict import WorldPlanConflictRow
+from forwin.planning.beat_sheet.types import ProtectionSpec
 from forwin.protocol.book_state import FactNode, WorldNode
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.review.repair import service as repair_service
+from forwin.review.repair.service import RepairService
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
@@ -39,6 +51,9 @@ from forwin.world_engine.chapter_conflicts import (
 )
 from forwin.world_engine.conflict_delegate import WorldConflictDelegation
 from forwin.world_engine.conflict_repository import WorldConflictRepository
+from forwin.world_engine.conflict_resolution import ConflictResolutionService
+from forwin.world_engine.conflict_types import ConflictDecision
+from forwin.writer.prompt_core.world_repair import protection_repair_fix
 from forwin.writer.prompt_core.world_view import UNNAMED_ACTOR_LABEL
 from tests.postgres import postgres_test_url
 
@@ -52,6 +67,7 @@ HERO_NAME = "Hero-Name"
 SHADOW_NAME = "Shadow-Name"
 PROPOSITION = "PROPOSITION-OF-THE-SECRET"
 PROTECTION = "protection-hero"
+PLAN_ID = f"chapter-conflict-plan-{CHAPTER}"
 HUMAN = RuntimePolicy.for_profile("standard").with_user_settings(world_conflict_delegate="human")
 CODEX = RuntimePolicy.for_profile("standard").with_user_settings(world_conflict_delegate="codex")
 
@@ -175,7 +191,7 @@ def test_chapter_conflict_draft_fields() -> None:
     assert (draft.intent_ref, draft.actor_ref) == ("", "")
     assert draft.proposed_change == {
         "kind": "chapter_boundary", "chapter": CHAPTER, "boundary": asdict(protection), "candidate_id": "candidate-1",
-        "detected_by": "draft_review",
+        "detected_by": "draft_review", "names": {},
     }
     assert (milestone_draft.violated, milestone_draft.impact_level) == ("milestone", "critical")
     assert milestone_draft.origin_key == f"chapter_extraction:{CHAPTER}:milestone:{SHADOW}"
@@ -224,8 +240,11 @@ def test_chapter_conflict_summary_has_no_proposition(factory) -> None:
     assert secret_row.summary.count(HERO_NAME) == 2
     assert UNNAMED_ACTOR_LABEL in shadow_row.summary
     assert sorted(event.summary for event in detected) == sorted([secret_row.summary, shadow_row.summary])
-    # Operators read the violation itself in proposed_change.
+    # Operators read the violation itself in proposed_change, and the console its names.
     assert json.loads(secret_row.proposed_change_json)["boundary"] == asdict(keep_secret)
+    names = json.loads(secret_row.proposed_change_json)["names"]
+    assert names[HERO] == HERO_NAME and PROPOSITION not in json.dumps(names)
+    assert json.loads(shadow_row.proposed_change_json)["names"] == {SHADOW: UNNAMED_ACTOR_LABEL}
 
 
 # routing and idempotency
@@ -311,6 +330,27 @@ def test_open_row_no_longer_violated_resolves_as_auto_rewrite(factory) -> None:
     assert [event.related_object_id for event in resolved] == [row.id]
 
 
+def test_open_row_is_reused_only_by_the_check_that_found_it(factory) -> None:
+    """The other check could never close a reused row, so the same boundary found by both checks gets two rows."""
+    violation = _violation()
+    with factory() as session:
+        recorder = _recorder(session)
+        draft = recorder.record(project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-1",
+                                violations=[violation])
+        gate = recorder.record(project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-1",
+                               violations=[violation], detected_by="canon_gate")
+        again = recorder.record(project_id=PROJECT_ID, chapter_number=CHAPTER, candidate_id="candidate-2",
+                                violations=[violation], detected_by="canon_gate")
+        session.commit()
+        rows = {row.id: row for row in _rows(session)}
+
+    assert draft.blocking_conflict_id != gate.blocking_conflict_id == again.blocking_conflict_id
+    assert {conflict_id: json.loads(row.proposed_change_json)["detected_by"] for conflict_id, row in rows.items()} == {
+        draft.blocking_conflict_id: "draft_review", gate.blocking_conflict_id: "canon_gate",
+    }
+    assert {row.origin_key for row in rows.values()} == {f"chapter_extraction:{CHAPTER}:{PROTECTION}"}
+
+
 def test_no_longer_violated_resolution_uses_the_rows_own_source(factory) -> None:
     """The draft review never reports a gate-only boundary, so only the gate may close a gate row, and back."""
     gate_violation = _violation(protection_node_id="gate-only", impact_level="critical")
@@ -372,23 +412,36 @@ class FakeRepair:
         self.review = review
         self.after_extra_pass = after_extra_pass
         self.extra_passes: list[list[str]] = []
+        self.reviewed: list[str] = []
 
     def review_candidate(self, **kwargs):
+        self.reviewed.append(kwargs["writer_output"].body)
         _persist_candidate(kwargs["session"], kwargs["writer_output"], self.review)
         return kwargs["writer_output"], self.review, False
 
     def repair_world_conflict(self, **kwargs):
         self.extra_passes.append([row.id for row in kwargs["conflicts"]])
+        # The repair loop counts its attempt on the chapter plan, as the real pass does.
+        plan = kwargs["chapter_plan"]
+        plan.repair_attempt_count = int(plan.repair_attempt_count or 0) + 1
         output = _writer_output("The repaired chapter body.")
         _persist_candidate(kwargs["session"], output, self.after_extra_pass)
         return output, self.after_extra_pass, False
 
 
-def _run(factory, monkeypatch, *, repair, policy=HUMAN, delegate=None, canon_preparation=None):
+def _run(factory, monkeypatch, *, repair, policy=HUMAN, delegate=None, canon_preparation=None, saved=None,
+         execution=None):
+    """Run chapter 3 through the stage; ``saved`` is the writer output the latest draft's artifact holds."""
     from forwin.generation.pipeline_core import project_chapters
 
     events: list[tuple[str, dict]] = []
     written: list[int] = []
+    loaded: list[str] = []
+
+    def load_saved(path):
+        loaded.append(path)
+        return saved or _writer_output()
+
     monkeypatch.setattr(project_chapters, "handle_chapter_review_gate", lambda *_args, **_kwargs: SimpleNamespace(
         pause_required=False, gate_approved=False,
     ))
@@ -419,7 +472,8 @@ def _run(factory, monkeypatch, *, repair, policy=HUMAN, delegate=None, canon_pre
             _audit_current_plan_before_write=lambda **kwargs: kwargs["context"],
             _write_chapter_with_attention_fallback=write,
             repair=repair,
-            repair_execution=SimpleNamespace(),
+            repair_execution=execution or SimpleNamespace(),
+            _load_writer_output_from_meta=load_saved,
             _review_issue_payloads=lambda verdict: [issue.model_dump(mode="json") for issue in verdict.issues],
             _review_canon_risk=lambda _verdict: "low",
             _chapter_conflict_recorder=lambda session, policy: _recorder(session, policy=policy, delegate=delegate),
@@ -442,7 +496,7 @@ def _run(factory, monkeypatch, *, repair, policy=HUMAN, delegate=None, canon_pre
             ChapterDraft.chapter_plan_id == f"chapter-conflict-plan-{CHAPTER}",
         ))))
     paused = [payload.get("payload") for _event, payload in events if payload.get("stage") == "paused_for_review"]
-    return SimpleNamespace(result=result, written=written, status=status, drafts=drafts, paused=paused)
+    return SimpleNamespace(result=result, written=written, status=status, drafts=drafts, paused=paused, loaded=loaded)
 
 
 def test_violation_fixed_in_repair_loop_stores_no_row(factory, monkeypatch) -> None:
@@ -688,3 +742,218 @@ def test_canon_prep_violation_creates_conflict(factory, monkeypatch) -> None:
     assert run.result.pause_reason == "world_conflict"
     assert run.paused == [{"reason": "world_conflict", "conflict_id": row.id}]
     assert (run.status, run.drafts) == ("needs_review", 1)
+
+
+# resolution and resume
+
+
+def _open_conflict(factory, monkeypatch, violation: DeltaBoundaryViolation) -> str:
+    """Run the chapter once: its residual violation pauses it mid-way with an open human conflict."""
+    run = _run(factory, monkeypatch, repair=FakeRepair(_failing(violation)))
+    assert (run.status, run.result.pause_reason) == ("needs_review", "world_conflict")
+    with factory() as session:
+        (row,) = _rows(session)
+    return row.id
+
+
+def _resolve(factory, conflict_id: str, option: str):
+    with factory() as session:
+        result = ConflictResolutionService(session, admission=CanonAdmissionService(), policy=HUMAN).resolve(
+            project_id=PROJECT_ID, conflict_id=conflict_id, decision=ConflictDecision(
+                option=option, decided_by="human", rationale="rationale", decided_at=datetime.now(UTC),
+            ),
+        )
+        session.commit()
+    return result
+
+
+class SavedDraftRepair(RepairService):
+    """The real world-conflict repair; a fresh review would mean the chapter was written again."""
+
+    def review_candidate(self, **kwargs):
+        raise AssertionError("a rewrite_chapter resume repairs the saved draft")
+
+
+def _decision_events(**_kwargs):
+    return SimpleNamespace(id="event-1")
+
+
+def test_rewrite_chapter_resumes_repair_from_saved_draft(factory, monkeypatch) -> None:
+    conflict_id = _open_conflict(factory, monkeypatch, _violation())
+    with factory() as session:
+        draft = session.scalar(select(ChapterDraft).where(ChapterDraft.chapter_plan_id == PLAN_ID))
+        draft_id, artifact = draft.id, draft.llm_raw_response
+    result = _resolve(factory, conflict_id, "rewrite_chapter")
+    with factory() as session:
+        row = session.get(WorldPlanConflictRow, conflict_id)
+        plan_status = session.get(ChapterPlan, PLAN_ID).status
+        pending = WorldConflictRepository(session).pending_chapter_resumes(PROJECT_ID, chapter_number=CHAPTER)
+        plan_constraints = session.scalars(select(GraphDeltaRow.id).where(
+            GraphDeltaRow.project_id == PROJECT_ID, GraphDeltaRow.source_type == "plan_constraint",
+        )).all()
+    # No canon is written; the plan goes back to planned and the decision waits to resume the chapter.
+    assert result.graph_delta_ids == () and plan_constraints == []
+    assert (row.status, json.loads(row.decision_json)["option"], json.loads(row.result_refs_json)) == (
+        "resolved", "rewrite_chapter", [],
+    )
+    assert plan_status == "planned" and [item.id for item in pending] == [conflict_id]
+
+    loops: list[dict] = []
+
+    def repair_loop(_execution, **kwargs):
+        loops.append({**kwargs, "current_draft_id": kwargs["current_draft"].id})
+        output = _writer_output("The repaired chapter body.")
+        _persist_candidate(kwargs["session"], output, PASSING)
+        return output, PASSING, False
+
+    monkeypatch.setattr(repair_service, "_run_repair_loop_for_phase", repair_loop)
+    execution = SimpleNamespace(_record_decision_event=_decision_events, _review_event_payload=lambda _review: {})
+    run = _run(factory, monkeypatch, repair=SavedDraftRepair(), execution=execution)
+
+    # No new draft is written: the saved one goes to repair, in its own phase, with the boundary as must_fix.
+    assert run.written == [] and run.loaded == [artifact]
+    (loop,) = loops
+    assert loop["repair_phase"] == "world_conflict_repair"
+    assert loop["current_draft_id"] == draft_id
+    review = loop["current_review"]
+    assert review.verdict == "fail" and review.repair_instruction.repair_scope == "draft"
+    assert review.repair_instruction.must_fix == [protection_repair_fix("must_be_alive", {"name": HERO_NAME})]
+    assert HERO_NAME in review.repair_instruction.must_fix[0]
+    assert [issue.original_result["conflict_id"] for issue in review.issues] == [conflict_id]
+    assert PROPOSITION not in review.model_dump_json()
+    assert (run.status, run.result.completed_chapters) == ("accepted", [CHAPTER])
+    with factory() as session:
+        latest = CandidateDraftRepository(session).latest_for_chapter(project_id=PROJECT_ID, chapter_number=CHAPTER)
+        row = session.get(WorldPlanConflictRow, conflict_id)
+        assert json.loads(row.result_refs_json) == [f"candidate:{latest.id}"]
+        assert WorldConflictRepository(session).pending_chapter_resumes(PROJECT_ID, chapter_number=CHAPTER) == []
+        # The synthetic review was saved on the saved draft for the repair to start from.
+        saved_reviews = session.scalars(select(ChapterReview).where(ChapterReview.draft_id == draft_id)).all()
+        assert len(saved_reviews) == 2
+
+
+def test_amend_plan_releases_protection_and_rereviews_same_text(factory, monkeypatch) -> None:
+    with factory() as session:
+        CanonAdmissionService().commit_plan_constraints(
+            session=session, project_id=PROJECT_ID, constraint_set_id="sheet-1", releases=[],
+            creates=[ProtectionSpec(ref=HERO, kind="must_be_alive", until_chapter=6)],
+        )
+        session.commit()
+        runtime = BookStateProjection(session).load_runtime_as_of(PROJECT_ID, as_of_chapter=0)
+        (protection_id,) = [node.id for node in runtime.narrative.nodes_by_id.values()
+                            if node.node_type == "review_constraint"]
+    conflict_id = _open_conflict(factory, monkeypatch, _violation(protection_node_id=protection_id))
+
+    result = _resolve(factory, conflict_id, "amend_plan")
+
+    constraint_set_id = f"conflict:{conflict_id}"
+    with factory() as session:
+        again = CanonAdmissionService().commit_plan_constraints(
+            session=session, project_id=PROJECT_ID, constraint_set_id=constraint_set_id, creates=[],
+            releases=[protection_id],
+        )
+        releases = session.scalars(select(GraphDeltaRow).where(
+            GraphDeltaRow.project_id == PROJECT_ID, GraphDeltaRow.source_type == "plan_constraint",
+            GraphDeltaRow.source_id == constraint_set_id,
+        )).all()
+        runtime = BookStateProjection(session).load_runtime_as_of(PROJECT_ID, as_of_chapter=CHAPTER - 1)
+        row = session.get(WorldPlanConflictRow, conflict_id)
+        plan_status = session.get(ChapterPlan, PLAN_ID).status
+    # One plan_constraint delta releases the protection, and committing the same set again changes nothing.
+    assert [delta.id for delta in releases] == list(result.graph_delta_ids)
+    assert again.idempotent and again.graph_delta_ids == result.graph_delta_ids
+    assert runtime.narrative.nodes_by_id[protection_id].payload["status"] == "released"
+    assert (row.status, json.loads(row.decision_json)["option"]) == ("resolved", "amend_plan")
+    assert json.loads(row.result_refs_json) == list(result.graph_delta_ids)
+    assert plan_status == "planned"
+
+    repair = FakeRepair(PASSING)
+    run = _run(factory, monkeypatch, repair=repair, saved=_writer_output("The saved chapter body."))
+
+    # The same text is reviewed again without a writer call, and now the chapter passes.
+    assert run.written == [] and repair.reviewed == ["The saved chapter body."]
+    assert (run.status, run.result.completed_chapters, run.result.pause_reason) == ("accepted", [CHAPTER], "")
+    with factory() as session:
+        latest = CandidateDraftRepository(session).latest_for_chapter(project_id=PROJECT_ID, chapter_number=CHAPTER)
+        row = session.get(WorldPlanConflictRow, conflict_id)
+        assert json.loads(row.result_refs_json) == [*result.graph_delta_ids, f"candidate:{latest.id}"]
+
+
+def test_accept_review_refused_while_chapter_conflict_open(factory, monkeypatch) -> None:
+    conflict_id = _open_conflict(factory, monkeypatch, _violation())
+    stage = SimpleNamespace(
+        _SessionFactory=factory,
+        _make_state_helpers=lambda session: (StateRepository(session), StateUpdater(session), None),
+    )
+
+    with pytest.raises(ChapterConflictPending, match=conflict_id) as refused:
+        AcceptanceStage.accept_review(stage, PROJECT_ID, CHAPTER)
+    assert isinstance(refused.value, ValueError) and refused.value.conflict_id == conflict_id
+
+    # Over HTTP the refusal is a 409, not a bad request.
+    with pytest.raises(HTTPException) as http:
+        approve_chapter_review(
+            PROJECT_ID, CHAPTER, ChapterReviewApproveRequest(reason="operator review"),
+            config=object(), pipeline=SimpleNamespace(
+                accept_review=lambda *args, **kwargs: AcceptanceStage.accept_review(stage, *args, **kwargs),
+            ),
+            get_session=factory, display_datetime=str, active_generation_task_error_cls=RuntimeError,
+            require_reason=lambda reason, action: reason, project_has_active_generation_task=lambda *_a, **_k: False,
+            generation_task_conflict_message=str, log_decision_event=lambda *_a, **_k: None,
+            create_continue_generation_task=lambda **_kwargs: None, update_task=lambda *_a, **_k: None,
+        )
+    assert http.value.status_code == 409 and conflict_id in http.value.detail
+    with factory() as session:
+        assert session.get(ChapterPlan, PLAN_ID).status == "needs_review"
+        assert session.get(WorldPlanConflictRow, conflict_id).status == "open"
+
+
+class _LockOrder:
+    """Per connection, whether a transaction that wrote the chapter plans went on to lock or write a conflict row."""
+
+    def __init__(self, engine) -> None:
+        self.dirty: set[int] = set()
+        self.inversions: list[str] = []
+        self.engine = engine
+        event.listen(engine, "before_cursor_execute", self.statement)
+        event.listen(engine, "commit", self.end)
+        event.listen(engine, "rollback", self.end)
+
+    def statement(self, conn, _cursor, statement, *_args) -> None:
+        text = " ".join(statement.split()).upper()
+        if text.startswith("UPDATE CHAPTER_PLANS"):
+            self.dirty.add(id(conn.connection.dbapi_connection))
+        elif id(conn.connection.dbapi_connection) in self.dirty and "WORLD_PLAN_CONFLICTS" in text and (
+            text.startswith("UPDATE WORLD_PLAN_CONFLICTS") or "FOR UPDATE" in text
+        ):
+            self.inversions.append(text[:120])
+
+    def end(self, conn) -> None:
+        self.dirty.discard(id(conn.connection.dbapi_connection))
+
+    def remove(self) -> None:
+        event.remove(self.engine, "before_cursor_execute", self.statement)
+        event.remove(self.engine, "commit", self.end)
+        event.remove(self.engine, "rollback", self.end)
+
+
+@pytest.mark.parametrize("path", ["codex_pass", "resume"])
+def test_conflict_rows_are_locked_only_after_the_chapter_plan_write_commits(factory, monkeypatch, path) -> None:
+    """Lock order: a conflict row comes before the chapter plan, so each write of the plan commits first."""
+    violation = _violation(impact_level="moderate")
+    if path == "resume":
+        conflict_id = _open_conflict(factory, monkeypatch, violation)
+        _resolve(factory, conflict_id, "rewrite_chapter")
+    order = _LockOrder(factory.kw["bind"])
+    try:
+        if path == "codex_pass":
+            repair = FakeRepair(_failing(violation), after_extra_pass=_failing(violation))
+            _run(factory, monkeypatch, repair=repair, policy=CODEX, delegate=FakeDelegate("rewrite_chapter"))
+            assert len(repair.extra_passes) == 1
+        else:
+            repair = FakeRepair(_failing(violation), after_extra_pass=_failing(violation))
+            run = _run(factory, monkeypatch, repair=repair)
+            assert run.written == [] and len(repair.extra_passes) == 1
+    finally:
+        order.remove()
+    assert order.inversions == []

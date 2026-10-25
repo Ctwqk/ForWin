@@ -607,19 +607,31 @@ class CanonAdmissionService:
         return compile_result
 
     def commit_plan_constraints(
-        self, *, session: Session, project_id: str, beat_sheet_id: str,
+        self, *, session: Session, project_id: str, constraint_set_id: str | None = None,
         creates: list[ProtectionSpec], releases: list[str], release_sheet_id: str | None = None,
+        beat_sheet_id: str | None = None,
     ) -> CanonPlanConstraintOutcome:
-        """Commit a sheet's protections after the latest canon delta; the caller owns the transaction."""
+        """Commit a constraint set's protections and releases after the latest canon delta, idempotently by
+        ``constraint_set_id``; the caller owns the transaction.
+
+        The id is a beat sheet's id, or ``conflict:<id>`` for a chapter conflict a user settled by amending the
+        plan. ``beat_sheet_id`` is the same parameter under its earlier name. The ledger stores the id under the
+        delta's and protection nodes' ``beat_sheet_id`` metadata key.
+        """
+        if (constraint_set_id is None) == (beat_sheet_id is None):
+            raise TypeError("commit_plan_constraints takes exactly one of constraint_set_id and beat_sheet_id")
+        constraint_set_id = constraint_set_id if constraint_set_id is not None else beat_sheet_id
         project = session.scalar(select(Project).where(Project.id == project_id).with_for_update(key_share=True))
         if project is None:
             raise CanonStaleVersion("project no longer exists")
-        escaped = json.dumps(beat_sheet_id, ensure_ascii=False)[1:-1]
+        escaped = json.dumps(constraint_set_id, ensure_ascii=False)[1:-1]
         rows = session.execute(select(GraphDeltaRow.id, GraphDeltaRow.metadata_json).where(
             GraphDeltaRow.project_id == project_id, GraphDeltaRow.source_type == PLAN_CONSTRAINT_SOURCE_TYPE,
             GraphDeltaRow.metadata_json.contains(escaped, autoescape=True),
         ).order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)).all()
-        existing = tuple(ref for ref, metadata in rows if _json_object(metadata).get("beat_sheet_id") == beat_sheet_id)
+        existing = tuple(
+            ref for ref, metadata in rows if _json_object(metadata).get("beat_sheet_id") == constraint_set_id
+        )
         if existing:
             return CanonPlanConstraintOutcome(existing, True)
         chapter = BookStateRepository(session).latest_canon_chapter(project_id) or 0
@@ -650,18 +662,19 @@ class CanonAdmissionService:
                 payload.update(field=spec.field, value=spec.value)
             patches.append(NarrativePatch(target_ref=f"review_constraint:{ref}", op="create", new_value={
                 "id": ref, "project_id": project_id, "node_type": "review_constraint", "payload": payload,
-                "metadata": {"beat_sheet_id": beat_sheet_id},
+                "metadata": {"beat_sheet_id": constraint_set_id},
             }))
         delta = GraphDelta(id=new_id(), project_id=project_id, chapter_number=chapter,
-            source_type=PLAN_CONSTRAINT_SOURCE_TYPE, source_id=beat_sheet_id, narrative_patches=patches,
-            metadata={"beat_sheet_id": beat_sheet_id})
+            source_type=PLAN_CONSTRAINT_SOURCE_TYPE, source_id=constraint_set_id, narrative_patches=patches,
+            metadata={"beat_sheet_id": constraint_set_id})
         changes = ApprovedGraphDeltaSet(project_id=project_id, chapter_number=chapter,
                                        graph_deltas=[delta], approved_by=[PLAN_CONSTRAINT_SOURCE_TYPE])
         verdict = BookStateReviewGate(session).review(changes, base_chapter=chapter)
         if not verdict.accepted:
             raise CanonWriteFailure("; ".join(issue.message for issue in verdict.issues))
-        result = BookStateCompiler(session).compile(changes, compiler_run_id=f"canon-plan-constraints-{beat_sheet_id}",
-                                                     base_chapter=chapter)
+        result = BookStateCompiler(session).compile(
+            changes, compiler_run_id=f"canon-plan-constraints-{constraint_set_id}", base_chapter=chapter,
+        )
         if not result.committed:
             raise CanonWriteFailure("; ".join(result.blocked_reasons))
         # PostgreSQL now() is transaction-stable. Preserve order after the seed and after any
@@ -678,11 +691,11 @@ class CanonAdmissionService:
         session.add(DecisionEvent(
             id=new_id(), project_id=project_id, chapter_number=chapter, scope="chapter",
             event_family="business_event", event_type=DecisionEventType.PLAN_CONSTRAINTS_COMMITTED,
-            actor_type="system", summary=f"Beat-sheet protections {beat_sheet_id} committed into chapter {chapter}.",
-            payload_json=json.dumps({"beat_sheet_id": beat_sheet_id, "graph_delta_ids": list(result.graph_delta_ids),
+            actor_type="system", summary=f"Plan constraints {constraint_set_id} committed into chapter {chapter}.",
+            payload_json=json.dumps({"beat_sheet_id": constraint_set_id, "graph_delta_ids": list(result.graph_delta_ids),
                                      "created_ids": created_ids, "released_ids": released_ids,
                                      "chapter_number": chapter}, ensure_ascii=False, sort_keys=True),
-            related_object_type="beat_sheet", related_object_id=beat_sheet_id,
+            related_object_type="beat_sheet", related_object_id=constraint_set_id,
         ))
         session.flush()
         return CanonPlanConstraintOutcome(tuple(result.graph_delta_ids), False)

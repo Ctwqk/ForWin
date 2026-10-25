@@ -37,6 +37,7 @@ class WorldConflictBlockInfo(BaseModel):
     blocks_from_chapter: int
     summary: str
     created_at: datetime = datetime.min
+    source: str = ""
 
 
 def load_open_world_conflicts(
@@ -48,6 +49,7 @@ def load_open_world_conflicts(
             blocks_from_chapter=row.blocks_from_chapter,
             summary=row.summary,
             created_at=row.created_at,
+            source=row.source,
         )
         for row in WorldConflictRepository(session).list(project_id, status="open")
         if row.required_decider == "human"
@@ -66,6 +68,7 @@ def load_open_world_conflicts_by_project(
             WorldPlanConflictRow.blocks_from_chapter,
             WorldPlanConflictRow.summary,
             WorldPlanConflictRow.created_at,
+            WorldPlanConflictRow.source,
         )
         .where(
             WorldPlanConflictRow.project_id.in_(project_ids),
@@ -88,6 +91,7 @@ def load_open_world_conflicts_by_project(
                 blocks_from_chapter=row.blocks_from_chapter,
                 summary=row.summary,
                 created_at=row.created_at,
+                source=row.source,
             )
         )
     return grouped
@@ -129,6 +133,8 @@ def _derive_blocking_reason(
                 message=chapter_blocking_message("world_conflict_pending"),
                 chapter_number=conflict_chapter,
                 detail=f"conflict_id={conflict.conflict_id}: {conflict.summary}",
+                conflict_id=conflict.conflict_id,
+                conflict_source=conflict.source,
             )
 
     ordered_events = list(decision_events or [])

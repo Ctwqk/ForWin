@@ -14,6 +14,7 @@ _AUTO_OPTIONS: dict[str, ConflictOption] = {"world_tick": "veto_world", "chapter
 PLAN_CONFLICT_SOURCES = frozenset({"plan_feasibility", "band_planning"})
 _PLAN_CONFLICT_OPTIONS: tuple[ConflictOption, ...] = ("amend_plan",)
 # Chapter text that breaks a boundary is rewritten, or the user amends the plan to accept it.
+CHAPTER_CONFLICT_SOURCE = "chapter_extraction"
 CHAPTER_CONFLICT_OPTIONS: tuple[ConflictOption, ...] = ("rewrite_chapter", "amend_plan")
 # Only chapter text is rewritten, so a world conflict never offers rewrite_chapter.
 _PLAN_OPTIONS: tuple[ConflictOption, ...] = ("veto_world", "plot_responds", "amend_plan")
@@ -79,6 +80,7 @@ def route_conflict(draft: ConflictDraft, *, policy: RuntimePolicy) -> ConflictDe
 
 __all__ = [
     "CHAPTER_CONFLICT_OPTIONS",
+    "CHAPTER_CONFLICT_SOURCE",
     "PLAN_BOUNDARY_VIOLATIONS",
     "PLAN_CONFLICT_SOURCES",
     "auto_option",

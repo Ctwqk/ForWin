@@ -740,7 +740,7 @@
           (Array.isArray(field.options) ? field.options : []).forEach((optionValue) => {
             const option = document.createElement('option');
             option.value = String(optionValue || '');
-            option.textContent = String(optionValue || '');
+            option.textContent = String(field.optionLabels?.[optionValue] || optionValue || '');
             control.appendChild(option);
           });
           control.value = String(field.value ?? '');

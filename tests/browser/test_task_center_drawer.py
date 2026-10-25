@@ -4,7 +4,13 @@ import re
 
 from playwright.sync_api import expect
 
-from tests.browser.fixtures import MockForWinBackend, goto_home, switch_home_tab
+from tests.browser.fixtures import (
+    MockForWinBackend,
+    goto_home,
+    sample_chapter_conflict,
+    sample_chapter_conflict_control,
+    switch_home_tab,
+)
 
 
 def test_task_center_drawer_controls_and_bulk_delete(
@@ -185,3 +191,69 @@ def test_stale_drawer_closes_when_task_disappears_from_list(
         re.compile(r".*\bopen\b.*")
     )
     expect(page.locator("#global_status")).to_contain_text("已从任务中心移除")
+
+
+def test_drawer_shows_chapter_conflict_with_review_chapters(
+    page, browser_test_base_url: str
+) -> None:
+    conflict = sample_chapter_conflict(chapter_number=2)
+    backend = MockForWinBackend(world_plan_conflicts=[conflict])
+    control = sample_chapter_conflict_control(conflict)
+    backend.tasks["task-1"]["generation_control"] = control
+    backend.projects[0]["generation_control"] = control
+    backend.projects[0]["blocking_reason"] = control["blocking_reason"]
+    goto_home(page, browser_test_base_url, backend)
+
+    switch_home_tab(page, "task")
+    page.get_by_role("button", name="查看详情").first.click()
+    drawer = page.locator("#drawer_body")
+    # The copy names the chapter conflict, and the paused chapter stays in the review queue beside it.
+    expect(drawer).to_contain_text("第 2 章正文与规划保护冲突")
+    expect(drawer).to_contain_text("退回修复正文")
+    expect(drawer).to_contain_text("第2章 · 待人工检查")
+    expect(drawer).to_contain_text("正文冲突待处理：接受会被拒绝")
+    expect(drawer).to_contain_text("needs-review queue：1")
+    expect(drawer.get_by_role("button", name="接受", exact=True).first).to_be_visible()
+
+    card = page.locator("#world_conflicts_card")
+    row = card.locator("#world_conflict_chapter-conflict-1")
+    expect(row).to_contain_text("来源：章节正文")
+    expect(row).to_contain_text("保护类型：must_be_alive")
+    expect(row).to_contain_text("引用名：林夜")
+    expect(row).to_contain_text("until_chapter：第 5 章")
+    expect(row).to_contain_text("证据引文：「林夜倒在雾港码头。」")
+    expect(row).not_to_contain_text("hero")
+    row.get_by_role("button", name="决定", exact=True).click()
+    select = page.locator("#project_control_action_field_option")
+    expect(select.locator("option")).to_have_text(["退回修复正文", "接受正文并解除保护"])
+    assert select.locator("option").evaluate_all("options => options.map(option => option.value)") == [
+        "rewrite_chapter", "amend_plan",
+    ]
+    page.locator("#project_control_action_modal_reason").fill("operator review")
+    page.locator("#project_control_action_field_rationale").fill("repair the text")
+    page.locator("#project_control_action_modal_submit").click()
+    expect(row).to_have_count(0)
+    payload = backend.captured_payloads(
+        "/api/projects/project-1/world-conflicts/chapter-conflict-1/resolve"
+    )[-1]
+    assert payload == {"option": "rewrite_chapter", "reason": "operator review", "rationale": "repair the text"}
+
+
+def test_world_conflict_without_chapter_source_keeps_its_copy(
+    page, browser_test_base_url: str
+) -> None:
+    backend = MockForWinBackend()
+    control = {
+        **backend.tasks["task-1"]["generation_control"],
+        "blocking_reason": {"code": "world_conflict_pending", "message": "存在待处理的世界冲突", "chapter_number": 2,
+                            "conflict_id": "conflict-1", "conflict_source": "world_tick"},
+    }
+    backend.tasks["task-1"]["generation_control"] = control
+    goto_home(page, browser_test_base_url, backend)
+
+    switch_home_tab(page, "task")
+    page.get_by_role("button", name="查看详情").first.click()
+    drawer = page.locator("#drawer_body")
+    expect(drawer).to_contain_text("世界与计划冲突需要处理")
+    expect(drawer).not_to_contain_text("正文与规划保护冲突")
+    expect(drawer).to_contain_text("needs-review queue：0")

@@ -156,6 +156,7 @@ def mock_conflict_api(monkeypatch):
 @pytest.mark.parametrize("error_name,status", [
     ("ConflictNotOpen", 409),
     ("ConflictStale", 409),
+    ("ChapterNotAwaitingConflict", 409),
     ("ConflictOptionUnavailable", 400),
     ("ValueError", 400),
     ("LookupError", 500),
@@ -645,3 +646,50 @@ def test_http_response_between_tick_staging_and_snapshot_lock_rolls_back_tick(mo
     finally:
         resume.set()
         engine.dispose()
+
+
+def test_resolve_refused_while_generation_active(conflict_api):
+    from forwin.models import ChapterPlan
+    from forwin.models.task import GenerationTask
+    from tests.test_world_conflict_resolution import _chapter_conflict, _chapter_violation
+
+    client, Session, book, _ = conflict_api
+    conflict_id = _chapter_conflict(Session, book.project_id, _chapter_violation(ref=book.world.hero))
+    task_id = f"task-{book.project_id}"
+    with Session.begin() as session:
+        session.add(GenerationTask(id=task_id, project_id=book.project_id, status="running"))
+    path = f"/api/projects/{book.project_id}/world-conflicts/{conflict_id}/resolve"
+    payload = {"option": "rewrite_chapter", "rationale": "repair the text", "reason": "operator review"}
+
+    response = client.post(path, json=payload)
+
+    assert response.status_code == 409 and "generation task" in response.json()["detail"]
+    with Session() as session:
+        assert WorldConflictRepository(session).get(book.project_id, conflict_id).status == "open"
+        assert session.get(ChapterPlan, book.plans[2]).status == "needs_review"
+    with Session.begin() as session:
+        session.get(GenerationTask, task_id).status = "paused"
+    response = client.post(path, json=payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["status"], body["source"], body["decision"]["option"], body["result_refs"]) == (
+        "resolved", "chapter_extraction", "rewrite_chapter", [],
+    )
+    assert body["proposed_change"]["boundary"]["kind"] == "must_be_alive"
+    with Session() as session:
+        assert session.get(ChapterPlan, book.plans[2]).status == "planned"
+
+
+def test_resolve_refused_once_the_chapter_left_needs_review(conflict_api):
+    from forwin.models import ChapterPlan
+    from tests.test_world_conflict_resolution import _chapter_conflict, _chapter_violation
+
+    client, Session, book, _ = conflict_api
+    conflict_id = _chapter_conflict(Session, book.project_id, _chapter_violation(ref=book.world.hero), status="drafted")
+    response = client.post(f"/api/projects/{book.project_id}/world-conflicts/{conflict_id}/resolve", json={
+        "option": "rewrite_chapter", "rationale": "repair the text", "reason": "operator review",
+    })
+    assert response.status_code == 409 and "not needs_review" in response.json()["detail"]
+    with Session() as session:
+        assert WorldConflictRepository(session).get(book.project_id, conflict_id).status == "open"
+        assert session.get(ChapterPlan, book.plans[2]).status == "drafted"

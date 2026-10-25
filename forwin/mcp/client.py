@@ -662,10 +662,18 @@ class ForWinAPIClient:
     async def world_conflict_resolve(
         self, *, project_id: str, conflict_id: str, option: str, rationale: str, reason: str,
     ) -> WorldConflictView:
+        """Resolve a conflict with one of its offered options.
+
+        A chapter_extraction conflict offers rewrite_chapter (the paused chapter's saved draft goes back to repair)
+        and amend_plan (the text is accepted and the broken protection released, or the beat sheet revised for a
+        milestone). It is refused with 409 while a generation task runs or once the chapter left needs_review.
+        """
         payload = await self._request_json(
             "POST", f"/api/projects/{project_id}/world-conflicts/{conflict_id}/resolve",
             json={"option": option, "rationale": rationale, "reason": reason},
         )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Expected WorldConflict payload from ForWin API.")
         return WorldConflictView.model_validate(payload)
 
     async def world_model_signal_list(self, *, project_id: str) -> list[WorldModelConflictView]:
@@ -911,6 +919,8 @@ class ForWinAPIClient:
             band_id=str(raw.get("band_id", "")),
             decision_event_id=str(raw.get("decision_event_id", "")),
             detail=str(raw.get("detail", "")),
+            conflict_id=str(raw.get("conflict_id", "")),
+            conflict_source=str(raw.get("conflict_source", "")),
         )
 
     @staticmethod

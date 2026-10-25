@@ -117,6 +117,17 @@ class WorldConflictRepository:
             .with_for_update().execution_options(populate_existing=True)
         )
 
+    def open_chapter_conflict(self, project_id: str, *, chapter_number: int) -> WorldPlanConflictRow | None:
+        """The oldest open chapter_extraction conflict over chapter ``chapter_number``'s text, whoever decides it."""
+        return self.session.scalar(
+            select(WorldPlanConflictRow).where(
+                WorldPlanConflictRow.project_id == project_id,
+                WorldPlanConflictRow.source == "chapter_extraction",
+                WorldPlanConflictRow.blocks_from_chapter == chapter_number,
+                WorldPlanConflictRow.status == "open",
+            ).order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id).limit(1)
+        )
+
     def expire(self, row: WorldPlanConflictRow, *, reason: str) -> None:
         if row.status != "open":
             raise ConflictNotOpen(f"Conflict {row.id} is {row.status}")

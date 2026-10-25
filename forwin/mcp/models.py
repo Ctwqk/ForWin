@@ -41,6 +41,8 @@ class BlockingReasonView(BaseModel):
     band_id: str = ""
     decision_event_id: str = ""
     detail: str = ""
+    conflict_id: str = ""
+    conflict_source: str = ""
 
 
 class DecisionEventView(BaseModel):

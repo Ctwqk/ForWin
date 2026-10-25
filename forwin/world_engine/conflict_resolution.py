@@ -5,6 +5,9 @@ what the option owes the plan; ``ConflictResolutionService.resolve`` composes th
 commit, and the world tick reuses both inside its own delta. Either way the option's world changes are
 checked against current canon first (running_state); a held change canon has since ruled out is stale.
 What the plan and the obligation ledger tell the writer comes only from the change's public events.
+
+A chapter conflict holds no world change: its chapter waits mid-way in needs_review, and its decision sends the
+chapter back to planned so the next continue resumes it from its saved draft.
 """
 
 from __future__ import annotations
@@ -23,11 +26,13 @@ from forwin.book_state.book_frame_repository import BookLexiconRepository, Story
 from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.protections import MILESTONE_KIND, DeltaBoundaryViolation
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.reviewer import CHAPTER_EXTRACTION_SOURCE_TYPE
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.canon.admission import CanonAdmissionService, CanonStaleVersion, CanonWriteFailure
+from forwin.generation.task_repository import GenerationTaskRepository
 from forwin.models.audit import DecisionEvent
 from forwin.models.base import new_id
 from forwin.models.project import ChapterPlan, Project
@@ -42,7 +47,7 @@ from forwin.runtime.policy import RuntimePolicy
 from forwin.writer.prompt_core.world_engine import world_change_response
 
 from .conflict_repository import ConflictNotOpen, WorldConflictRepository, conflict_result_refs
-from .conflict_routing import PLAN_BOUNDARY_VIOLATIONS, PLAN_CONFLICT_SOURCES, live_intent
+from .conflict_routing import CHAPTER_CONFLICT_SOURCE, PLAN_BOUNDARY_VIOLATIONS, PLAN_CONFLICT_SOURCES, live_intent
 from .conflict_types import ConflictDecision
 from .constraints import check_narrative_boundaries, is_living_actor
 from .delta_builder import WorldTickDeltaBuilder
@@ -75,6 +80,11 @@ class ConflictStale(RuntimeError):
 
 class ConflictOptionUnavailable(RuntimeError):
     """The decided option cannot be carried out now; the conflict stays open."""
+
+
+class ChapterNotAwaitingConflict(RuntimeError):
+    """The chapter a chapter conflict paused is not waiting for the decision now: its plan is not in needs_review,
+    or a generation task is running. The conflict stays open."""
 
 
 @dataclass(frozen=True)
@@ -112,8 +122,10 @@ def _check_decision(conflict: WorldPlanConflictRow, decision: ConflictDecision) 
         raise ValueError(f"Conflict {conflict.id} offers {options}, not {decision.option}")
     if decision.option == "amend_plan" and decision.decided_by != "human":
         raise ValueError(f"Only a human may amend the plan; {decision.decided_by} chose amend_plan")
-    if decision.option == "rewrite_chapter":
-        raise ConflictOptionUnavailable("rewrite_chapter needs a chapter-extraction conflict, which P3 never raises")
+    if decision.option == "rewrite_chapter" and conflict.source != CHAPTER_CONFLICT_SOURCE:
+        raise ConflictOptionUnavailable(
+            f"rewrite_chapter rewrites a chapter's text; conflict {conflict.id} comes from {conflict.source}"
+        )
 
 
 def option_candidates(
@@ -574,6 +586,7 @@ class ConflictResolutionService:
         open and the session usable; any other CanonWriteFailure propagates after the same rollback.
 
         A plan conflict never takes that path: its only option, amend_plan, plans again (_resolve_plan_conflict).
+        Nor does a chapter conflict, which holds no world change (_resolve_chapter_conflict).
         A world-tick amend_plan hands the plan to the amender once its change is committed; a replan that fails
         then leaves the resolution standing, with a ``replan_failed`` warning and a follow-up plan conflict.
         """
@@ -589,6 +602,8 @@ class ConflictResolutionService:
             raise LookupError(f"World conflict {conflict_id} not found in project {project_id}")
         if found.source in PLAN_CONFLICT_SOURCES:
             return self._resolve_plan_conflict(found, decision)
+        if found.source == CHAPTER_CONFLICT_SOURCE:
+            return self._resolve_chapter_conflict(found, decision)
         row = repo.get(project_id, conflict_id, for_update=True)
         # FOR NO KEY UPDATE, as canon admission takes it: after the conflict row, as the world tick orders them.
         session.execute(select(Project.id).where(Project.id == project_id).with_for_update(key_share=True))
@@ -727,6 +742,87 @@ class ConflictResolutionService:
             beat_sheet_id=amended.beat_sheet_id or "",
         )
 
+    def _resolve_chapter_conflict(
+        self, found: WorldPlanConflictRow, decision: ConflictDecision,
+    ) -> ConflictResolutionResult:
+        """rewrite_chapter or amend_plan on the conflict that paused chapter N mid-way, N its blocks_from_chapter.
+
+        The conflict row, the project row (FOR NO KEY UPDATE) and chapter N's plan are locked in that order, and
+        the plan must be in needs_review with no generation task running (ChapterNotAwaitingConflict otherwise).
+        rewrite_chapter writes no canon. amend_plan, a human's, releases the broken protection through a
+        plan_constraint delta idempotent by ``conflict:<id>``, or has the plan amender revise the beat sheet for a
+        milestone; the amender's model calls run after a commit, and the locks are taken again afterwards. Once the
+        chapter's last open conflict is decided its plan goes back to planned, and the next continue resumes the
+        chapter from its saved draft. The writes land in one SAVEPOINT; the caller commits.
+        """
+        session = self.session
+        # A decision the conflict does not allow is refused whatever state the chapter is in.
+        _check_decision(found, decision)
+        row, plan = self._lock_chapter_conflict(found.project_id, found.id)
+        boundary = _chapter_boundary(row)
+        amends_milestone = decision.option == "amend_plan" and boundary.kind == MILESTONE_KIND
+        beat_sheet_id = ""
+        if amends_milestone:
+            if self.plan_amender is None:
+                raise ConflictOptionUnavailable(
+                    f"Conflict {row.id}: amending a milestone needs a plan amender; none is configured"
+                )
+            # Neither lock may last through the amender's model calls.
+            session.commit()
+            amended = self.plan_amender.amend(session, conflict=row, decision=decision, policy=self.policy)
+            if amended.failed or not amended.beat_sheet_id:
+                problems = "; ".join(f"{issue.code}: {issue.message}" for issue in amended.issues) or "no beat sheet"
+                raise ConflictOptionUnavailable(f"Conflict {row.id}: the beat sheet could not be revised: {problems}")
+            beat_sheet_id = amended.beat_sheet_id
+            row, plan = self._lock_chapter_conflict(row.project_id, row.id)
+        graph_delta_ids: tuple[str, ...] = ()
+        with session.begin_nested():
+            if decision.option == "amend_plan" and not amends_milestone:
+                graph_delta_ids = self.admission.commit_plan_constraints(
+                    session=session, project_id=row.project_id, constraint_set_id=f"conflict:{row.id}",
+                    creates=[], releases=[boundary.protection_node_id],
+                ).graph_delta_ids
+            # The amender attached its beat sheet to the conflict; a rewrite leaves no result until the resume.
+            refs = conflict_result_refs(row) if amends_milestone else list(graph_delta_ids)
+            repo = WorldConflictRepository(session)
+            repo.mark_resolved(row, decision=decision, result_refs=refs)
+            # The chapter waits in needs_review while another of its conflicts is open, so that one can be decided.
+            if repo.open_chapter_conflict(row.project_id, chapter_number=int(row.blocks_from_chapter)) is None:
+                plan.status = "planned"
+                session.add(plan)
+            session.add(conflict_resolved_event(row, chapter_number=row.blocks_from_chapter, extra={
+                "graph_delta_ids": list(graph_delta_ids), "beat_sheet_id": beat_sheet_id,
+            }))
+            session.flush()
+        return ConflictResolutionResult(
+            graph_delta_ids=graph_delta_ids, obligation_id="", plan_patch_id="", beat_sheet_id=beat_sheet_id,
+        )
+
+    def _lock_chapter_conflict(self, project_id: str, conflict_id: str) -> tuple[WorldPlanConflictRow, ChapterPlan]:
+        """Lock the open chapter conflict, the project row and the plan of the chapter it paused, in that order."""
+        session = self.session
+        row = WorldConflictRepository(session).get(project_id, conflict_id, for_update=True)
+        session.execute(select(Project.id).where(Project.id == project_id).with_for_update(key_share=True))
+        if row is None:
+            raise LookupError(f"World conflict {conflict_id} not found in project {project_id}")
+        if row.status != "open":
+            raise ConflictNotOpen(f"Conflict {row.id} is {row.status}")
+        number = int(row.blocks_from_chapter)
+        plan = session.scalar(
+            select(ChapterPlan).where(ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == number)
+            .with_for_update().execution_options(populate_existing=True)
+        )
+        if plan is None or plan.status != "needs_review":
+            status = plan.status if plan is not None else "missing"
+            raise ChapterNotAwaitingConflict(
+                f"Conflict {row.id}: chapter {number} is {status}, not needs_review; reread the project and task state"
+            )
+        if GenerationTaskRepository(session).has_active(project_id):
+            raise ChapterNotAwaitingConflict(
+                f"Conflict {row.id}: a generation task is running; pause it or wait for it to stop before deciding"
+            )
+        return row, plan
+
     def _check_against_canon(
         self,
         conflict: WorldPlanConflictRow,
@@ -800,6 +896,14 @@ class ConflictResolutionService:
         return outcome.graph_delta_ids, warnings
 
 
+def _chapter_boundary(conflict: WorldPlanConflictRow) -> DeltaBoundaryViolation:
+    """The boundary a chapter conflict's text broke, as its proposed_change stores it."""
+    try:
+        return DeltaBoundaryViolation(**json.loads(conflict.proposed_change_json or "{}")["boundary"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ConflictOptionUnavailable(f"Conflict {conflict.id} names no broken boundary: {exc}") from exc
+
+
 def canon_running_check(
     session: Session,
     project_id: str,
@@ -859,6 +963,7 @@ __all__ = [
     "PLOT_RESPONSE_PATCH_TYPE",
     "REPLAN_FAILED",
     "WORLD_CHANGE_OBLIGATION_TYPE",
+    "ChapterNotAwaitingConflict",
     "ConflictOptionUnavailable",
     "ConflictResolutionResult",
     "ConflictResolutionService",

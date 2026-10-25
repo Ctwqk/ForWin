@@ -2,7 +2,9 @@
 
 A rewrite of the latest chapter retires the tick that ran after it (``retired_tick_ids`` in the commit's
 historical_rewrite result); the tick the chapter's world step runs in its place expires the open conflicts
-the retired tick raised in its commit section, after its LLM calls. A rewrite of an earlier chapter keeps the
+the retired tick raised in its commit section, after its LLM calls. There it also expires the open chapter
+conflicts over the next chapter's draft when that chapter is drafted or in needs_review: the draft was reviewed
+against the replaced text, so the next chapter's review is retried. A rewrite of an earlier chapter keeps the
 later ticks; its world step expires each open tick conflict, detected after the rewritten chapter or later,
 whose held change no longer stands against the latest canon, and stops without asking any model. Each
 expiry records a WORLD_CONFLICT_EXPIRED event with its reason.
@@ -25,7 +27,7 @@ from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.models.audit import DecisionEvent
-from forwin.models.project import Project
+from forwin.models.project import ChapterPlan, Project
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.protocol.book_state import ObserverType
 from forwin.runtime.policy import RuntimePolicy
@@ -43,6 +45,16 @@ from .conflict_resolution import (
 
 # Why a retired tick's open conflicts expire.
 RETIRED_TICK_REASON = "latest chapter rewritten; the world step re-ticks"
+# The next chapter's statuses in which its draft was reviewed against the latest chapter's text.
+_REVIEWED_DRAFT_STATUSES = ("drafted", "needs_review")
+
+
+def rewritten_chapter_reason(chapter_number: int) -> str:
+    """Why the next chapter's open chapter conflicts expire once chapter ``chapter_number`` is rewritten."""
+    return (
+        f"chapter {chapter_number} rewritten; chapter {chapter_number + 1}'s draft was reviewed against the "
+        f"replaced text, so retry its review"
+    )
 
 
 def expire_retired_tick_conflicts(
@@ -57,6 +69,38 @@ def expire_retired_tick_conflicts(
     rows = repo.open_by_origin(project_id, tick_ids)
     for row in rows:
         _expire(session, repo, row, reason=RETIRED_TICK_REASON, chapter_number=chapter_number)
+    return [row.id for row in rows]
+
+
+def expire_next_chapter_conflicts(session: Session, *, project_id: str, chapter_number: int) -> list[str]:
+    """Expire the open chapter_extraction conflicts over chapter ``chapter_number + 1`` after a rewrite of chapter
+    ``chapter_number``, the latest canon chapter, while the next chapter is drafted or in needs_review; their ids,
+    oldest first.
+
+    It reads without a lock first and locks only the rows it expires; the caller takes the project row after them.
+    """
+    following = chapter_number + 1
+    status = session.scalar(select(ChapterPlan.status).where(
+        ChapterPlan.project_id == project_id, ChapterPlan.chapter_number == following,
+    ))
+    if status not in _REVIEWED_DRAFT_STATUSES:
+        return []
+    open_rows = (
+        WorldPlanConflictRow.project_id == project_id,
+        WorldPlanConflictRow.source == "chapter_extraction",
+        WorldPlanConflictRow.blocks_from_chapter == following,
+        WorldPlanConflictRow.status == "open",
+    )
+    if session.scalar(select(WorldPlanConflictRow.id).where(*open_rows).limit(1)) is None:
+        return []
+    rows = list(session.scalars(
+        select(WorldPlanConflictRow).where(*open_rows)
+        .order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id)
+        .with_for_update().execution_options(populate_existing=True)
+    ))
+    repo = WorldConflictRepository(session)
+    for row in rows:
+        _expire(session, repo, row, reason=rewritten_chapter_reason(chapter_number), chapter_number=chapter_number)
     return [row.id for row in rows]
 
 
@@ -158,4 +202,10 @@ def _expire(
     ))
 
 
-__all__ = ["RETIRED_TICK_REASON", "expire_retired_tick_conflicts", "expire_stale_open_conflicts"]
+__all__ = [
+    "RETIRED_TICK_REASON",
+    "expire_next_chapter_conflicts",
+    "expire_retired_tick_conflicts",
+    "expire_stale_open_conflicts",
+    "rewritten_chapter_reason",
+]

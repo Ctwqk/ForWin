@@ -577,9 +577,17 @@ def _band_planned(session: Session, plan: ChapterPlan | None) -> bool:
 def _can_rewrite(
     session: Session, plan: ChapterPlan | None, *, amend_chapters: frozenset[int] = frozenset(),
 ) -> bool:
-    return plan is None or (plan.status in REWRITABLE_PLAN_STATUSES and (
-        plan.band_plan_id is not None or plan.chapter_number in amend_chapters or not _has_draft_history(session, plan)
-    ))
+    """A plan still to write, unless a decided chapter conflict waits to resume it from its saved draft; only a
+    human amendment of that chapter rewrites it then."""
+    if plan is None:
+        return True
+    if plan.chapter_number in amend_chapters:
+        return plan.status in REWRITABLE_PLAN_STATUSES
+    return plan.status in REWRITABLE_PLAN_STATUSES and (
+        plan.band_plan_id is not None or not _has_draft_history(session, plan)
+    ) and not WorldConflictRepository(session).pending_chapter_resumes(
+        plan.project_id, chapter_number=plan.chapter_number,
+    )
 
 
 def _band_rows(

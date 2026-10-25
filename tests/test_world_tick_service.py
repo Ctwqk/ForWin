@@ -1998,6 +1998,73 @@ def test_a_quiet_retick_expires_the_retired_ticks_open_conflicts() -> None:
     engine.dispose()
 
 
+def _next_chapter_conflict(Session, world: _World, *, next_status: str) -> str:
+    """Chapter 2, paused in ``next_status`` on a conflict its draft raised against chapter 1's text."""
+    from forwin.book_state.protections import DeltaBoundaryViolation
+    from forwin.world_engine.chapter_conflicts import CHAPTER_CONFLICT_OPTIONS, chapter_conflict_draft
+
+    _plan(Session, world, 2)
+    violation = DeltaBoundaryViolation(
+        protection_node_id="protect-hero", milestone_ref="", kind="must_be_alive", ref=world.hero, observer_ref="",
+        fact_ref="", field="", value=None, until_chapter=0, source="test", impact_level="major", evidence="falls",
+    )
+    with Session.begin() as session:
+        session.scalar(select(ChapterPlan).where(
+            ChapterPlan.project_id == world.project_id, ChapterPlan.chapter_number == 2,
+        )).status = next_status
+        return WorldConflictRepository(session).create(
+            chapter_conflict_draft(violation, project_id=world.project_id, chapter_number=2, story_time=0),
+            required_decider="human", options=CHAPTER_CONFLICT_OPTIONS,
+        ).id
+
+
+@pytest.mark.parametrize(("next_status", "rewritten", "world_enabled", "expires"), [
+    ("needs_review", True, True, True),
+    ("drafted", True, True, True),
+    ("needs_review", True, False, True),
+    ("planned", True, True, False),
+    ("needs_review", False, True, False),
+])
+def test_rewriting_the_latest_chapter_expires_the_next_chapters_chapter_conflicts(
+    next_status, rewritten, world_enabled, expires,
+) -> None:
+    from forwin.world_engine.conflict_revalidation import rewritten_chapter_reason
+
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    chapter = _chapter(Session, world, 1, days=1)
+    far = chapter.story_time_end + 10 * DAY
+    _commit_tick(Session, world, _built(Session, _context(world, chapter), [TickCandidate(
+        candidate_id="setup", origin="actor_turn", summary="setup", effects=WorldEffects(),
+        next_turn_at={world.hero: far, world.rival: far, world.faction: far},
+    )], tick_id="setup"), tick_id="setup")
+    conflict_id = _next_chapter_conflict(Session, world, next_status=next_status)
+    commit = _canon_commit(chapter)
+    if rewritten:
+        commit.result_json = json.dumps({"historical_rewrite": {"retired_tick_ids": []}})
+
+    with Session.begin() as session:
+        _service(Session, _WorldLLM()).run(session, commit, policy=_policy(enabled=world_enabled))
+
+    [row] = _conflicts(Session, world)
+    events = _events(Session, world, DecisionEventType.WORLD_CONFLICT_EXPIRED)
+    if not expires:
+        assert row.status == "open" and events == []
+        engine.dispose()
+        return
+    # Chapter 2's draft was reviewed against the replaced chapter 1: its conflict goes, and its review is retried.
+    assert row.status == "expired"
+    assert json.loads(row.decision_json) == {"reason": rewritten_chapter_reason(1)}
+    assert "chapter 1 rewritten" in rewritten_chapter_reason(1)
+    [event] = _events(Session, world, DecisionEventType.WORLD_CONFLICT_EXPIRED)
+    assert (event.related_object_id, event.chapter_number, _payload(event)["source"]) == (
+        conflict_id, 1, "chapter_extraction",
+    )
+    with Session() as session:
+        assert WorldConflictRepository(session).open_blocking(world.project_id, next_chapter=2) is None
+    engine.dispose()
+
+
 def test_actor_views_read_only_the_turned_actors_recent_vetoes(monkeypatch) -> None:
     from forwin.world_engine.actor_turns import MAX_RECENT_VETOES, recent_vetoes
     from forwin.world_engine.conflict_types import ConflictDecision, ConflictDraft

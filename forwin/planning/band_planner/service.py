@@ -91,7 +91,7 @@ class BandPlanner:
 
     ``llm_client`` is None when no model is configured: nothing is planned then. ``feasibility`` audits every
     valid answer. ``save_trace`` saves the call's PromptTrace and its LLM DecisionEvents in that session and
-    returns the trace id; every planning call saves one.
+    returns the trace id; it must support ``independent=True`` for an audit failure. Every planning call saves one.
     """
 
     def __init__(
@@ -99,7 +99,7 @@ class BandPlanner:
         llm_client: Any,
         *,
         feasibility: FeasibilityAuditor,
-        save_trace: Callable[[Session, dict], str],
+        save_trace: Callable[..., str],
         trope_cost_ceiling: int = 3,
         max_attempts: int = 2,
         max_tokens: int = 12000,
@@ -255,10 +255,10 @@ class BandPlanner:
             call = self._call(session, project_id=project_id, inputs=inputs, band=band, chapter_numbers=chapter_numbers,
                               beat_sheet=beat_sheet, policy=policy)
         if call.error is not None:
-            # Saved in the caller's session: a caller that rolls back on the exception discards the trace too.
+            # An audit failure may abort the caller's transaction; spent calls still need their audit trail.
             try:
-                self.save_trace(session, self._prompt_trace(call, trace, BandPlanOutcome(band_plan_id=None)))
-            except Exception:  # noqa: BLE001 - an aborted audit transaction may also prevent saving its trace
+                self.save_trace(session, self._prompt_trace(call, trace, BandPlanOutcome(band_plan_id=None)), independent=True)
+            except Exception:  # noqa: BLE001 - preserve the audit error if independent persistence also fails
                 logger.warning("Project %s: could not save the failed band audit trace", project_id, exc_info=True)
             raise BandPlanningAuditError(str(call.error), call.issues) from call.error
         if call.draft is None:

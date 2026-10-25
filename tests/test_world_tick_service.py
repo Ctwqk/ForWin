@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -258,7 +259,7 @@ def _service(
         actor_runner=ActorTurnRunner(llm),
         conflict_delegate=WorldConflictDelegate(llm),
         audit_writer_factory=own_transaction_audit_writer(Session),
-        save_prompt_trace=save_world_prompt_trace,
+        save_prompt_trace=partial(save_world_prompt_trace, independent=True),
     )
 
 
@@ -1495,15 +1496,25 @@ def test_canon_written_during_the_tick_makes_it_stale_and_a_retry_commits(monkey
             _disrupt_the_later_intent(Session, world, chapter)
         return _quiet_turns(payload, content)
 
+    first_llm = _WorldLLM(adjudicate=_outcomes(meeting), actor_turn=turns)
+    retry_llm = _WorldLLM(adjudicate=_outcomes(meeting), actor_turn=_quiet_turns)
     with pytest.raises(CanonStaleVersion):
-        _tick(Session, _WorldLLM(adjudicate=_outcomes(meeting), actor_turn=turns), chapter)
+        _tick(Session, first_llm, chapter)
 
     # The step rolled back: only the other writer's delta is left, and the tick never overwrote it.
     assert [row.source_id for row in _tick_deltas(Session, world)] == ["conflict-race"]
     assert _runtime(Session, world).world.get_state(_later(world))["status"] == "disrupted"
 
-    retried = _tick(Session, _WorldLLM(adjudicate=_outcomes(meeting), actor_turn=_quiet_turns), chapter)
+    retried = _tick(Session, retry_llm, chapter)
 
+    with Session() as session:
+        traces = list(session.scalars(select(PromptTrace).where(PromptTrace.project_id == world.project_id)))
+        assert len(traces) == len(first_llm.calls) + len(retry_llm.calls)
+        events = list(session.scalars(select(DecisionEvent).where(
+            DecisionEvent.project_id == world.project_id,
+            DecisionEvent.event_type == DecisionEventType.LLM_REQUEST_SUCCEEDED,
+        )))
+        assert {event.related_object_id for event in events} == {trace.id for trace in traces}
     assert retried.graph_delta_ids == [_delta_id(chapter)]
     runtime = _runtime(Session, world)
     assert runtime.world.get_state(_later(world))["status"] == "disrupted"

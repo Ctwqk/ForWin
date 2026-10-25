@@ -6,6 +6,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from collections.abc import Callable
 
 from sqlalchemy.orm import Session
 
@@ -20,7 +21,7 @@ from forwin.checker.reference_classifier import (
 from forwin.llm.compat import call_chat_compat
 from forwin.models.base import new_id
 from forwin.models.entity import Entity
-from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
+from forwin.observability.llm_trace import RAW_REQUEST_KEY, RAW_RESPONSE_KEY, mark_latest_attempt_parse_failure
 from forwin.protocol.context import EntitySnapshot
 from forwin.protocol.writer import WriterOutput
 from forwin.utils import parse_llm_json
@@ -84,8 +85,12 @@ class EntityAdmissionResult:
 
 
 class LLMEntityAdmissionClassifier:
-    def __init__(self, llm_client: Any, *, max_schema_retries: int = 1) -> None:
+    def __init__(
+        self, llm_client: Any, *, max_schema_retries: int = 1,
+        save_trace: Callable[[dict[str, Any]], str] | None = None,
+    ) -> None:
         self.llm_client = llm_client
+        self.save_trace = save_trace
         self.max_schema_retries = max(0, int(max_schema_retries))
 
     def classify(
@@ -192,54 +197,91 @@ class LLMEntityAdmissionClassifier:
                     validation_error=last_error,
                 )
             )
-            raw = call_chat_compat(
-                self.llm_client,
-                messages,
-                temperature=0.2 if attempt_index == 0 else 0.0,
-                max_tokens=600,
-                response_format={"type": "json_object"},
-                output_schema=_ENTITY_ADMISSION_OUTPUT_SCHEMA,
-                task_family="entity_admission",
-                stage_key=stage_key,
-            )
+            raw = ""
+            error = None
             try:
-                payload = parse_llm_json(
-                    raw,
-                    error_prefix="EntityRegistrar JSON parser",
-                )
-                return _validate_entity_admission_decisions(
-                    payload,
-                    expected_names=names,
-                    existing_entities=existing_entities,
-                )
-            except ValueError as exc:
-                last_raw = str(raw or "")
-                last_error = str(exc)
-                mark_latest_attempt_parse_failure(
+                raw = call_chat_compat(
                     self.llm_client,
-                    parser_name="EntityRegistrar",
+                    messages,
+                    temperature=0.2 if attempt_index == 0 else 0.0,
+                    max_tokens=600,
+                    response_format={"type": "json_object"},
+                    output_schema=_ENTITY_ADMISSION_OUTPUT_SCHEMA,
+                    task_family="entity_admission",
                     stage_key=stage_key,
-                    schema_name="entity_admission_response",
-                    raw_output=last_raw,
-                    error=exc,
                 )
-                if (
-                    attempt_index == self.max_schema_retries
-                    and payload is not None
-                ):
-                    try:
-                        return _validate_entity_admission_decisions(
-                            payload,
-                            expected_names=names,
-                            existing_entities=existing_entities,
-                            require_complete=False,
-                        )
-                    except ValueError:
-                        pass
+                try:
+                    payload = parse_llm_json(
+                        raw,
+                        error_prefix="EntityRegistrar JSON parser",
+                    )
+                    return _validate_entity_admission_decisions(
+                        payload,
+                        expected_names=names,
+                        existing_entities=existing_entities,
+                    )
+                except ValueError as exc:
+                    error = exc
+                    last_raw = str(raw or "")
+                    last_error = str(exc)
+                    mark_latest_attempt_parse_failure(
+                        self.llm_client,
+                        parser_name="EntityRegistrar",
+                        stage_key=stage_key,
+                        schema_name="entity_admission_response",
+                        raw_output=last_raw,
+                        error=exc,
+                    )
+                    if (
+                        attempt_index == self.max_schema_retries
+                        and payload is not None
+                    ):
+                        try:
+                            return _validate_entity_admission_decisions(
+                                payload,
+                                expected_names=names,
+                                existing_entities=existing_entities,
+                                require_complete=False,
+                            )
+                        except ValueError:
+                            pass
+            except Exception as exc:
+                error = exc
+                raise
+            finally:
+                self._save_call_trace(
+                    project_id=project_id, chapter_number=chapter_number, stage_key=stage_key,
+                    messages=messages, raw=raw, error=error, attempt_index=attempt_index,
+                )
         raise ValueError(
             "EntityRegistrar schema invalid after "
             f"{self.max_schema_retries + 1} attempts: {last_error}"
         )
+
+    def _save_call_trace(
+        self, *, project_id: str, chapter_number: int, stage_key: str,
+        messages: list[dict[str, str]], raw: str, error: Exception | None, attempt_index: int,
+    ) -> None:
+        drain = getattr(self.llm_client, "drain_llm_attempt_events", None)
+        attempts = drain() if callable(drain) else []
+        attempts = attempts or [{"attempt_no": 1, "stage_key": stage_key, "output_chars": len(raw or "")}]
+        for attempt in attempts:
+            attempt.setdefault("workflow_attempt_no", attempt_index + 1)
+            attempt.setdefault("workflow_retry", attempt_index > 0)
+            attempt.setdefault(RAW_REQUEST_KEY, {"messages": messages})
+            attempt.setdefault(RAW_RESPONSE_KEY, raw)
+            if error is not None:
+                attempt.setdefault("error_class", type(error).__name__)
+                attempt.setdefault("error_message", str(error))
+        if self.save_trace is not None:
+            self.save_trace({
+                "trace_scope": "entity_admission", "stage_key": stage_key,
+                "template_id": "naming:entity_admission", "template_version": "v1",
+                "effective_system_prompt": messages[0]["content"], "prompt_layers": messages,
+                "input_snapshot": {"project_id": project_id, "chapter_number": chapter_number},
+                "model_profile": {"model": getattr(self.llm_client, "model", "")},
+                "attempts": attempts,
+            })
 
 
 def _validate_entity_admission_decisions(

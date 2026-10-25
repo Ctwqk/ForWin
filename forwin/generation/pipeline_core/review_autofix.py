@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import partial
+
 from forwin.book_state.extraction.chapter_delta_extractor import ensure_chapter_delta
 from forwin.naming.entity_registrar import EntityRegistrar, LLMEntityAdmissionClassifier
 from forwin.protocol.writer import WriterOutput
@@ -364,15 +366,15 @@ class ReviewWorkflowStage:
             chapter_number=chapter_number,
             writer_output=writer_output,
         )
+        from forwin.maintenance.post_canon import save_world_prompt_trace
+
+        save_trace = partial(
+            save_world_prompt_trace, session, artifact_store=getattr(self, "artifact_store", None), independent=True,
+        )
         if extraction is not None:
-            self._save_prompt_trace_payload(
-                session=session,
-                updater=StateUpdater(session),
-                project_id=project_id,
-                prompt_trace=extraction.prompt_trace,
-            )
+            save_trace(extraction.prompt_trace)
         classifier = (
-            LLMEntityAdmissionClassifier(llm_client) if llm_client is not None else None
+            LLMEntityAdmissionClassifier(llm_client, save_trace=save_trace) if llm_client is not None else None
         )
         result = EntityRegistrar(
             session=session, classifier=classifier

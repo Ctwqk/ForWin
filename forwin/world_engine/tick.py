@@ -148,7 +148,7 @@ class WorldTickService:
 
     ``llm_client`` is None when no model is configured: the LLM nodes are then skipped as unavailable.
     ``audit_writer_factory`` gives the Codex review a writer that commits on its own, so its audit trail
-    survives a tick that rolls back; ``save_prompt_trace`` saves a world role's trace in the tick's session.
+    survives a tick that rolls back; ``save_prompt_trace`` must also commit each role's trace independently.
     """
 
     def __init__(

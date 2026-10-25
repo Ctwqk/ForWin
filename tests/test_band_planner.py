@@ -844,9 +844,9 @@ def test_a_raising_audit_saves_the_trace_before_the_error_surfaces(Session) -> N
     world, arc_id, sheet_id = _book(Session)
     saved: list[dict] = []
 
-    def save_trace(session, prompt_trace):
+    def save_trace(session, prompt_trace, **kwargs):
         saved.append(prompt_trace)
-        return save_world_prompt_trace(session, prompt_trace)
+        return save_world_prompt_trace(session, prompt_trace, **kwargs)
 
     client = StubLLM(_band(world, range(1, 5)), _band(world, range(1, 5)))
     planner = BandPlanner(client, feasibility=RaisingAudit(), save_trace=save_trace)

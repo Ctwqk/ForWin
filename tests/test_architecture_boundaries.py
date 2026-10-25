@@ -1417,7 +1417,7 @@ LLM_STAGE_TRACE_OWNERS = {
     "comment_analysis": ("forwin/maintenance/post_canon.py", "save_world_prompt_trace("),
     "spark_pause_gate": ("forwin/generation/gate_delegation.py", "audit_writer.save_prompt_trace("),
     "review.world_conflict": ("forwin/generation/gate_delegation.py", "audit_writer.save_prompt_trace("),
-    "chapter_delta_extraction": ("forwin/generation/pipeline_core/review_autofix.py", "self._save_prompt_trace_payload("),
+    "chapter_delta_extraction": ("forwin/generation/pipeline_core/review_autofix.py", "save_trace(extraction.prompt_trace)"),
     "world.adjudicate": ("forwin/world_engine/tick.py", "self.service.save_prompt_trace("),
     "world.actor_turn": ("forwin/world_engine/tick.py", "self.service.save_prompt_trace("),
     "world.drift": ("forwin/world_engine/tick.py", "self.service.save_prompt_trace("),

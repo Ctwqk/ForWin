@@ -10,7 +10,7 @@ import threading
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from forwin.audience.feedback import run_feedback_aggregation_pass
 from forwin.audit.events import DecisionEventInfo, DecisionEventType
@@ -1027,7 +1027,7 @@ def build_world_tick_service(
     from forwin.planning.plan_step import PlanStepService
 
     def save_prompt_trace(session: Session, prompt_trace: dict) -> str:
-        return save_world_prompt_trace(session, prompt_trace, artifact_store=artifact_store)
+        return save_world_prompt_trace(session, prompt_trace, artifact_store=artifact_store, independent=True)
 
     return WorldTickService(
         llm_client=llm_client if llm_available else None,
@@ -1049,11 +1049,17 @@ def own_transaction_audit_writer(
 
     def save_decision_event(info: DecisionEventInfo) -> Any:
         with session_factory.begin() as session:
-            return StateUpdater(session).save_decision_event(info)
+            row = StateUpdater(session).save_decision_event(info)
+            session.expunge(row)
+            return row
 
     def save_prompt_trace(**payload: Any) -> Any:
         with session_factory.begin() as session:
-            return StateUpdater(session).save_prompt_trace(**payload)
+            project = session.get(Project, payload["project_id"])
+            payload.setdefault("genesis_revision_id", str(getattr(project, "active_genesis_revision_id", "") or ""))
+            row = StateUpdater(session).save_prompt_trace(**payload)
+            session.expunge(row)
+            return row
 
     def factory() -> GateAuditWriter:
         return GateAuditWriter(
@@ -1069,8 +1075,9 @@ def save_world_prompt_trace(
     prompt_trace: Mapping[str, Any],
     *,
     artifact_store: Any = None,
+    independent: bool = False,
 ) -> str:
-    """Save a world role's PromptTrace and its LLM DecisionEvents in ``session``; returns the trace id."""
+    """Save a role's trace and events, optionally through the independent audit writer."""
     snapshot = prompt_trace.get("input_snapshot")
     snapshot = snapshot if isinstance(snapshot, Mapping) else {}
     project_id = str(snapshot.get("project_id") or "")
@@ -1081,11 +1088,16 @@ def save_world_prompt_trace(
         project_id=project_id,
         chapter_number=chapter_number,
     )
-    project = session.get(Project, project_id)
-    updater = StateUpdater(session)
+    if independent:
+        updater = own_transaction_audit_writer(sessionmaker(bind=session.get_bind().engine, expire_on_commit=False))()
+        revision = {}
+    else:
+        project = session.get(Project, project_id)
+        updater = StateUpdater(session)
+        revision = {"genesis_revision_id": str(getattr(project, "active_genesis_revision_id", "") or "")}
     row = updater.save_prompt_trace(
         project_id=project_id,
-        genesis_revision_id=str(getattr(project, "active_genesis_revision_id", "") or ""),
+        **revision,
         trace_scope=str(payload.get("trace_scope") or "world_engine"),
         stage_key=str(payload.get("stage_key") or ""),
         template_id=str(payload.get("template_id") or ""),

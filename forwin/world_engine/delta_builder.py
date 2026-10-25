@@ -24,6 +24,7 @@ from forwin.book_state.extraction.translator import (
 from forwin.book_state.knowledge import FACT_REF_PREFIX, KnowledgeEvent, knowledge_event_to_patch
 from forwin.book_state.narrative import PROTECTION_STATUS_PATH, RELEASED_PROTECTION_STATUS
 from forwin.book_state.lexicon import BookLexicon
+from forwin.book_state.names import normalized_name
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.runtime import BookStateRuntime, require_runtime_as_of
@@ -131,16 +132,16 @@ class WorldTickDeltaBuilder:
                 Entity.project_id == project_id,
             )):
                 for name in [entity.name, *json.loads(entity.aliases_json or "[]")]:
-                    owners.setdefault(name.strip(), set()).add(entity.id)
+                    owners.setdefault(normalized_name(name), set()).add(entity.id)
                 if not entity.is_active and entity.kind == "character":
                     reusable_names[entity.id] = entity.name.strip()
             for alias, entity_id in self.session.execute(select(EntityAlias.alias, EntityAlias.entity_id).where(
                 EntityAlias.project_id == project_id,
             )):
-                owners.setdefault(alias.strip(), set()).add(entity_id)
+                owners.setdefault(normalized_name(alias), set()).add(entity_id)
             reserved_names.update(owners)
             reusable_names = {entity_id: name for entity_id, name in reusable_names.items()
-                              if owners[name] == {entity_id}}
+                              if owners[normalized_name(name)] == {entity_id}}
         builder = _TickBuilder(
             context=context,
             tick_id=tick_id,
@@ -181,7 +182,7 @@ class _TickBuilder:
         self.map = runtime.map
         self.calendar = calendar
         self.lexicon = lexicon
-        self.reserved_actor_names = set(reserved_actor_names)
+        self.reserved_actor_names = {normalized_name(name) for name in reserved_actor_names}
         self.reusable_actor_names = dict(reusable_actor_names or {})
         self.issues: list[TickIssue] = []
         self.node_patches: list[NodePatch] = []
@@ -419,6 +420,13 @@ class _TickBuilder:
     def _set_node_field(self, node_id: str, field_path: str, value: Any) -> None:
         created = self.created_nodes.get(node_id)
         if created is not None:
+            parts = field_path.split(".")
+            if (created.node_type == "character" and parts[0] == "state"
+                    and parts[1] in {"actor_tier", "alive_status", "next_turn_at"}
+                    and (len(parts) != 2 or value != created.new_value["state"][parts[1]])):
+                self._issue("error", "new_actor_initial_state",
+                            f"New character {node_id!r} must retain its initial {parts[1]}")
+                return
             # A node created by this delta takes the value in its create payload.
             apply_path_patch(created.new_value, field_path, value)
             return
@@ -565,7 +573,7 @@ class _TickBuilder:
         node_id = self._local_id(actor.node_type, actor.key)
         reserved = self.reserved_actor_names
         if actor.node_type == "character" and self.reusable_actor_names.get(node_id) == name:
-            reserved = reserved - {name}
+            reserved = reserved - {normalized_name(name)}
         if not name or new_actor_name_taken(name, self.runtime, reserved):
             self._issue("error", "new_actor_name_taken", f"New actor name is unavailable: {name!r}")
             return
@@ -579,8 +587,9 @@ class _TickBuilder:
         if location is None or any(ref is None for ref in affiliations):
             return
         self.new_actors[actor.key] = node_id
-        self.reserved_actor_names.add(name)
-        self.reusable_actor_names = {ref: value for ref, value in self.reusable_actor_names.items() if value != name}
+        self.reserved_actor_names.add(normalized_name(name))
+        self.reusable_actor_names = {ref: value for ref, value in self.reusable_actor_names.items()
+                                     if normalized_name(value) != normalized_name(name)}
         state = {"actor_tier": "minor", "location_id": location, "next_turn_at": self.context.now}
         if actor.node_type == "character":
             state["alive_status"] = "alive"
@@ -880,6 +889,10 @@ class _TickBuilder:
                 },
             },
         )
+
+        for node_id in participants:
+            if node_id in self.new_actors.values():
+                self._knowledge(node_id, fact_ref, state="knows", channel="witnessed", source_ref="")
 
     def _new_fact(self, fact: EffectFact) -> None:
         # Keys are the candidate's own: two candidates' k1 are two facts.

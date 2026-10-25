@@ -308,7 +308,9 @@ def test_adjudicated_outcome_creates_minor_actor_with_entity_and_personality(mon
         llm = _WorldLLM(adjudicate=_outcomes({
             "intent_id": _later(world), "result": "resolved", "summary": "Arrival",
             "effects": {"new_actors": [_new_actor(name="Rowan", node_type=node_type,
-                location_id=world.loc(1), affiliation_refs=[world.faction])]},
+                location_id=world.loc(1), affiliation_refs=[world.faction])],
+                "events": [{"summary": "Arrival witnessed", "participant_refs": [world.hero, "actor:new:arrival"],
+                            "location_id": "", "visibility": "secret", "at": chapter.story_time_end}]},
         }), actor_turn=_quiet_turns)
         result = _tick(Session, llm, chapter)
         assert result.dropped_candidate_ids == []
@@ -316,6 +318,10 @@ def test_adjudicated_outcome_creates_minor_actor_with_entity_and_personality(mon
         [node] = [node for node in runtime.world.nodes_by_id.values()
                   if node.node_type == node_type and node.metadata.get("tick_id") == result.tick_id]
         assert runtime.world.get_state(node.id)["actor_tier"] == "minor"
+        [event_fact] = [f"fact:{fact.id}" for fact in runtime.world.facts_by_id.values()
+                        if fact.proposition == "Arrival witnessed"]
+        assert _knows(runtime, node.id, event_fact) == "knows"
+        assert _knows(runtime, world.hero, event_fact) == "knows"
         with Session() as session:
             entity = session.get(Entity, node.id)
             if node_type == "character":
@@ -384,7 +390,9 @@ def test_new_actor_budget_commits_first_outcome_postgres(monkeypatch):
     engine.dispose()
 
 
-def test_new_actor_name_collision_retry_without_database():
+@pytest.mark.parametrize("name", ["New Actor", "new actor", "NewActor", "New\tActor"])
+@pytest.mark.parametrize("source", ["node_alias", "candidate"])
+def test_new_actor_name_collision_retry_without_database(name, source):
     from forwin.world_engine.constraints import ConstraintIssue
     from forwin.world_engine.delta_builder import _TickBuilder
     from forwin.world_engine.tick import _Tick
@@ -393,12 +401,15 @@ def test_new_actor_name_collision_retry_without_database():
 
     tick = object.__new__(_Tick)
     tick.runtime, tick.context, tick.lexicon, tick.calendar = runtime_fixture(), CONTEXT, LEXICON, CALENDAR
-    tick.runtime.world.get_node("owner").aliases = ["New Actor"]
+    if source == "node_alias":
+        tick.runtime.world.get_node("owner").aliases = ["New Actor"]
     tick.policy = POLICY
-    bad = {"intent_id": "intent-1", "result": "resolved", "summary": "Arrival",
-           "effects": {"new_actors": [_new_actor()]}}
-    good = {"intent_id": "intent-2", "result": "resolved", "summary": "Settled", "effects": {}}
-    client = StubLLM({"outcomes": [bad, good]}, {"outcomes": [bad]})
+    bad = {"intent_id": "intent-2", "result": "resolved", "summary": "Arrival",
+           "effects": {"new_actors": [_new_actor(name=name)]}}
+    good = {"intent_id": "intent-1", "result": "resolved", "summary": "Settled", "effects": {}}
+    if source == "candidate":
+        good["effects"] = {"new_actors": [_new_actor(name="New Actor")]}
+    client = StubLLM({"outcomes": [good, bad]}, {"outcomes": [bad]})
     tick.service = SimpleNamespace(llm_client=client, adjudicator=WorldAdjudicator(client))
     tick._check_snapshot = lambda: None
     tick._save_trace = lambda trace: "trace"
@@ -413,10 +424,10 @@ def test_new_actor_name_collision_retry_without_database():
     tick._issues = issues
     initial = tick._adjudicate([tick.runtime.world.get_node(ref) for ref in ("intent-1", "intent-2")])
     passed = tick._check(initial.candidates)
-    assert [candidate.intent_id for candidate in passed] == ["intent-2"]
+    assert [candidate.intent_id for candidate in passed] == ["intent-1"]
     assert len(client.calls) == 2
     assert "new_actor_name_taken" in client.calls[1][0][-1]["content"]
-    assert len(dropped) == 1 and dropped[0][0].intent_id == "intent-1"
+    assert len(dropped) == 1 and dropped[0][0].intent_id == "intent-2"
 
 
 # reading what the tick left

@@ -160,8 +160,9 @@ def test_adjudicated_outcome_builds_minor_actor_nodes(node_type):
     assert "actor:new:" not in json.dumps(result.delta.model_dump(mode="json"))
 
 
-@pytest.mark.parametrize("source", ["node_name", "node_alias", "map_alias", "reserved"])
-def test_new_actor_name_collision_is_a_build_error(source):
+@pytest.mark.parametrize("name", ["New Actor", "new actor", "NewActor", "New\tActor"])
+@pytest.mark.parametrize("source", ["node_name", "node_alias", "map_name", "map_alias", "reserved"])
+def test_new_actor_name_collision_is_a_build_error(source, name):
     from forwin.world_engine.delta_builder import _TickBuilder
     from tests.test_world_adjudicator import CALENDAR, CONTEXT, LEXICON, _runtime
     from tests.test_world_engine_contracts import _new_actor
@@ -172,16 +173,127 @@ def test_new_actor_name_collision_is_a_build_error(source):
         runtime.world.get_node("owner").name = "New Actor"
     elif source == "node_alias":
         runtime.world.get_node("owner").aliases = ["New Actor"]
+    elif source == "map_name":
+        runtime.map.nodes_by_id["site"].name = "New Actor"
     elif source == "map_alias":
         runtime.map.nodes_by_id["site"].aliases = ["New Actor"]
     else:
         reserved = ["New Actor"]
     result = _TickBuilder(context=CONTEXT, tick_id="tick-1", runtime=runtime,
                           calendar=CALENDAR, lexicon=LEXICON, reserved_actor_names=reserved).build([
-        _candidate("arrival", effects={"new_actors": [_new_actor()]}),
+        _candidate("arrival", effects={"new_actors": [_new_actor(name=name)]}),
     ], [])
     assert result.delta is None
     assert _issues(result) == [("error", "new_actor_name_taken", "arrival")]
+
+
+@pytest.mark.parametrize("name", ["new actor", "NewActor", "New\tActor"])
+@pytest.mark.parametrize("source", ["entity_name", "entity_alias", "entity_aliases_json"])
+def test_normalized_entity_name_collision_without_postgres(source, name):
+    from forwin.models.entity import Entity, EntityAlias
+    from forwin.models.project import Project
+    from tests.test_entity_admission import _session
+    from tests.test_world_adjudicator import CONTEXT, _runtime
+    from tests.test_world_engine_contracts import _new_actor
+
+    engine, session = _session()
+    try:
+        session.add(Project(id="p", title="Collision", premise="Test", genre="test"))
+        session.flush()
+        entity = Entity(project_id="p", kind="character",
+                        name="New Actor" if source == "entity_name" else "Registered Actor",
+                        aliases_json=json.dumps(["New Actor"] if source == "entity_aliases_json" else []))
+        session.add(entity)
+        session.flush()
+        if source == "entity_alias":
+            session.add(EntityAlias(project_id="p", entity_id=entity.id, alias="New Actor"))
+            session.flush()
+        result = WorldTickDeltaBuilder(session).build(
+            context=CONTEXT, tick_id="tick-1", runtime=_runtime(), news_in_transit=[],
+            candidates=[_candidate("arrival", effects={"new_actors": [_new_actor(name=name)]})],
+        )
+        assert result.delta is None
+        assert _issues(result) == [("error", "new_actor_name_taken", "arrival")]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+@pytest.mark.parametrize("same_candidate", [True, False])
+@pytest.mark.parametrize("name", ["new actor", "NewActor", "New\tActor"])
+def test_new_actor_names_reserved_within_build(same_candidate, name):
+    from forwin.world_engine.delta_builder import _TickBuilder
+    from tests.test_world_adjudicator import CALENDAR, CONTEXT, LEXICON, _runtime
+    from tests.test_world_engine_contracts import _new_actor
+
+    first = _candidate("first", effects={"new_actors": [_new_actor()]})
+    second = _candidate("second", effects={"new_actors": [_new_actor(key="second", name=name)]})
+    if same_candidate:
+        first.effects.new_actors.extend(second.effects.new_actors)
+    result = _TickBuilder(context=CONTEXT, tick_id="tick-1", runtime=_runtime(),
+                          calendar=CALENDAR, lexicon=LEXICON).build(
+        [first] if same_candidate else [first, second], [],
+    )
+    assert result.delta is None
+    assert _issues(result) == [("error", "new_actor_name_taken", "first" if same_candidate else "second")]
+
+
+@pytest.mark.parametrize("field,value", [("actor_tier", "major"), ("alive_status", "dead"), ("next_turn_at", 999)])
+@pytest.mark.parametrize("nested", [False, True])
+def test_new_actor_initial_state_cannot_be_overwritten(field, value, nested):
+    from forwin.world_engine.delta_builder import _TickBuilder
+    from tests.test_world_adjudicator import CALENDAR, CONTEXT, LEXICON, _runtime
+    from tests.test_world_engine_contracts import _new_actor
+
+    result = _TickBuilder(context=CONTEXT, tick_id="tick-1", runtime=_runtime(),
+                          calendar=CALENDAR, lexicon=LEXICON).build([
+        _candidate("arrival", effects={
+            "new_actors": [_new_actor()],
+            "entity_changes": [{"ref": "actor:new:arrival", "field": field + (".value" if nested else ""),
+                                "new_value": value}],
+        }),
+    ], [])
+    assert result.delta is None
+    assert _issues(result) == [("error", "new_actor_initial_state", "arrival")]
+
+
+@pytest.mark.parametrize("node_type", ["character", "group"])
+def test_new_event_participants_receive_scoped_witness_knowledge(node_type):
+    from forwin.world_engine.delta_builder import _TickBuilder, tick_event_fact_ref
+    from forwin.world_engine.tick import _Tick
+    from tests.test_world_adjudicator import CALENDAR, CONTEXT, LEXICON, _runtime
+    from tests.test_world_engine_contracts import _new_actor
+
+    runtime = _runtime()
+    candidates = [_candidate(key, effects={
+        "new_actors": [_new_actor(name=f"Actor {key}", node_type=node_type)],
+        "events": [{"summary": f"Event {key}", "participant_refs": ["owner", "actor:new:arrival"],
+                    "location_id": "", "visibility": "secret", "at": CONTEXT.now}],
+    }) for key in ("first", "second")]
+    tick = object.__new__(_Tick)
+    tick.runtime, tick.context, tick.lexicon = runtime, CONTEXT, LEXICON
+    tick.tick_id, tick.chapter = "tick-1", None
+    news = tick._news(candidates, [])
+    assert news.candidate is not None
+    built = _TickBuilder(context=CONTEXT, tick_id="tick-1", runtime=runtime,
+                         calendar=CALENDAR, lexicon=LEXICON).build([*candidates, news.candidate], news.in_transit)
+    assert built.delta is not None, built.issues
+    verdict = reviewer.BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=CONTEXT.chapter_number, graph_deltas=[built.delta]),
+        runtime=runtime, base_chapter=CONTEXT.chapter_number,
+    )
+    assert verdict.accepted, verdict.issues
+    actors = {p.new_value["metadata"]["candidate_id"]: p.node_id for p in built.delta.node_patches
+              if p.op == "create" and p.node_type == node_type}
+    expected = {(observer, tick_event_fact_ref("p", "tick-1", key, 0))
+                for key, actor_id in actors.items() for observer in ("owner", actor_id)}
+    assert {(p.observer_id, ref) for p in built.delta.cognition_patches
+            for ref, state in p.new_value.items() if state == "knows"} == expected
+    assert {(tag["observer_id"], tag["fact_ref"]) for tag in built.delta.metadata["knowledge_tags"]
+            if tag["state"] == "knows" and tag["channel"] == "witnessed"} == expected
+    assert all(p.old_value == {ref: None for ref in p.new_value} for p in built.delta.cognition_patches)
+    assert "actor:new:" not in json.dumps(built.delta.model_dump(mode="json"))
+    assert news.in_transit == []
 
 
 @pytest.mark.parametrize("node_type", ["character", "group"])

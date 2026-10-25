@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
 from forwin.book_state.knowledge import FACT_REF_PREFIX, KnowledgeEvent, is_concealed, knowledge_event_to_patch
 from forwin.book_state.lexicon import BookLexicon
+from forwin.book_state.names import normalized_name as _normalized_name
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
@@ -1194,10 +1195,6 @@ def _decisions_by_name(plan: EntityAdmissionPlan) -> dict[str, EntityAdmissionDe
             index.setdefault(name.strip(), decision)
     index.pop("", None)
     return index
-
-
-def _normalized_name(text: str) -> str:
-    return "".join(str(text or "").split()).casefold()
 
 
 def matching_runtime_entities(world: ObjectiveWorldGraph, kind: str, name: str) -> list[WorldNode]:

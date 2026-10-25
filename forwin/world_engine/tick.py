@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from forwin.audit.events import DecisionEventType
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
+from forwin.book_state.names import normalized_name
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
@@ -208,7 +209,7 @@ class WorldTickService:
 
 def _actor_name_issues(candidate: TickCandidate, names: set[str]) -> list[ConstraintIssue]:
     return [ConstraintIssue("new_actor_name_taken", f"New actor name is unavailable: {actor.name!r}", "")
-            for actor in candidate.effects.new_actors if actor.name.strip() in names]
+            for actor in candidate.effects.new_actors if normalized_name(actor.name) in names]
 
 
 class _Tick:
@@ -549,7 +550,7 @@ class _Tick:
             issues.extend(_actor_name_issues(candidate, actor_names))
             if not issues:
                 passed.append(candidate)
-                actor_names.update(actor.name.strip() for actor in candidate.effects.new_actors)
+                actor_names.update(normalized_name(actor.name) for actor in candidate.effects.new_actors)
             elif any(issue.code == "touches_onstage_entity" for issue in issues):
                 staged = self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
                 if staged is not None:
@@ -587,7 +588,7 @@ class _Tick:
                     passed.append(staged)
             else:
                 passed.append(candidate)
-                actor_names.update(actor.name.strip() for actor in candidate.effects.new_actors)
+                actor_names.update(normalized_name(actor.name) for actor in candidate.effects.new_actors)
         return passed
 
     def _issues(self, candidate: TickCandidate) -> list[ConstraintIssue]:

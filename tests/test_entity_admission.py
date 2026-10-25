@@ -38,7 +38,8 @@ def _tick_entity_session_factory(backend):
     return engine, get_session_factory(engine)
 
 
-@pytest.mark.parametrize("reservation", ["same_id", "other_id", "active", "alias_owner"])
+@pytest.mark.parametrize("reservation", ["same_id", "other_id", "active", "alias_owner",
+                                         "alias_owner_case", "alias_owner_whitespace"])
 def test_tick_builder_reuses_only_its_own_inactive_entity_name(reservation):
     from forwin.models.entity import EntityAlias
     from forwin.world_engine.delta_builder import WorldTickDeltaBuilder, _tick_local_id
@@ -55,10 +56,13 @@ def test_tick_builder_reuses_only_its_own_inactive_entity_name(reservation):
         session.flush()
         session.add(Entity(id=node_id if reservation != "other_id" else "other", project_id=CONTEXT.project_id,
                            name=actor.name, kind="character", is_active=reservation == "active"))
-        if reservation == "alias_owner":
+        if reservation.startswith("alias_owner"):
             session.add(Entity(id="alias-owner", project_id=CONTEXT.project_id, name="Other", kind="character"))
             session.flush()
-            session.add(EntityAlias(id="alias", project_id=CONTEXT.project_id, entity_id="alias-owner", alias=actor.name))
+            alias = {"alias_owner_case": "new actor", "alias_owner_whitespace": "New\tActor"}.get(
+                reservation, actor.name,
+            )
+            session.add(EntityAlias(id="alias", project_id=CONTEXT.project_id, entity_id="alias-owner", alias=alias))
         session.flush()
         built = WorldTickDeltaBuilder(session).build(context=CONTEXT, candidates=[candidate],
             news_in_transit=[], tick_id="tick-reuse", runtime=_runtime())
@@ -985,7 +989,7 @@ def test_admission_plan_still_rejects_semantic_scene_changes() -> None:
         engine.dispose()
 
 
-@pytest.mark.parametrize("name", ["ROWAN", "the courier"])
+@pytest.mark.parametrize("name", ["ROWAN", "the courier", "TheCourier", "the\tcourier"])
 def test_normalized_existing_character_bypasses_admission_and_translates(name):
     class UnexpectedClassifier:
         def classify(self, **_kwargs):

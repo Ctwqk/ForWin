@@ -7,6 +7,7 @@ from typing import Any
 
 from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.lexicon import BookLexicon
+from forwin.book_state.names import normalized_name
 from forwin.book_state.runtime import BookStateRuntime
 from forwin.world_engine.types import NEW_ACTOR_REF_PREFIX, NEW_FACT_REF_PREFIX, WorldEffects
 
@@ -17,7 +18,7 @@ def new_actor_name_taken(name: str, runtime: BookStateRuntime, reserved_names: C
         if getattr(node, "is_active", True):
             names.add(node.name)
             names.update(getattr(node, "aliases", ()))
-    return name.strip() in {value.strip() for value in names}
+    return normalized_name(name) in {normalized_name(value) for value in names}
 
 
 def effect_reference_issues(effects: WorldEffects, runtime: BookStateRuntime, lexicon: BookLexicon) -> list[str]:

@@ -161,8 +161,14 @@ def build_band_inputs(
     actors = [node for node in world.nodes_by_id.values() if node.is_active and str(node.node_type) in ACTOR_NODE_TYPES]
     intents = [node for node in world.nodes_by_id.values() if node.is_active and str(node.node_type) == "intent"
                and world.get_state(node.id).get("status") in _PENDING_INTENT_STATUSES]
-    due_onstage = sorted(node.id for node in intents if node.profile.get("requires_onstage") is True
-                         and world.get_state(node.id).get("status") == "due")
+    due_onstage = []
+    for node in intents:
+        state = world.get_state(node.id)
+        at = state.get("scheduled_at")
+        if node.profile.get("requires_onstage") is True and (
+            state.get("status") == "due" or (type(at) is int and at <= window_end)
+        ):
+            due_onstage.append(node.id)
     clocks = [node for node in world.nodes_by_id.values() if node.is_active and str(node.node_type) == "clock"
               and world.get_state(node.id).get("status") == "running"]
     events = sorted((node for node in world.nodes_by_id.values() if node.is_active and str(node.node_type) == "event"
@@ -258,7 +264,7 @@ def build_band_inputs(
              "requires_onstage": node.profile.get("requires_onstage"), "location_ref": node.profile.get("location_id")}
             for node in sorted(intents, key=lambda item: item.id)
         ],
-        "due_onstage_intent_ids": due_onstage,
+        "due_onstage_intent_ids": sorted(due_onstage),
         "clocks": [
             {"id": node.id, "label": node.profile.get("label") or node.name, "scope": node.profile.get("scope"),
              "due_at": world.get_state(node.id).get("due_at")}
@@ -297,12 +303,22 @@ def _trim_payload(
     payload: dict[str, Any], *, runtime: BookStateRuntime, lexicon: BookLexicon,
     rows: Mapping[int, ChapterPlan], window_minutes: int, budget_chars: int, required_facts: set[str],
 ) -> None:
-    """Narrow locality once, then trim the least relevant optional items round-robin."""
+    """Narrow locality once, then trim optional items round-robin by category.
+
+    Remove the least relevant item that no kept item references; pinned items are skipped,
+    so trimming never leaves dangling refs.
+    """
     protagonist = payload["protagonist_ref"]
     origin = resolve_world_node_location_id(runtime.world, protagonist)
+    required_intents = set(payload["due_onstage_intent_ids"])
+    # Audit warnings are not available yet; retain clocks due by the estimated band end, including overdue ones.
+    required_clocks = {item["id"] for item in payload["clocks"]
+                       if type(item["due_at"]) is int and item["due_at"] <= payload["story_now"] + window_minutes}
     required_actors = {protagonist} | {
         item["observer"] for item in payload["reveal_targets"] if item["observer"] != READER_OBSERVER
-    } | {item["observer_ref"] for item in payload["protections"] if item["observer_ref"] != READER_OBSERVER}
+    } | {item["observer_ref"] for item in payload["protections"] if item["observer_ref"] != READER_OBSERVER} | {
+        item["owner_ref"] for item in payload["intents"] if item["id"] in required_intents
+    }
     news_actors = {item["observer_ref"] for item in payload["news"]}
     news_facts = {item["fact_ref"] for item in payload["news"]}
     band_locations = {ref for row in rows.values() for ref in json.loads(row.location_refs_json or "[]")}
@@ -403,7 +419,9 @@ def _trim_payload(
         optional[key] = [item for item in payload[key]
                          if not (key == "actors" and item["id"] in required_actors)
                          and not (key == "locations" and item["id"] == origin)
-                         and not (key == "facts" and item["ref"] in required_facts)]
+                         and not (key == "facts" and item["ref"] in required_facts)
+                         and not (key == "intents" and item["id"] in required_intents)
+                         and not (key == "clocks" and item["id"] in required_clocks)]
 
     def dependencies(key, item):
         if key == "facts":

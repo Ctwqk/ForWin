@@ -1289,6 +1289,92 @@ def test_band_payload_small_overflow_keeps_clock_and_recent_event(band_input_bui
     assert band_input_builder(runtime, cap=cap).payload == trimmed.payload
 
 
+@pytest.mark.parametrize("status, scheduled_at", [("due", None), ("planned", 0), ("planned", 4 * DAY), ("held", 4 * DAY)])
+def test_band_payload_keeps_due_onstage_intents_and_clocks_under_tight_budget(
+    band_input_builder, status, scheduled_at,
+):
+    from forwin.protocol.book_state import FactNode
+    from tests.test_world_tick_steps import PROJECT, _runtime, _actor, _intent, _clock
+
+    runtime = _runtime(
+        _actor("hero", location="site-1"), _actor("remote", location="site-5"),
+        _intent("required-intent", "remote", at=scheduled_at, status=status, onstage=True),
+        _intent("later-intent", "hero", at=4 * DAY + 1, onstage=True),
+        _intent("offstage-intent", "hero", at=0),
+        _clock("due-clock", due_at=0), _clock("end-clock", due_at=4 * DAY),
+        _clock("overdue-clock", due_at=-1), _clock("later-clock", due_at=4 * DAY + 1),
+    )
+    for node in runtime.map.nodes_by_id.values():
+        node.subworld_id = "outside" if node.id == "site-5" else "band"
+    runtime.world.facts_by_id.update({
+        f"optional-{i}": FactNode(id=f"optional-{i}", project_id=PROJECT, proposition="x" * 300,
+                                 related_node_refs=["hero"]) for i in range(20)
+    })
+    full = band_input_builder(runtime)
+    trimmed = band_input_builder(runtime, cap=2600)
+    assert len(json.dumps(full.payload, ensure_ascii=False)) > 2600
+    assert len(json.dumps(trimmed.payload, ensure_ascii=False)) <= 2600
+    for result in (full, trimmed):
+        assert result.payload["due_onstage_intent_ids"] == ["required-intent"]
+        assert "required-intent" in result.offered.intent_ids
+        assert {"due-clock", "end-clock", "overdue-clock"} <= result.offered.clock_ids
+        assert "remote" in result.offered.actor_ids
+        assert result.offered.intent_ids == {item["id"] for item in result.payload["intents"]}
+        assert result.offered.clock_ids == {item["id"] for item in result.payload["clocks"]}
+        assert {item["owner_ref"] for item in result.payload["intents"]} <= result.offered.actor_ids
+    assert len(trimmed.offered.facts) < len(full.offered.facts)
+    assert "later-intent" not in trimmed.offered.intent_ids
+    assert "later-clock" not in trimmed.offered.clock_ids
+    assert band_input_builder(runtime, cap=2600).payload == trimmed.payload
+
+
+def test_band_payload_protects_singleton_category_while_others_have_optional_tails(band_input_builder):
+    from forwin.protocol.book_state import FactNode
+    from tests.test_world_tick_steps import PROJECT, _runtime, _actor
+
+    runtime = _runtime(
+        _actor("hero", location="site-1"),
+        *[WorldNode(id=f"event-{i}", project_id=PROJECT, node_type="event", created_at_chapter=i)
+          for i in (2, 3)],
+    )
+    runtime.world.facts_by_id.update({
+        f"optional-{i}": FactNode(id=f"optional-{i}", project_id=PROJECT, proposition="x" * 100,
+                                 related_node_refs=["hero"]) for i in range(5)
+    })
+    full = band_input_builder(runtime)
+    # Two rounds shed two facts and two locations, but only the worse of the two events.
+    removed_size = sum(len(json.dumps(item, ensure_ascii=False)) + 2
+                       for key, count in (("facts", 2), ("events", 1), ("locations", 2))
+                       for item in full.payload[key][-count:])
+    cap = len(json.dumps(full.payload, ensure_ascii=False)) - removed_size
+    trimmed = band_input_builder(runtime, cap=cap)
+    assert trimmed.offered.event_ids == {"event-3"}
+    assert len(trimmed.offered.facts) == 3
+    assert len(trimmed.offered.location_ids - {"site-1"}) == 2
+    assert len(json.dumps(trimmed.payload, ensure_ascii=False)) == cap
+
+
+@pytest.mark.parametrize("far_chapter", [2, 3])
+def test_band_payload_fact_locality_outweighs_tied_or_newer_recency(band_input_builder, far_chapter):
+    from forwin.protocol.book_state import FactNode
+    from tests.test_world_tick_steps import PROJECT, _runtime, _actor
+
+    runtime = _runtime(_actor("hero", location="site-1"), _actor("near", location="site-1"),
+                       _actor("far", location="site-2"), edges=[(1, 2, 2)])
+    runtime.world.facts_by_id.update({
+        "z-near": FactNode(id="z-near", project_id=PROJECT, proposition="near fact",
+                           related_node_refs=["near"], created_at_chapter=2),
+        "a-far": FactNode(id="a-far", project_id=PROJECT, proposition="far fact",
+                          related_node_refs=["far"], created_at_chapter=far_chapter),
+    })
+    full = band_input_builder(runtime)
+    assert set(full.offered.facts) == {"fact:z-near", "fact:a-far"}
+    cap = len(json.dumps(full.payload, ensure_ascii=False)) - 1
+    trimmed = band_input_builder(runtime, cap=cap)
+    assert set(trimmed.offered.facts) == {"fact:z-near"}
+    assert len(json.dumps(trimmed.payload, ensure_ascii=False)) <= cap
+
+
 def test_band_payload_missing_location_concealment_and_overdue_milestone(band_input_builder):
     from tests.test_world_tick_steps import PROJECT, _runtime, _actor
 
@@ -1322,7 +1408,7 @@ def test_band_payload_round_robin_ranks_categories_and_preserves_news_refs(band_
         *[WorldNode(id=f"event-{i}", project_id=PROJECT, node_type="event", created_at_chapter=i,
                     profile={"location_id": "site-1"}) for i in range(1, 4)],
         *[WorldNode(id=f"clock-{i}", project_id=PROJECT, node_type="clock",
-                    state={"status": "running", "due_at": i * 10}) for i in range(1, 4)],
+                    state={"status": "running", "due_at": 4 * DAY + i * 10}) for i in range(1, 4)],
         *[_intent(f"intent-{i}", "hero", at=i * 10) for i in range(1, 4)],
     )
     for i in range(1, 4):

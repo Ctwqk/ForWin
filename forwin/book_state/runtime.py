@@ -258,6 +258,18 @@ class BookStateRuntime:
         self.map.cognition_by_observer.update(self.cognition_by_observer)
 
 
+class RuntimeMismatch(ValueError):
+    """A supplied runtime belongs to a different project or canon chapter."""
+
+
+def require_runtime_as_of(runtime: BookStateRuntime, project_id: str, chapter: int) -> None:
+    if (runtime.project_id, runtime.as_of_chapter) != (project_id, chapter):
+        raise RuntimeMismatch(
+            f"Runtime mismatch: expected project {project_id!r}, chapter {chapter}; "
+            f"actual project {runtime.project_id!r}, chapter {runtime.as_of_chapter}"
+        )
+
+
 def distance_between_world_nodes(
     world: ObjectiveWorldGraph,
     map_graph: MapGraph,

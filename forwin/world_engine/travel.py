@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pydantic import BaseModel, ConfigDict
 
 from forwin.book_state.lexicon import BookLexicon, TravelMode
@@ -30,11 +32,10 @@ def estimate_travel(
     runtime: BookStateRuntime,
     lexicon: BookLexicon,
     *,
-    mover_id: str | None,
+    mover_id: str,
     from_location_id: str,
     to_location_id: str,
     graph: MapGraph | None = None,
-    _paths: dict[tuple[tuple[str, str] | None, frozenset[str] | None], dict[str, PathResult]] | None = None,
 ) -> TravelEstimate:
     """The mover's shortest time from one map node to another.
 
@@ -42,22 +43,28 @@ def estimate_travel(
     the routes it knows. The time is the least of the route at speed 1.0 and, per travel mode of
     the mover, the fastest route that mode may use divided by its speed. ``graph`` defaults to
     the runtime's map; the world gate passes its map with the chapter's own patches.
-    ``mover_id=None`` uses objective routes. Only ``estimate_travel_from`` supplies ``_paths``,
-    computed for this source and runtime snapshot.
     """
     graph = graph if graph is not None else runtime.map
 
     def path(
-        observer: tuple[str, str] | None = None, allowed_edge_types: frozenset[str] | None = None,
+        observer: tuple[str, str] | None, allowed_edge_types: frozenset[str] | None,
     ) -> PathResult:
-        if _paths is not None:
-            return _paths[(observer, allowed_edge_types)][to_location_id]
         return graph.shortest_path(
             from_location_id, to_location_id, metric="travel_time", observer=observer,
             allowed_edge_types=allowed_edge_types,
         )
 
-    objective = path()
+    return _estimate_travel(runtime, lexicon, mover_id=mover_id, path=path)
+
+
+def _estimate_travel(
+    runtime: BookStateRuntime,
+    lexicon: BookLexicon,
+    *,
+    mover_id: str | None,
+    path: Callable[[tuple[str, str] | None, frozenset[str] | None], PathResult],
+) -> TravelEstimate:
+    objective = path(None, None)
     if not objective.reachable:
         return TravelEstimate(
             reachable=False, minutes=None, route_known=False, blocked_reason=objective.blocked_reason,
@@ -65,7 +72,7 @@ def estimate_travel(
     observer = _overlay_key(runtime, mover_id) if mover_id is not None else None
     route = objective
     if observer is not None:
-        route = path(observer)
+        route = path(observer, None)
         if not route.reachable:
             return TravelEstimate(
                 reachable=True, minutes=None, route_known=False, blocked_reason=route.blocked_reason,
@@ -87,7 +94,7 @@ def _mover_modes(runtime: BookStateRuntime, lexicon: BookLexicon, mover_id: str 
 def estimate_travel_from(
     runtime: BookStateRuntime, lexicon: BookLexicon, *, mover_id: str | None, from_location_id: str,
 ) -> dict[str, TravelEstimate]:
-    """Estimate every destination with one search; None selects objective travel for news."""
+    """Estimate every destination with one search per profile; None selects objective travel for news."""
     observer = _overlay_key(runtime, mover_id) if mover_id is not None else None
     profiles = list(dict.fromkeys([
         (None, None), (observer, None),
@@ -95,8 +102,10 @@ def estimate_travel_from(
     ]))
     paths = dict(zip(profiles, runtime.map.single_source_travel_paths(from_location_id, profiles=profiles)))
     return {
-        target: estimate_travel(runtime, lexicon, mover_id=mover_id, from_location_id=from_location_id,
-                                to_location_id=target, _paths=paths)
+        target: _estimate_travel(
+            runtime, lexicon, mover_id=mover_id,
+            path=lambda observer, allowed, target=target: paths[(observer, allowed)][target],
+        )
         for target in runtime.map.nodes_by_id
     }
 

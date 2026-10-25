@@ -24,7 +24,7 @@ from forwin.book_state.narrative import PROTECTION_STATUS_PATH, RELEASED_PROTECT
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
-from forwin.book_state.runtime import BookStateRuntime
+from forwin.book_state.runtime import BookStateRuntime, require_runtime_as_of
 from forwin.book_state.schema import ACTOR_NODE_TYPES, WORLD_NODE_FIELDS
 from forwin.book_state.story_clock import StoryCalendar, StoryClockError, duration_to_minutes, format_story_time
 from forwin.protocol.book_state import (
@@ -117,7 +117,7 @@ class WorldTickDeltaBuilder:
                 project_id, as_of_chapter=context.chapter_number,
             )
         else:
-            assert (runtime.project_id, runtime.as_of_chapter) == (project_id, context.chapter_number)
+            require_runtime_as_of(runtime, project_id, context.chapter_number)
         builder = _TickBuilder(
             context=context,
             tick_id=tick_id,

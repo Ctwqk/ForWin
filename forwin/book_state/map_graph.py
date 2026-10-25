@@ -140,43 +140,13 @@ class MapGraph:
                 explanation="起点与终点相同。",
             )
 
-        distances: dict[str, float] = {from_node_id: 0.0}
-        previous: dict[str, tuple[str, MapEdge]] = {}
-        use_astar = algorithm == "astar" or (algorithm == "auto" and self._has_coordinates(from_node_id, to_node_id))
-        queue: list[_QueueItem] = [_QueueItem(0.0, from_node_id)]
-        visited: set[str] = set()
-
-        while queue:
-            current = heapq.heappop(queue)
-            if current.node_id in visited:
-                continue
-            visited.add(current.node_id)
-            if current.node_id == to_node_id:
-                break
-            for neighbor_id, edge in self.get_accessible_neighbors(
-                current.node_id,
-                observer=observer,
-                allow_hidden=allow_hidden,
-                allow_blocked=allow_blocked,
-            ):
-                if not self._edge_type_allowed(edge, allowed_edge_types):
-                    continue
-                weight = self._metric_weight(edge, str(metric), composite_weights=composite_weights)
-                current_cost = distances.get(current.node_id, float("inf"))
-                next_cost = current_cost + weight
-                if next_cost < distances.get(neighbor_id, float("inf")):
-                    distances[neighbor_id] = next_cost
-                    previous[neighbor_id] = (current.node_id, edge)
-                    priority = next_cost
-                    if use_astar:
-                        priority += self._heuristic(neighbor_id, to_node_id, str(metric))
-                    heapq.heappush(queue, _QueueItem(priority, neighbor_id))
-
-        if to_node_id not in distances:
-            return self._unreachable(from_node_id, to_node_id, metric, "no accessible path")
-
-        path_node_ids, path_edges = self._reconstruct_path(from_node_id, to_node_id, previous)
-        result = self._path_result(from_node_id, to_node_id, str(metric), path_node_ids, path_edges)
+        result = self._single_source_shortest_paths(
+            from_node_id, target_ids=[to_node_id], metric=str(metric), observer=observer,
+            allow_hidden=allow_hidden, allow_blocked=allow_blocked, algorithm=algorithm,
+            composite_weights=composite_weights, allowed_edge_types=allowed_edge_types,
+        )[(from_node_id, to_node_id)]
+        if not result.reachable:
+            return result
         if not allow_hidden and not allow_blocked:
             self.path_cache[cache_key] = result
         return result
@@ -193,45 +163,18 @@ class MapGraph:
         *,
         profiles: list[tuple[tuple[str, str] | None, frozenset[str] | None]],
     ) -> list[dict[str, PathResult]]:
-        """One Dijkstra over independent observer/mode layers, without switching modes mid-route.
+        """One single-source search per observer/mode profile, without switching modes mid-route.
 
         Search weights, edge availability and reported path times match ``shortest_path``.
         Results belong to this map snapshot; callers keep them local to one actor or event.
         """
-        distances = [{source_id: 0.0} for _ in profiles]
-        previous: list[dict[str, tuple[str, MapEdge]]] = [{} for _ in profiles]
-        queue = [(0.0, source_id, index) for index in range(len(profiles))
-                 if source_id in self.nodes_by_id]
-        heapq.heapify(queue)
-        visited: set[tuple[int, str]] = set()
-        while queue:
-            cost, node_id, index = heapq.heappop(queue)
-            if (index, node_id) in visited:
-                continue
-            visited.add((index, node_id))
-            observer, allowed = profiles[index]
-            for neighbor, edge in self.get_accessible_neighbors(node_id, observer=observer):
-                if not self._edge_type_allowed(edge, allowed):
-                    continue
-                next_cost = cost + self._metric_weight(edge, "travel_time")
-                if next_cost < distances[index].get(neighbor, float("inf")):
-                    distances[index][neighbor] = next_cost
-                    previous[index][neighbor] = (node_id, edge)
-                    heapq.heappush(queue, (next_cost, neighbor, index))
-        results = []
-        for index in range(len(profiles)):
-            paths = {}
-            for target in self.nodes_by_id:
-                if source_id not in self.nodes_by_id:
-                    paths[target] = self._unreachable(source_id, target, "travel_time",
-                                                      f"unknown from_node_id: {source_id}")
-                elif target not in distances[index]:
-                    paths[target] = self._unreachable(source_id, target, "travel_time", "no accessible path")
-                else:
-                    nodes, edges = self._reconstruct_path(source_id, target, previous[index])
-                    paths[target] = self._path_result(source_id, target, "travel_time", nodes, edges)
-            results.append(paths)
-        return results
+        return [
+            {target: path for (_, target), path in self._single_source_shortest_paths(
+                source_id, target_ids=list(self.nodes_by_id), metric="travel_time", observer=observer,
+                allowed_edge_types=allowed,
+            ).items()}
+            for observer, allowed in profiles
+        ]
 
     def all_pairs_shortest_paths(
         self,
@@ -417,6 +360,11 @@ class MapGraph:
         target_ids: list[str],
         metric: str,
         observer: tuple[str, str] | None,
+        allowed_edge_types: frozenset[str] | None = None,
+        allow_hidden: bool = False,
+        allow_blocked: bool = False,
+        algorithm: str = "dijkstra",
+        composite_weights: dict[str, float] | None = None,
     ) -> dict[tuple[str, str], PathResult]:
         if source_id not in self.nodes_by_id:
             return {
@@ -429,6 +377,10 @@ class MapGraph:
                 for target_id in target_ids
             }
 
+        target = target_ids[0] if len(target_ids) == 1 else None
+        use_astar = target is not None and (
+            algorithm == "astar" or (algorithm == "auto" and self._has_coordinates(source_id, target))
+        )
         distances: dict[str, float] = {source_id: 0.0}
         previous: dict[str, tuple[str, MapEdge]] = {}
         queue: list[_QueueItem] = [_QueueItem(0.0, source_id)]
@@ -441,13 +393,22 @@ class MapGraph:
                 continue
             visited.add(current.node_id)
             remaining_targets.discard(current.node_id)
-            for neighbor_id, edge in self.get_accessible_neighbors(current.node_id, observer=observer):
-                weight = self._metric_weight(edge, metric)
+            if not remaining_targets:
+                break
+            for neighbor_id, edge in self.get_accessible_neighbors(
+                current.node_id, observer=observer, allow_hidden=allow_hidden, allow_blocked=allow_blocked,
+            ):
+                if not self._edge_type_allowed(edge, allowed_edge_types):
+                    continue
+                weight = self._metric_weight(edge, metric, composite_weights=composite_weights)
                 next_cost = distances.get(current.node_id, float("inf")) + weight
                 if next_cost < distances.get(neighbor_id, float("inf")):
                     distances[neighbor_id] = next_cost
                     previous[neighbor_id] = (current.node_id, edge)
-                    heapq.heappush(queue, _QueueItem(next_cost, neighbor_id))
+                    priority = next_cost
+                    if use_astar:
+                        priority += self._heuristic(neighbor_id, target, metric)
+                    heapq.heappush(queue, _QueueItem(priority, neighbor_id))
 
         results: dict[tuple[str, str], PathResult] = {}
         for target_id in target_ids:

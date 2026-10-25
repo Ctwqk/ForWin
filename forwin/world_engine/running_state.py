@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.reviewer import BookStateReviewGate
-from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph, require_runtime_as_of
 from forwin.book_state.story_clock import StoryCalendar
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, GraphDelta
 
@@ -47,7 +47,8 @@ class RunningStateCheck:
     ) -> None:
         self.session = session
         self.context = context
-        assert (runtime.project_id, runtime.as_of_chapter) == (context.project_id, context.chapter_number)
+        require_runtime_as_of(runtime, context.project_id, context.chapter_number)
+        # Builds and gate reviews need the unmodified as-of base, never the running runtime _applied advances.
         self.base = runtime
         self.runtime = runtime
         self.lexicon = lexicon

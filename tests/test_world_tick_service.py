@@ -2135,6 +2135,13 @@ def test_tick_releases_or_settles_bound_holds_after_acceptance(monkeypatch, effe
 def test_tick_reuses_runtime_for_builds_and_gate(monkeypatch):
     from forwin.book_state.reviewer import BookStateReviewGate
 
+    original_create_project = StateUpdater.create_project
+    def create_project(self, *args, **kwargs):
+        # Separate databases share one project id so seeded and tick-generated refs compare exactly.
+        with monkeypatch.context() as ids:
+            ids.setattr("forwin.state.updater.new_id", lambda: "runtime-reuse-project")
+            return original_create_project(self, *args, **kwargs)
+    monkeypatch.setattr(StateUpdater, "create_project", create_project)
     original_load = BookStateProjection.load_runtime_as_of
     original_build = WorldTickDeltaBuilder.build
     original_review = BookStateReviewGate.review
@@ -2144,6 +2151,7 @@ def test_tick_reuses_runtime_for_builds_and_gate(monkeypatch):
         return original_load(self, *args, **kwargs)
     monkeypatch.setattr(BookStateProjection, "load_runtime_as_of", load)
     counts = []
+    patches = []
     for reuse in (True, False):
         engine, Session = _session_factory()
         world = _seed_tick_world(Session, monkeypatch, errands=24)
@@ -2164,8 +2172,16 @@ def test_tick_reuses_runtime_for_builds_and_gate(monkeypatch):
         assert result.dropped_candidate_ids == []
         runtime = _runtime(Session, world)
         assert {runtime.world.get_state(ref)["status"] for ref in _errands(world, 24)[:20]} == {"disrupted"}
+        with Session() as session:
+            [delta] = [
+                delta for delta in BookStateProjection(session).repo.list_graph_deltas(
+                    world.project_id, through_chapter=1,
+                ) if delta.id in result.graph_delta_ids
+            ]
+        patches.append((delta.node_patches, delta.fact_patches, delta.narrative_patches))
         engine.dispose()
     assert counts[0] < counts[1] / 2, counts
+    assert patches[0] == patches[1]
 
 
 @pytest.mark.parametrize("backend", ["sqlite", "postgresql"])

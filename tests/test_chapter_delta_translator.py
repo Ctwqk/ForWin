@@ -996,28 +996,49 @@ def test_reused_runtime_must_match_project_and_as_of_chapter():
     import pytest
     from forwin.book_state.extraction.chapter_input import build_chapter_extraction_input
     from forwin.book_state.reviewer import BookStateReviewGate
+    from forwin.book_state.runtime import RuntimeMismatch
+    from forwin.book_state.lexicon import BookLexicon
+    from forwin.world_engine.running_state import RunningStateCheck
     from forwin.world_engine.delta_builder import WorldTickDeltaBuilder
     from forwin.world_engine.types import TickContext
     from tests.test_world_actor_turns import _runtime
 
     runtime = _runtime()
     for project_id, chapter in (("p", 4), ("other", 3)):
-        with pytest.raises(AssertionError):
+        with pytest.raises(RuntimeMismatch):
             WorldTickDeltaBuilder(None).build(
                 context=TickContext(project_id=project_id, chapter_number=chapter, now=10, window_start=0, seed=1),
                 candidates=[], news_in_transit=[], tick_id="tick", runtime=runtime,
             )
-        with pytest.raises(AssertionError):
+        with pytest.raises(RuntimeMismatch):
             BookStateReviewGate(None).review(
                 ApprovedGraphDeltaSet(project_id=project_id, chapter_number=chapter, graph_deltas=[]),
                 base_chapter=chapter, runtime=runtime,
             )
-        with pytest.raises(AssertionError):
+        with pytest.raises(RuntimeMismatch):
             ChapterDeltaTranslator(None).translate(
                 project_id=project_id, chapter_number=chapter + 1,
                 extraction=_extraction(chapter + 1, {}), chapter_summary="summary",
                 admission_plan=EntityAdmissionPlan(project_id=project_id, chapter_number=chapter + 1,
                                                    candidate_fingerprint="f"), runtime=runtime,
             )
-        with pytest.raises(AssertionError):
+        with pytest.raises(RuntimeMismatch):
             build_chapter_extraction_input(None, project_id=project_id, chapter_number=chapter + 1, runtime=runtime)
+
+        with pytest.raises(RuntimeMismatch):
+            RunningStateCheck(
+                None, context=TickContext(project_id=project_id, chapter_number=chapter, now=10, window_start=0, seed=1),
+                runtime=runtime, lexicon=BookLexicon(), calendar=None, tick_id="tick", travel_tolerance=0.2,
+            )
+
+
+def test_runtime_mismatch_names_expected_and_actual_snapshot():
+    import pytest
+    from forwin.book_state.runtime import RuntimeMismatch, require_runtime_as_of
+    from tests.test_world_actor_turns import _runtime
+
+    with pytest.raises(RuntimeMismatch) as caught:
+        require_runtime_as_of(_runtime(), "expected-project", 7)
+    assert str(caught.value) == (
+        "Runtime mismatch: expected project 'expected-project', chapter 7; actual project 'p', chapter 3"
+    )

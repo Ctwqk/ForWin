@@ -1036,7 +1036,7 @@ def test_news_single_source_matches_pairwise_minutes(monkeypatch):
     lexicon = BookLexicon(news_speed_multiplier=1.5)
     expected = {}
     for i in range(2, 6):
-        estimate = estimate_travel(runtime, lexicon, mover_id=None,
+        estimate = estimate_travel(runtime, lexicon, mover_id="actor-1",
                                    from_location_id=_site(1), to_location_id=_site(i))
         if estimate.minutes is not None:
             expected[f"actor-{i}"] = 100 + math.ceil(estimate.minutes / 1.5 - 1e-6)

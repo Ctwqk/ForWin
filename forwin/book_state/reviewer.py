@@ -23,7 +23,7 @@ from forwin.book_state.narrative import (
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.reveal_schedule import earliest_reveal_chapters
-from forwin.book_state.runtime import BookStateRuntime
+from forwin.book_state.runtime import BookStateRuntime, require_runtime_as_of
 from forwin.book_state.schema import validate_graph_delta
 from forwin.models.project import ChapterPlan
 from forwin.protocol.book_state import (
@@ -89,7 +89,7 @@ class BookStateReviewGate:
                 changes.project_id, as_of_chapter=base_chapter,
             )
         else:
-            assert (runtime.project_id, runtime.as_of_chapter) == (changes.project_id, base_chapter)
+            require_runtime_as_of(runtime, changes.project_id, base_chapter)
         issues: list[BookStateReviewIssue] = []
         for delta in changes.graph_deltas:
             issues.extend(_canon_permission_issues(delta))

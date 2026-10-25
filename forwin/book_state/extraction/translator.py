@@ -15,7 +15,7 @@ from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.query import BookStateQuery
-from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph, require_runtime_as_of
 from forwin.book_state.schema import ACTOR_NODE_TYPES, WORLD_NODE_FIELDS
 from forwin.book_state.story_clock import (
     StoryCalendar, StoryClockError, duration_to_minutes, format_story_time,
@@ -113,7 +113,7 @@ class ChapterDeltaTranslator:
         if runtime is None:
             runtime = BookStateProjection(self.session).load_runtime_as_of(project_id, as_of_chapter=as_of_chapter)
         else:
-            assert (runtime.project_id, runtime.as_of_chapter) == (project_id, as_of_chapter)
+            require_runtime_as_of(runtime, project_id, as_of_chapter)
         calendar = StoryCalendarRepository(self.session).get(project_id)
         start = BookStateQuery(self.session).current_story_minute(project_id, as_of_chapter=as_of_chapter)
         if start is None:

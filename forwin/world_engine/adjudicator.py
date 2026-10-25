@@ -105,12 +105,15 @@ class WorldAdjudicator:
                 result=result, issues=[],
             )
             return AdjudicationCall(result, prompt_trace, [])
+        # The last prompt sent, which the trace records. Only when nothing was sent does the trace record the
+        # unsent prompt, with no attempts and failure_reason prompt_too_large.
+        messages: list[dict] = []
         for attempt_no in range(1, self.max_attempts + 1):
-            messages = build_adjudication_messages(
+            prompt = build_adjudication_messages(
                 context=context, intents=intents, runtime=runtime, lexicon=lexicon, calendar=calendar,
                 feedback=feedback, retry_feedback=retry_feedback,
             )
-            if len(messages[-1]["content"]) > MAX_ADJUDICATION_PROMPT_CHARS:
+            if len(prompt[-1]["content"]) > MAX_ADJUDICATION_PROMPT_CHARS:
                 if result is not None:
                     # The retry's feedback put it over the guard: keep what the earlier attempt settled.
                     too_large = True
@@ -118,11 +121,12 @@ class WorldAdjudicator:
                     break
                 issues = ["prompt_too_large"]
                 prompt_trace = self._build_prompt_trace(
-                    messages=messages, context=context, intent_ids=sorted(intent_ids), attempts=attempts,
+                    messages=messages or prompt, context=context, intent_ids=sorted(intent_ids), attempts=attempts,
                     business_retries=business_retries, result=None, issues=issues,
                     failure_reason="prompt_too_large",
                 )
                 return AdjudicationCall(None, prompt_trace, issues, tuple(sorted(intent_ids)), PROMPT_TOO_LARGE)
+            messages = prompt
             retry_feedback = []
             raw = ""
             call_error: Exception | None = None

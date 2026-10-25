@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
@@ -25,8 +25,8 @@ if TYPE_CHECKING:
 
 
 MAX_ADJUDICATION_PROMPT_CHARS = 60000
-# The event facts an adjudication shows: each due intent's newest few, up to this many in all; older events
-# stay in canon but out of the prompt.
+# The event facts an adjudication shows, up to this many in all: each due intent's newest ones first, up to
+# its guaranteed share; older events stay in canon but out of the prompt.
 MAX_ADJUDICATION_EVENT_FACTS = 20
 MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT = 5
 MAX_ACTOR_TURN_PROMPT_CHARS = 60000
@@ -145,18 +145,24 @@ def _fact_references(value: Any, *, is_ref: bool = False) -> set[str]:
     return set()
 
 
-def _round_robin(queues: Sequence[Sequence[str]], *, per_queue: int, total: int) -> list[str]:
-    """Round by round, each queue's first entry not taken yet: at most ``per_queue`` from each, ``total`` in all."""
-    taken: list[str] = []
+def _round_robin(
+    queues: Sequence[Sequence[str]], *, rounds: int, total: int, taken: Collection[str] = (),
+) -> list[str]:
+    """Round by round, each queue's first entry not in ``taken`` or picked yet: at most ``rounds`` from each and
+    ``total`` in all. Stops early once every queue is spent."""
+    picked: list[str] = []
     remaining = [iter(queue) for queue in queues]
-    for _round in range(per_queue):
+    for _round in range(rounds):
+        before = len(picked)
         for queue in remaining:
-            if len(taken) >= total:
-                return taken
-            ref = next((ref for ref in queue if ref not in taken), None)
+            if len(picked) >= total:
+                return picked
+            ref = next((ref for ref in queue if ref not in taken and ref not in picked), None)
             if ref is not None:
-                taken.append(ref)
-    return taken
+                picked.append(ref)
+        if len(picked) == before:
+            break
+    return picked
 
 
 def build_adjudication_messages(
@@ -264,11 +270,15 @@ def build_adjudication_messages(
                         else [scope([intent])[0] for intent in intents])
     by_intent = [[ref for ref in events if bodies.intersection(facts[ref].related_node_refs)]
                  for bodies in bodies_by_intent]
-    picked = _round_robin(by_intent, per_queue=MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT,
+    # Each intent's guaranteed share comes first; then the newest scoped events no intent's own full bodies
+    # take part in, such as the ones a shown node names; spare room then goes round by round to the intents
+    # that still have events.
+    picked = _round_robin(by_intent, rounds=MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT,
                           total=MAX_ADJUDICATION_EVENT_FACTS)
-    # Room left goes to the newest scoped events no intent's own bodies take part in.
     attributed = {ref for queue in by_intent for ref in queue}
     picked.extend([ref for ref in events if ref not in attributed][:MAX_ADJUDICATION_EVENT_FACTS - len(picked)])
+    picked.extend(_round_robin(by_intent, rounds=MAX_ADJUDICATION_EVENT_FACTS,
+                               total=MAX_ADJUDICATION_EVENT_FACTS - len(picked), taken=picked))
     shown = {ref for ref in fact_payloads if facts[ref].fact_type != EVENT_FACT_TYPE}
     shown.update(picked)
     payload["facts"] = [fact_payloads[ref] for ref in sorted(shown)]

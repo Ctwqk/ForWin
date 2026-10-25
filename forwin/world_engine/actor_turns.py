@@ -30,7 +30,7 @@ from forwin.runtime.policy import WorldPolicy
 from forwin.skills import serialize_prompt_layers
 from forwin.utils import parse_llm_json
 from forwin.world_engine.conflict_repository import SUPERSEDED_BY_DELTA_KEY
-from forwin.world_engine.constraints import ConstraintIssue
+from forwin.world_engine.constraints import ConstraintIssue, is_living_actor
 from forwin.world_engine.effect_validation import scoped_effect_reference_issues
 from forwin.world_engine.travel import estimate_travel
 from forwin.world_engine.types import (
@@ -138,12 +138,7 @@ class ActorTurnCall:
 
 
 def _living_actors(runtime: BookStateRuntime) -> list[WorldNode]:
-    world = runtime.world
-    return [
-        node for node in world.nodes_by_id.values()
-        if str(node.node_type) in ACTOR_NODE_TYPES and node.is_active
-        and world.get_state(node.id).get("alive_status") != "dead"
-    ]
+    return [node for node in runtime.world.nodes_by_id.values() if is_living_actor(runtime.world, node)]
 
 
 def rank_actors(

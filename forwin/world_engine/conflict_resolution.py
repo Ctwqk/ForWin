@@ -27,7 +27,6 @@ from forwin.book_state.query import BookStateQuery
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.reviewer import CHAPTER_EXTRACTION_SOURCE_TYPE
 from forwin.book_state.runtime import BookStateRuntime
-from forwin.book_state.schema import ACTOR_NODE_TYPES
 from forwin.canon.admission import CanonAdmissionService, CanonStaleVersion, CanonWriteFailure
 from forwin.models.audit import DecisionEvent
 from forwin.models.base import new_id
@@ -45,7 +44,7 @@ from forwin.writer.prompt_core.world_engine import world_change_response
 from .conflict_repository import ConflictNotOpen, WorldConflictRepository, conflict_result_refs
 from .conflict_routing import PLAN_BOUNDARY_VIOLATIONS, PLAN_CONFLICT_SOURCES, live_intent
 from .conflict_types import ConflictDecision
-from .constraints import check_narrative_boundaries
+from .constraints import check_narrative_boundaries, is_living_actor
 from .delta_builder import WorldTickDeltaBuilder
 from .propagation import latest_news_in_transit, propagate_news, tick_events
 from .running_state import RunningStateCheck
@@ -181,12 +180,7 @@ def _veto_candidate(
         else {}
     )
     # A dead or inactive actor takes no more turns.
-    turns = (
-        {actor_ref: now}
-        if actor is not None and str(actor.node_type) in ACTOR_NODE_TYPES and actor.is_active
-        and world.get_state(actor_ref).get("alive_status") != "dead" and reroll_count < policy.world.max_rerolls
-        else {}
-    )
+    turns = {actor_ref: now} if is_living_actor(world, actor) and reroll_count < policy.world.max_rerolls else {}
     if not statuses and not turns:
         return None
     return TickCandidate(
@@ -291,7 +285,9 @@ def unprotected_news(runtime: BookStateRuntime, news: PropagatedNews, *, now: in
     """The news without what an active protection forbids an observer to know; those deliveries wait in the queue.
 
     ``runtime`` is the latest canon chapter's, so the protections are the ones in force in the chapter after it.
-    A forbidden delivery is queued again to arrive at the next tick, which checks it against its own protections.
+    A forbidden delivery is queued again to arrive at the next tick. It arrives there once, as a rumour
+    (``heard``), as distant observers hear news: ``must_not_know`` forbids only knowing or believing, so it lets
+    the rumour through even while the protection holds.
     """
     if news.candidate is None:
         return news

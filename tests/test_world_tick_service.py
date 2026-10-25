@@ -802,14 +802,14 @@ def test_llm_outage_skips_world_nodes_and_commits_the_deterministic_rest(monkeyp
 def test_forbidden_delivery_is_requeued_not_dropped() -> None:
     engine, Session = _session_factory()
     world = _seed_world(Session)
-    # The hero does something in public at loc 1, where the faction also is; chapter 2 lifts the protection.
+    # The hero does something in public at loc 1, where the faction also is; the faction may never know of it.
     chapter = _delta(Session, world, 1, {
         **_time(1, "日"), "events": [_event([world.hero], location_ref=world.loc(1))],
     })
     [(_event_item, deed)] = chapter_events(chapter)
     chapter = _protecting(chapter, [("hide-deed", {
         "ref": world.faction, "kind": "must_not_know", "observer_ref": world.faction, "fact_ref": deed,
-        "until_chapter": 2, "source": "human",
+        "until_chapter": 0, "source": "human",
     })])
     _commit(Session, world, chapter)
 
@@ -827,8 +827,13 @@ def test_forbidden_delivery_is_requeued_not_dropped() -> None:
     later = _chapter(Session, world, 2, days=1)
     _tick(Session, _WorldLLM(actor_turn=_quiet_turns), later)
 
+    # With the protection still in force, the faction hears the deed once as a rumour, as the rival does, and the
+    # news leaves the queue.
     runtime = _runtime(Session, world, 2)
+    assert runtime.narrative.nodes_by_id["hide-deed"].payload["until_chapter"] == 0
     assert (_knows(runtime, world.faction, deed), _knows(runtime, world.rival, deed)) == ("heard", "heard")
+    [_first, second] = _tick_deltas(Session, world)
+    assert [item for item in json.loads(second.metadata_json)["news_in_transit"] if item["fact_ref"] == deed] == []
     engine.dispose()
 
 
@@ -1481,6 +1486,17 @@ def test_oversized_intent_is_deferred_not_repeated_every_tick(monkeypatch) -> No
 
     assert adjudicator.batches[1:] == [waiting]
     assert len(_events(Session, world, DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED)) == 1
+
+    # Once story time reaches its new time and its prompt fits, a later tick asks and settles it.
+    adjudicator.oversized.clear()
+    with Session.begin() as session:
+        session.get(Project, world.project_id).target_total_chapters = 20
+    next_day = _chapter(Session, world, 3, days=1)
+    with Session.begin() as session:
+        _service(Session, llm, adjudicator=adjudicator).run(session, _canon_commit(next_day), policy=POLICY)
+
+    assert adjudicator.batches[2:] == [[errands[0]]]
+    assert _runtime(Session, world, 3).world.get_state(errands[0])["status"] == "disrupted"
     engine.dispose()
 
 
@@ -1731,9 +1747,7 @@ def test_resolving_a_held_change_that_canon_has_since_ruled_out_is_stale(monkeyp
 
 
 def test_a_long_history_keeps_adjudication_under_the_prompt_guard(monkeypatch) -> None:
-    from forwin.writer.prompt_core.world_engine import (
-        MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT, MAX_ADJUDICATION_PROMPT_CHARS,
-    )
+    from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_EVENT_FACTS, MAX_ADJUDICATION_PROMPT_CHARS
 
     engine, Session = _session_factory()
     world = _seed_tick_world(Session, monkeypatch)
@@ -1758,9 +1772,7 @@ def test_a_long_history_keeps_adjudication_under_the_prompt_guard(monkeypatch) -
     assert len(content) < MAX_ADJUDICATION_PROMPT_CHARS
     payload = json.JSONDecoder().raw_decode(content)[0]
     assert {node["node_type"] for node in payload["world_nodes"]}.isdisjoint({"event", "intent"})
-    assert len([fact for fact in payload["facts"] if fact.get("fact_type") == "event"]) == (
-        MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT
-    )
+    assert len([fact for fact in payload["facts"] if fact.get("fact_type") == "event"]) == MAX_ADJUDICATION_EVENT_FACTS
     assert result.dropped_candidate_ids == []
     assert _runtime(Session, world).world.get_state(_later(world))["status"] == "resolved"
     engine.dispose()

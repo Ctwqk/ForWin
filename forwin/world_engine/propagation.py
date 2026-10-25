@@ -14,10 +14,10 @@ from forwin.book_state.extraction.translator import _OBSERVER_TYPES
 from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.runtime import BookStateRuntime, resolve_world_node_location_id
-from forwin.book_state.schema import ACTOR_NODE_TYPES
 from forwin.models.book_state import GraphDeltaRow
 from forwin.protocol.book_state import GraphDelta
 
+from .constraints import is_living_actor
 from .delta_builder import tick_event_fact_ref
 from .travel import _MINUTES_PER_HOUR
 from .types import WORLD_ENGINE_SOURCE_TYPE, EffectEvent, EffectKnowledge, NewsItem, TickCandidate
@@ -147,9 +147,7 @@ class _News:
         # Living, active actors and their locations ("" for none).
         self.recipients = {
             node_id: resolve_world_node_location_id(world, node_id)
-            for node_id, node in world.nodes_by_id.items()
-            if str(node.node_type) in ACTOR_NODE_TYPES and node.is_active
-            and world.get_state(node_id).get("alive_status") != "dead"
+            for node_id, node in world.nodes_by_id.items() if is_living_actor(world, node)
         }
         self.delivered: dict[tuple[str, str], EffectKnowledge] = {}
         self.pending: dict[tuple[str, str], NewsItem] = {}

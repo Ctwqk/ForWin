@@ -21,7 +21,7 @@ from forwin.models.audit import DecisionEvent
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.world_conflict import WorldPlanConflictRow
 from forwin.planning.goals import load_goals_json
-from forwin.protocol.book_state import GraphDelta, NarrativePatch
+from forwin.protocol.book_state import GraphDelta, NarrativePatch, WorldNode
 from forwin.runtime.policy import RuntimePolicy
 from forwin.world_engine.conflict_repository import ConflictNotOpen, WorldConflictRepository
 from forwin.world_engine.conflict_resolution import (
@@ -2448,17 +2448,18 @@ def test_veto_does_not_reschedule_a_dead_actor(pending_side_effect_session):
     _, row = pending_side_effect_session
     row.intent_ref, row.actor_ref = "intent-1", "actor-1"
 
-    def veto(alive_status: str) -> list[tuple[dict, dict]]:
-        runtime = _steps_runtime(_actor("actor-1", alive_status=alive_status), _intent("intent-1", "actor-1", at=50))
+    def veto(actor: WorldNode) -> list[tuple[dict, dict]]:
+        runtime = _steps_runtime(actor, _intent("intent-1", "actor-1", at=50))
         return [
             (item.intent_status_changes, item.next_turn_at)
             for item in option_candidates(row, _decision("veto_world"), runtime=runtime, policy=POLICY,
                                           reroll_count=0, now=100)
         ]
 
-    assert veto("alive") == [({"intent-1": "vetoed"}, {"actor-1": 100})]
-    # A dead actor takes no more turns, so the veto only stops its intent.
-    assert veto("dead") == [({"intent-1": "vetoed"}, {})]
+    assert veto(_actor("actor-1")) == [({"intent-1": "vetoed"}, {"actor-1": 100})]
+    # A dead or inactive actor takes no more turns, so the veto only stops its intent.
+    assert veto(_actor("actor-1", alive_status="dead")) == [({"intent-1": "vetoed"}, {})]
+    assert veto(_actor("actor-1").model_copy(update={"is_active": False})) == [({"intent-1": "vetoed"}, {})]
 
 
 def test_superseded_veto_does_not_cap_rerolls(pending_side_effect_session):

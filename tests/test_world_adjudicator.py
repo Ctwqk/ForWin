@@ -217,6 +217,9 @@ def test_retry_over_the_guard_keeps_the_first_attempts_outcomes(monkeypatch):
     assert "prompt_too_large" in call.issues
     assert call.prompt_trace["output_summary"]["failure_reason"] == "prompt_too_large"
     assert call.prompt_trace["output_summary"]["outcome_count"] == 1
+    # The trace records the prompt that was sent, not the retry that never was.
+    assert call.prompt_trace["prompt_layers"][-1]["content"] == first[-1]["content"]
+    assert "Retry validation feedback" not in json.dumps(call.prompt_trace, ensure_ascii=False)
 
 
 def test_fits_measures_the_first_prompt_against_the_guard(monkeypatch):
@@ -468,10 +471,10 @@ def test_prompt_leaves_past_events_and_settled_intents_out_of_full_bodies_and_th
 
 
 def test_prompt_shows_every_standing_fact_and_only_the_newest_event_facts():
-    from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT
+    from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_EVENT_FACTS
 
     runtime = _runtime()
-    for index in range(25):
+    for index in range(MAX_ADJUDICATION_EVENT_FACTS + 5):
         runtime.world.add_fact(FactNode(id=f"event-fact-{index:02d}", project_id="p", proposition="event-truth",
                                         fact_type="event", related_node_refs=["owner"], created_at_chapter=index))
     runtime.world.add_fact(FactNode(id="old-standing", project_id="p", proposition="standing-truth",
@@ -480,7 +483,7 @@ def test_prompt_shows_every_standing_fact_and_only_the_newest_event_facts():
     ids = {fact["id"] for fact in payload["facts"]}
     assert {"hidden", "old-standing"} <= ids
     assert sorted(ref for ref in ids if ref.startswith("event-fact-")) == [
-        f"event-fact-{index:02d}" for index in range(25 - MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT, 25)
+        f"event-fact-{index:02d}" for index in range(5, MAX_ADJUDICATION_EVENT_FACTS + 5)
     ]
 
 
@@ -516,8 +519,6 @@ def _shown_events(runtime, refs) -> list[str]:
 
 
 def test_a_busy_intent_does_not_crowd_out_another_intents_event_facts():
-    from forwin.writer.prompt_core.world_engine import MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT
-
     runtime = _runtime()
     [loner] = _loner_intents(runtime, 1)
     # The owner's recent history is long; the loner's is short and old.
@@ -526,9 +527,31 @@ def test_a_busy_intent_does_not_crowd_out_another_intents_event_facts():
 
     shown = _shown_events(runtime, ["intent-1", loner])
 
+    # The loner keeps its whole history; the owner's newest events take the spare room.
     assert shown == sorted([
-        *(f"event-owner-{index:02d}" for index in range(MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT)),
+        *(f"event-owner-{index:02d}" for index in range(17)),
         *(f"event-loner-0-{index:02d}" for index in range(3)),
+    ])
+
+
+def test_an_event_a_shown_node_names_outranks_spare_history_but_not_the_guaranteed_share():
+    from forwin.writer.prompt_core.world_engine import (
+        MAX_ADJUDICATION_EVENT_FACTS, MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT,
+    )
+
+    runtime = _runtime()
+    _event_facts(runtime, "owner", 25, newest=30)
+    # An old event elsewhere that the owner's token names: no intent's own full bodies take part in it.
+    runtime.world.add_node(_node("token", "item", holder_id="owner", cause_ref="fact:named-event"))
+    runtime.world.add_fact(FactNode(id="named-event", project_id="p", proposition="event-truth", fact_type="event",
+                                    related_node_refs=["elsewhere"], created_at_chapter=0))
+
+    shown = _shown_events(runtime, ["intent-1"])
+
+    spare = MAX_ADJUDICATION_EVENT_FACTS - MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT - 1
+    assert shown == sorted([
+        "named-event",
+        *(f"event-owner-{index:02d}" for index in range(MAX_ADJUDICATION_EVENT_FACTS_PER_INTENT + spare)),
     ])
 
 

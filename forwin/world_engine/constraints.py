@@ -12,8 +12,8 @@ from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.narrative import RELEASED_PROTECTION_STATUS
 from forwin.book_state.path_patch import apply_path_patch
 from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph, resolve_world_node_location_id
-from forwin.book_state.schema import ACTOR_TIERS, IMPACT_LEVELS, WORLD_NODE_FIELDS
-from forwin.protocol.book_state import NarrativeNode
+from forwin.book_state.schema import ACTOR_NODE_TYPES, ACTOR_TIERS, IMPACT_LEVELS, WORLD_NODE_FIELDS
+from forwin.protocol.book_state import NarrativeNode, WorldNode
 from forwin.book_state.story_clock import StoryCalendar, StoryClockError, duration_to_minutes
 from forwin.world_engine.travel import estimate_travel
 from forwin.world_engine.types import NEW_FACT_REF_PREFIX, EffectEntityChange, TickCandidate, WorldEffects
@@ -60,6 +60,12 @@ class BudgetResult:
     kept: list[TickCandidate]
     postponed: list[TickCandidate]
     deferred_without_intent: list[TickCandidate]
+
+
+def is_living_actor(world: ObjectiveWorldGraph, node: WorldNode | None) -> bool:
+    """An active actor node that is not dead: one that still takes turns and learns news."""
+    return (node is not None and str(node.node_type) in ACTOR_NODE_TYPES and node.is_active
+            and world.get_state(node.id).get("alive_status") != "dead")
 
 
 def _path(runtime: BookStateRuntime, ref: str, field: str) -> str:

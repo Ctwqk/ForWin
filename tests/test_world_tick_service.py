@@ -267,6 +267,107 @@ def _tick(Session, llm: _WorldLLM, chapter: GraphDelta, *, policy: RuntimePolicy
         return _service(Session, llm).run(session, _canon_commit(chapter), policy=policy)
 
 
+def test_new_actor_budget_drops_second():
+    from forwin.world_engine.tick import _Tick
+    from tests.test_world_engine_contracts import _new_actor
+
+    tick = object.__new__(_Tick)
+    tick.policy = _policy(max_new_actors_per_tick=1)
+    tick.conflicts = SimpleNamespace(resolutions=[])
+    tick._running_check = lambda: SimpleNamespace(admit=lambda candidate: [])
+    dropped = []
+    tick._drop_candidate = lambda candidate, reason, issues: dropped.append((candidate, issues))
+    candidates = [TickCandidate(candidate_id=str(index), origin="adjudication", summary="Arrival",
+                               effects=WorldEffects(new_actors=[_new_actor(name=f"Actor {index}")]))
+                  for index in range(2)]
+    assert tick._admitted(candidates) == candidates[:1]
+    assert dropped[0][0] == candidates[1]
+    assert dropped[0][1][0].code == "new_actor_budget"
+
+
+def test_new_actor_name_collision_retries_then_drops(monkeypatch):
+    from tests.test_world_engine_contracts import _new_actor
+
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch)
+    chapter = _chapter(Session, world, 1)
+    name = _runtime(Session, world).world.get_node(world.hero).name
+    llm = _WorldLLM(adjudicate=_outcomes({
+        "intent_id": _later(world), "result": "resolved", "summary": "Arrival",
+        "effects": {"new_actors": [_new_actor(name=name, location_id=world.loc(1))]},
+    }), actor_turn=_quiet_turns)
+    result = _tick(Session, llm, chapter)
+    calls = [content for stage, content in llm.calls if stage == "world.adjudicate"]
+    assert len(calls) == 2
+    assert "new_actor_name_taken" in calls[1]
+    assert result.dropped_candidate_ids == [f"adjudication:{_later(world)}"]
+    assert _tick_deltas(Session, world)
+    assert not any(node.metadata.get("tick_id") == result.tick_id and node.node_type in {"character", "group"}
+                   for node in _runtime(Session, world).world.nodes_by_id.values())
+    engine.dispose()
+
+
+def test_new_actor_budget_commits_first_outcome_postgres(monkeypatch):
+    from tests.test_world_engine_contracts import _new_actor
+
+    engine, Session = _session_factory()
+    world = _seed_tick_world(Session, monkeypatch, rival_strikes=True)
+    chapter = _chapter(Session, world, 1)
+    intents = sorted([_later(world), _strike(world)])
+    llm = _WorldLLM(adjudicate=_outcomes(*[
+        {"intent_id": ref, "result": "resolved", "summary": "Arrival",
+         "effects": {"new_actors": [_new_actor(name=f"Actor {index}", location_id=world.loc(1),
+                                               affiliation_refs=[world.faction])]}}
+        for index, ref in enumerate(intents)
+    ]), actor_turn=_quiet_turns)
+    result = _tick(Session, llm, chapter)
+    assert result.dropped_candidate_ids == [f"adjudication:{intents[1]}"]
+    runtime = _runtime(Session, world)
+    created = [node for node in runtime.world.nodes_by_id.values()
+               if node.node_type == "character" and node.metadata.get("tick_id") == result.tick_id]
+    assert [node.name for node in created] == ["Actor 0"]
+    assert runtime.world.get_state(created[0].id)["actor_tier"] == "minor"
+    [dropped] = _events(Session, world, DecisionEventType.WORLD_TICK_CANDIDATE_DROPPED)
+    assert "new_actor_budget" in [issue["code"] for issue in _payload(dropped)["issues"]]
+    assert [runtime.world.get_state(ref)["status"] for ref in intents] == ["resolved", "planned"]
+    engine.dispose()
+
+
+def test_new_actor_name_collision_retry_without_database():
+    from forwin.world_engine.constraints import ConstraintIssue
+    from forwin.world_engine.delta_builder import _TickBuilder
+    from forwin.world_engine.tick import _Tick
+    from tests.test_world_adjudicator import CALENDAR, CONTEXT, LEXICON, StubLLM, _runtime as runtime_fixture
+    from tests.test_world_engine_contracts import _new_actor
+
+    tick = object.__new__(_Tick)
+    tick.runtime, tick.context, tick.lexicon, tick.calendar = runtime_fixture(), CONTEXT, LEXICON, CALENDAR
+    tick.runtime.world.get_node("owner").aliases = ["New Actor"]
+    tick.policy = POLICY
+    bad = {"intent_id": "intent-1", "result": "resolved", "summary": "Arrival",
+           "effects": {"new_actors": [_new_actor()]}}
+    good = {"intent_id": "intent-2", "result": "resolved", "summary": "Settled", "effects": {}}
+    client = StubLLM({"outcomes": [bad, good]}, {"outcomes": [bad]})
+    tick.service = SimpleNamespace(llm_client=client, adjudicator=WorldAdjudicator(client))
+    tick._check_snapshot = lambda: None
+    tick._save_trace = lambda trace: "trace"
+    dropped = []
+    tick._drop_candidate = lambda candidate, reason, issues: dropped.append((candidate, issues))
+
+    def issues(candidate):
+        built = _TickBuilder(context=CONTEXT, tick_id="tick-1", runtime=tick.runtime,
+                             calendar=CALENDAR, lexicon=LEXICON).build([candidate], [])
+        return [ConstraintIssue(issue.code, issue.message, "") for issue in built.issues if issue.severity == "error"]
+
+    tick._issues = issues
+    initial = tick._adjudicate([tick.runtime.world.get_node(ref) for ref in ("intent-1", "intent-2")])
+    passed = tick._check(initial.candidates)
+    assert [candidate.intent_id for candidate in passed] == ["intent-2"]
+    assert len(client.calls) == 2
+    assert "new_actor_name_taken" in client.calls[1][0][-1]["content"]
+    assert len(dropped) == 1 and dropped[0][0].intent_id == "intent-1"
+
+
 # reading what the tick left
 
 

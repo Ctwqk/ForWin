@@ -43,7 +43,10 @@ ADJUDICATION_INSTRUCTIONS = (
     "依据客观状态、资源持有、位置与规则的 hardness/statement 决定结果。隐藏事实也是世界事实，"
     "可用于结算；不要为了读者体验改变事实。不得生成 reader 的认知变化或将 reader 放进 known_by。",
     "effects 只描述本次实际发生的变化，不照抄 expected_effects。引用只能来自输入的世界节点、地图节点或事实。"
-    "同一 effects 内的新事实可通过给出的新事实引用前缀加 key 引用；不得创造新行动者。",
+    "同一 effects 内的新事实可通过给出的新事实引用前缀加 key 引用；只有当意图的结算确实需要时，"
+    "可在全部 outcomes 中新建至多 max_new_actors 个次要行动者（new_actors，仅 character 或 group，"
+    "以 actor:new:<key> 引用）。名字须符合本书 lexicon 的称谓风格且不得与已有名字或别名重复；"
+    "location_id 必须是地图节点，affiliation_refs 只可引用已有 group、faction 或 organization。",
     "所有 at、depart_at、arrive_at 都是自纪元起的整数分钟，须在 window_start 到 now 之间；"
     "地图 travel_time 的单位是小时。时长描述只使用本书日历单位或 lexicon 别名。",
     "使用 seed 使同一输入的裁决稳定。约束反馈按 intent_id 修正对应结果；所有空列表返回 []。"
@@ -183,6 +186,7 @@ def build_adjudication_messages(
     lexicon: BookLexicon, calendar: StoryCalendar | None,
     feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
     retry_feedback: Sequence[str] = (),
+    max_new_actors: int = 1,
 ) -> list[dict]:
     node_locations: dict[str, str] = {}
 
@@ -243,6 +247,7 @@ def build_adjudication_messages(
     map_ids = locations | {ref for edge in map_edges for ref in (edge.from_node_id, edge.to_node_id)}
     payload = {
         "context": context.model_dump(mode="json"),
+        "max_new_actors": max(0, max_new_actors),
         "intents": [node_payload(node) for node in intents],
         "world_nodes": [node_payload(node) for node in nodes
                         if node.id in full_ids - intent_ids and node.node_type != "rule"],

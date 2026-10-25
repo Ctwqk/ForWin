@@ -75,10 +75,12 @@ class WorldAdjudicator:
         self, *, context: TickContext, intents: Sequence[WorldNode], runtime: BookStateRuntime,
         lexicon: BookLexicon, calendar: StoryCalendar | None,
         feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
+        max_new_actors: int = 1,
     ) -> bool:
         """Whether one call can ask about ``intents``: its first prompt is within the guard. No model is called."""
         messages = build_adjudication_messages(
             context=context, intents=intents, runtime=runtime, lexicon=lexicon, calendar=calendar, feedback=feedback,
+            max_new_actors=max_new_actors,
         )
         return len(messages[-1]["content"]) <= MAX_ADJUDICATION_PROMPT_CHARS
 
@@ -86,6 +88,7 @@ class WorldAdjudicator:
         self, *, context: TickContext, intents: Sequence[WorldNode], runtime: BookStateRuntime,
         lexicon: BookLexicon, calendar: StoryCalendar | None,
         feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
+        max_new_actors: int = 1,
     ) -> AdjudicationCall:
         attempts: list[dict[str, Any]] = []
         business_retries: list[dict[str, Any]] = []
@@ -111,7 +114,7 @@ class WorldAdjudicator:
         for attempt_no in range(1, self.max_attempts + 1):
             prompt = build_adjudication_messages(
                 context=context, intents=intents, runtime=runtime, lexicon=lexicon, calendar=calendar,
-                feedback=feedback, retry_feedback=retry_feedback,
+                feedback=feedback, retry_feedback=retry_feedback, max_new_actors=max_new_actors,
             )
             if len(prompt[-1]["content"]) > MAX_ADJUDICATION_PROMPT_CHARS:
                 if result is not None:

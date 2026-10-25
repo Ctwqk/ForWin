@@ -20,6 +20,7 @@ WORLD_ENGINE_SOURCE_TYPE = "world_engine"
 TICK_ID_PREFIX = "tick-"
 # A knowledge effect's ref to a fact the same effects create: ``fact:new:<key>``.
 NEW_FACT_REF_PREFIX = f"{FACT_REF_PREFIX}new:"
+NEW_ACTOR_REF_PREFIX = "actor:new:"
 # The agenda_ref of an agenda change that creates an agenda.
 NEW_AGENDA_REF = "new"
 # An agenda's priority range; AgendaChange leaves it unbounded, so consumers check it.
@@ -123,7 +124,18 @@ class EffectKnowledge(_ContractModel):
     source_ref: str = ""
 
 
+class EffectNewActor(_ContractModel):
+    key: str = Field(min_length=1)
+    node_type: Literal["character", "group"]
+    name: str = Field(min_length=1)
+    role_hint: str = ""
+    location_id: str
+    affiliation_refs: list[str] = Field(default_factory=list)
+    summary: str
+
+
 class WorldEffects(_ContractModel):
+    new_actors: list[EffectNewActor] = Field(default_factory=list)
     entity_changes: list[EffectEntityChange] = Field(default_factory=list)
     relation_changes: list[EffectRelationChange] = Field(default_factory=list)
     movements: list[EffectMovement] = Field(default_factory=list)
@@ -131,6 +143,29 @@ class WorldEffects(_ContractModel):
     events: list[EffectEvent] = Field(default_factory=list)
     new_facts: list[EffectFact] = Field(default_factory=list)
     knowledge: list[EffectKnowledge] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _new_actor_refs_resolve(self) -> WorldEffects:
+        keys = [actor.key for actor in self.new_actors]
+        if len(set(keys)) != len(keys):
+            raise ValueError(f"new_actors repeat a key: {keys}")
+
+        def check(value: Any, is_ref: bool = False) -> None:
+            if isinstance(value, str) and is_ref and value.startswith(NEW_ACTOR_REF_PREFIX):
+                if value.removeprefix(NEW_ACTOR_REF_PREFIX) not in keys:
+                    raise ValueError(f"ref missing from new_actors: {value!r}")
+            elif isinstance(value, dict):
+                for key, item in value.items():
+                    reference = key.endswith(("_id", "_ids", "_ref", "_refs")) or key in {"ref", "known_by"}
+                    if key == "new_value":
+                        reference = str(value.get("field", "")).endswith(("_id", "_ids", "_ref", "_refs"))
+                    check(item, reference)
+            elif isinstance(value, list):
+                for item in value:
+                    check(item, is_ref)
+
+        check(self.model_dump())
+        return self
 
     @model_validator(mode="after")
     def _new_fact_refs_resolve(self) -> WorldEffects:
@@ -183,6 +218,12 @@ class ProposedIntent(_ContractModel):
     requires_onstage: bool
     impact_level: ImpactLevel
     expected_effects: WorldEffects
+
+    @model_validator(mode="after")
+    def _no_new_actors(self) -> ProposedIntent:
+        if self.expected_effects.new_actors:
+            raise ValueError("new_actors are allowed only in adjudicated outcomes")
+        return self
 
 
 class AgendaChange(_ContractModel):

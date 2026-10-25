@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.book_frame_repository import BookLexiconRepository, StoryCalendarRepository
@@ -27,6 +29,7 @@ from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.runtime import BookStateRuntime, require_runtime_as_of
 from forwin.book_state.schema import ACTOR_NODE_TYPES, WORLD_NODE_FIELDS
 from forwin.book_state.story_clock import StoryCalendar, StoryClockError, duration_to_minutes, format_story_time
+from forwin.models.entity import Entity, EntityAlias
 from forwin.protocol.book_state import (
     WORLD_EDGE_TYPES_BY_FAMILY,
     CognitionPatch,
@@ -40,10 +43,11 @@ from forwin.protocol.book_state import (
     WorldEdge,
     WorldNode,
 )
-
+from .effect_validation import new_actor_name_taken
 from .types import (
     AGENDA_PRIORITY_MAX,
     AGENDA_PRIORITY_MIN,
+    NEW_ACTOR_REF_PREFIX,
     NEW_AGENDA_REF,
     NEW_FACT_REF_PREFIX,
     WORLD_ENGINE_SOURCE_TYPE,
@@ -53,6 +57,7 @@ from .types import (
     EffectFact,
     EffectItemTransfer,
     EffectMovement,
+    EffectNewActor,
     EffectRelationChange,
     NewsItem,
     ProposedIntent,
@@ -118,6 +123,16 @@ class WorldTickDeltaBuilder:
             )
         else:
             require_runtime_as_of(runtime, project_id, context.chapter_number)
+        reserved_names: set[str] = set()
+        if any(candidate.effects.new_actors for candidate in candidates):
+            for name, aliases in self.session.execute(select(Entity.name, Entity.aliases_json).where(
+                Entity.project_id == project_id,
+            )):
+                reserved_names.add(name)
+                reserved_names.update(json.loads(aliases or "[]"))
+            reserved_names.update(self.session.scalars(select(EntityAlias.alias).where(
+                EntityAlias.project_id == project_id,
+            )))
         builder = _TickBuilder(
             context=context,
             tick_id=tick_id,
@@ -125,6 +140,7 @@ class WorldTickDeltaBuilder:
             runtime=runtime,
             calendar=StoryCalendarRepository(self.session).get(project_id),
             lexicon=BookLexiconRepository(self.session).get(project_id),
+            reserved_actor_names=reserved_names,
         )
         return builder.build(candidates, news_in_transit)
 
@@ -144,6 +160,7 @@ class _TickBuilder:
         runtime: BookStateRuntime,
         calendar: StoryCalendar | None,
         lexicon: BookLexicon,
+        reserved_actor_names: Collection[str] = (),
     ) -> None:
         self.context = context
         self.project_id = context.project_id
@@ -154,6 +171,7 @@ class _TickBuilder:
         self.map = runtime.map
         self.calendar = calendar
         self.lexicon = lexicon
+        self.reserved_actor_names = set(reserved_actor_names)
         self.issues: list[TickIssue] = []
         self.node_patches: list[NodePatch] = []
         self.created_nodes: dict[str, NodePatch] = {}
@@ -172,6 +190,7 @@ class _TickBuilder:
         self.reason = ""
         self.new_agendas: list[str] = []
         self.new_facts: dict[str, str] = {}
+        self.new_actors: dict[str, str] = {}
 
     def build(self, candidates: Sequence[TickCandidate], news_in_transit: Sequence[NewsItem]) -> TickDeltaBuild:
         seen: set[str] = set()
@@ -180,6 +199,7 @@ class _TickBuilder:
             self.reason = candidate.summary.strip()
             self.new_agendas = []
             self.new_facts = {}
+            self.new_actors = {}
             if candidate.candidate_id in seen:
                 self._issue("error", "duplicate_candidate", f"candidate id {candidate.candidate_id!r} repeats")
                 continue
@@ -227,6 +247,11 @@ class _TickBuilder:
         return TickDeltaBuild(delta, issues)
 
     def _candidate(self, candidate: TickCandidate) -> None:
+        if candidate.effects.new_actors and candidate.origin != "adjudication":
+            self._issue("error", "new_actor_origin", "new_actors are allowed only in adjudicated outcomes")
+            return
+        for actor in candidate.effects.new_actors:
+            self._new_actor(actor)
         for index, change in enumerate(candidate.agenda_changes):
             self._agenda_change(candidate, change, index)
         for index, intent in enumerate(candidate.new_intents):
@@ -287,6 +312,8 @@ class _TickBuilder:
 
     def _node(self, ref: str, label: str) -> str | None:
         text = ref.strip()
+        if text.startswith(NEW_ACTOR_REF_PREFIX):
+            text = self.new_actors.get(text.removeprefix(NEW_ACTOR_REF_PREFIX), text)
         if text in self.world.nodes_by_id or text in self.created_nodes:
             return text
         self._unresolved(f"{label} {text!r} is not a BookState node")
@@ -522,7 +549,49 @@ class _TickBuilder:
 
     # effects
 
+    def _new_actor(self, actor: EffectNewActor) -> None:
+        name = actor.name.strip()
+        if not name or new_actor_name_taken(name, self.runtime, self.reserved_actor_names):
+            self._issue("error", "new_actor_name_taken", f"New actor name is unavailable: {name!r}")
+            return
+        location = self._location(actor.location_id, "new actor location")
+        if any(ref not in self.world.nodes_by_id or not self.world.nodes_by_id[ref].is_active
+               for ref in actor.affiliation_refs):
+            self._unresolved("new actor affiliations must name existing active groups")
+            return
+        affiliations = [self._node_of_type(ref, {"group", "faction", "organization"}, "affiliation")
+                        for ref in actor.affiliation_refs]
+        if location is None or any(ref is None for ref in affiliations):
+            return
+        node_id = self._local_id(actor.node_type, actor.key)
+        self.new_actors[actor.key] = node_id
+        self.reserved_actor_names.add(name)
+        state = {"actor_tier": "minor", "location_id": location, "next_turn_at": self.context.now}
+        if actor.node_type == "character":
+            state["alive_status"] = "alive"
+        self._create_node(WorldNode(
+            id=node_id, project_id=self.project_id, node_type=actor.node_type, name=name,
+            summary=actor.summary, profile={"narrative_role": actor.role_hint}, state=state,
+            created_at_chapter=self.chapter,
+            metadata={**self._provenance(), "origin": WORLD_ENGINE_SOURCE_TYPE},
+        ))
+        for ref in affiliations:
+            self._relation_change(EffectRelationChange(
+                source_ref=node_id, target_ref=ref, edge_type="member_of", change="create",
+            ))
+
+    def _actor_values(self, value: Any, field: str) -> Any:
+        if isinstance(value, str) and field.endswith(("_id", "_ids", "_ref", "_refs")):
+            if value.startswith(NEW_ACTOR_REF_PREFIX):
+                return self._node(value, "actor reference")
+        elif isinstance(value, dict):
+            return {key: self._actor_values(item, key) for key, item in value.items()}
+        elif isinstance(value, list):
+            return [self._actor_values(item, field) for item in value]
+        return value
+
     def _entity_change(self, change: EffectEntityChange, movers: set[str]) -> None:
+        change = change.model_copy(update={"new_value": self._actor_values(change.new_value, change.field)})
         node_id = self._node(change.ref, "entity")
         if node_id is None:
             return
@@ -546,6 +615,7 @@ class _TickBuilder:
             self._set_node_field(node_id, field_path, change.new_value)
 
     def _relation_change(self, change: EffectRelationChange) -> None:
+        change = change.model_copy(update={"new_value": self._actor_values(change.new_value, change.field)})
         families = [
             family for family, edge_types in WORLD_EDGE_TYPES_BY_FAMILY.items() if change.edge_type in edge_types
         ]

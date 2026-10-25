@@ -8,7 +8,16 @@ from typing import Any
 from forwin.book_state.knowledge import FACT_REF_PREFIX
 from forwin.book_state.lexicon import BookLexicon
 from forwin.book_state.runtime import BookStateRuntime
-from forwin.world_engine.types import NEW_FACT_REF_PREFIX, WorldEffects
+from forwin.world_engine.types import NEW_ACTOR_REF_PREFIX, NEW_FACT_REF_PREFIX, WorldEffects
+
+
+def new_actor_name_taken(name: str, runtime: BookStateRuntime, reserved_names: Collection[str] = ()) -> bool:
+    names = set(reserved_names)
+    for node in [*runtime.world.nodes_by_id.values(), *runtime.map.nodes_by_id.values()]:
+        if getattr(node, "is_active", True):
+            names.add(node.name)
+            names.update(getattr(node, "aliases", ()))
+    return name.strip() in {value.strip() for value in names}
 
 
 def effect_reference_issues(effects: WorldEffects, runtime: BookStateRuntime, lexicon: BookLexicon) -> list[str]:
@@ -18,6 +27,8 @@ def effect_reference_issues(effects: WorldEffects, runtime: BookStateRuntime, le
               | {f"{FACT_REF_PREFIX}{ref}" for ref in runtime.world.facts_by_id}),
         location_ids=set(runtime.map.nodes_by_id),
         travel_mode_ids={mode.id for mode in lexicon.travel_modes},
+        affiliation_ids={node.id for node in runtime.world.nodes_by_id.values()
+                         if node.is_active and node.node_type in {"group", "faction", "organization"}},
     )
 
 
@@ -27,9 +38,10 @@ def scoped_effect_reference_issues(
     refs: Collection[str],
     location_ids: Collection[str],
     travel_mode_ids: Collection[str],
+    affiliation_ids: Collection[str] = (),
 ) -> list[str]:
     """The same checks within given references: node, map node and ``fact:<id>`` refs, and movement destinations."""
-    allowed = set(refs) - {"reader"}
+    allowed = (set(refs) | {f"{NEW_ACTOR_REF_PREFIX}{actor.key}" for actor in effects.new_actors}) - {"reader"}
     locations = set(location_ids)
     new_facts = {f"{NEW_FACT_REF_PREFIX}{fact.key}" for fact in effects.new_facts}
     modes = set(travel_mode_ids)
@@ -50,6 +62,11 @@ def scoped_effect_reference_issues(
         elif isinstance(value, list):
             for index, item in enumerate(value):
                 value_refs(item, f"{path}[{index}]", is_ref=is_ref)
+
+    for index, item in enumerate(effects.new_actors):
+        check(item.location_id, f"new_actors[{index}].location_id", within=locations)
+        for ref in item.affiliation_refs:
+            check(ref, f"new_actors[{index}].affiliation_refs", within=set(affiliation_ids))
 
     for index, item in enumerate(effects.entity_changes):
         check(item.ref, f"entity_changes[{index}].ref")

@@ -95,12 +95,14 @@ def adjudicate(
     calendar: StoryCalendar | None,
     save_trace: SaveTrace,
     feedback: Mapping[str, Sequence[ConstraintIssue]] | None = None,
+    max_new_actors: int = 1,
 ) -> NodeResults:
     """One adjudication of ``intents``: a candidate per settled intent, a failure per unsettled one."""
     if not intents:
         return NodeResults()
     call = adjudicator.adjudicate(
         context=context, intents=intents, runtime=runtime, lexicon=lexicon, calendar=calendar, feedback=feedback,
+        max_new_actors=max_new_actors,
     )
     trace_id = save_trace(call.prompt_trace)
     outcomes = {outcome.intent_id: outcome for outcome in call.result.outcomes} if call.result is not None else {}

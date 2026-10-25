@@ -113,6 +113,122 @@ def _patches(delta: GraphDelta) -> list[tuple[str, str, str, Any, Any]]:
     ]
 
 
+@pytest.mark.parametrize("node_type", ["character", "group"])
+def test_adjudicated_outcome_builds_minor_actor_nodes(node_type):
+    from forwin.protocol.book_state import WorldNode
+    from forwin.world_engine.delta_builder import _TickBuilder
+    from tests.test_world_adjudicator import CALENDAR, CONTEXT, LEXICON, _runtime
+    from tests.test_world_engine_contracts import _new_actor
+
+    runtime = _runtime()
+    runtime.world.add_node(WorldNode(id="faction", project_id="p", node_type="faction", name="Faction"))
+    candidate = _candidate("arrival", effects={
+        "new_actors": [_new_actor(node_type=node_type, affiliation_refs=["faction"])],
+        "relation_changes": [{"source_ref": "actor:new:arrival", "target_ref": "owner",
+                              "edge_type": "trusts", "change": "create"}],
+        "item_transfers": [{"item_ref": "item", "from_ref": "owner", "to_ref": "actor:new:arrival"}],
+        "events": [{"summary": "Arrival", "participant_refs": ["actor:new:arrival"],
+                    "location_id": "site", "visibility": "public", "at": CONTEXT.now}],
+        "new_facts": [{"key": "known", "proposition": "A fact.", "truth_value": True,
+                       "sensitivity": "hidden", "known_by": ["actor:new:arrival"]}],
+        "knowledge": [{"observer_ref": "owner", "fact_ref": "fact:new:known", "state": "knows",
+                       "channel": "told", "source_ref": "actor:new:arrival"}],
+    })
+
+    def build():
+        return _TickBuilder(context=CONTEXT, tick_id="tick-1", runtime=runtime,
+                            calendar=CALENDAR, lexicon=LEXICON).build([candidate], [])
+
+    result = build()
+    assert result.delta is not None, result.issues
+    from forwin.book_state.schema import validate_graph_delta
+    assert validate_graph_delta(result.delta, strict=True).ok
+    assert result.delta.model_dump() == build().delta.model_dump()
+    [actor] = [p for p in result.delta.node_patches if p.op == "create" and p.node_type == node_type]
+    assert actor.new_value["state"]["actor_tier"] == "minor"
+    assert actor.new_value["state"]["next_turn_at"] == CONTEXT.now
+    if node_type == "character":
+        assert actor.new_value["state"]["alive_status"] == "alive"
+    assert actor.new_value["state"]["location_id"] == "site"
+    assert {(p.source_id, p.target_id, p.edge_type) for p in result.delta.edge_patches} == {
+        (actor.node_id, "faction", "member_of"), (actor.node_id, "owner", "trusts"),
+    }
+    [transfer] = [p for p in result.delta.node_patches if p.node_id == "item"]
+    assert (transfer.old_value, transfer.new_value) == ("owner", actor.node_id)
+    assert all("old_value" in p.model_fields_set for p in result.delta.node_patches if p.op != "create")
+    assert all("old_value" in p.model_fields_set for p in result.delta.cognition_patches)
+    assert "actor:new:" not in json.dumps(result.delta.model_dump(mode="json"))
+
+
+@pytest.mark.parametrize("source", ["node_name", "node_alias", "map_alias", "reserved"])
+def test_new_actor_name_collision_is_a_build_error(source):
+    from forwin.world_engine.delta_builder import _TickBuilder
+    from tests.test_world_adjudicator import CALENDAR, CONTEXT, LEXICON, _runtime
+    from tests.test_world_engine_contracts import _new_actor
+
+    runtime = _runtime()
+    reserved = []
+    if source == "node_name":
+        runtime.world.get_node("owner").name = "New Actor"
+    elif source == "node_alias":
+        runtime.world.get_node("owner").aliases = ["New Actor"]
+    elif source == "map_alias":
+        runtime.map.nodes_by_id["site"].aliases = ["New Actor"]
+    else:
+        reserved = ["New Actor"]
+    result = _TickBuilder(context=CONTEXT, tick_id="tick-1", runtime=runtime,
+                          calendar=CALENDAR, lexicon=LEXICON, reserved_actor_names=reserved).build([
+        _candidate("arrival", effects={"new_actors": [_new_actor()]}),
+    ], [])
+    assert result.delta is None
+    assert _issues(result) == [("error", "new_actor_name_taken", "arrival")]
+
+
+@pytest.mark.parametrize("node_type", ["character", "group"])
+def test_new_actor_creation_passes_world_gate_without_database(node_type):
+    from forwin.protocol.book_state import WorldNode
+    from forwin.world_engine.delta_builder import _TickBuilder
+    from tests.test_world_adjudicator import CALENDAR, CONTEXT, LEXICON, _runtime
+    from tests.test_world_engine_contracts import _new_actor
+
+    runtime = _runtime()
+    runtime.world.add_node(WorldNode(id="faction", project_id="p", node_type="faction"))
+    built = _TickBuilder(context=CONTEXT, tick_id="tick-1", runtime=runtime,
+                         calendar=CALENDAR, lexicon=LEXICON).build([
+        _candidate("arrival", effects={"new_actors": [_new_actor(node_type=node_type, affiliation_refs=["faction"])]}),
+    ], [])
+    assert built.delta is not None, built.issues
+    verdict = reviewer.BookStateReviewGate(None).review(
+        ApprovedGraphDeltaSet(project_id="p", chapter_number=CONTEXT.chapter_number, graph_deltas=[built.delta]),
+        runtime=runtime, base_chapter=CONTEXT.chapter_number,
+    )
+    assert verdict.accepted, verdict.issues
+
+
+@pytest.mark.parametrize("source", ["entity_name", "entity_alias", "entity_aliases_json"])
+def test_new_actor_entity_name_collision_postgres(source):
+    from forwin.models.entity import Entity, EntityAlias
+    from tests.test_world_engine_contracts import _new_actor
+
+    engine, Session = _session_factory()
+    world = _seed_world(Session)
+    chapter = _chapter_one(Session, world)
+    with Session.begin() as session:
+        entity = Entity(project_id=world.project_id, kind="character",
+                        name="New Actor" if source == "entity_name" else "Registered Actor",
+                        aliases_json=json.dumps(["New Actor"] if source == "entity_aliases_json" else []))
+        session.add(entity)
+        session.flush()
+        if source == "entity_alias":
+            session.add(EntityAlias(project_id=world.project_id, entity_id=entity.id, alias="New Actor"))
+    result = _build(Session, _context(world, chapter), [
+        _candidate("arrival", effects={"new_actors": [_new_actor(location_id=world.loc(1))]}),
+    ])
+    assert result.delta is None
+    assert _issues(result) == [("error", "new_actor_name_taken", "arrival")]
+    engine.dispose()
+
+
 def test_builder_writes_gate_compatible_movement_metadata() -> None:
     engine, Session = _session_factory()
     world = _seed_world(Session)

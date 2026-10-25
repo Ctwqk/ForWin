@@ -170,6 +170,7 @@ def milestone_change_references(candidate: TickCandidate) -> frozenset[str]:
     refs.update(move.entity_ref for move in effects.movements)
     refs.update(ref for transfer in effects.item_transfers for ref in (transfer.item_ref, transfer.to_ref))
     refs.update(ref for change in effects.relation_changes for ref in (change.source_ref, change.target_ref))
+    refs.update(ref for actor in effects.new_actors for ref in actor.affiliation_refs)
     for knowledge in effects.knowledge:
         refs.update((knowledge.fact_ref, knowledge.fact_ref.removeprefix(FACT_REF_PREFIX)))
     return frozenset(refs)
@@ -185,7 +186,7 @@ def classify_impact(
     references = milestone_change_references(candidate)
     if milestone_refs.intersection(references):
         return "critical"
-    if candidate.effects.relation_changes:
+    if candidate.effects.relation_changes or candidate.effects.new_actors:
         level = max(level, IMPACT_LEVELS.index("moderate"))
     transitions = list(_transitions(runtime, _changes(candidate)))
     for ref, path, before, after in transitions:

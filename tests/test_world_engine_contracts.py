@@ -40,6 +40,60 @@ def _knowledge(**overrides) -> dict:
     return {"observer_ref": "actor-1", "fact_ref": "fact:1", "state": "knows", "channel": "told", **overrides}
 
 
+def _new_actor(**overrides) -> dict:
+    return {"key": "arrival", "node_type": "character", "name": "New Actor", "role_hint": "contact",
+            "location_id": "site", "affiliation_refs": [], "summary": "An arrival.", **overrides}
+
+
+def test_actor_turn_cannot_create_actor():
+    with pytest.raises(ValidationError, match="new_actors.*adjudicat"):
+        ActorTurnResult.model_validate({
+            "actor_id": "actor-1", "next_turn_in": {"amount": 1, "unit": "day"},
+            "new_intents": [_intent(expected_effects={"new_actors": [_new_actor()]})],
+        })
+
+
+def test_new_actor_ref_must_resolve_in_effects():
+    effects = {"new_actors": [_new_actor()], "events": [{
+        "summary": "Arrival", "participant_refs": ["actor:new:arrival"], "location_id": "site",
+        "visibility": "public", "at": 90,
+    }]}
+    assert WorldEffects.model_validate(effects).new_actors[0].key == "arrival"
+    with pytest.raises(ValidationError, match="new_actors"):
+        WorldEffects.model_validate({**effects, "new_actors": []})
+    with pytest.raises(ValidationError, match="repeat"):
+        WorldEffects.model_validate({"new_actors": [_new_actor(), _new_actor()]})
+
+
+def test_new_actor_impact_is_at_least_moderate():
+    from forwin.world_engine.constraints import classify_impact
+    from tests.test_world_adjudicator import _runtime
+
+    candidate = TickCandidate(candidate_id="arrival", origin="adjudication", summary="Arrival",
+                              effects=WorldEffects(new_actors=[_new_actor()]))
+    assert classify_impact(_runtime(), candidate) == "moderate"
+    candidate.effects.new_actors[0].affiliation_refs = ["faction"]
+    assert classify_impact(_runtime(), candidate, milestone_refs=frozenset({"faction"})) == "critical"
+
+
+@pytest.mark.parametrize("effects", [
+    {"entity_changes": [{"ref": "actor:new:arrival", "field": "mood", "new_value": "calm"}]},
+    {"entity_changes": [{"ref": "owner", "field": "details", "new_value": {"owner_ref": "actor:new:arrival"}}]},
+    {"relation_changes": [{"source_ref": "owner", "target_ref": "actor:new:arrival",
+                           "edge_type": "trusts", "change": "create"}]},
+    {"movements": [{"entity_ref": "actor:new:arrival", "to_location_id": "site", "depart_at": 0, "arrive_at": 1}]},
+    {"item_transfers": [{"item_ref": "item", "from_ref": "owner", "to_ref": "actor:new:arrival"}]},
+    {"knowledge": [_knowledge(observer_ref="actor:new:arrival")]},
+    {"knowledge": [_knowledge(source_ref="actor:new:arrival")]},
+    {"new_facts": [{"key": "fact", "proposition": "A fact.", "truth_value": True,
+                    "sensitivity": "public", "known_by": ["actor:new:arrival"]}]},
+])
+def test_new_actor_refs_are_scoped_for_each_effect(effects):
+    assert WorldEffects.model_validate({**effects, "new_actors": [_new_actor()]}).new_actors
+    with pytest.raises(ValidationError, match="missing from new_actors"):
+        WorldEffects.model_validate(effects)
+
+
 def test_world_effects_reject_unknown_action_type_and_knowledge_state() -> None:
     assert ProposedIntent.model_validate(_intent()).action_type == "negotiate"
     with pytest.raises(ValidationError):

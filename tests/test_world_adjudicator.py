@@ -77,12 +77,12 @@ def _outcome(ref="intent-1", **kwargs):
     return {"intent_id": ref, "result": "resolved", "summary": "settled", "effects": {}, **kwargs}
 
 
-def _adjudicate(client, *, refs=("intent-1",), runtime=None, feedback=None, **kwargs):
+def _adjudicate(client, *, refs=("intent-1",), runtime=None, feedback=None, max_new_actors=1, **kwargs):
     from forwin.world_engine.adjudicator import WorldAdjudicator
     runtime = runtime or _runtime()
     return WorldAdjudicator(client, **kwargs).adjudicate(
         context=CONTEXT, intents=[runtime.world.get_node(ref) for ref in refs], runtime=runtime,
-        lexicon=LEXICON, calendar=CALENDAR, feedback=feedback,
+        lexicon=LEXICON, calendar=CALENDAR, feedback=feedback, max_new_actors=max_new_actors,
     )
 
 
@@ -281,6 +281,39 @@ def test_new_fact_reference_is_valid_within_its_outcome():
     })]})
     call = _adjudicate(client)
     assert call.issues == [] and len(call.result.outcomes) == 1
+
+
+def test_adjudication_new_actor_references_and_remaining_budget():
+    from tests.test_world_engine_contracts import _new_actor
+
+    response = {"outcomes": [_outcome(effects={
+        "new_actors": [_new_actor()],
+        "events": [{"summary": "Arrival", "participant_refs": ["actor:new:arrival"],
+                    "location_id": "site", "visibility": "public", "at": 90}],
+    })]}
+    client = StubLLM(response)
+    call = _adjudicate(client, max_new_actors=0)
+    assert call.issues == [] and len(call.result.outcomes) == 1
+    payload = json.JSONDecoder().raw_decode(client.calls[0][0][-1]["content"])[0]
+    assert payload["max_new_actors"] == 0
+    assert "actor:new:<key>" in client.calls[0][0][0]["content"]
+    assert "lexicon" in payload
+
+
+@pytest.mark.parametrize("changes,path", [
+    ({"location_id": "owner"}, "location_id"),
+    ({"affiliation_refs": ["owner"]}, "affiliation_refs"),
+    ({"affiliation_refs": ["actor:new:arrival"]}, "affiliation_refs"),
+])
+def test_new_actor_requires_map_location_and_existing_group(changes, path):
+    from tests.test_world_engine_contracts import _new_actor
+
+    bad = {"outcomes": [_outcome(effects={"new_actors": [_new_actor(**changes)]})]}
+    client = StubLLM(bad, bad)
+    call = _adjudicate(client)
+    assert call.result.outcomes == []
+    assert len(client.calls) == 2
+    assert any(path in issue for issue in call.issues)
 
 
 def test_trace_preserves_backend_and_actual_model():

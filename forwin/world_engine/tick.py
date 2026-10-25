@@ -206,6 +206,11 @@ class WorldTickService:
         return tick.finish_holds() if book_complete else tick.run()
 
 
+def _actor_name_issues(candidate: TickCandidate, names: set[str]) -> list[ConstraintIssue]:
+    return [ConstraintIssue("new_actor_name_taken", f"New actor name is unavailable: {actor.name!r}", "")
+            for actor in candidate.effects.new_actors if actor.name.strip() in names]
+
+
 class _Tick:
     """One run of the tick: its context, its candidates as they pass each phase, and what it dropped."""
 
@@ -418,6 +423,10 @@ class _Tick:
         while pending:
             asked, pending, oversized = self._adjudicate_within_guard(pending, limit=len(pending), feedback=feedback)
             results.candidates.extend(asked.candidates)
+            self._new_actor_budget_remaining = max(
+                0, getattr(self, "_new_actor_budget_remaining", self.policy.world.max_new_actors_per_tick)
+                - sum(len(c.effects.new_actors) for c in asked.candidates),
+            )
             results.failures.extend([*asked.failures, *too_large(oversized).failures])
         return results
 
@@ -425,6 +434,7 @@ class _Tick:
         return self.service.adjudicator.fits(
             context=self.context, intents=intents, runtime=self.runtime, lexicon=self.lexicon,
             calendar=self.calendar, feedback=feedback,
+            max_new_actors=getattr(self, "_new_actor_budget_remaining", self.policy.world.max_new_actors_per_tick),
         )
 
     def _deferred(self, failure: NodeFailure) -> TickCandidate:
@@ -457,6 +467,7 @@ class _Tick:
         return adjudicate(
             self.service.adjudicator, context=self.context, intents=intents, runtime=self.runtime,
             lexicon=self.lexicon, calendar=self.calendar, save_trace=self._save_trace, feedback=feedback,
+            max_new_actors=getattr(self, "_new_actor_budget_remaining", self.policy.world.max_new_actors_per_tick),
         )
 
     def _drift(
@@ -532,10 +543,13 @@ class _Tick:
         outcome_issues: dict[str, list[ConstraintIssue]] = {}
         turn_issues: dict[str, list[ConstraintIssue]] = {}
         drift_issues: dict[str, list[ConstraintIssue]] = {}
+        actor_names: set[str] = set()
         for candidate in collected:
             issues = self._issues(candidate)
+            issues.extend(_actor_name_issues(candidate, actor_names))
             if not issues:
                 passed.append(candidate)
+                actor_names.update(actor.name.strip() for actor in candidate.effects.new_actors)
             elif any(issue.code == "touches_onstage_entity" for issue in issues):
                 staged = self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
                 if staged is not None:
@@ -549,8 +563,10 @@ class _Tick:
             else:
                 self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
         if outcome_issues:
+            self._new_actor_budget_remaining = max(0, self.policy.world.max_new_actors_per_tick
+                                                   - sum(len(c.effects.new_actors) for c in passed))
             intents = [self.runtime.world.nodes_by_id[intent_id] for intent_id in outcome_issues]
-            passed.extend(self._recheck(self._adjudicate_all(intents, outcome_issues)))
+            passed.extend(self._recheck(self._adjudicate_all(intents, outcome_issues), actor_names=actor_names))
         if turn_issues:
             views = [self.views[actor_id] for actor_id in turn_issues]
             passed.extend(self._recheck(self._turns(views, feedback=actor_safe_feedback(turn_issues, self.views))))
@@ -559,16 +575,19 @@ class _Tick:
             passed.extend(self._recheck(self._drift(variables, feedback=drift_issues)))
         return sorted(passed, key=lambda candidate: order[candidate.candidate_id])
 
-    def _recheck(self, results: NodeResults) -> list[TickCandidate]:
+    def _recheck(self, results: NodeResults, *, actor_names: set[str] | None = None) -> list[TickCandidate]:
         passed = []
+        actor_names = set(actor_names or ())
         for candidate in self._settled(results):
             issues = self._issues(candidate)
+            issues.extend(_actor_name_issues(candidate, actor_names))
             if issues:
                 staged = self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
                 if staged is not None:
                     passed.append(staged)
             else:
                 passed.append(candidate)
+                actor_names.update(actor.name.strip() for actor in candidate.effects.new_actors)
         return passed
 
     def _issues(self, candidate: TickCandidate) -> list[ConstraintIssue]:
@@ -591,8 +610,21 @@ class _Tick:
         """
         check = self._running_check()
         admitted = []
-        for candidate in base:
+        new_actor_count = 0
+
+        def admit(candidate: TickCandidate) -> list[ConstraintIssue]:
+            nonlocal new_actor_count
+            count = len(candidate.effects.new_actors)
+            if new_actor_count + count > self.policy.world.max_new_actors_per_tick:
+                return [ConstraintIssue("new_actor_budget", "Candidate exceeds the remaining new actor budget",
+                                        candidate.intent_id)]
             issues = check.admit(candidate)
+            if not issues:
+                new_actor_count += count
+            return issues
+
+        for candidate in base:
+            issues = admit(candidate)
             if issues:
                 staged = self._drop_candidate(candidate, CONSTRAINT_VIOLATION, issues)
                 if staged is not None and not check.admit(staged):
@@ -601,11 +633,13 @@ class _Tick:
                 admitted.append(candidate)
         for resolution in list(self.conflicts.resolutions):
             mark = check.mark()
+            actor_mark = new_actor_count
             for candidate in resolution.candidates:
-                issues = check.admit(candidate)
+                issues = admit(candidate)
                 if not issues:
                     continue
                 check.reset(mark)
+                new_actor_count = actor_mark
                 # The open conflict holds the intent; do not also stage it for the planner.
                 self._drop(
                     candidate.candidate_id, origin=candidate.origin, actor_id=candidate.actor_id,

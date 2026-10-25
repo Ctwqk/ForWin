@@ -144,6 +144,7 @@ def test_stored_empty_writer_section_uses_profile_defaults(profile, expected_bud
 def test_world_and_models_defaults_per_profile(profile, actor_turns) -> None:
     policy = RuntimePolicy.for_profile(profile)
     assert policy.world.model_dump() == {
+        "max_new_actors_per_tick": 0 if profile == "pulp" else 1,
         "drift_every_story_minutes": 0 if profile == "pulp" else 10080,
         "max_drift_variables_per_tick": 3,
         "enabled": True,
@@ -383,3 +384,14 @@ def test_world_policy_drift_defaults_and_merge(profile, every):
     for field in ("drift_every_story_minutes", "max_drift_variables_per_tick"):
         with pytest.raises(ValidationError):
             WorldPolicy.model_validate({field: -1})
+
+
+@pytest.mark.parametrize("profile,limit", [("standard", 1), ("pulp", 0)])
+def test_new_actor_budget_profile_defaults_and_override(profile, limit):
+    stored = RuntimePolicy.for_profile(profile).model_dump(mode="json")
+    del stored["world"]["max_new_actors_per_tick"]
+    assert RuntimePolicy.model_validate(stored).world.max_new_actors_per_tick == limit
+    stored["world"]["max_new_actors_per_tick"] = 2
+    assert RuntimePolicy.model_validate(stored).world.max_new_actors_per_tick == 2
+    with pytest.raises(ValidationError):
+        WorldPolicy(max_new_actors_per_tick=-1)

@@ -109,6 +109,7 @@ class CanonPolicy(FrozenPolicyModel):
 
 
 class WorldPolicy(FrozenPolicyModel):
+    max_new_actors_per_tick: int = Field(default=1, ge=0)
     drift_every_story_minutes: int = Field(default=10080, ge=0)
     max_drift_variables_per_tick: int = Field(default=3, ge=0)
     enabled: bool = True
@@ -123,7 +124,7 @@ class WorldPolicy(FrozenPolicyModel):
     @classmethod
     def for_profile(cls, quality_profile: str) -> WorldPolicy:
         if quality_profile == "pulp":
-            return cls(max_actor_turns_per_tick=3, drift_every_story_minutes=0)
+            return cls(max_actor_turns_per_tick=3, drift_every_story_minutes=0, max_new_actors_per_tick=0)
         return cls()
 
 

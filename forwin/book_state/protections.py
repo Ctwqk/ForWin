@@ -174,9 +174,10 @@ def delta_boundary_violations(
 
     A state protection compares its guarded value before the delta with the value after the delta's non-create
     node patches of its ref. A must_not_know protection is broken by a knowledge tag, flashback or not, in which its
-    observer comes to know or believe its fact, as the tag's fact or the secret the tag touches. A milestone ref is
-    broken only by ending it, a death or an ended status: milestones expect their refs to change otherwise. An ending
-    in ``planned_endings``, as (ref, state path, value), is the plan's own goal and breaks nothing.
+    observer comes to know or believe its fact, as the tag's fact or, for the reader, the secret the tag touches. A
+    milestone ref is broken only by ending it, a death or an ended status: milestones expect their refs to change
+    otherwise. An ending in ``planned_endings``, as (ref, state path, value), is the plan's own goal and breaks
+    nothing.
     """
     tags = [tag for tag in delta.metadata.get("knowledge_tags") or [] if isinstance(tag, dict)]
     violations = []
@@ -232,7 +233,10 @@ def _learns(tag: Mapping[str, Any], protection: ActiveProtection) -> bool:
         observer_matches = is_reader
     else:
         observer_matches = not is_reader and tag.get("observer_id") == protection.observer_ref
-    facts = {_fact_ref(_text(tag.get("fact_ref"))), _fact_ref(_text(tag.get("touches_secret_ref")))}
+    facts = {_fact_ref(_text(tag.get("fact_ref")))}
+    if protection.observer_ref == _READER:
+        # The reader is shown the secret the prose touches; an actor who touches a secret does not know it.
+        facts.add(_fact_ref(_text(tag.get("touches_secret_ref"))))
     return observer_matches and protection.fact_ref in facts
 
 

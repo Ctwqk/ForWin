@@ -84,9 +84,8 @@ _KILL_B = _delta(_patch("b", "state.location_id", "l2"), _patch("b", "state.aliv
     (_SECRET, _delta(tags=(_tag(),)), frozenset(), _broken(_SECRET, "major", "tag-evidence")),
     (_PUBLIC, _delta(tags=(_tag(fact_ref="fact:public", state="believes"),)), frozenset(),
      _broken(_PUBLIC, "moderate", "tag-evidence")),
-    # A flashback still writes cognition, and a fact the tag only touches as a secret counts.
-    (_SECRET, _delta(tags=(_tag(fact_ref="fact:public", touches_secret_ref="fact:secret", flashback=True),)),
-     frozenset(), _broken(_SECRET, "major", "tag-evidence")),
+    # A flashback still writes cognition.
+    (_SECRET, _delta(tags=(_tag(flashback=True),)), frozenset(), _broken(_SECRET, "major", "tag-evidence")),
     (_READER, _delta(tags=(_tag("reader", "fact:hidden"),)), frozenset(), _broken(_READER, "major", "tag-evidence")),
     # A protection on a ref a later milestone needs, or on a fact it needs, is critical.
     (_HOLDER, _delta(_patch("item", "state.holder_id", "b", node_type="item")), frozenset({"item"}),
@@ -123,6 +122,18 @@ def test_delta_violations_cover_four_kinds_and_milestone(protection, delta, mile
 ])
 def test_delta_respects_kept_states_weak_knowledge_and_expired_protections(protection, delta, extra):
     assert _violations(protection, delta, *extra) == []
+
+
+def test_only_the_reader_learns_a_secret_by_touching_it():
+    touching = _delta(tags=(
+        _tag(fact_ref="fact:public", touches_secret_ref="fact:hidden"),
+        _tag("reader", "fact:public", touches_secret_ref="fact:hidden"),
+    ))
+    actor = _protection("must_not_know", "b", observer_ref="b", fact_ref="fact:hidden")
+
+    # Touching a secret is not knowing it; the reader, though, is shown what the prose touches.
+    assert _violations(actor, touching) == []
+    assert _violations(_READER, touching) == [_broken(_READER, "major", "tag-evidence")]
 
 
 def test_planned_ending_is_not_a_milestone_violation():

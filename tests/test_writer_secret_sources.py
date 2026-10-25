@@ -155,6 +155,7 @@ def _author_context(monkeypatch, genre, setting_source="handoff"):
     client = _Answers(poisoned, sheet.model_dump(mode="json"))
     call = ArcBeatSheetService(client, save_trace=lambda *a: "trace")._call(
         {}, "", start=1, end=3, runtime=runtime, actor_ids=actors, reveal_chapters={},
+        reader_known=feasibility.reader_known_facts(runtime),
     )
     assert len(client.messages) == 2 and call.data is not None and call.issues == []
     sheet = call.data

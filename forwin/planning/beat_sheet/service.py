@@ -118,9 +118,6 @@ class ArcBeatSheetService:
         expected_sheet_id: str | None = None,
         current: ArcBeatSheetData | None = None, revision: Mapping[str, str] | None = None,
     ) -> ArcBeatSheetRow:
-        # Imported here: the feasibility audit imports the band planner's modules, which import this package.
-        from forwin.planning.feasibility import reader_known_facts
-
         start, end = arc_bounds(arc_plan)
         # The refs are checked against the latest canon: chapter 0 at handoff.
         as_of = BookStateRepository(session).latest_canon_chapter(project_id) or 0
@@ -171,7 +168,7 @@ class ArcBeatSheetService:
         call = self._call(
             payload, digest.text, start=start, end=end, runtime=runtime, actor_ids={actor["id"] for actor in actors},
             reveal_chapters=earliest_reveal_chapters(session, project_id),
-            reader_known=reader_known_facts(reader_runtime),
+            reader_known=_reader_known_facts(reader_runtime),
         )
         data, source = call.data, "llm"
         if data is None:
@@ -198,7 +195,7 @@ class ArcBeatSheetService:
 
     def _call(
         self, payload: Mapping[str, Any], digest_text: str, *, start: int, end: int, runtime: BookStateRuntime,
-        actor_ids: Collection[str], reveal_chapters: Mapping[str, int], reader_known: frozenset[str] | None = None,
+        actor_ids: Collection[str], reveal_chapters: Mapping[str, int], reader_known: frozenset[str],
     ) -> _BeatSheetCall:
         """Up to ``max_attempts`` calls. A malformed or invalid answer goes back to the model as feedback;
         a provider failure resends the same messages."""
@@ -443,11 +440,10 @@ def _writer_text_issues(
     unchanged. Only reader knowledge from before the arc is allowed: a fact the reader learns inside the arc is
     not known in the chapters before it, and a rewrite of one of those renders this text (FU-R52).
     """
-    # Imported here: the feasibility audit imports the band planner's modules, which import this package.
+    # Imported here: the band planner's modules import this package.
     from forwin.planning.band_planner.inputs import _concealed_names
-    from forwin.planning.feasibility import reader_known_facts
 
-    known = reader_known if reader_known is not None else reader_known_facts(runtime)
+    known = reader_known if reader_known is not None else _reader_known_facts(runtime)
     reveal = dict(reveal_chapters)
     own: dict[str, int] = {}
     for target in data.reveal_targets:
@@ -504,6 +500,14 @@ def _writer_text_issues(
                 issues.append(f"{path} names concealed entity {ref} ({name}); it reaches the writer verbatim "
                               f"and may name it only once a reader reveal about it has started")
     return issues
+
+
+def _reader_known_facts(runtime: BookStateRuntime) -> frozenset[str]:
+    """The fact node ids ``runtime`` records the reader as knowing or believing."""
+    # Imported here: the feasibility audit imports the band planner's modules, which import this package.
+    from forwin.planning.feasibility import reader_known_facts
+
+    return reader_known_facts(runtime)
 
 
 def milestone_refs_for_chapter(session: Session, project_id: str, chapter_number: int) -> frozenset[str]:

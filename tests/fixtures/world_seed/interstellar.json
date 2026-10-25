@@ -690,6 +690,9 @@
   },
   "chapter_1": {
     "plan": {
+      "pov_ref": "@node:应潮生",
+      "onstage_refs": ["@node:应潮生", "@node:钟离曜"],
+      "location_refs": ["@site:曙光轨道站", "@site:舰队军事法庭"],
       "title": "听证席",
       "one_line": "应潮生搭穿梭舱赶到舰队军事法庭，见到监察官钟离曜。",
       "goals": [

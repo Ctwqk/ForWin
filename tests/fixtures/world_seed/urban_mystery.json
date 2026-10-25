@@ -703,6 +703,9 @@
   },
   "chapter_1": {
     "plan": {
+      "pov_ref": "@node:蒲念安",
+      "onstage_refs": ["@node:蒲念安", "@node:韦清和"],
+      "location_refs": ["@site:市立档案馆", "@site:第三分局"],
       "title": "缺页",
       "one_line": "蒲念安带着缺页的复印件步行去第三分局，找刑侦队长韦清和。",
       "goals": [

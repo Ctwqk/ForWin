@@ -717,6 +717,9 @@
   },
   "chapter_1": {
     "plan": {
+      "pov_ref": "@node:祁长烬",
+      "onstage_refs": ["@node:祁长烬"],
+      "location_refs": ["@site:栖云山门", "@site:断剑崖"],
       "title": "断剑崖",
       "one_line": "祁长烬徒步登上断剑崖，在残碑上找到母亲留下的痕迹。",
       "goals": [

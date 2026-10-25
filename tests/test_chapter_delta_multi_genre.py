@@ -184,7 +184,12 @@ def _start_book(pipeline, genre: str) -> _Book:
                 command=StartWritingCommand(project_id=project_id, actor_type="manual_ui"),
             )
         # Arc 1's first band, planned with this book's own chapter one.
-        write_band_plan(session, project_id, {1: chapter["plan"], 2: stub_plan(2), 3: stub_plan(3)})
+        plans = write_band_plan(session, project_id, {1: chapter["plan"], 2: stub_plan(2), 3: stub_plan(3)})
+        runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=0)
+        planned = _resolved(chapter["plan"], _committed_refs(runtime))
+        plans[0].pov_ref = planned["pov_ref"]
+        plans[0].onstage_refs_json = json.dumps(planned["onstage_refs"])
+        plans[0].location_refs_json = json.dumps(planned["location_refs"])
         session.commit()
         runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=0)
     return _Book(project_id, chapter, _committed_refs(runtime))

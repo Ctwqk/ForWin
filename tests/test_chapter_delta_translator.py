@@ -1140,6 +1140,80 @@ def test_existing_character_new_ref_without_declaration_resolves():
     assert (patch.node_id, patch.old_value, patch.new_value) == ("offstage", "well", "injured")
 
 
+@pytest.mark.parametrize("kind", ["item", "faction"])
+@pytest.mark.parametrize("is_active,status", [(True, "retired"), (False, "active")])
+def test_new_ref_reuses_retired_generated_id(kind, is_active, status):
+    from forwin.protocol.book_state import WorldNode
+
+    node_id = seed_ref_id("p", kind, "Harbor")
+    result = _translate_recalled_name([
+        WorldNode(id=node_id, project_id="p", node_type=kind, name="Harbor",
+                  is_active=is_active, status=status, state={"state_summary": "before"}),
+    ], {"entity_changes": [{
+        "ref": "new:Harbor", "new_entity": {"name": "Harbor", "kind": kind},
+        "field": "state_summary", "new_value": "after", "evidence": "e",
+    }]})
+
+    assert result.delta is not None, result.issues
+    assert result.issues == ()
+    (patch,) = result.delta.node_patches
+    assert (patch.node_id, str(patch.op), patch.field_path, patch.old_value, patch.new_value) == (
+        node_id, "set", "state.state_summary", "before", "after",
+    )
+
+
+@pytest.mark.parametrize("kind", ["item", "faction"])
+def test_retired_generated_id_does_not_bypass_ambiguous_name(kind):
+    from forwin.protocol.book_state import WorldNode
+
+    result = _translate_recalled_name([
+        WorldNode(id=seed_ref_id("p", kind, "Harbor"), project_id="p", node_type=kind,
+                  name="Harbor", status="retired"),
+        WorldNode(id="first", project_id="p", node_type=kind, name="Harbor"),
+        WorldNode(id="second", project_id="p", node_type=kind, name="Harbor"),
+    ], {"entity_changes": [{
+        "ref": "new:Harbor", "new_entity": {"name": "Harbor", "kind": kind},
+        "field": "state_summary", "new_value": "after", "evidence": "e",
+    }]})
+
+    assert result.delta is None
+    assert [issue.code for issue in result.issues] == ["ambiguous_name", "unresolved_ref"]
+
+
+@pytest.mark.parametrize("ref", ["new:Rowan", "new:the courier", "dead-character"])
+@pytest.mark.parametrize("flashback", [False, True])
+def test_dead_character_name_reuse_warns_only_for_non_flashback_change(ref, flashback):
+    from forwin.protocol.book_state import WorldNode
+
+    result = _translate_recalled_name([
+        WorldNode(id="dead-character", project_id="p", node_type="character", name="Rowan",
+                  aliases=["The Courier"], state={"alive_status": "dead", "health": "dead"}),
+    ], {"entity_changes": [{
+        "ref": ref, "field": "health", "new_value": "injured", "evidence": "e", "flashback": flashback,
+    }]})
+
+    assert result.delta is not None, result.issues
+    if flashback:
+        assert result.delta.node_patches == []
+        assert result.delta.metadata["flashback_refs"] == [
+            {"path": "entity_changes[0]", "refs": ["dead-character"]},
+        ]
+    else:
+        (patch,) = result.delta.node_patches
+        assert (patch.node_id, patch.field_path, patch.old_value, patch.new_value) == (
+            "dead-character", "state.health", "dead", "injured",
+        )
+    if not flashback and ref.startswith("new:"):
+        (issue,) = result.issues
+        assert (issue.severity, issue.code, issue.path) == (
+            "warning", "dead_character_reused", "entity_changes[0].ref",
+        )
+        assert ref in issue.message
+        assert "dead-character" in issue.message
+    else:
+        assert result.issues == ()
+
+
 @pytest.mark.parametrize("kind", ["character", "group"])
 def test_ambiguous_new_entity_name_is_not_merged(kind):
     from forwin.protocol.book_state import WorldNode
@@ -1234,17 +1308,17 @@ def test_recalled_offstage_character_and_seeded_site_commit_postgres():
         engine.dispose()
 
 
-@pytest.mark.parametrize("kind", ["group", "map_node"])
+@pytest.mark.parametrize("kind", ["group", "item", "faction", "map_node"])
 def test_ambiguous_name_does_not_fall_back_to_existing_generated_id(kind):
     from forwin.protocol.book_state import WorldNode
 
     stable_id = seed_ref_id("p", kind, "Harbor")
-    if kind == "group":
+    if kind != "map_node":
         result = _translate_recalled_name([
-            WorldNode(id=ref, project_id="p", node_type="group", name="Harbor")
+            WorldNode(id=ref, project_id="p", node_type=kind, name="Harbor")
             for ref in (stable_id, "second")
         ], {"entity_changes": [{
-            "ref": "new:Harbor", "new_entity": {"name": "Harbor", "kind": "group"},
+            "ref": "new:Harbor", "new_entity": {"name": "Harbor", "kind": kind},
             "field": "status", "new_value": "injured", "evidence": "e",
         }]})
     else:

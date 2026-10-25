@@ -365,6 +365,14 @@ class _DeltaBuilder:
             return None
         node_id = _stable_id(self.project_id, entity.kind, name)
         if self._node_exists(node_id):
+            # Retired nodes retain their generated ids, but cannot bypass an ambiguous name.
+            node = self.world.nodes_by_id.get(node_id)
+            if (
+                node is not None and str(node.node_type) == entity.kind
+                and (not node.is_active or node.status in {"inactive", "retired", "deleted"})
+                and not any(issue.code == "ambiguous_name" and issue.path == path for issue in self.issues)
+            ):
+                return node_id
             self._unresolved(path, f"new entity {name!r} would reuse {node_id!r} without a unique active name match")
             return None
         self._create_node(
@@ -638,6 +646,14 @@ class _DeltaBuilder:
             # A flashback recalls the past; it never changes current state.
             self.flashback_refs.append({"path": path, "refs": [node_id]})
             return
+        if (
+            ref.startswith(NEW_REF_PREFIX) and self._node_type(node_id) == "character"
+            and self.world.get_state(node_id).get("alive_status") == "dead"
+        ):
+            self._issue(
+                "warning", "dead_character_reused", f"{path}.ref",
+                f"entity ref {ref!r} reused dead character {node_id!r} for a non-flashback change",
+            )
         field_path = self._field_path(node_id, change.field, f"{path}.field")
         if field_path is None:
             return

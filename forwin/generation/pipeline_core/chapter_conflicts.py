@@ -90,9 +90,10 @@ class ChapterConflicts:
         ``gate`` alone, then commit.
 
         Codex choosing rewrite_chapter buys one more repair pass unless a human conflict already blocks the
-        chapter. After the pass the repaired draft is recorded again, or, on the gate path, the canon loop
-        prepares again and the gate records what is left; either way every conflict then goes to a human. A
-        conflict a human decides marks the chapter needs_review and raises ChapterConflictBlocked.
+        chapter. After the pass the repaired draft's own boundary violations are recorded. On the gate path, a
+        repaired draft without one goes back to the canon loop, which prepares again so the gate records what is
+        left. Every conflict recorded after the pass goes to a human. A conflict a human decides marks the chapter
+        needs_review and raises ChapterConflictBlocked.
         """
         session, project_id = self.session, self.chapter_plan.project_id
         chapter_number = int(self.chapter_plan.chapter_number)
@@ -124,10 +125,13 @@ class ChapterConflicts:
             # The repair the decision asked for ran on this candidate, so the decision is no pending resume.
             for row in rows:
                 conflicts.attach_result_refs(row, [f"candidate:{candidate.id}"])
-            if gate is None:
+            # A draft row never closes a gate row, so on the gate path the repaired draft's violations are recorded
+            # too: canon preparation would refuse its failing review before the gate runs.
+            draft_violations = violations_from_verdict(verdict)
+            if gate is None or draft_violations:
                 outcome = recorder.record(
                     project_id=project_id, chapter_number=chapter_number, candidate_id=candidate.id,
-                    violations=violations_from_verdict(verdict), allow_codex=False,
+                    violations=draft_violations, allow_codex=False,
                 )
         if outcome.blocking_conflict_id:
             repair_attempt_count, residual_review_issues, _risk = self.review_state(verdict)

@@ -15,6 +15,7 @@ from forwin.book_state.protections import DeltaBoundaryViolation
 from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.reviewer import BookStateReviewIssue, BookStateReviewVerdict
 from forwin.candidate_drafts import CandidateDraftRepository, candidate_plan_revision
+from forwin.canon.eligibility import candidate_ineligibility_reason
 from forwin.canon.preparation import BookStatePreparationOutcome, CanonPreparationService
 from forwin.canon.types import CanonPreparationOutcome
 from forwin.generation.pipeline_core.project_chapters import ChapterExecutionStage
@@ -440,7 +441,7 @@ def _run(factory, monkeypatch, *, repair, policy=HUMAN, delegate=None, canon_pre
         drafts = len(list(session.scalars(select(ChapterDraft).where(
             ChapterDraft.chapter_plan_id == f"chapter-conflict-plan-{CHAPTER}",
         ))))
-    paused = [payload["payload"] for _event, payload in events if payload.get("stage") == "paused_for_review"]
+    paused = [payload.get("payload") for _event, payload in events if payload.get("stage") == "paused_for_review"]
     return SimpleNamespace(result=result, written=written, status=status, drafts=drafts, paused=paused)
 
 
@@ -535,15 +536,18 @@ def test_boundary_first_seen_after_the_extra_pass_goes_to_a_human(factory, monke
 
 
 class SequencedPreparation:
-    """Canon preparation whose review gate blocks with each verdict in turn, the last one from then on."""
+    """Canon preparation that refuses an ineligible review, as the real one does; otherwise its review gate blocks
+    with each verdict in turn, the last one from then on."""
 
     def __init__(self, *gates: BookStateReviewVerdict) -> None:
         self.gates = list(gates)
         self.calls = 0
 
-    def prepare(self, **_kwargs):
-        gate = self.gates[min(self.calls, len(self.gates) - 1)]
+    def prepare(self, **kwargs):
         self.calls += 1
+        if reason := candidate_ineligibility_reason(kwargs["verdict"]):
+            return CanonPreparationOutcome(blocked_path=reason, block_kind="candidate_ineligible")
+        gate = self.gates[min(self.calls - 1, len(self.gates) - 1)]
         return CanonPreparationOutcome(
             blocked_path="book-state-review-gate-blocked", block_kind="book_state", book_state_review=gate,
         )
@@ -595,6 +599,60 @@ def test_gate_violation_stays_open_after_the_extra_pass(factory, monkeypatch, bl
         assert repair.extra_passes == []
         assert [row.id for row in pending] == [codex_row.id]
         assert len(rows) == 2
+
+
+def test_gate_pass_records_the_repaired_drafts_own_violations(factory, monkeypatch) -> None:
+    """Canon preparation would refuse the failing repaired draft; its new boundary pauses the chapter instead."""
+    gate_only = _violation(impact_level="moderate")
+    new_in_draft = _violation(protection_node_id="protection-three", impact_level="moderate")
+    preparation = SequencedPreparation(_gate(gate_only))
+    delegate = FakeDelegate("rewrite_chapter")
+    repair = FakeRepair(PASSING, after_extra_pass=_failing(new_in_draft))
+
+    run = _run(factory, monkeypatch, repair=repair, policy=CODEX, delegate=delegate, canon_preparation=preparation)
+
+    with factory() as session:
+        rows = {row.origin_key.rsplit(":", 1)[-1]: row for row in _rows(session)}
+        repaired = CandidateDraftRepository(session).latest_for_chapter(project_id=PROJECT_ID, chapter_number=CHAPTER)
+    gate_row, draft_row = rows[PROTECTION], rows["protection-three"]
+    assert set(rows) == {PROTECTION, "protection-three"}
+    # The repaired draft's boundary is a draft-review conflict for a human: this recording follows the pass.
+    assert (draft_row.status, draft_row.required_decider) == ("open", "human")
+    assert json.loads(draft_row.proposed_change_json)["detected_by"] == "draft_review"
+    assert run.result.pause_reason == "world_conflict"
+    assert run.paused == [{"reason": "world_conflict", "conflict_id": draft_row.id}]
+    assert (run.status, preparation.calls, delegate.calls) == ("needs_review", 1, [gate_row.id])
+    # The gate row keeps Codex's decision and the pass's candidate; the draft verdict never closes it.
+    decision = json.loads(gate_row.decision_json)
+    assert (gate_row.status, decision["decided_by"], decision["option"]) == ("resolved", "codex", "rewrite_chapter")
+    assert json.loads(gate_row.result_refs_json) == ["trace-1", f"candidate:{repaired.id}"]
+    assert json.loads(gate_row.proposed_change_json)["detected_by"] == "canon_gate"
+
+
+@pytest.mark.parametrize("after_extra_pass", ["passes", "fails_without_boundary"])
+def test_gate_pass_without_draft_boundary_prepares_again(factory, monkeypatch, after_extra_pass) -> None:
+    """Without a boundary in the repaired draft's review, the gate judges again, or the generic pause stands."""
+    plain = ContinuityIssue(rule_name="movement_too_fast", severity="error", description="d", reviewer="r")
+    verdict = PASSING if after_extra_pass == "passes" else ReviewVerdict(verdict="fail", issues=[plain])
+    preparation = SequencedPreparation(_gate(_violation(impact_level="moderate")))
+    repair = FakeRepair(PASSING, after_extra_pass=verdict)
+
+    run = _run(factory, monkeypatch, repair=repair, policy=CODEX, delegate=FakeDelegate("rewrite_chapter"),
+               canon_preparation=preparation)
+
+    with factory() as session:
+        rows = _rows(session)
+    assert preparation.calls == 2
+    assert all(json.loads(row.proposed_change_json)["detected_by"] == "canon_gate" for row in rows)
+    assert run.status == "needs_review"
+    if after_extra_pass == "passes":
+        # The gate still blocks the repaired draft: that recording follows the pass, so a human decides.
+        assert run.result.pause_reason == "world_conflict"
+        assert [(row.status, row.required_decider) for row in rows] == [("resolved", "codex"), ("open", "human")]
+    else:
+        # Canon preparation refuses the failing draft before its gate runs, and nothing is recorded from it.
+        assert run.result.pause_reason == ""
+        assert [(row.status, row.required_decider) for row in rows] == [("resolved", "codex")]
 
 
 def test_canon_preparation_outcome_carries_the_gate_verdict(factory) -> None:

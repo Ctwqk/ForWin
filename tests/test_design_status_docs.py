@@ -210,3 +210,53 @@ def test_p4b_docs_describe_task_contract_removal() -> None:
             "计划由 band planner 生成，通过 `amend_plan`、重规划与 plan patches 修改",
         ):
             assert marker in text, (name, marker)
+
+
+def test_p4_docs_describe_implemented_world_engine_and_separate_deployment() -> None:
+    for name in (
+        "Design-docs/CURRENT_ARCHITECTURE.md",
+        "Design-docs/CURRENT_DESIGN.md",
+        "Design-docs/DESIGN_STATUS.md",
+        "Design-docs/writing_flow_state_machine.md",
+        "forwin/book_state/README.md",
+        "docs/codex-forwin-mcp.md",
+        "plugins/forwin-operator/skills/forwin-operator/SKILL.md",
+    ):
+        text = _read(ROOT / name)
+        for marker in (
+            "chapter_extraction", "rewrite_chapter", "world_variable", "world.drift",
+            "checkable", "expired", "narrative_constraints", "Task 14",
+        ):
+            assert marker in text, (name, marker)
+        for stale in ("P4b 尚未实现", "P4b remains planned", "P4b still owns", "P4b 延后项"):
+            assert stale not in text, (name, stale)
+
+
+def test_world_review_contract_has_one_owner_and_links() -> None:
+    architecture = _read(DOC_ROOT / "CURRENT_ARCHITECTURE.md")
+    assert '<a id="world-review"></a>' in architecture
+    assert architecture.count("v6 检查时间跨度、移动偏移") == 1
+    for name in ("CURRENT_DESIGN.md", "DESIGN_STATUS.md"):
+        text = _read(DOC_ROOT / name)
+        assert "CURRENT_ARCHITECTURE.md#world-review" in text, name
+        assert "v6 检查时间跨度、移动偏移" not in text, name
+
+
+def test_p4_status_tracks_cleanup_and_p5_tuning() -> None:
+    status = _read(DOC_ROOT / "DESIGN_STATUS.md")
+    for marker in (
+        "Post-deploy cleanup", "Deferred to P5", "map_movement", "context_recency_window",
+        "future_constraints", "trace_upload", "MAP_MOVEMENT_REVIEW_ISSUE",
+        "graph_deltas.world_line_id", "active_world_line_ids_json", "MapEdge.access_rule_id",
+        "WorldContextPack", "band_checkpoint_action", "heard", "must_not_know",
+        "form_countdown_inconsistency",
+    ):
+        assert marker in status, marker
+
+
+def test_overhaul_spec_records_implementation_without_claiming_deployment() -> None:
+    text = _read(ROOT / "docs/designs/2026-10-20-world-engine-overhaul.md")
+    assert "代码已实现" in text
+    assert "Task 14 runbook" in text
+    assert "P5 真实生成验收尚未执行" in text
+    assert "设计起点的问题（历史" in text

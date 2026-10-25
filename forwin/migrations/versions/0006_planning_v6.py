@@ -4,16 +4,30 @@ Revision ID: 0006_planning_v6
 Revises: 0005_world_plan_conflicts
 Create Date: 2026-10-22 00:00:00.000000
 
-Adds versioned arc beat sheets and band plans, and chapter planning fields.
-Drops arc_world_contracts, band_world_contracts, and chapter_world_delta_intents;
-downgrade recreates these tables empty without restoring their rows.
-The subworld character table and identity links are also dropped; downgrade
-restores their schema, with empty identity links, but cannot recover deleted data.
-New NOT NULL chapter columns carry server defaults for existing rows.
-The maintenance step rename and deletion are irreversible; downgrade only
-reverts the schema; removed policy keys and maintenance history are not restored.
-Downgrade leaves stored policies without use_llm_simulation, so pre-0006 code
-cannot load them. The rollback runbook restores from backup.
+Adds versioned arc_beat_sheets and band_plans, chapter planning fields with
+server defaults for new NOT NULL columns, unique chapter numbering, and unique
+(arc_plan_id, band_index, version) band versions. Renames maintenance planning to
+plan (including idempotency keys) and deletes the arc maintenance step.
+
+Drops arc_world_contracts, band_world_contracts, chapter_world_delta_intents,
+world_simulation_turns, project_stage_analyses, project_replan_events,
+arc_plan_versions.macro_progression_json, arc_envelope_analyses, arc_envelopes,
+arc_structure_drafts, provisional_promotion_records, sub_world_roster_items,
+character_identity_map.roster_item_ids_json, both chapter/band task_contract_json
+columns, and narrative_constraints. Removes use_llm_simulation and
+context_recency_window from stored project planning policies.
+
+Adds world_plan_conflicts.origin_key and its project index; backfills indexed
+decision_option and superseded_by_delta columns, normalized
+world_conflict_result_refs, and indexed graph_deltas.tick_id / beat_sheet_id.
+Adds backfilled identity seq ordering to world_snapshots, graph_deltas,
+world_node_states, map_snapshots and book_cognition_snapshots, and adds
+projection_checkpoints.run_seq.
+
+Downgrade restores removed table/column schemas with empty data/defaults, not
+deleted rows or identity links. Maintenance history/key rewrites and stored
+policy cleanup are irreversible. Stored policies remain without
+use_llm_simulation, so pre-0006 code cannot load them; rollback restores backup.
 """
 
 import json

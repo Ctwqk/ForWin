@@ -1,6 +1,6 @@
 # 写作流程状态机
 
-更新时间：2026-10-22
+更新时间：2026-10-25
 
 本文档描述当前代码里的**写作任务**状态机。范围包括 HTTP 入队、durable worker、`start-writing` 后的章节主流程、五层 review、暂停/终止，以及 LLM retry/fallback。
 
@@ -169,19 +169,21 @@ worker 已 claim lease 并开始推进。`GenerationApplicationService` 根据 p
 3. 每章先检查 pause/cancel、人工冲突与当前卷；`ArcProgressionService` 只向前推进，completed arc 不重新激活。run control 对 active arc 之前的已有行直接复用，包括从未起草的 legacy 行。其余写前由 `BandPlanner.ensure_plan_for_chapter` 准备当前 band 的 `band_plans` / ChapterPlan：accepted/drafted/needs_review 不改；legacy 行（band_plan_id 为空）有草稿 / candidate 历史时保留，从未起草的 legacy planned/failed 行补规划；已有 band-owned 行直接复用，但其中 planned/failed 行即使有草稿历史仍可被后续显式或自动重规划改写。
 4. 写前可行性审计检查角色可用性、地点与出行时间、揭示 / protection、writer 文本泄密和 milestone 覆盖；错误持久化为 `plan_feasibility` 冲突并暂停。`band_planning` / `plan_feasibility` 仅向 human 提供 `amend_plan`；PlanAmender 按问题修订节拍表或强制重规划。
 5. context 使用 `ChapterWorldView`；writer 分 scene 生成并 stitch。失败仍可调用普通 preview fallback。`<<FORWIN_LOCATION>>` 为视图地点 id 或 `new:<名称>`，抽取仅将其作为 `scene_location_hints`，不作事实证据。
-6. `ChapterDeltaExtractor` 从最终 body 抽取，只有 body hash 与 plan fingerprint 同时匹配才复用；draft review / repair 和 CanonPreparation 共享它。`world_consistency` 经 translator / gate 检查时间、移动、角色、物品与揭示，`plan_fulfillment` 提供计划 / 义务履行证据。
-7. review、有限 repair、residual eligibility 与配置的 human/spark delegation 决定候选资格；CanonPreparation 冻结计划，`CanonAdmissionService.commit_plan` 在事务内重验并原子写入 BookState、实体身份、accepted 状态、审计和 outbox。
+6. `ChapterDeltaExtractor` 按 ChapterWorldView 的实体 / 地点 / 相关秘密从最终 body 抽取，只有 body hash 与 plan fingerprint 同时匹配才复用；draft review / repair 和 CanonPreparation 共享它。`world_consistency` 经 translator / gate 检查时间、移动、角色、物品与揭示，`plan_fulfillment` 提供计划 / 义务履行证据。
+7. review、有限 repair 后仍有正文边界违反则先走下述章内冲突；其余由 residual eligibility 与配置的 human/spark delegation 决定候选资格；CanonPreparation 冻结计划，`CanonAdmissionService.commit_plan` 在事务内重验并原子写入 BookState、实体身份、accepted 状态、审计和 outbox。
 8. 依次运行 world → plan → feedback，然后 order controls。plan 审计本 band 剩余计划，按上限重规划，必要时开冲突；band / arc 边界准备下一 band。accepted/drafted/needs_review 计划不改；并发发布只覆盖调用方所见的 band 版本，过期审计延期。
 9. feedback 由 `CommentAnalyzer` 先分析评论再聚合。`plan.arc_beats` / `plan.band` 均保存 PromptTrace / LLM DecisionEvents。plan 分别提交卷激活、节拍表、审计 / 重规划及下一 band 工作，最后提交 step 完成状态与 trace outbox；同步 raw-artifact 写失败可使当前单元 / step 失败，重试保留并按条件复用已提交规划工作。事务后 trace outbox 上传失败只重试上传。
 10. 下一章重新检查冲突与维护屏障。没有下一计划的 `plot_responds` 保留待回应世界变化，`accept_with_obligation` 保留义务，由后续 band 规划消费并补 `plan_patch:` 引用。
 
-代码 schema head 为 `0006_planning_v6`（父 `0005_world_plan_conflicts`）。卷长按 Genesis 固定，节拍表只切 band；独立 access rules / team speed / edge multipliers 已由出行方式取代（lexicon travel_modes 与 estimate_travel）。完整字段、POV 预算、删除清单与 P4b 范围见 [当前架构](CURRENT_ARCHITECTURE.md)。
+代码 schema head 为 `0006_planning_v6`（父 `0005_world_plan_conflicts`）。卷长按 Genesis 固定，节拍表只切 band；独立 access rules / team speed / edge multipliers 已由出行方式取代（lexicon travel_modes 与 estimate_travel）。完整字段、POV 预算、删除清单与 P4b 实现见 [当前架构](CURRENT_ARCHITECTURE.md)。
 
 world tick 使用 `tick-<commit id>` 与本章故事时间窗口，经过候选收集、逐候选 gate / 一次重试、影响 / 预算、冲突审查、新闻传播与 `WorldTickDeltaBuilder`。提交前按 base candidates → in-tick resolutions 的顺序，在前序已接受变化留下的 runtime / 累计 delta 上复核 hard rules / gate；base 失效以 `constraint_violation` 丢弃，resolution 失效以 `failure_reason="conflict_stale"` 升级人工并保持 open。无补丁且无 resolution 的 quiet tick 不取项目锁；其余在 commit SAVEPOINT 前取项目锁、复核 snapshot，再经 `CanonAdmissionService.commit_world_tick` 写入。LLM 不可用跳过节点；非最新章或已 tick 章跳过；`target_total_chapters > 0` 且本章达到或超过目标时以 `skipped_reason="book_complete"` 跳过。step `result_json` 保存 tick 身份、提交 / 冲突 / 丢弃 / 顺延 ids、warnings、skipped_reason。
 
 历史重写对 plan_constraint 重放 release 时，将 old_value 重置为当前 status，跳过缺失或已 released 的目标；create 保留意图，引用的节点 / fact 缺失则抛 `HistoricalRewriteInvalid` 拒绝整次重写（R20）。world_engine deltas（含直接 `conflict-<id>` resolve）单独走 CAS；失败或依赖已丢弃 tick 的创建引用时退役，产生 `replay_cas` 人工冲突并 supersede 该 delta 承载的 resolutions。原冲突仍为 `resolved`，其未结义务变为终态 `cancelled`（`metadata.cancel_reason`），退出 open 列表、预算和 gate；`planned` / `failed` 计划的关联补丁回撤并记 `plan_patch_revert`，accepted 等其他状态计划不变。同计划其他有效 resolution 仍贡献的目标 / 标记保留，五项上限挤出的旧条目无法恢复。replay_cas 的 `proposed_change` 总含 `superseded_conflict_ids`、`cancelled_obligation_ids`、`reverted_plan_patch_ids`，有 supersede 时摘要给出三项数量。
 
-P4b 延后项沿用[当前架构的清单](CURRENT_ARCHITECTURE.md)：最新章重写后的旧 tick 退役 / 重跑与过期 open conflicts 处理；M7（P10 扩展）的保留 tick 对被替换章节创建 refs 的引用检查；M10 的控制台冲突卡片展示 held change。
+P4（P4a + follow-up + P4b）已实现，生产部署为独立 Task 14 runbook。`chapter_extraction` 残留冲突保留 needs_review 草稿，提供 `rewrite_chapter` / 人工 `amend_plan`；resolve 后显式 continue，从草稿修复或重审，不重新生成正文。`world_conflict_repair` 有独立预算；critical 交人，其余按策略交 Codex 或人，从不 auto。控制台展示脱敏 evidence / held change。
+
+最新章重写退役旧 tick，world step 重跑并让受影响 open conflicts 进入 `expired`；更早重写检查消失引用，依赖它的 tick 丢弃并建 replay_cas，非 tick 依赖拒绝重写。`world_variable` / `world.drift`、五种 `checkable` 谓词及幕后新 minor actors 均经 gate / Canon；抽取输入已按 ChapterWorldView 收窄。task_contract_json 与 `narrative_constraints` 已删除，计划用 amend_plan / 重规划 / plan patches 修改。CostLedgerReport 提供按章角色成本 / token、冲突与人工决定、checkpoint 暂停、payload 裁剪及 intent 顺延计数；剩余清理与 P5 调参见 [DESIGN_STATUS](DESIGN_STATUS.md#post-deploy-cleanup)。
 
 ### Pause / Continue
 
@@ -195,7 +197,7 @@ Pause 是安全暂停：
 Continue 的规则：
 
 1. `POST /api/projects/{project_id}/continue-generation` 从已有 project 继续。
-2. 如果派生阻断为 `world_conflict_pending` 或存在真实 `needs_review`，返回 409，要求先处理。冲突读取 `world_plan_conflicts`，任务 / 章节不新增 reason 列。
+2. 如果派生阻断为 `world_conflict_pending` 或存在真实 `needs_review`，返回 409，要求先处理；chapter_extraction 冲突解决后标回 planned，下次继续恢复保存的草稿。冲突读取 `world_plan_conflicts`，任务 / 章节不新增 reason 列。
 3. workset 按顺序选未接受章节，包含尚无 ChapterPlan 的章位；planned/failed 可重试，drafted/needs_review 阻塞，写前即时准备 band 计划。
 4. 已 `accepted` 章节不会重写。
 5. 入队前确认无 active generation task；入队时冻结 RuntimePolicy snapshot，worker claim 后构造 execution context，运行中修改项目策略不影响已启动任务。

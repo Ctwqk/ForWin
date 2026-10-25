@@ -1,6 +1,10 @@
 # Feature: 世界引擎大修——让世界驱动剧情（破坏性）
 
-日期：2026-10-20。状态：设计稿，待用户批准。源码核查基于 `codex/fanqie-publish-recovery`（分叉自 2026-09-08 的 master）；该分支已合入 master（`f81d542`），master 在此期间的其它提交只删除死代码与无人读取的配置，不改变本文涉及的链路。大修从 master 开分支实施。
+日期：2026-10-20；2026-10-25 更新实施状态。状态：已批准，P0–P4（P4a + 审计 follow-up + P4b）代码已实现。生产部署由独立 Task 14 runbook 执行，P5 真实生成验收尚未执行。
+
+本文保留批准时的设计目标、实施分期及历史问题清单，不能把这些历史问题当作当前缺口。当前代码边界与实施取舍以 [CURRENT_ARCHITECTURE](../../Design-docs/CURRENT_ARCHITECTURE.md#p4b-已落地)、[CURRENT_DESIGN](../../Design-docs/CURRENT_DESIGN.md) 和 [DESIGN_STATUS](../../Design-docs/DESIGN_STATUS.md#post-deploy-cleanup) 为准。源码核查起点分支已合入 master（`f81d542`），随后实施了本次大修。
+
+实施取舍：正文残留冲突使用 `chapter_extraction`，提供 `rewrite_chapter` / 人工 `amend_plan`，从不 auto；最新章重写退役重跑 tick，失效 open conflicts 标为 `expired`。`world_variable` / `world.drift`、五种 `checkable` 谓词与幕后新 minor actors 已实现；物品类谓词与 soft protection 未实现。task_contract_json 和 `narrative_constraints` 已删除，抽取输入已按 ChapterWorldView 收窄，按章成本 / 自主性报告已落地。部署后兼容清理与 P5 调参见上述状态文档。
 
 ## Goal
 
@@ -10,7 +14,7 @@ ForWin 要用一个世界框架降低长篇创作的难度。世界模型是背�
 
 两者都要，但优先级是“世界推动剧情”；账本补全作为地基一起完成。
 
-### 现状问题（已核实，清单见附录 A）
+### 设计起点的问题（历史，清单见附录 A）
 
 - `WorldContractPlanningService` 和 v4 抽取链路写死了一个“母星被围 / 殖民地”样例剧本；另一套“记忆重置 / 档案清理 / 倒计时 / 父亲留下的后门 / 盟友被羁押”剧本散落在倒计时与羁押审计、续写节拍、名字锚点、质量检查、Genesis fallback 和 writer prompt 示例中。
 - 认知层（谁知道什么）不进入写作；正文不会回写关系、地图和认知；故事时间只是一个字符串标签；只有 `state` 带时间版本，`profile` 是最新值覆盖。
@@ -628,7 +632,7 @@ allowlist 条目格式：`path[:SYMBOL]`、category（language_lexicon / catalog
 - 三个多题材 fixture 的具体内容（只能放在 `tests/` 下）。
 - 各期内部的任务拆分与合并节奏。
 
-## 附录 A：已核实的泄漏与缺陷
+## 附录 A：设计起点已核实的泄漏与缺陷（历史）
 
 路径相对仓库根目录；`fpa/` = `forwin/planning/future_plan_audit/`。
 

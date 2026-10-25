@@ -518,6 +518,18 @@ def test_extraction_input_uses_world_view_tables(pov_extraction_context):
     ]
 
 
+def test_concealed_onstage_extraction_row_uses_public_identity(pov_extraction_context):
+    session, plan, runtime = pov_extraction_context
+    guest = runtime.world.get_node("guest")
+    guest.profile.update(visibility_level="secret", public_identity="Masked visitor")
+
+    result = build_chapter_extraction_input(session, project_id="p", chapter_number=3, runtime=runtime)
+
+    row = next(row for row in result.entities if row.id == "guest")
+    assert row.name == "Masked visitor"
+    assert row.aliases == ()
+
+
 def test_extraction_secrets_are_the_three_relevant_sets(pov_extraction_context):
     session, plan, runtime = pov_extraction_context
     result = build_chapter_extraction_input(session, project_id="p", chapter_number=3, runtime=runtime)

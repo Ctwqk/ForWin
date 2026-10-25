@@ -212,7 +212,7 @@ def build_chapter_extraction_input(
         node = runtime.world.get_node(entity.ref)
         if node is not None and node.is_active:
             entities[node.id] = EntityRow(
-                node.id, str(node.node_type), entity.name,
+                node.id, str(node.node_type), entity.name or getattr(entity, "public_identity", ""),
                 tuple(getattr(entity, "aliases", node.aliases)) if entity.name else (),
             )
     locations = {location.id: location for location in view.locations}

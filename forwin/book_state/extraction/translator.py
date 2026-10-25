@@ -188,7 +188,7 @@ class _DeltaBuilder:
             *(transfer.new_item for transfer in extraction.item_transfers),
         ]:
             if entity is not None:
-                self.declared.setdefault(entity.name.strip(), entity)
+                self.declared.setdefault(_normalized_name(entity.name), entity)
         self.movers = {movement.entity_ref.strip() for movement in extraction.movements}
         self._apply_admission_plan()
         for index, site in enumerate(extraction.new_sites):
@@ -347,6 +347,11 @@ class _DeltaBuilder:
         return None
 
     def _new_entity(self, name: str, path: str) -> str | None:
+        entity = self.declared.get(_normalized_name(name))
+        # Undeclared new entity refs follow the admission planner's character default.
+        existing = self._named_node(entity.kind if entity is not None else "character", name, path)
+        if existing is not None:
+            return existing
         decision = self.decisions.get(name)
         if decision is not None:
             if decision.action == "background_generic":
@@ -355,40 +360,34 @@ class _DeltaBuilder:
                 return decision.entity_id
             self._unresolved(path, f"entity admission did not admit {name!r} ({decision.action})")
             return None
-        entity = self.declared.get(name)
         if entity is None or entity.kind not in _NEW_ENTITY_NODE_TYPES:
             self._unresolved(path, f"new entity {name!r} has no admission decision or declared non-character kind")
             return None
-        existing = self._named_node(entity.kind, name)
-        if existing is not None:
-            return existing
         node_id = _stable_id(self.project_id, entity.kind, name)
-        if not self._node_exists(node_id):
-            self._create_node(
-                WorldNode(
-                    id=node_id,
-                    project_id=self.project_id,
-                    node_type=entity.kind,
-                    name=name,
-                    aliases=[alias for alias in entity.aliases if alias.strip()],
-                    created_at_chapter=self.chapter,
-                    state={"status": "active"},
-                    metadata={"source": SOURCE_TYPE, "mention_name": name},
-                ),
-                reason="chapter extraction new entity",
-            )
+        if self._node_exists(node_id):
+            self._unresolved(path, f"new entity {name!r} would reuse {node_id!r} without a unique active name match")
+            return None
+        self._create_node(
+            WorldNode(
+                id=node_id,
+                project_id=self.project_id,
+                node_type=entity.kind,
+                name=name,
+                aliases=[alias for alias in entity.aliases if alias.strip()],
+                created_at_chapter=self.chapter,
+                state={"status": "active"},
+                metadata={"source": SOURCE_TYPE, "mention_name": name},
+            ),
+            reason="chapter extraction new entity",
+        )
         return node_id
 
-    def _named_node(self, kind: str, name: str) -> str | None:
+    def _named_node(self, kind: str, name: str, path: str) -> str | None:
         """A node of ``kind`` named ``name`` or aliased so, ignoring case and whitespace."""
-        wanted = _normalized_name(name)
-        if not wanted:
-            return None
         candidates = [
             *(
-                (node_id, node.name, node.aliases)
-                for node_id, node in sorted(self.world.nodes_by_id.items())
-                if str(node.node_type) == kind
+                (node.id, node.name, node.aliases)
+                for node in matching_runtime_entities(self.world, kind, name)
             ),
             *(
                 (node_id, patch.new_value.get("name", ""), patch.new_value.get("aliases", []))
@@ -396,13 +395,21 @@ class _DeltaBuilder:
                 if str(patch.node_type) == kind
             ),
         ]
-        return next(
-            (
-                node_id for node_id, node_name, aliases in candidates
-                if wanted in {_normalized_name(label) for label in (node_name, *aliases)}
-            ),
-            None,
-        )
+        return self._unique_named_ref(name, candidates, path)
+
+    def _unique_named_ref(self, name: str, candidates: list[tuple[str, str, list[str]]], path: str) -> str | None:
+        wanted = _normalized_name(name)
+        if not wanted:
+            return None
+        matches = sorted({
+            node_id for node_id, node_name, aliases in candidates
+            if wanted in {_normalized_name(label) for label in (node_name, *aliases)}
+        })
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            self._issue("warning", "ambiguous_name", path, f"name {name!r} matches multiple nodes: {', '.join(matches)}")
+        return None
 
     def _location(self, ref: str, path: str) -> str | None:
         text = ref.strip()
@@ -527,8 +534,25 @@ class _DeltaBuilder:
 
     def _new_site(self, site: NewSite, path: str) -> None:
         name = site.name.strip()
+        # A map node and its site_state are two representations of the same place.
+        candidates = [(node.id, node.name, node.aliases) for node in self.map.nodes_by_id.values()]
+        candidates.extend(
+            (str(node.profile.get("map_node_id") or node.id), node.name, node.aliases)
+            for node in self.world.nodes_by_id.values() if str(node.node_type) == "site_state"
+        )
+        matched = self._unique_named_ref(name, candidates, path)
+        if matched is not None:
+            existing = self.map.nodes_by_id.get(matched)
+            if existing is None:
+                self._unresolved(path, f"site {name!r} has no map node {matched!r}")
+            else:
+                self.new_sites[name] = existing
+            return
         node_id = _stable_id(self.project_id, "map_node", name)
-        existing = self.map.nodes_by_id.get(node_id) or self.new_sites.get(name)
+        if node_id in self.map.nodes_by_id:
+            self._unresolved(path, f"new site {name!r} would reuse {node_id!r} without a unique name match")
+            return
+        existing = self.new_sites.get(name)
         if existing is not None:
             # Named again (in this chapter or an earlier one): reuse the site.
             self.new_sites[name] = existing
@@ -1158,6 +1182,17 @@ def _decisions_by_name(plan: EntityAdmissionPlan) -> dict[str, EntityAdmissionDe
 
 def _normalized_name(text: str) -> str:
     return "".join(str(text or "").split()).casefold()
+
+
+def matching_runtime_entities(world: ObjectiveWorldGraph, kind: str, name: str) -> list[WorldNode]:
+    """Exact active-node matches shared with admission planning; never choose an ambiguous owner."""
+    wanted = _normalized_name(name)
+    return [
+        node for node in world.nodes_by_id.values()
+        if wanted and str(node.node_type) == kind and node.is_active
+        and node.status not in {"inactive", "retired", "deleted"}
+        and wanted in {_normalized_name(label) for label in (node.name, *node.aliases)}
+    ]
 
 
 def _stable_id(project_id: str, kind: str, name: str) -> str:

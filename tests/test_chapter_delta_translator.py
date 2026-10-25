@@ -1086,3 +1086,173 @@ def test_runtime_mismatch_names_expected_and_actual_snapshot():
     assert str(caught.value) == (
         "Runtime mismatch: expected project 'expected-project', chapter 7; actual project 'p', chapter 3"
     )
+
+
+def _translate_recalled_name(nodes, fields, *, sites=()):
+    from forwin.book_state.extraction.translator import _DeltaBuilder
+    from forwin.book_state.lexicon import BookLexicon
+    from forwin.book_state.map_graph import MapGraph
+    from forwin.book_state.runtime import BookStateRuntime, ObjectiveWorldGraph
+
+    runtime = BookStateRuntime(
+        project_id="p", as_of_chapter=0, world=ObjectiveWorldGraph(nodes=nodes),
+        map_graph=MapGraph(nodes=list(sites)),
+    )
+    return _DeltaBuilder(
+        project_id="p", chapter_number=1, runtime=runtime, calendar=None, lexicon=BookLexicon(),
+        start=0, admission_plan=EntityAdmissionPlan(project_id="p", chapter_number=1, candidate_fingerprint="f"),
+    ).build(_extraction(1, fields), chapter_summary="", review_verdict_id="")
+
+
+@pytest.mark.parametrize("kind", ["character", "group"])
+@pytest.mark.parametrize("name", ["  ROWAN  ", " the courier "])
+def test_offstage_new_ref_reuses_active_node_without_admission(kind, name):
+    from forwin.protocol.book_state import WorldNode
+
+    result = _translate_recalled_name([
+        WorldNode(id="offstage", project_id="p", node_type=kind, name="Rowan", aliases=["The Courier"],
+                  state={"status": "active"}),
+        WorldNode(id="wrong-kind", project_id="p", node_type="item", name="Rowan", aliases=["The Courier"]),
+        WorldNode(id="inactive", project_id="p", node_type=kind, name="Rowan", aliases=["The Courier"],
+                  is_active=False),
+    ], {"entity_changes": [{
+        "ref": f"new:{name}", "new_entity": {"name": name, "kind": kind},
+        "field": "status", "new_value": "injured", "evidence": "The courier was injured.",
+    }]})
+
+    assert result.delta is not None, result.issues
+    assert result.issues == ()
+    (patch,) = result.delta.node_patches
+    assert (patch.node_id, str(patch.op), patch.field_path, patch.old_value, patch.new_value) == (
+        "offstage", "set", "state.status", "active", "injured",
+    )
+
+
+def test_existing_character_new_ref_without_declaration_resolves():
+    from forwin.protocol.book_state import WorldNode
+
+    result = _translate_recalled_name([
+        WorldNode(id="offstage", project_id="p", node_type="character", name="Rowan", state={"health": "well"}),
+    ], {"entity_changes": [{"ref": "new:Rowan", "field": "health", "new_value": "injured", "evidence": "e"}]})
+
+    assert result.delta is not None, result.issues
+    (patch,) = result.delta.node_patches
+    assert (patch.node_id, patch.old_value, patch.new_value) == ("offstage", "well", "injured")
+
+
+@pytest.mark.parametrize("kind", ["character", "group"])
+def test_ambiguous_new_entity_name_is_not_merged(kind):
+    from forwin.protocol.book_state import WorldNode
+
+    result = _translate_recalled_name([
+        WorldNode(id="first", project_id="p", node_type=kind, name="Rowan"),
+        WorldNode(id="second", project_id="p", node_type=kind, name="Other", aliases=["Rowan"]),
+    ], {"entity_changes": [{
+        "ref": "new:Rowan", "new_entity": {"name": "Rowan", "kind": kind},
+        "field": "status", "new_value": "injured", "evidence": "e",
+    }]})
+
+    ambiguity = next(issue for issue in result.issues if issue.code == "ambiguous_name")
+    assert all(value in ambiguity.message for value in ("Rowan", "first", "second"))
+    if kind == "character":
+        assert result.delta is None
+        assert any(issue.code == "unresolved_ref" for issue in result.issues)
+    else:
+        assert result.delta is not None, result.issues
+        assert all(patch.node_id not in {"first", "second"} for patch in result.delta.node_patches)
+
+
+@pytest.mark.parametrize("name", ["Rowan", "Rowa"])
+def test_new_character_name_does_not_reuse_inactive_wrong_kind_or_fuzzy_match(name):
+    from forwin.protocol.book_state import WorldNode
+
+    result = _translate_recalled_name([
+        WorldNode(id="inactive", project_id="p", node_type="character", name="Rowan", is_active=False),
+        WorldNode(id="group", project_id="p", node_type="group", name="Rowan"),
+        WorldNode(id="similar", project_id="p", node_type="character", name="Rowan II"),
+    ], {"entity_changes": [{
+        "ref": f"new:{name}", "new_entity": {"name": name, "kind": "character"},
+        "field": "health", "new_value": "injured", "evidence": "e",
+    }]})
+
+    assert result.delta is None
+    assert [issue.code for issue in result.issues] == ["unresolved_ref"]
+
+
+@pytest.mark.parametrize("name", ["  HARBOR  ", " old quay ", " river landing "])
+def test_new_sites_reuses_seeded_map_or_site_state_name_without_duplicates(name):
+    from forwin.protocol.book_state import WorldNode
+
+    result = _translate_recalled_name([
+        WorldNode(id="site-state", project_id="p", node_type="site_state", name="Harbor",
+                  aliases=["River Landing"], profile={"map_node_id": "seeded-map"}),
+    ], {
+        "new_sites": [{"name": name, "evidence": "e"}],
+        "events": [{"summary": "Arrival", "location_ref": f"new:{name}", "evidence": "e",
+                    "significance": "minor", "visibility": "public"}],
+    }, sites=[MapNode(id="seeded-map", project_id="p", name="Harbor", aliases=["Old Quay"], node_type="site")])
+
+    assert result.delta is not None, result.issues
+    assert result.issues == ()
+    assert result.delta.map_patches == []
+    (event,) = result.delta.node_patches
+    assert str(event.node_type) == "event"
+    assert event.new_value["profile"]["location_id"] == "seeded-map"
+
+
+def test_ambiguous_new_site_name_is_not_merged():
+    result = _translate_recalled_name([], {
+        "new_sites": [{"name": "Harbor", "near_ref": "first", "evidence": "e"}],
+    }, sites=[
+        MapNode(id="first", project_id="p", node_type="site", name="Harbor"),
+        MapNode(id="second", project_id="p", node_type="site", name="Other", aliases=["Harbor"]),
+    ])
+
+    assert result.delta is not None, result.issues
+    ambiguity = next(issue for issue in result.issues if issue.code == "ambiguous_name")
+    assert all(value in ambiguity.message for value in ("Harbor", "first", "second"))
+    created = next(patch for patch in result.delta.map_patches if str(patch.target_type) == "map_node")
+    assert created.target_id not in {"first", "second"}
+
+
+def test_recalled_offstage_character_and_seeded_site_commit_postgres():
+    engine, Session = _session_factory()
+    try:
+        world = _seed_world(Session)
+        result = _translate(Session, world, 1, {
+            "entity_changes": [{
+                "ref": "new:乙", "new_entity": {"name": "乙", "kind": "character"},
+                "field": "health", "new_value": "injured", "evidence": "e",
+            }],
+            "new_sites": [{"name": "site-2", "near_ref": world.loc(1), "evidence": "e"}],
+        })
+        delta = _commit(Session, world, 1, result)
+        assert delta.map_patches == []
+        assert all(str(patch.op) != "create" for patch in delta.node_patches)
+        assert _runtime(Session, world, 1).world.get_state(world.rival)["health"] == "injured"
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("kind", ["group", "map_node"])
+def test_ambiguous_name_does_not_fall_back_to_existing_generated_id(kind):
+    from forwin.protocol.book_state import WorldNode
+
+    stable_id = seed_ref_id("p", kind, "Harbor")
+    if kind == "group":
+        result = _translate_recalled_name([
+            WorldNode(id=ref, project_id="p", node_type="group", name="Harbor")
+            for ref in (stable_id, "second")
+        ], {"entity_changes": [{
+            "ref": "new:Harbor", "new_entity": {"name": "Harbor", "kind": "group"},
+            "field": "status", "new_value": "injured", "evidence": "e",
+        }]})
+    else:
+        result = _translate_recalled_name([], {
+            "new_sites": [{"name": "Harbor", "near_ref": "second", "evidence": "e"}],
+        }, sites=[MapNode(id=ref, project_id="p", node_type="site", name="Harbor")
+                  for ref in (stable_id, "second")])
+
+    assert any(issue.code == "ambiguous_name" for issue in result.issues)
+    assert result.delta is None
+    assert any(issue.code == "unresolved_ref" for issue in result.issues)

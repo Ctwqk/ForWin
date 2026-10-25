@@ -866,3 +866,41 @@ def test_admission_plan_still_rejects_semantic_scene_changes() -> None:
     finally:
         session.close()
         engine.dispose()
+
+
+@pytest.mark.parametrize("name", ["ROWAN", "the courier"])
+def test_normalized_existing_character_bypasses_admission_and_translates(name):
+    class UnexpectedClassifier:
+        def classify(self, **_kwargs):
+            raise AssertionError("existing character must not be reclassified")
+
+    engine, session = _session()
+    try:
+        project = Project(title="Recall", premise="test", genre="test")
+        session.add(project)
+        session.flush()
+        BookStateRepository(session).create_world_node(
+            WorldNode(id="offstage", project_id=project.id, node_type="character", name="Rowan",
+                      aliases=["The Courier"], state={"health": "well"}),
+            version_chapter=0, version_state={"health": "well"},
+        )
+        registrar = EntityRegistrar(session=session, classifier=UnexpectedClassifier())
+        result = registrar.plan_writer_output(
+            project_id=project.id, chapter_number=1,
+            writer_output=_output(project.id, 1, f"{name} was injured.", "An injury.", entity_changes=[{
+                "ref": f"new:{name}", "new_entity": {"name": name, "kind": "character"},
+                "field": "health", "new_value": "injured", "evidence": f"{name} was injured.",
+            }]),
+        )
+        assert result.plan.decisions == []
+        assert registrar.verify_writer_output_admission(project_id=project.id, writer_output=result.writer_output) == result.plan
+        translation = ChapterDeltaTranslator(session).translate(
+            project_id=project.id, chapter_number=1, extraction=result.writer_output.chapter_delta,
+            admission_plan=result.plan, chapter_summary="An injury.",
+        )
+        assert translation.delta is not None, translation.issues
+        (patch,) = translation.delta.node_patches
+        assert (patch.node_id, str(patch.op), patch.old_value, patch.new_value) == ("offstage", "set", "well", "injured")
+    finally:
+        session.close()
+        engine.dispose()

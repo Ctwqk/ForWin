@@ -803,6 +803,9 @@ class EntityRegistrar:
         project_id: str,
         writer_output: WriterOutput,
     ) -> list[str]:
+        # Imported lazily: the translator also consumes the naming package's plan types.
+        from forwin.book_state.extraction.translator import matching_runtime_entities
+
         mentioned = _structured_character_reference_names(writer_output)
         if not mentioned:
             return []
@@ -811,7 +814,11 @@ class EntityRegistrar:
             mentioned,
             as_of_chapter=max(int(writer_output.chapter_number) - 1, 0),
         )
-        return [name for name in mentioned if name not in known]
+        runtime = self.book_state.runtime(project_id, as_of_chapter=max(int(writer_output.chapter_number) - 1, 0))
+        return [
+            name for name in mentioned if name not in known
+            and len(matching_runtime_entities(runtime.world, "character", name)) != 1
+        ]
 
     def _name_owners(
         self,

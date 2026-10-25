@@ -33,7 +33,8 @@ from forwin.models.maintenance import PostCanonMaintenanceRun
 from forwin.models.project import ChapterPlan, Project
 from forwin.maintenance.state import post_canon_barrier_ready
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
-from forwin.outbox.store import enqueue_outbox_event
+from forwin.naming import EntityAdmissionDecision, EntityAdmissionPlan
+from forwin.outbox.store import any_outbox_events_exist, enqueue_outbox_event
 from forwin.protocol.book_state import ApprovedGraphDeltaSet, BookStateCompileResult, GraphDelta, NarrativePatch
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.world_engine.types import WORLD_ENGINE_SOURCE_TYPE
@@ -753,6 +754,30 @@ class CanonAdmissionService:
         if compile_result.metadata.get("idempotent"):
             raise CanonStaleVersion("world tick delta already exists under another tick")
 
+        entity_plan = EntityAdmissionPlan(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            candidate_fingerprint=f"world_tick:{tick_id}",
+            decisions=[
+                EntityAdmissionDecision(
+                    mention_name=patch.new_value["name"],
+                    action="register_character",
+                    entity_id=patch.node_id,
+                    canonical_name=patch.new_value["name"],
+                    role_hint=patch.new_value.get("profile", {}).get("narrative_role", ""),
+                    importance=patch.new_value.get("importance", 5),
+                    reason="world tick new actor",
+                )
+                for delta in approved_changes.graph_deltas
+                for patch in delta.node_patches
+                if patch.op == "create" and patch.node_type == "character"
+            ],
+        )
+        try:
+            EntityAdmissionCommitter(session).apply(project_id=project_id, plan=entity_plan)
+        except ValueError as exc:
+            raise CanonWriteFailure(str(exc)) from exc
+
         graph_delta_ids = tuple(compile_result.graph_delta_ids)
         session.add(
             DecisionEvent(
@@ -777,12 +802,16 @@ class CanonAdmissionService:
             )
         )
         for delta_id in graph_delta_ids:
+            event_id = f"canon-world-tick:{tick_id}:{delta_id}:projection"
+            # Recreating a retired tick needs a fresh refresh, even if its first event was processed.
+            if any_outbox_events_exist(session, event_ids=[event_id]):
+                event_id = f"{event_id}:{new_id()}"
             enqueue_outbox_event(
                 session,
                 aggregate_type="project",
                 aggregate_id=project_id,
                 event_type="knowledge.projection.refresh_requested",
-                event_id=f"canon-world-tick:{tick_id}:{delta_id}:projection",
+                event_id=event_id,
                 payload={
                     "project_id": project_id,
                     "projection_kind": "all",

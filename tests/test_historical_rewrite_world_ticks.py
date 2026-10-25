@@ -1169,6 +1169,90 @@ def test_state_drift_records_event_without_abort(Session) -> None:
 RALLY = "event-tick-rally"
 
 
+def _tick_character(node_id="tick-character"):
+    return NodePatch(node_id=node_id, node_type="character", op="create", new_value={
+        "id": node_id, "node_type": "character", "name": "Rowan", "summary": "Arrives offstage",
+        "state": {"actor_tier": "minor", "alive_status": "alive", "next_turn_at": 3000},
+    })
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "postgresql"])
+def test_dropped_tick_retires_created_entity(backend):
+    from forwin.models.entity import Entity
+    from tests.test_entity_admission import _tick_entity_session_factory
+
+    engine, Session = _tick_entity_session_factory(backend)
+    try:
+        book = _book(Session, tick_three=(_tick_character(),))
+        with Session() as session:
+            assert session.get(Entity, "tick-character").is_active is True
+        outcome = _wary_rewrite(book)
+        assert outcome.blocked is False, outcome.failure_reason
+        with Session() as session:
+            assert session.get(Entity, "tick-character").is_active is False
+        assert "tick-character" not in _runtime(book, 3).world.nodes_by_id
+        assert _replay_conflict(book).violated == "replay_cas"
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "postgresql"])
+def test_retired_tick_retires_created_entity_and_retick_reuses_it(backend):
+    from forwin.models.entity import Entity
+    from forwin.models.outbox import OutboxEvent
+    from tests.test_entity_admission import _tick_entity_session_factory
+
+    engine, Session = _tick_entity_session_factory(backend)
+    try:
+        book = _book(Session, tick_three=(_tick_character(),))
+        with Session() as session:
+            assert session.get(Entity, "tick-character").is_active is True
+        outcome = _rewrite_chapter(book, 3, version=2, delta=_chapter_delta(
+            book.project_id, 3, "delta-ch3-v2", _create(book.project_id, "event-later"),
+        ))
+        assert outcome.blocked is False, outcome.failure_reason
+        with Session() as session:
+            assert session.get(Entity, "tick-character").is_active is False
+            payload = json.loads(session.get(CanonCommitRecord, outcome.commit_id).result_json)
+            assert payload["historical_rewrite"]["retired_tick_ids"] == ["tick-3"]
+        assert "tick-character" not in _runtime(book, 3).world.nodes_by_id
+        delta = _tick_three(book.project_id, *_in_project(book.project_id, (_tick_character(),)))
+        assert _commit_tick(Session, delta).idempotent is False
+        assert _commit_tick(Session, delta).idempotent is True
+        with Session() as session:
+            [entity] = session.scalars(select(Entity).where(Entity.name == "Rowan")).all()
+            assert (entity.id, entity.is_active) == ("tick-character", True)
+            refreshes = [row for row in session.scalars(select(OutboxEvent))
+                         if json.loads(row.payload_json).get("tick_id") == "tick-3"]
+            assert len(refreshes) == 2
+            assert len({row.event_id for row in refreshes}) == 2
+        assert _runtime(book, 3).world.get_node("tick-character").profile["personality_loadout"]
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "postgresql"])
+def test_aborted_rewrite_restores_tick_entity_activity(backend):
+    from forwin.models.entity import Entity
+    from tests.test_entity_admission import _tick_entity_session_factory
+
+    engine, Session = _tick_entity_session_factory(backend)
+    try:
+        book = _book(Session, tick_three=(_tick_character(),))
+        _accept(Session, book.project_id, 4, version=1, deltas=[_chapter_delta(
+            book.project_id, 4, "delta-ch4", NodePatch(node_id="tick-character", node_type="character",
+                op="set", field_path="state.health", old_value=None, new_value="injured"),
+        )])
+        outcome = _wary_rewrite(book)
+        assert outcome.stale is True
+        assert "tick-character" in outcome.failure_reason
+        with Session() as session:
+            assert session.get(Entity, "tick-character").is_active is True
+        assert book.tick_3 in _delta_ids(book)
+    finally:
+        engine.dispose()
+
+
 def test_rewriting_latest_chapter_retires_its_tick_and_cascades_its_dependents(Session) -> None:
     # The chapter 3 tick gathers a rally and decides a plot response bound to chapter 4.
     book = _book(

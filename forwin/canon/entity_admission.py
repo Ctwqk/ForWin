@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import select
@@ -19,6 +20,19 @@ class EntityAdmissionCommitter:
 
     def __init__(self, session: Session) -> None:
         self.session = session
+
+    def retire(self, project_id: str, entity_ids: Iterable[str]) -> None:
+        """Deactivate character registry rows whose creating tick left canon."""
+        ids = set(entity_ids)
+        if not ids:
+            return
+        for entity in self.session.scalars(select(Entity).where(
+            Entity.project_id == project_id,
+            Entity.id.in_(ids),
+            Entity.kind == "character",
+        )):
+            entity.is_active = False
+        self.session.flush()
 
     def apply(
         self,
@@ -78,9 +92,11 @@ class EntityAdmissionCommitter:
         entity = self._require_or_create_registry_character(
             project_id=project_id,
             entity_id=decision.entity_id,
+            allow_inactive=True,
         )
         if entity.name != decision.canonical_name:
             raise ValueError(f"Entity admission id conflict: {decision.mention_name}")
+        entity.is_active = True
         if existing is None:
             self._record_event(
                 project_id=project_id,
@@ -151,6 +167,7 @@ class EntityAdmissionCommitter:
         *,
         project_id: str,
         entity_id: str,
+        allow_inactive: bool = False,
     ) -> Entity:
         node = BookStateRepository(self.session).get_world_node(entity_id)
         if (
@@ -191,7 +208,7 @@ class EntityAdmissionCommitter:
             entity.project_id != project_id
             or entity.kind != "character"
             or entity.name != node.name
-            or not entity.is_active
+            or (not entity.is_active and not allow_inactive)
         ):
             raise ValueError(f"Entity admission registry conflict: {entity_id}")
         return entity

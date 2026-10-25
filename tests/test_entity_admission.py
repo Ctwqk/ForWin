@@ -25,6 +25,123 @@ def _session():
     return engine, sessionmaker(bind=engine)()
 
 
+def _tick_entity_session_factory(backend):
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from tests.postgres import postgres_test_url
+
+    if backend == "postgresql":
+        engine = get_engine(postgres_test_url("tick-entity-admission"))
+        init_db(engine)
+    else:
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+    return engine, get_session_factory(engine)
+
+
+@pytest.mark.parametrize("reservation", ["same_id", "other_id", "active", "alias_owner"])
+def test_tick_builder_reuses_only_its_own_inactive_entity_name(reservation):
+    from forwin.models.entity import EntityAlias
+    from forwin.world_engine.delta_builder import WorldTickDeltaBuilder, _tick_local_id
+    from tests.test_world_adjudicator import CONTEXT, _runtime
+    from tests.test_world_engine_contracts import _new_actor
+    from tests.test_world_tick_delta import _candidate
+
+    engine, session = _session()
+    try:
+        candidate = _candidate("arrival", effects={"new_actors": [_new_actor()]})
+        actor = candidate.effects.new_actors[0]
+        node_id = _tick_local_id(CONTEXT.project_id, "tick-reuse", candidate.candidate_id, "character", actor.key)
+        session.add(Project(id=CONTEXT.project_id, title="Reuse", premise="Test", genre="test"))
+        session.flush()
+        session.add(Entity(id=node_id if reservation != "other_id" else "other", project_id=CONTEXT.project_id,
+                           name=actor.name, kind="character", is_active=reservation == "active"))
+        if reservation == "alias_owner":
+            session.add(Entity(id="alias-owner", project_id=CONTEXT.project_id, name="Other", kind="character"))
+            session.flush()
+            session.add(EntityAlias(id="alias", project_id=CONTEXT.project_id, entity_id="alias-owner", alias=actor.name))
+        session.flush()
+        built = WorldTickDeltaBuilder(session).build(context=CONTEXT, candidates=[candidate],
+            news_in_transit=[], tick_id="tick-reuse", runtime=_runtime())
+        if reservation == "same_id":
+            assert built.delta is not None, built.issues
+            assert any(p.node_id == node_id for p in built.delta.node_patches)
+        else:
+            assert "new_actor_name_taken" in [issue.code for issue in built.issues]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_entity_retirement_is_scoped_and_reactivation_preserves_aliases():
+    from forwin.canon.entity_admission import EntityAdmissionCommitter
+    from forwin.models.audit import DecisionEvent
+    from forwin.models.entity import EntityAlias
+    from forwin.naming import EntityAdmissionDecision, EntityAdmissionPlan
+
+    engine, session = _session()
+    try:
+        session.add_all([Project(id=key, title=key, premise="Test", genre="test") for key in ("one", "two")])
+        session.flush()
+        BookStateRepository(session).create_world_node(WorldNode(
+            id="arrival", project_id="one", node_type="character", name="Rowan",
+        ), version_chapter=1, version_state={})
+        session.add_all([
+            Entity(id="foreign", project_id="two", kind="character", name="Foreign"),
+            Entity(id="group", project_id="one", kind="group", name="Group"),
+        ])
+        committer = EntityAdmissionCommitter(session)
+        plan = EntityAdmissionPlan(project_id="one", chapter_number=1, candidate_fingerprint="world_tick:tick-one",
+            decisions=[EntityAdmissionDecision(mention_name="Rowan", action="register_character",
+                entity_id="arrival", canonical_name="Rowan", aliases=["Courier"])])
+        committer.apply(project_id="one", plan=plan)
+        session.flush()
+        before_events = len(session.scalars(select(DecisionEvent)).all())
+        committer.retire("one", ["arrival", "arrival", "foreign", "group", "missing"])
+        assert session.get(Entity, "arrival").is_active is False
+        assert session.get(Entity, "foreign").is_active is True
+        assert session.get(Entity, "group").is_active is True
+        committer.apply(project_id="one", plan=plan)
+        session.flush()
+        assert session.get(Entity, "arrival").is_active is True
+        assert json.loads(session.get(Entity, "arrival").aliases_json) == ["Courier"]
+        assert len(session.scalars(select(EntityAlias)).all()) == 1
+        assert len(session.scalars(select(DecisionEvent)).all()) == before_events
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_world_tick_entity_admission_failure_rolls_back_canon(monkeypatch):
+    from forwin.canon.admission import CanonWriteFailure
+    from forwin.canon.entity_admission import EntityAdmissionCommitter
+    from forwin.models.book_state import GraphDeltaRow, WorldNodeRow
+    from forwin.models.outbox import OutboxEvent
+    from tests.test_historical_rewrite_world_ticks import _book, _commit_tick, _in_project, _tick_character, _tick_delta
+
+    engine, Session = _tick_entity_session_factory("sqlite")
+    try:
+        book = _book(Session)
+        project_id = book.project_id
+        models = (Entity, GraphDeltaRow, WorldNodeRow, OutboxEvent)
+        with Session() as session:
+            before = {model: set(session.scalars(select(model.id))) for model in models}
+        original = EntityAdmissionCommitter.apply
+
+        def fail(self, **kwargs):
+            original(self, **kwargs)
+            raise ValueError("admission rejected")
+
+        monkeypatch.setattr(EntityAdmissionCommitter, "apply", fail)
+        delta = _tick_delta(project_id, 3, "tick-fail", *_in_project(project_id, (_tick_character(),)))
+        with pytest.raises(CanonWriteFailure, match="admission rejected"):
+            _commit_tick(Session, delta)
+        with Session() as session:
+            for model in models:
+                assert set(session.scalars(select(model.id))) == before[model]
+    finally:
+        engine.dispose()
+
+
 def _output(project_id: str, chapter_number: int, body: str, summary: str, **delta: Any) -> WriterOutput:
     """WriterOutput whose chapter delta carries ``delta``; admission reads names only from it."""
     return WriterOutput(

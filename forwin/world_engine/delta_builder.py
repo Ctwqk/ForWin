@@ -124,15 +124,23 @@ class WorldTickDeltaBuilder:
         else:
             require_runtime_as_of(runtime, project_id, context.chapter_number)
         reserved_names: set[str] = set()
+        reusable_names: dict[str, str] = {}
         if any(candidate.effects.new_actors for candidate in candidates):
-            for name, aliases in self.session.execute(select(Entity.name, Entity.aliases_json).where(
+            owners: dict[str, set[str]] = {}
+            for entity in self.session.scalars(select(Entity).where(
                 Entity.project_id == project_id,
             )):
-                reserved_names.add(name)
-                reserved_names.update(json.loads(aliases or "[]"))
-            reserved_names.update(self.session.scalars(select(EntityAlias.alias).where(
+                for name in [entity.name, *json.loads(entity.aliases_json or "[]")]:
+                    owners.setdefault(name.strip(), set()).add(entity.id)
+                if not entity.is_active and entity.kind == "character":
+                    reusable_names[entity.id] = entity.name.strip()
+            for alias, entity_id in self.session.execute(select(EntityAlias.alias, EntityAlias.entity_id).where(
                 EntityAlias.project_id == project_id,
-            )))
+            )):
+                owners.setdefault(alias.strip(), set()).add(entity_id)
+            reserved_names.update(owners)
+            reusable_names = {entity_id: name for entity_id, name in reusable_names.items()
+                              if owners[name] == {entity_id}}
         builder = _TickBuilder(
             context=context,
             tick_id=tick_id,
@@ -141,6 +149,7 @@ class WorldTickDeltaBuilder:
             calendar=StoryCalendarRepository(self.session).get(project_id),
             lexicon=BookLexiconRepository(self.session).get(project_id),
             reserved_actor_names=reserved_names,
+            reusable_actor_names=reusable_names,
         )
         return builder.build(candidates, news_in_transit)
 
@@ -161,6 +170,7 @@ class _TickBuilder:
         calendar: StoryCalendar | None,
         lexicon: BookLexicon,
         reserved_actor_names: Collection[str] = (),
+        reusable_actor_names: dict[str, str] | None = None,
     ) -> None:
         self.context = context
         self.project_id = context.project_id
@@ -172,6 +182,7 @@ class _TickBuilder:
         self.calendar = calendar
         self.lexicon = lexicon
         self.reserved_actor_names = set(reserved_actor_names)
+        self.reusable_actor_names = dict(reusable_actor_names or {})
         self.issues: list[TickIssue] = []
         self.node_patches: list[NodePatch] = []
         self.created_nodes: dict[str, NodePatch] = {}
@@ -551,7 +562,11 @@ class _TickBuilder:
 
     def _new_actor(self, actor: EffectNewActor) -> None:
         name = actor.name.strip()
-        if not name or new_actor_name_taken(name, self.runtime, self.reserved_actor_names):
+        node_id = self._local_id(actor.node_type, actor.key)
+        reserved = self.reserved_actor_names
+        if actor.node_type == "character" and self.reusable_actor_names.get(node_id) == name:
+            reserved = reserved - {name}
+        if not name or new_actor_name_taken(name, self.runtime, reserved):
             self._issue("error", "new_actor_name_taken", f"New actor name is unavailable: {name!r}")
             return
         location = self._location(actor.location_id, "new actor location")
@@ -563,9 +578,9 @@ class _TickBuilder:
                         for ref in actor.affiliation_refs]
         if location is None or any(ref is None for ref in affiliations):
             return
-        node_id = self._local_id(actor.node_type, actor.key)
         self.new_actors[actor.key] = node_id
         self.reserved_actor_names.add(name)
+        self.reusable_actor_names = {ref: value for ref, value in self.reusable_actor_names.items() if value != name}
         state = {"actor_tier": "minor", "location_id": location, "next_turn_at": self.context.now}
         if actor.node_type == "character":
             state["alive_status"] = "alive"

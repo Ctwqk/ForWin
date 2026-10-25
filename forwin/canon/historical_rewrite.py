@@ -52,6 +52,7 @@ from forwin.book_state.narrative import (
     PLAN_CONSTRAINT_SOURCE_TYPE, PROTECTION_STATUS_PATH, RELEASED_PROTECTION_STATUS,
 )
 
+from .entity_admission import EntityAdmissionCommitter
 from .plan import CanonCommitPlan
 
 
@@ -830,7 +831,16 @@ class HistoricalCanonReplacement:
         )
         for ref in _created_refs(delta):
             self.vanished_refs[ref] = VanishedRef(ref, "dropped_tick", delta.id)
+        self._retire_tick_entities(delta)
         self.retired_tick_ids.append(tick_id)
+
+    def _retire_tick_entities(self, delta: GraphDelta) -> None:
+        EntityAdmissionCommitter(self.session).retire(
+            self.plan.project_id,
+            (patch.node_id for patch in delta.node_patches
+             if patch.op == "create" and patch.node_type == "character"
+             and patch.node_id in self.vanished_refs),
+        )
 
     def _drop_world_tick_delta(
         self,
@@ -850,6 +860,7 @@ class HistoricalCanonReplacement:
         )
         for ref in _created_refs(delta):
             self.vanished_refs[ref] = VanishedRef(ref, "dropped_tick", delta.id)
+        self._retire_tick_entities(delta)
         superseded = supersede_resolutions(
             self.session,
             project_id=self.plan.project_id,

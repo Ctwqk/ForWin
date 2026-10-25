@@ -285,6 +285,57 @@ def test_new_actor_budget_drops_second():
     assert dropped[0][1][0].code == "new_actor_budget"
 
 
+@pytest.mark.parametrize("backend", ["sqlite", "postgresql"])
+@pytest.mark.parametrize("node_type", ["character", "group"])
+def test_adjudicated_outcome_creates_minor_actor_with_entity_and_personality(monkeypatch, backend, node_type):
+    from forwin.canon.entity_admission import EntityAdmissionCommitter
+    from forwin.models.entity import Entity
+    from tests.test_entity_admission import _tick_entity_session_factory
+    from tests.test_world_engine_contracts import _new_actor
+
+    engine, Session = _tick_entity_session_factory(backend)
+    try:
+        world = _seed_tick_world(Session, monkeypatch)
+        chapter = _chapter(Session, world, 1)
+        plans = []
+        original = EntityAdmissionCommitter.apply
+
+        def capture(self, **kwargs):
+            plans.append(kwargs["plan"])
+            return original(self, **kwargs)
+
+        monkeypatch.setattr(EntityAdmissionCommitter, "apply", capture)
+        llm = _WorldLLM(adjudicate=_outcomes({
+            "intent_id": _later(world), "result": "resolved", "summary": "Arrival",
+            "effects": {"new_actors": [_new_actor(name="Rowan", node_type=node_type,
+                location_id=world.loc(1), affiliation_refs=[world.faction])]},
+        }), actor_turn=_quiet_turns)
+        result = _tick(Session, llm, chapter)
+        assert result.dropped_candidate_ids == []
+        runtime = _runtime(Session, world)
+        [node] = [node for node in runtime.world.nodes_by_id.values()
+                  if node.node_type == node_type and node.metadata.get("tick_id") == result.tick_id]
+        assert runtime.world.get_state(node.id)["actor_tier"] == "minor"
+        with Session() as session:
+            entity = session.get(Entity, node.id)
+            if node_type == "character":
+                assert entity is not None
+                assert (entity.name, entity.kind, entity.is_active) == ("Rowan", "character", True)
+                assert entity.created_at_chapter == 1
+                assert node.profile["personality_loadout"]
+                assert runtime.world.get_state(node.id)["alive_status"] == "alive"
+                [plan] = plans
+                assert plan.candidate_fingerprint == f"world_tick:{result.tick_id}"
+                assert plan.decisions[0].entity_id == node.id
+            else:
+                assert entity is None
+        assert _tick(Session, llm, chapter).graph_delta_ids == result.graph_delta_ids
+        with Session() as session:
+            assert len(session.scalars(select(Entity).where(Entity.id == node.id)).all()) == (node_type == "character")
+    finally:
+        engine.dispose()
+
+
 def test_new_actor_name_collision_retries_then_drops(monkeypatch):
     from tests.test_world_engine_contracts import _new_actor
 

@@ -1,0 +1,255 @@
+name: forwin
+
+x-runtime-build: &runtime-build
+  context: ../..
+  target: forwin-runtime
+  args:
+    PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+
+x-runtime-service: &runtime-service
+  image: forwin-forwin:magi3
+  build: *runtime-build
+  env_file:
+    - .env
+  restart: unless-stopped
+
+x-common-environment: &common-environment
+  # In-container service names only. Nothing here points at an external host.
+  FORWIN_DATABASE_URL: "postgresql+psycopg://forwin:${FORWIN_POSTGRES_PASSWORD}@postgres:5432/forwin"
+  FORWIN_QDRANT_URL: "http://qdrant:6333"
+  FORWIN_QDRANT_COLLECTION: "chapter_memories"
+  FORWIN_LLM_KB_QDRANT_COLLECTION: "llm_kb_vectors"
+  FORWIN_RETRIEVAL_BACKEND: "qdrant"
+  FORWIN_MINIO_ENDPOINT: "minio:9000"
+  FORWIN_MINIO_SECURE: "false"
+  FORWIN_MINIO_BUCKET: "forwin-artifacts"
+  FORWIN_MINIO_PREFIX: "artifacts"
+  FORWIN_ARTIFACT_BACKEND: "minio"
+  FORWIN_ARTIFACT_ROOT: "data/artifacts"
+  FORWIN_RUNTIME_SETTINGS_PATH: "data/runtime_settings.json"
+  FORWIN_HTTP_BIND: "0.0.0.0"
+  FORWIN_HTTP_PORT: "8899"
+  FORWIN_ALLOW_BIND_ALL_INTERFACES: "true"
+  FORWIN_ALLOW_UNAUTHENTICATED_LAN: "true"
+  FORWIN_EMBEDDING_BACKEND: "${FORWIN_EMBEDDING_BACKEND:-hash}"
+  FORWIN_EMBEDDING_DIMS: "${FORWIN_EMBEDDING_DIMS:-384}"
+  FORWIN_EMBEDDING_REQUIRED: "${FORWIN_EMBEDDING_REQUIRED:-false}"
+  FORWIN_CHAPTER_REVIEW_FORM_MODE: "${FORWIN_CHAPTER_REVIEW_FORM_MODE:-off}"
+  FORWIN_REVIEW_ENGINE_ARC_BOOK_BUDGET_ENABLED: "${FORWIN_REVIEW_ENGINE_ARC_BOOK_BUDGET_ENABLED:-true}"
+  FORWIN_REVIEW_ENGINE_REPAIR_V2_ENABLED: "${FORWIN_REVIEW_ENGINE_REPAIR_V2_ENABLED:-true}"
+  FORWIN_REVIEW_ENGINE_AUTO_APPROVE_ENABLED: "${FORWIN_REVIEW_ENGINE_AUTO_APPROVE_ENABLED:-true}"
+  FORWIN_REVIEW_ENGINE_LIVE_CUTOVER_ENABLED: "${FORWIN_REVIEW_ENGINE_LIVE_CUTOVER_ENABLED:-true}"
+  FORWIN_REVIEW_ENGINE_LIVE_CUTOVER_PROJECT_ALLOWLIST: "${FORWIN_REVIEW_ENGINE_LIVE_CUTOVER_PROJECT_ALLOWLIST:-}"
+  FORWIN_REVIEW_ENGINE_COMMIT_WITH_OBLIGATION_ENABLED: "${FORWIN_REVIEW_ENGINE_COMMIT_WITH_OBLIGATION_ENABLED:-true}"
+  FORWIN_REVIEW_ENGINE_BOOK_PATCHER_ENABLED: "${FORWIN_REVIEW_ENGINE_BOOK_PATCHER_ENABLED:-true}"
+  FORWIN_REVIEW_ENGINE_OBLIGATION_VERIFIER_ENABLED: "${FORWIN_REVIEW_ENGINE_OBLIGATION_VERIFIER_ENABLED:-true}"
+  FORWIN_REVIEW_ENGINE_ARC_PATCHER_ENABLED: "${FORWIN_REVIEW_ENGINE_ARC_PATCHER_ENABLED:-true}"
+  FORWIN_REVIEW_ENGINE_LOCAL_REWRITE_ENABLED: "${FORWIN_REVIEW_ENGINE_LOCAL_REWRITE_ENABLED:-true}"
+  FORWIN_EXTENSION_TEST_PROFILE: "/app/data/chrome_profiles/forwin-extension"
+  FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE: "${FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE:-true}"
+  FORWIN_EXTENSION_AUTO_QUALIFY_PROFILE: "${FORWIN_EXTENSION_AUTO_QUALIFY_PROFILE:-true}"
+  FORWIN_EXTENSION_RESTORE_BACKEND_SESSIONS: "${FORWIN_EXTENSION_RESTORE_BACKEND_SESSIONS:-false}"
+  FORWIN_EXTENSION_STARTUP_HEARTBEAT_TIMEOUT_SECONDS: "${FORWIN_EXTENSION_STARTUP_HEARTBEAT_TIMEOUT_SECONDS:-75}"
+  FORWIN_PUBLISHER_HEARTBEAT_STALE_SECONDS: "${FORWIN_PUBLISHER_HEARTBEAT_STALE_SECONDS:-300}"
+  FORWIN_PUBLISHER_HEARTBEAT_MONITOR_INTERVAL_SECONDS: "${FORWIN_PUBLISHER_HEARTBEAT_MONITOR_INTERVAL_SECONDS:-30}"
+  FORWIN_PUBLISHER_HEARTBEAT_MONITOR_FAILURES: "${FORWIN_PUBLISHER_HEARTBEAT_MONITOR_FAILURES:-2}"
+  FORWIN_PUBLISHER_STRICT_PREFERRED_CLIENT: "${FORWIN_PUBLISHER_STRICT_PREFERRED_CLIENT:-true}"
+  FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED: "${FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED:-true}"
+  FORWIN_PUBLISHER_PREFERRED_CLIENT_ID: "${FORWIN_PUBLISHER_PREFERRED_CLIENT_ID:-}"
+  FORWIN_PUBLISHER_EXTENSION_API_KEY: "${FORWIN_PUBLISHER_EXTENSION_API_KEY:-}"
+  FORWIN_PUBLISHER_SESSION_SECRET: "${FORWIN_PUBLISHER_SESSION_SECRET:-}"
+  FORWIN_MINIO_ACCESS_KEY: "${FORWIN_MINIO_ACCESS_KEY:-}"
+  FORWIN_MINIO_SECRET_KEY: "${FORWIN_MINIO_SECRET_KEY:-}"
+  DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+  DEEPSEEK_BASE_URL: "${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}"
+  DEEPSEEK_MODEL: "${DEEPSEEK_MODEL:-deepseek-chat}"
+  KIMI_API_KEY: "${KIMI_API_KEY:-}"
+  KIMI_BASE_URL: "${KIMI_BASE_URL:-https://api.moonshot.cn/v1}"
+  KIMI_MODEL: "${KIMI_MODEL:-kimi-k2.5}"
+  MINIMAX_API_KEY: "${MINIMAX_API_KEY:-}"
+  MINIMAX_BASE_URL: "${MINIMAX_BASE_URL:-https://api.minimaxi.com/v1}"
+  MINIMAX_MODEL: "${MINIMAX_MODEL:-MiniMax-M2.7}"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: "forwin"
+      POSTGRES_PASSWORD: "${FORWIN_POSTGRES_PASSWORD:?FORWIN_POSTGRES_PASSWORD must be set in deploy/magi3/.env}"
+      POSTGRES_DB: "forwin"
+    volumes:
+      - forwin-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.17.1
+    volumes:
+      - forwin-qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec '</dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: "${FORWIN_MINIO_ACCESS_KEY:?FORWIN_MINIO_ACCESS_KEY must be set in deploy/magi3/.env}"
+      MINIO_ROOT_PASSWORD: "${FORWIN_MINIO_SECRET_KEY:?FORWIN_MINIO_SECRET_KEY must be set in deploy/magi3/.env}"
+    volumes:
+      - forwin-minio:/data
+    restart: unless-stopped
+
+  app:
+    <<: *runtime-service
+    command: ["uvicorn", "forwin.api:app", "--host", "0.0.0.0", "--port", "8899"]
+    environment:
+      <<: *common-environment
+      FORWIN_PUBLISHER_COVER_DIR: "/app/data/publisher_covers"
+    ports:
+      - "127.0.0.1:8899:8899"
+    volumes:
+      - forwin-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import httpx; r=httpx.get('http://localhost:8899/health', timeout=3); raise SystemExit(0 if r.status_code == 200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  mcp:
+    <<: *runtime-service
+    command: ["python", "-m", "uvicorn", "forwin.mcp.http:app", "--host", "0.0.0.0", "--port", "8896"]
+    environment:
+      <<: *common-environment
+      FORWIN_API_BASE_URL: "http://app:8899"
+      FORWIN_MCP_API_TIMEOUT_SECONDS: "${FORWIN_MCP_API_TIMEOUT_SECONDS:-300}"
+      FORWIN_MCP_HOST: "0.0.0.0"
+      FORWIN_MCP_PORT: "8896"
+    ports:
+      - "127.0.0.1:8896:8896"
+    volumes:
+      - forwin-data:/app/data
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import httpx; r=httpx.get('http://localhost:8896/health', timeout=3); raise SystemExit(0 if r.status_code == 200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  generation-worker:
+    <<: *runtime-service
+    command: ["python", "-m", "forwin.cli", "-v", "generation-worker", "--worker-id", "forwin-generation-worker", "--lease-seconds", "300", "--poll-interval", "2"]
+    environment:
+      <<: *common-environment
+    volumes:
+      - forwin-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      disable: true
+
+  outbox-worker:
+    <<: *runtime-service
+    command: ["python", "-m", "forwin.cli", "-v", "outbox-worker", "--worker-id", "forwin-outbox-worker", "--poll-interval", "2"]
+    environment:
+      <<: *common-environment
+    volumes:
+      - forwin-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  publisher-worker:
+    <<: *runtime-service
+    command: ["python", "-m", "forwin.cli", "-v", "publisher-worker", "--limit", "1", "--poll-interval", "2"]
+    environment:
+      <<: *common-environment
+      FORWIN_PUBLISHER_COVER_DIR: "/app/data/publisher_covers"
+    volumes:
+      - forwin-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  publisher-browser:
+    image: forwin-publisher-browser:magi3
+    build:
+      context: ../..
+      target: publisher-browser-runtime
+      args:
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+    env_file:
+      - .env
+    command: ["bash", "-lc", "exec scripts/launch_linux_extension_browser.sh"]
+    environment:
+      <<: *common-environment
+      FORWIN_BACKEND_URL: "http://app:8899"
+      FORWIN_EXTENSION_DISPLAY_MODE: "${FORWIN_EXTENSION_DISPLAY_MODE:-xvfb}"
+      FORWIN_EXTENSION_DISPLAY: "${FORWIN_EXTENSION_DISPLAY:-:100}"
+      FORWIN_EXTENSION_XVFB_SERVER_NUM: "${FORWIN_EXTENSION_XVFB_SERVER_NUM:-100}"
+      FORWIN_EXTENSION_NO_SANDBOX: "${FORWIN_EXTENSION_NO_SANDBOX:-auto}"
+      FORWIN_EXTENSION_TEST_REMOTE_DEBUGGING_ADDRESS: "0.0.0.0"
+      FORWIN_EXTENSION_TEST_REMOTE_DEBUGGING_PORT: "9222"
+      FORWIN_EXTENSION_DEBUG_BIND: "127.0.0.1:9222"
+    tmpfs:
+      - "/dev/shm:size=1073741824,mode=1777"
+    ports:
+      - "127.0.0.1:9222:9222"
+    volumes:
+      - forwin-data:/app/data
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9222/json/version', timeout=5)\" && python scripts/check_publisher_browser_heartbeat.py --wait-seconds 0"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 90s
+    restart: unless-stopped
+
+  migrate:
+    <<: *runtime-service
+    profiles: ["tools"]
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *common-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  forwin-postgres:
+  forwin-qdrant:
+  forwin-minio:
+  forwin-data:

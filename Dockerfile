@@ -10,6 +10,8 @@ RUN npm run build
 
 FROM python:3.13-slim AS python-base
 
+ARG PIP_INDEX_URL=""
+
 WORKDIR /app
 
 COPY pyproject.toml .
@@ -17,7 +19,11 @@ COPY alembic.ini .
 COPY forwin/ forwin/
 COPY forwin_skills/ forwin_skills/
 
-RUN pip install --no-cache-dir . py-spy
+RUN if [ -n "$PIP_INDEX_URL" ]; then \
+        pip install --no-cache-dir --index-url "$PIP_INDEX_URL" . py-spy; \
+    else \
+        pip install --no-cache-dir . py-spy; \
+    fi
 COPY --from=world-studio-builder /app/frontend/world-studio/dist/ frontend/world-studio/dist/
 COPY browser_extension/ browser_extension/
 COPY scripts/ scripts/

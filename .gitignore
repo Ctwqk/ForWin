@@ -1,4 +1,5 @@
 .env
+deploy/magi3/.env
 .env.dev.local
 .env.*.local
 .claude/settings.local.json*

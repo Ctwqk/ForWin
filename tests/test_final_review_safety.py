@@ -172,7 +172,11 @@ def test_exhausted_plot_response_names_remaining_options(pending_side_effect_ses
 
 
 def test_cancelled_onstage_resolution_does_not_stage_its_intent():
+    from forwin.runtime.policy import RuntimePolicy
+
     tick = object.__new__(_Tick)
+    # The new-actor budget reads the tick's policy.
+    tick.policy = RuntimePolicy.for_profile("standard")
     candidate = SimpleNamespace(candidate_id="candidate", origin="conflict_resolution", actor_id="actor", intent_id="intent",
                                 effects=SimpleNamespace(new_actors=[]))
     issue = SimpleNamespace(code="touches_onstage_entity", message="onstage change")

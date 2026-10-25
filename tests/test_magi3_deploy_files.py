@@ -46,6 +46,7 @@ def test_compose_has_the_expected_services_and_volumes() -> None:
     assert set(compose["services"]) == {
         "postgres",
         "qdrant",
+        "embedding",
         "app",
         "mcp",
         "generation-worker",
@@ -64,6 +65,10 @@ def test_compose_has_the_expected_services_and_volumes() -> None:
     assert services["postgres"]["image"] == "postgres:16-alpine"
     assert services["qdrant"]["image"] == "qdrant/qdrant:v1.17.1"
     assert services["app"]["environment"]["FORWIN_ARTIFACT_BACKEND"] == "local"
+    assert services["app"]["environment"]["FORWIN_EMBEDDING_BACKEND"] == "gateway"
+    assert services["app"]["environment"]["FORWIN_EMBEDDING_BASE_URL"] == "http://embedding:8080"
+    assert services["embedding"]["build"]["context"] == "./embedding-gateway"
+    assert "ports" not in services["embedding"]
     assert services["migrate"]["profiles"] == ["tools"]
     assert services["migrate"]["command"] == ["alembic", "upgrade", "head"]
 
@@ -179,7 +184,7 @@ def test_publisher_browser_has_swarm_tmpfs_and_healthcheck() -> None:
 def test_runtime_volumes_and_mcp_healthcheck() -> None:
     services = load_compose()["services"]
     for name, service in services.items():
-        if name not in {"postgres", "qdrant", "migrate"}:
+        if name not in {"postgres", "qdrant", "embedding", "migrate"}:
             assert "forwin-data:/app/data" in service["volumes"]
     for name, target in {
         "postgres": "/var/lib/postgresql/data", "qdrant": "/qdrant/storage",

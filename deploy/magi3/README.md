@@ -137,3 +137,7 @@ ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 28899:127.0.0.1:
 Access the app at `http://127.0.0.1:28899` and MCP at
 `http://127.0.0.1:28896/mcp` on magi1. Health endpoints are `/health` on both
 ports. All published ports on magi3 bind its loopback interface.
+
+## Embeddings
+
+The `embedding` service (deploy/magi3/embedding-gateway, copied from Constructure) serves all-MiniLM-L6-v2 at 384 dimensions on CPU, the same model infra-150 served on GPU. The model is baked into the image at build time through `HF_ENDPOINT` (default https://hf-mirror.com), so the service starts without network access.

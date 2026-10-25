@@ -27,8 +27,11 @@ x-common-environment: &common-environment
   FORWIN_HTTP_BIND: "0.0.0.0"
   FORWIN_ALLOW_BIND_ALL_INTERFACES: "true"
   FORWIN_ALLOW_UNAUTHENTICATED_LAN: "true"
-  FORWIN_EMBEDDING_BACKEND: "${FORWIN_EMBEDDING_BACKEND:-hash}"
-  FORWIN_EMBEDDING_DIMS: "${FORWIN_EMBEDDING_DIMS:-384}"
+  # Embeddings come from the embedding service below (all-MiniLM-L6-v2, 384 dimensions), as on infra-150.
+  FORWIN_EMBEDDING_BACKEND: "gateway"
+  FORWIN_EMBEDDING_BASE_URL: "http://embedding:8080"
+  FORWIN_EMBEDDING_MODEL: "all-MiniLM-L6-v2"
+  FORWIN_EMBEDDING_DIMS: "384"
   FORWIN_EMBEDDING_REQUIRED: "${FORWIN_EMBEDDING_REQUIRED:-false}"
   # Review and checkpoint behavior comes from each project RuntimePolicy.
   # See env.example for the current policy controls.
@@ -85,6 +88,25 @@ services:
     restart: unless-stopped
 
 
+  embedding:
+    image: forwin-embedding-gateway:magi3
+    build:
+      context: ./embedding-gateway
+      args:
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+        HF_ENDPOINT: "${HF_ENDPOINT:-https://hf-mirror.com}"
+    environment:
+      EMBED_MODEL: "all-MiniLM-L6-v2"
+      EMBED_DEVICE: "cpu"
+      EMBED_CACHE_SIZE: "16384"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    restart: unless-stopped
+
   app:
     <<: *runtime-service
     command: ["uvicorn", "forwin.api:app", "--host", "0.0.0.0", "--port", "8899"]
@@ -96,6 +118,8 @@ services:
     volumes:
       - forwin-data:/app/data
     depends_on:
+      embedding:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       qdrant:
@@ -138,6 +162,8 @@ services:
     volumes:
       - forwin-data:/app/data
     depends_on:
+      embedding:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       qdrant:

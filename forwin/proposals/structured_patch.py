@@ -641,15 +641,18 @@ def _cognition_patch(
             raise ValueError("set_cognition_field requires field_path")
         patch_op = str(operation.get("patch_op") or "set")
         new_value = operation.get("new_value")
+    if "old_value" in operation:
+        old_value = operation["old_value"]
+    else:
+        old_value = _cognition_current(runtime, observer_type, observer_id, field_path)
+        if field_path == "knowledge_by_ref" and patch_op == "merge" and isinstance(new_value, dict):
+            old_value = {ref: old_value.get(ref) for ref in new_value}
     return CognitionPatch(
         observer_type=observer_type,
         observer_id=observer_id,
         op=patch_op,
         field_path=field_path,
-        old_value=operation.get(
-            "old_value",
-            _cognition_current(runtime, observer_type, observer_id, field_path),
-        ),
+        old_value=old_value,
         new_value=new_value,
         reason=reason or str(operation.get("reason") or row.reason or ""),
         evidence_refs=list(operation.get("evidence_refs", source_refs)),
@@ -808,6 +811,8 @@ def _cognition_current(
     runtime, observer_type: str, observer_id: str, field_path: str
 ) -> Any:
     view = runtime.cognition_by_observer.get((observer_type, observer_id))
+    if field_path == "knowledge_by_ref":
+        return dict(view.knowledge_by_ref) if view is not None else {}
     if view is None:
         return (
             []

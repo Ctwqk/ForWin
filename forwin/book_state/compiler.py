@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.cognition import CognitionView
 from forwin.book_state.narrative import OPEN_PROTECTION_UNTIL, PROTECTION_STATUS_PATH, PROTECTION_UNTIL_PATH
-from forwin.book_state.path_patch import current_path_value
+from forwin.book_state.path_patch import BlockedPathValue, current_path_value
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository, _as_jsonable, _world_edge_as_of
 from forwin.book_state.runtime import INACTIVE_SPANS_KEY, BookStateRuntime
@@ -224,14 +224,15 @@ class BookStateCompiler:
     ) -> list[tuple[str, Any, Any]]:
         """``(label, patch, current)`` for each patch whose ``old_value`` the runtime no longer holds."""
         return [
-            (label, patch, current)
+            (label, patch, {"blocked_path": current.field_path, "ancestor_value": current.value}
+             if isinstance(current, BlockedPathValue) else current)
             for label, patch, current in self._iter_patch_current_values(runtime, delta)
             if str(patch.op) != "create"
             and ("old_value" in patch.model_fields_set
                 # An absent protection status is active, and its explicit None must still participate in CAS.
                 or (isinstance(patch, NarrativePatch) and str(patch.op) != "create"
                     and patch.field_path == PROTECTION_STATUS_PATH))
-            and (not _json_equal(patch.old_value, current)
+            and (isinstance(current, BlockedPathValue) or not _json_equal(patch.old_value, current)
                  or (isinstance(patch, NarrativePatch) and patch.field_path == PROTECTION_STATUS_PATH
                      and _split_target_ref(patch.target_ref)[1] not in runtime.narrative.nodes_by_id))
         ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -8,12 +9,21 @@ def path_parts(field_path: str) -> list[str]:
     return [part for part in field_path.split(".") if part]
 
 
+@dataclass(frozen=True)
+class BlockedPathValue:
+    """A populated non-mapping ancestor that prevents resolving the requested leaf."""
+
+    field_path: str
+    value: Any
+
+
 def current_path_value(payload: Any, field_path: str) -> Any:
-    """Read a leaf or the non-mapping ancestor a write would replace."""
+    """Read a leaf, distinguishing a blocked traversal from a resolved value."""
     current = payload
-    for part in path_parts(field_path):
+    parts = path_parts(field_path)
+    for index, part in enumerate(parts):
         if not isinstance(current, dict):
-            return current
+            return BlockedPathValue(".".join(parts[:index]), current) if current is not None else None
         current = current.get(part)
     return current
 
@@ -86,4 +96,4 @@ def cas_patch_fields(
                 new_value={leaf: updated[leaf]} if leaf in updated else {})
 
 
-__all__ = ["apply_path_patch", "cas_patch_fields", "current_path_value", "path_parts"]
+__all__ = ["BlockedPathValue", "apply_path_patch", "cas_patch_fields", "current_path_value", "path_parts"]

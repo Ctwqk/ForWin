@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, select
 import pytest
 
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
 from forwin.book_state.query import BookStateQuery
 from forwin.context.assembler_core import assemble_context
 from forwin.http.adapters.api_book_state_routes import build_handlers
-from forwin.models import ArcPlanVersion, ChapterPlan
+from forwin.models import ArcPlanVersion, Base, ChapterPlan
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import (
     GraphDeltaPatchRow,
@@ -100,11 +100,15 @@ def test_graph_delta_story_minutes_round_trip_and_current_minute() -> None:
 
 
 @pytest.mark.parametrize("old_value", ["Genesis name", None])
+@pytest.mark.parametrize("backend", ["sqlite", "postgresql"])
 def test_historical_invalidation_restores_base_structure_or_fails_closed(
-    old_value,
+    old_value, backend,
 ) -> None:
-    engine = get_engine(postgres_test_url())
-    init_db(engine)
+    engine = create_engine("sqlite://") if backend == "sqlite" else get_engine(postgres_test_url())
+    if backend == "sqlite":
+        Base.metadata.create_all(engine)
+    else:
+        init_db(engine)
     Session = get_session_factory(engine)
     with Session.begin() as session:
         project_id = _create_project(session)
@@ -118,6 +122,16 @@ def test_historical_invalidation_restores_base_structure_or_fails_closed(
             ),
             version_chapter=0,
         )
+        # None represents an unrecorded old value, not an observed absent name.
+        patch = NodePatch(
+            node_id="base-item",
+            node_type="event",
+            op="set",
+            field_path="name",
+            new_value="Retired name",
+            **({"old_value": old_value} if old_value is not None else {}),
+        )
+        assert ("old_value" in patch.model_fields_set) is (old_value is not None)
         result = BookStateCompiler(session).compile(
             ApprovedGraphDeltaSet(
                 project_id=project_id,
@@ -127,21 +141,12 @@ def test_historical_invalidation_restores_base_structure_or_fails_closed(
                         id="rename-base",
                         project_id=project_id,
                         chapter_number=1,
-                        node_patches=[
-                            NodePatch(
-                                node_id="base-item",
-                                node_type="event",
-                                op="set",
-                                field_path="name",
-                                old_value=old_value,
-                                new_value="Retired name",
-                            )
-                        ],
+                        node_patches=[patch],
                     )
                 ],
             )
         )
-        assert result.committed
+        assert result.committed, result.blocked_reasons
         # A non-GraphDelta row is not a Canon materialization to discard.
         repo.create_world_node(
             WorldNode(
@@ -163,10 +168,14 @@ def test_historical_invalidation_restores_base_structure_or_fails_closed(
                     through_chapter=1,
                 )
         with Session() as session:
+            repo = BookStateRepository(session)
             assert (
-                BookStateRepository(session).get_world_node("base-item").name
+                repo.get_world_node("base-item").name
                 == "Retired name"
             )
+            assert repo.get_world_node("external-item").name == "Independent material"
+            assert session.get(WorldSnapshotRow, result.world_snapshot_id) is not None
+            assert [delta.id for delta in repo.list_graph_deltas(project_id, through_chapter=1)] == ["rename-base"]
     else:
         with Session.begin() as session:
             repo = BookStateRepository(session)

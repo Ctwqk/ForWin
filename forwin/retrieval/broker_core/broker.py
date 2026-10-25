@@ -20,8 +20,8 @@ from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
 logger = logging.getLogger(__name__)
 
 
-def _assemble_context(repo, project_id: str, chapter_plan) -> ChapterContextPack:
-    return assemble_context(repo, project_id, chapter_plan)
+def _assemble_context(repo, project_id: str, chapter_plan, *, runtime=None) -> ChapterContextPack:
+    return assemble_context(repo, project_id, chapter_plan, runtime=runtime)
 
 
 class RetrievalBroker:
@@ -56,10 +56,12 @@ class RetrievalBroker:
         self.last_observability_summary: dict[str, object] = {}
 
     def build_chapter_context(
-        self, repo, project_id: str, chapter_plan
+        self, repo, project_id: str, chapter_plan, *, runtime=None
     ) -> ChapterContextPack:
         self._ensure_memory_index(repo)
-        base_pack = _assemble_context(repo, project_id, chapter_plan)
+        base_pack = _assemble_context(
+            repo, project_id, chapter_plan, **({"runtime": runtime} if runtime is not None else {}),
+        )
         summaries = self._pick_summaries(base_pack.previous_chapter_summaries)
         entities = self._pick_entities(base_pack.active_entities)
         threads = self._pick_threads(base_pack.active_threads)

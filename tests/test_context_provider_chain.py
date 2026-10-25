@@ -93,10 +93,10 @@ class _FakeRepo:
     def get_chapter_experience_plan(self, project_id: str, chapter_number: int):
         return ChapterExperiencePlan(planned_reward_tags=["mystery"], progress_markers=["确认线索"])
 
-    def get_active_subworld_summary(self, project_id: str, chapter_number: int):
+    def get_active_subworld_summary(self, project_id: str, chapter_number: int, *, runtime=None):
         return []
 
-    def get_active_subworld_region_drafts(self, project_id: str, chapter_number: int):
+    def get_active_subworld_region_drafts(self, project_id: str, chapter_number: int, *, runtime=None):
         return [{"name": "临时渡口", "subworld_name": "外山", "level": "1"}]
 
     def get_audience_hints(self, project_id: str, before_chapter: int):

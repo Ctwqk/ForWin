@@ -36,12 +36,17 @@ class KnowledgeContextQuery:
         chapter_number: int,
         query_terms: Iterable[str] | None = None,
         max_pages: int = 6,
+        runtime=None,
     ) -> WorldContextPack:
         as_of = max(0, int(chapter_number or 0) - 1)
-        runtime = BookStateProjection(self.session).load_runtime_as_of(
-            project_id,
-            as_of_chapter=as_of,
-        )
+        from forwin.book_state.runtime import require_runtime_as_of
+
+        if runtime is None:
+            runtime = BookStateProjection(self.session).load_runtime_as_of(
+                project_id, as_of_chapter=as_of,
+            )
+        else:
+            require_runtime_as_of(runtime, project_id, as_of)
         snapshot = self.book_state.latest_world_snapshot(project_id, as_of)
         if snapshot is None and not (
             runtime.world.nodes_by_id

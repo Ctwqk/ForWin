@@ -19,7 +19,8 @@ _MAP_CONTEXT_REVIEW_GRAPH_EDGE_LIMIT = 512
 
 
 class ChapterContextAssembler:
-    def __init__(self, *, providers: list | None = None, gates: list | None = None, observability=None) -> None:
+    def __init__(self, *, providers: list | None = None, gates: list | None = None, observability=None, share_runtime: bool = True) -> None:
+        self.share_runtime = share_runtime
         self.providers = providers or self._default_providers()
         self.gates = gates if gates is not None else self._default_gates()
         self.observability = observability or NullObservability()
@@ -33,14 +34,22 @@ class ChapterContextAssembler:
         repo,
         project_id: str,
         chapter_plan,
+        *,
+        runtime=None,
     ) -> ChapterContextPack:
         from forwin.context.request import ContextDraft, ContextRequest
 
+        from forwin.book_state.runtime import require_runtime_as_of
+
+        if runtime is not None:
+            require_runtime_as_of(runtime, project_id, max(int(chapter_plan.chapter_number) - 1, 0))
         request = ContextRequest(
             project_id=project_id,
             chapter_plan=chapter_plan,
             repo=repo,
             session=getattr(repo, "session", None),
+            runtime=runtime,
+            share_runtime=self.share_runtime,
         )
         draft = ContextDraft(data={}, issues=[])
         base_context = OperationContext(
@@ -80,9 +89,10 @@ class ChapterContextAssembler:
             chapter_plan=chapter_plan,
             draft=draft,
             session=getattr(repo, "session", None),
+            runtime=request.runtime_as_of(max(int(chapter_plan.chapter_number) - 1, 0)),
         )
 
-    def _build_pack(self, *, project_id: str, chapter_plan, draft, session=None) -> ChapterContextPack:
+    def _build_pack(self, *, project_id: str, chapter_plan, draft, session=None, runtime=None) -> ChapterContextPack:
         from forwin.protocol.world_model import WorldContextPack
 
         data = draft.data
@@ -145,6 +155,7 @@ class ChapterContextAssembler:
                 target_total_chapters=int(getattr(project, "target_total_chapters", 0) or 0),
                 chapter_title=str(getattr(chapter_plan, "title", "") or ""),
                 chapter_summary=str(getattr(chapter_plan, "one_line", "") or ""),
+                runtime=runtime,
             ),
         )
 
@@ -183,9 +194,11 @@ def assemble_context(
     repo,  # StateRepository
     project_id: str,
     chapter_plan,  # ChapterPlan ORM object
+    *,
+    runtime=None,
 ) -> ChapterContextPack:
     """Build a ChapterContextPack for the writer through the provider chain."""
-    return ChapterContextAssembler().assemble(repo, project_id, chapter_plan)
+    return ChapterContextAssembler().assemble(repo, project_id, chapter_plan, runtime=runtime)
 
 
 __all__ = [

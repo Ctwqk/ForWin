@@ -26,7 +26,12 @@ def _build_canon_quality_context(
     target_total_chapters: int,
     chapter_title: str = "",
     chapter_summary: str = "",
+    runtime=None,
 ) -> dict[str, Any]:
+    from forwin.book_state.runtime import require_runtime_as_of
+
+    if runtime is not None:
+        require_runtime_as_of(runtime, project_id, max(int(chapter_number or 0) - 1, 0))
     is_final_chapter = _is_final_chapter_for_context(
         session=session,
         project_id=project_id,
@@ -62,6 +67,7 @@ def _build_canon_quality_context(
                 session=session,
                 project_id=project_id,
                 before_chapter=int(chapter_number or 0),
+                runtime=runtime,
             ),
             *_accepted_future_chapter_anchor_constraints(
                 session=session,
@@ -262,13 +268,17 @@ def _book_state_rule_invariant_constraints(
     session,
     project_id: str,
     before_chapter: int,
+    runtime=None,
 ) -> list[dict[str, Any]]:
     from forwin.book_state.projection import BookStateProjection
 
-    runtime = BookStateProjection(session).load_runtime_as_of(
-        project_id,
-        as_of_chapter=max(int(before_chapter or 0) - 1, 0),
-    )
+    from forwin.book_state.runtime import require_runtime_as_of
+
+    as_of = max(int(before_chapter or 0) - 1, 0)
+    if runtime is None:
+        runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=as_of)
+    else:
+        require_runtime_as_of(runtime, project_id, as_of)
     constraints: list[dict[str, Any]] = []
     for node in runtime.world.nodes_by_id.values():
         if str(node.node_type or "") != "rule":

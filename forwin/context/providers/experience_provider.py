@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 
+from forwin.book_state.runtime import RuntimeMismatch
 from forwin.context.request import ContextDraft, ContextRequest
 from forwin.experience.projection import writer_payoff_map
 from forwin.knowledge_system.context import KnowledgeContextQuery
@@ -56,7 +57,10 @@ class ExperienceContextProvider:
                     chapter_number=chapter_plan.chapter_number,
                     query_terms=query_terms,
                     max_pages=6,
+                    runtime=request.runtime_as_of(max(int(chapter_plan.chapter_number) - 1, 0)),
                 )
+            except RuntimeMismatch:
+                raise
             except Exception:
                 logger.warning("Failed to assemble world model context.", exc_info=True)
 

@@ -17,7 +17,7 @@ from forwin.protocol.context import (
 from .narrative import reader_promises_from_graph
 from .projection import BookStateProjection
 from .repository import BookStateRepository
-from .runtime import BookStateRuntime
+from .runtime import BookStateRuntime, require_runtime_as_of
 
 
 _ENTITY_NODE_TYPES = {
@@ -54,13 +54,17 @@ def _edge_hidden(edge) -> bool:
 class BookStateQuery:
     """Read accepted narrative state from BookState projections only."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, runtime: BookStateRuntime | None = None) -> None:
         self.session = session
+        self._supplied_runtime = runtime
         self.repository = BookStateRepository(session)
         self.projection = BookStateProjection(session)
         self._runtime_cache: dict[tuple[str, int], BookStateRuntime] = {}
 
     def runtime(self, project_id: str, *, as_of_chapter: int) -> BookStateRuntime:
+        if self._supplied_runtime is not None:
+            require_runtime_as_of(self._supplied_runtime, project_id, int(as_of_chapter))
+            return self._supplied_runtime
         key = (project_id, int(as_of_chapter))
         runtime = self._runtime_cache.get(key)
         if runtime is None:

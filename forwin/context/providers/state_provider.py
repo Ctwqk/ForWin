@@ -17,7 +17,9 @@ class StateContextProvider:
         if request.session is None:
             raise RuntimeError("StateContextProvider requires a database session")
         as_of_chapter = max(int(chapter_plan.chapter_number) - 1, 0)
-        book_state = BookStateQuery(request.session)
+        book_state = BookStateQuery(request.session, runtime=request.runtime_as_of(as_of_chapter))
+        latest = book_state.repository.latest_canon_chapter(project_id)
+        subworld_runtime = request.runtime_as_of(int(latest or 0))
         review_query = ReviewQuery(request.session)
         entities = book_state.active_entities(
             project_id,
@@ -55,10 +57,10 @@ class StateContextProvider:
                     as_of_chapter=as_of_chapter,
                 ),
                 "active_subworlds": repo.get_active_subworld_summary(
-                    project_id, chapter_plan.chapter_number
+                    project_id, chapter_plan.chapter_number, runtime=subworld_runtime
                 ),
                 "runtime_region_drafts": repo.get_active_subworld_region_drafts(
-                    project_id, chapter_plan.chapter_number
+                    project_id, chapter_plan.chapter_number, runtime=subworld_runtime
                 ),
             }
         )

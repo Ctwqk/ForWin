@@ -390,8 +390,10 @@ class StateRepository:
         self,
         project_id: str,
         chapter_number: int,
+        *,
+        runtime=None,
     ) -> list[SubWorldSummary]:
-        active_ids = self._active_subworld_ids_for_chapter(project_id, chapter_number)
+        active_ids = self._active_subworld_ids_for_chapter(project_id, chapter_number, runtime=runtime)
         active_set = set(active_ids)
         rows = self.list_subworlds(project_id)
         summaries: list[SubWorldSummary] = []
@@ -414,8 +416,10 @@ class StateRepository:
         self,
         project_id: str,
         chapter_number: int,
+        *,
+        runtime=None,
     ) -> list[dict]:
-        active_ids = self._active_subworld_ids_for_chapter(project_id, chapter_number)
+        active_ids = self._active_subworld_ids_for_chapter(project_id, chapter_number, runtime=runtime)
         active_set = set(active_ids)
         drafts: list[dict] = []
         map_region_rows = (
@@ -738,12 +742,12 @@ class StateRepository:
         )
 
     def _active_subworld_ids_for_chapter(
-        self, project_id: str, chapter_number: int,
+        self, project_id: str, chapter_number: int, *, runtime=None,
     ) -> list[str]:
         plan = self.get_chapter_plan(project_id, chapter_number)
         if plan is None:
             return []
-        query = BookStateQuery(self.session)
+        query = BookStateQuery(self.session, runtime=runtime)
         latest = query.repository.latest_canon_chapter(project_id)
         runtime = query.runtime(project_id, as_of_chapter=latest if latest is not None else 0)
         location_refs = _load_json_object(plan.location_refs_json or "[]", [])

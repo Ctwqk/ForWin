@@ -13,11 +13,18 @@ class BookStateContextProvider:
             _merge_book_state_map_overlay,
         )
 
-        runtime = _load_book_state_context_runtime(
-            request.session,
-            request.project_id,
-            request.chapter_plan.chapter_number,
+        from forwin.book_state import BookStateRepository
+
+        latest = (
+            BookStateRepository(request.session).latest_available_chapter(request.project_id)
+            if request.session is not None else 0
         )
+        as_of = max(0, min(int(latest or 0), int(request.chapter_plan.chapter_number) - 1))
+        runtime = request.runtime_as_of(as_of)
+        if runtime is None:
+            runtime = _load_book_state_context_runtime(
+                request.session, request.project_id, request.chapter_plan.chapter_number,
+            )
         overlay = _book_state_context_overlay(
             request.session,
             request.project_id,

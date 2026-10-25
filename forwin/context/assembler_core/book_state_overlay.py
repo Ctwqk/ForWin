@@ -43,7 +43,12 @@ def _book_state_context_overlay(
         runtime = _load_book_state_context_runtime(repo_session, project_id, chapter_number)
     if runtime is None:
         return {}
-    as_of_chapter = runtime.as_of_chapter
+    from forwin.book_state import BookStateRepository
+    from forwin.book_state.runtime import require_runtime_as_of
+
+    latest = BookStateRepository(repo_session).latest_available_chapter(project_id)
+    as_of_chapter = max(0, min(int(latest or 0), int(chapter_number or 0) - 1))
+    require_runtime_as_of(runtime, project_id, as_of_chapter)
 
     map_nodes_by_id = runtime.map.nodes_by_id
     node_id_by_name = {node.name: node.id for node in map_nodes_by_id.values() if node.name}

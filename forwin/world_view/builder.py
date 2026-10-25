@@ -91,6 +91,10 @@ def build_chapter_world_view(
             project_id, as_of_chapter=as_of_chapter,
             observer_keys=[READER_OVERLAY_KEY, *([(_POV_TYPE, pov_ref)] if pov_ref else [])],
         )
+    else:
+        from forwin.book_state.runtime import require_runtime_as_of
+
+        require_runtime_as_of(runtime, project_id, as_of_chapter)
     calendar = StoryCalendarRepository(session).get(project_id)
     now = BookStateQuery(session).current_story_minute(project_id, as_of_chapter=as_of_chapter)
     if now is None:

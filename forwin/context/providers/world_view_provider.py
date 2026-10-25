@@ -24,8 +24,7 @@ class WorldViewContextProvider:
             project_id=request.project_id,
             chapter_plan=chapter_plan,
             budget_chars=_budget_chars(session, request.project_id),
-            # The BookState provider's runtime: one load per assembly.
-            runtime=draft.data.get("book_state_runtime"),
+            runtime=request.runtime_as_of(max(int(chapter_plan.chapter_number) - 1, 0)),
         )
         draft.data["arc_phase_purpose"] = _phase_purpose(session, chapter_plan)
 

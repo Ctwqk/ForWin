@@ -521,6 +521,8 @@ class BookStateRepository:
             review_verdict_id=delta.review_verdict_id,
             allowed_for_canon=bool(delta.allowed_for_canon),
             metadata_json=_dump(delta.metadata),
+            tick_id=delta.metadata.get("tick_id") if isinstance(delta.metadata.get("tick_id"), str) else None,
+            beat_sheet_id=delta.metadata.get("beat_sheet_id") if isinstance(delta.metadata.get("beat_sheet_id"), str) else None,
         )
         self.session.add(row)
         patch_sequence = 0

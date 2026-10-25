@@ -1138,7 +1138,7 @@ def test_rewriting_latest_chapter_retires_its_tick_and_reticks(monkeypatch, reso
                     continue
                 if resolved_meanwhile:
                     connection.execute(text(
-                        "UPDATE world_plan_conflicts SET status = 'resolved', decision_json = :decision WHERE id = :id"
+                        "UPDATE world_plan_conflicts SET status = 'resolved', decision_option = 'veto_world', decision_json = :decision WHERE id = :id"
                     ), {"id": conflict_id, "decision": json.dumps({"option": "veto_world"})})
                     connection.commit()
                 else:

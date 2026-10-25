@@ -204,7 +204,9 @@ def actor_safe_vetoes(rows: Sequence[WorldPlanConflictRow]) -> list[WorldPlanCon
     return [
         WorldPlanConflictRow(
             id=row.id, project_id=row.project_id, status=row.status, actor_ref=row.actor_ref, intent_ref=row.intent_ref,
-            decision_json=row.decision_json, proposed_change_json=row.proposed_change_json, story_time=row.story_time,
+            decision_json=row.decision_json, decision_option=row.decision_option,
+            superseded_by_delta=row.superseded_by_delta,
+            proposed_change_json=row.proposed_change_json, story_time=row.story_time,
             detected_after_chapter=row.detected_after_chapter, summary=ACTOR_VETO_SUMMARY,
         )
         for row in rows

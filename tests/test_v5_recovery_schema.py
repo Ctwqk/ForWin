@@ -30,10 +30,10 @@ RECOVERY_TABLES = {
 # checks what 0001 itself creates, so these are removed from the ORM side.
 TABLES_ADDED_AFTER_BASELINE = {
     "story_calendars", "book_lexicons", "world_plan_conflicts",
-    "arc_beat_sheets", "band_plans",
+    "arc_beat_sheets", "band_plans", "world_conflict_result_refs",
 }
 COLUMNS_ADDED_AFTER_BASELINE = {
-    "graph_deltas": {"story_time_start", "story_time_end"},
+    "graph_deltas": {"story_time_start", "story_time_end", "tick_id", "beat_sheet_id"},
     "world_node_states": {"name", "aliases_json", "profile_json", "is_active"},
     "cognition_overlays": {"knowledge_by_ref_json"},
     "world_snapshots": {"narrative_node_index_json", "narrative_edge_index_json", "seq"},
@@ -674,7 +674,7 @@ def test_world_conflict_table_matches_migration_0005(monkeypatch: pytest.MonkeyP
     assert hasattr(models, "WorldPlanConflictRow")
     orm = _table("world_plan_conflicts")
     # 0006 adds origin_key and its index; tests/test_planning_v6_schema.py pins them.
-    added_in_0006 = {"origin_key"}
+    added_in_0006 = {"origin_key", "decision_option", "superseded_by_delta"}
     assert set(orm.c.keys()) - added_in_0006 == {
         "id", "project_id", "source", "detected_after_chapter", "story_time",
         "involved_refs_json", "violated", "proposed_change_json", "impact_level",

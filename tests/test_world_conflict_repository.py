@@ -136,6 +136,7 @@ def test_expire_only_open_rows_and_hides_from_blocking(session):
     session.expire_all()
     assert row.status == "expired"
     assert row.origin_key == "tick-1"
+    assert row.decision_option == ""
     assert row.decision_json == '{"reason":"chapter rewritten"}'
     assert repo.list("project-1", status="expired") == [row]
     assert repo.open_blocking("project-1", next_chapter=4) is None
@@ -147,6 +148,7 @@ def test_expire_only_open_rows_and_hides_from_blocking(session):
     ).code != "world_conflict_pending"
     with pytest.raises(ConflictNotOpen):
         repo.expire(row, reason="again")
+    assert row.decision_option == ""
     assert row.decision_json == '{"reason":"chapter rewritten"}'
     resolved = repo.create(_draft(), required_decider="human", options=["veto_world"])
     repo.mark_resolved(resolved, decision=_decision(), result_refs=["delta-1"])
@@ -352,3 +354,73 @@ def test_conflict_decision_rejects_unknown_tokens():
     for field in ("option", "decided_by"):
         with pytest.raises(ValidationError):
             ConflictDecision(**{**payload, field: "unknown"})
+
+
+def test_typed_veto_filters_ignore_json_and_exclude_superseded(session):
+    from forwin.world_engine.actor_turns import recent_vetoes
+    from forwin.world_engine.conflict_repository import WorldConflictRepository
+
+    repo = WorldConflictRepository(session)
+    kept, retired = [repo.create(_draft(), required_decider="human", options=["veto_world"]) for _ in range(2)]
+    for row in (kept, retired):
+        repo.mark_resolved(row, decision=_decision(), result_refs=[])
+    repo.mark_superseded(retired, graph_delta_id="delta-1")
+    assert retired.superseded_by_delta == "delta-1"
+    kept.decision_json = retired.decision_json = '{}'
+    session.flush()
+    assert repo.reroll_count("project-1", actor_ref="actor-1") == 1
+    assert recent_vetoes(session, "project-1", actor_ids=["actor-1"])["actor-1"] == [kept]
+
+
+def test_result_refs_are_written_atomically_and_match_exactly(session):
+    from sqlalchemy import select
+    from forwin.models.world_conflict import WorldConflictResultRefRow
+    from forwin.world_engine.conflict_repository import WorldConflictRepository
+    from forwin.world_engine.superseded_resolutions import supersede_resolutions
+
+    repo = WorldConflictRepository(session)
+    row = repo.create(_draft(), required_decider="human", options=["veto_world"])
+    repo.mark_resolved(row, decision=_decision(), result_refs=['delta_%"', 'delta_%"'])
+    repo.attach_result_refs(row, ['patch-1', 'patch-1'])
+    assert set(session.scalars(select(WorldConflictResultRefRow.ref))) == {'delta_%"', 'patch-1'}
+    assert json.loads(row.result_refs_json) == ['delta_%"', 'patch-1']
+    assert supersede_resolutions(session, project_id="project-1", graph_delta_id='delta_', reason="rewrite").conflict_ids == ()
+    assert supersede_resolutions(session, project_id="project-1", graph_delta_id='delta_%"', reason="rewrite").conflict_ids == (row.id,)
+    session.rollback()
+    assert list(session.scalars(select(WorldConflictResultRefRow.ref))) == []
+
+
+def test_plot_response_lookups_use_typed_option(session):
+    from forwin.world_engine.conflict_repository import WorldConflictRepository
+
+    repo = WorldConflictRepository(session)
+    row = repo.create(_draft(), required_decider="human", options=["plot_responds"])
+    repo.mark_resolved(row, decision=_decision("plot_responds"), result_refs=[], pending_plan_response=True)
+    assert row.decision_option == "plot_responds"
+    row.decision_json = '{"pending_plan_response":true}'
+    session.flush()
+    assert repo.has_plot_response("project-1", "intent-1")
+    assert repo.active_plot_responses("project-1") == [row]
+    repo.clear_pending_plan_response(row)
+    assert repo.active_plot_responses("project-1") == []
+
+
+def test_delta_metadata_lookups_use_typed_ids(session):
+    from forwin.book_state.repository import BookStateRepository
+    from forwin.canon.admission import CanonAdmissionService, _world_tick_delta_ids
+    from forwin.protocol.book_state import GraphDelta
+
+    repo = BookStateRepository(session)
+    tick = repo.append_graph_delta(GraphDelta(id="delta-tick", project_id="project-1", source_type="world_engine",
+                                              metadata={"tick_id": 'tick_%"'}))
+    plan = repo.append_graph_delta(GraphDelta(id="delta-plan", project_id="project-1", source_type="plan_constraint",
+                                              metadata={"beat_sheet_id": 'sheet_%"'}))
+    assert tick.tick_id == 'tick_%"' and plan.beat_sheet_id == 'sheet_%"'
+    tick.metadata_json = plan.metadata_json = '{}'
+    session.flush()
+    assert _world_tick_delta_ids(session, "project-1", 'tick_%"') == ("delta-tick",)
+    assert _world_tick_delta_ids(session, "project-1", 'tick_') == ()
+    assert _world_tick_delta_ids(session, "project-2", 'tick_%"') == ()
+    result = CanonAdmissionService().commit_plan_constraints(session=session, project_id="project-1",
+                        constraint_set_id='sheet_%"', creates=[], releases=[])
+    assert result.idempotent and result.graph_delta_ids == ("delta-plan",)

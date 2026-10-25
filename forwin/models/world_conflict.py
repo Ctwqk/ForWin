@@ -32,9 +32,21 @@ class WorldPlanConflictRow(Base):
     blocks_from_chapter: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, default="open")
     decision_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    decision_option: Mapped[str] = mapped_column(String, nullable=False, default="", server_default="", index=True)
+    superseded_by_delta: Mapped[str | None] = mapped_column(String, nullable=True)
     result_refs_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     intent_ref: Mapped[str] = mapped_column(String, nullable=False, default="")
     actor_ref: Mapped[str] = mapped_column(String, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class WorldConflictResultRefRow(Base):
+    __tablename__ = "world_conflict_result_refs"
+    __table_args__ = (Index("ix_world_conflict_result_refs_ref", "ref"),)
+
+    conflict_id: Mapped[str] = mapped_column(
+        String, ForeignKey("world_plan_conflicts.id", ondelete="CASCADE"), primary_key=True,
+    )
+    ref: Mapped[str] = mapped_column(String, primary_key=True)

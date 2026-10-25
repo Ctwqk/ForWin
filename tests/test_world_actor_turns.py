@@ -145,6 +145,7 @@ def _veto(ref, *, actor="hero", status="resolved", option="veto_world", story_ti
         id=ref, project_id="p", source="world_tick", detected_after_chapter=2, story_time=story_time,
         violated="protection", impact_level="minor", required_decider="auto", blocks_from_chapter=3,
         status=status, summary=f"{ref}-summary", intent_ref=intent_ref, actor_ref=actor,
+        decision_option=option if status == "resolved" else "",
         decision_json=json.dumps({"option": option}) if status == "resolved" else "{}",
         proposed_change_json=json.dumps(proposed or {}),
     )
@@ -824,3 +825,15 @@ def test_single_source_reachability_matches_pairwise(monkeypatch, actor_id):
     calls.clear()
     assert _reachable_places(runtime, lexicon, actor_id, "home") == expected
     assert calls == ["home"]
+
+
+def test_actor_safe_veto_copy_keeps_typed_filter_fields():
+    from forwin.world_engine.tick_nodes import actor_safe_vetoes
+
+    kept = _veto("kept")
+    retired = _veto("retired")
+    retired.superseded_by_delta = "dropped-delta"
+    copies = actor_safe_vetoes([kept, retired])
+    assert copies[0].decision_option == "veto_world"
+    assert copies[1].superseded_by_delta == "dropped-delta"
+    assert len(_view(vetoes=copies).vetoes) == 1

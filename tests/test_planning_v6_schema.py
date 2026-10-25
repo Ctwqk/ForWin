@@ -86,14 +86,25 @@ def _assert_planning_schema(engine: sa.Engine) -> None:
     if engine.dialect.name == "postgresql":
         assert snapshot_columns["seq"]["identity"]["always"] is False
     conflict_columns = {c["name"]: c for c in inspector.get_columns("world_plan_conflicts")}
-    assert {"origin_key"} <= conflict_columns.keys()
+    assert {"origin_key", "decision_option", "superseded_by_delta"} <= conflict_columns.keys()
     assert conflict_columns["origin_key"]["nullable"] is False
     assert str(conflict_columns["origin_key"]["default"]).split("::")[0] == "''"
     conflict_indexes = {i["name"]: i for i in inspector.get_indexes("world_plan_conflicts")}
     assert {"ix_world_plan_conflicts_project_status", "ix_world_plan_conflicts_project_blocks",
-            "ix_world_plan_conflicts_project_origin"} == conflict_indexes.keys()
+            "ix_world_plan_conflicts_project_origin", "ix_world_plan_conflicts_decision_option"} == conflict_indexes.keys()
     assert conflict_indexes["ix_world_plan_conflicts_project_origin"]["column_names"] == ["project_id", "origin_key"]
     assert not conflict_indexes["ix_world_plan_conflicts_project_origin"]["unique"]
+    assert conflict_columns["decision_option"]["nullable"] is False
+    assert str(conflict_columns["decision_option"]["default"]).split("::")[0] == "''"
+    assert conflict_columns["superseded_by_delta"]["nullable"] is True
+    assert conflict_indexes["ix_world_plan_conflicts_decision_option"]["column_names"] == ["decision_option"]
+    assert {c["name"] for c in inspector.get_columns("world_conflict_result_refs")} == {"conflict_id", "ref"}
+    assert inspector.get_pk_constraint("world_conflict_result_refs")["constrained_columns"] == ["conflict_id", "ref"]
+    assert ["ref"] in [i["column_names"] for i in inspector.get_indexes("world_conflict_result_refs")]
+    assert {"tick_id", "beat_sheet_id"} <= {c["name"] for c in inspector.get_columns("graph_deltas")}
+    assert ("arc_plan_id", "band_index", "version") in {
+        tuple(c["column_names"]) for c in inspector.get_unique_constraints("band_plans")
+    }
     assert ("arc_plan_id", "version") in {
         tuple(c["column_names"]) for c in inspector.get_unique_constraints("arc_beat_sheets")
     }
@@ -273,6 +284,11 @@ def test_models_create_all_on_sqlite() -> None:
             chapter = models.ChapterPlan(project_id="p", arc_plan_id="a", chapter_number=1, band_plan_id=band.id)
             session.add(chapter)
             session.flush()
+            with pytest.raises(sa.exc.IntegrityError):
+                with session.begin_nested():
+                    session.add(models.BandPlanRow(project_id="p", arc_plan_id="a", beat_sheet_id=beat.id,
+                                                   band_index=0, chapter_start=1, chapter_end=5, version=1))
+                    session.flush()
             assert beat.version == band.version == 1
             assert beat.status == band.status == "active"
             assert band.replan_count == 0
@@ -576,3 +592,80 @@ def test_0006_snapshot_sequence_backfills_and_round_trips(legacy_database):
     command.upgrade(config, "0006_planning_v6")
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT count(DISTINCT seq) FROM world_snapshots")).scalar_one() == 5
+
+
+def _seed_conflict_lookup_backfill(connection):
+    conflicts = sa.Table("world_plan_conflicts", sa.MetaData(), autoload_with=connection)
+    deltas = sa.Table("graph_deltas", sa.MetaData(), autoload_with=connection)
+    for table, rows in ((conflicts, [
+        ("resolved", {"status": "resolved", "decision_json": '{"option": "veto_world", "superseded_by_delta": "delta-1"}',
+                      "result_refs_json": '["delta-1", "delta-1", "plan_patch:p", 17]'}),
+        ("expired", {"status": "expired", "decision_json": '{"reason":"rewrite"}', "result_refs_json": '[]'}),
+        ("invalid", {"decision_json": 'invalid-json', "result_refs_json": '{}'}),
+    ]), (deltas, [
+        ("delta-1", {"metadata_json": '{"tick_id":"tick-1","beat_sheet_id":"sheet-1"}'}),
+        ("delta-invalid", {"metadata_json": '[]'}),
+    ])):
+        defaults = {c.name: datetime(2026, 10, 22) if isinstance(c.type, sa.DateTime)
+                    else False if isinstance(c.type, sa.Boolean)
+                    else 0 if isinstance(c.type, sa.Integer) else "" for c in table.columns}
+        for row_id, values in rows:
+            connection.execute(table.insert().values(**dict(defaults, id=row_id, project_id="project-1", **values)))
+
+
+def _assert_conflict_lookup_backfill(connection):
+    assert connection.execute(sa.text(
+        "SELECT id, decision_option, superseded_by_delta FROM world_plan_conflicts ORDER BY id"
+    )).all() == [("expired", "", None), ("invalid", "", None), ("resolved", "veto_world", "delta-1")]
+    assert connection.execute(sa.text(
+        "SELECT conflict_id, ref FROM world_conflict_result_refs ORDER BY ref"
+    )).all() == [("resolved", "delta-1"), ("resolved", "plan_patch:p")]
+    assert connection.execute(sa.text(
+        "SELECT id, tick_id, beat_sheet_id FROM graph_deltas ORDER BY id"
+    )).all() == [("delta-1", "tick-1", "sheet-1"), ("delta-invalid", None, None)]
+
+
+def test_typed_conflict_backfill_handles_old_json_on_sqlite(monkeypatch):
+    migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
+    engine = sa.create_engine("sqlite://")
+    try:
+        models.Base.metadata.create_all(engine)
+        with engine.begin() as connection:
+            _seed_conflict_lookup_backfill(connection)
+            monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
+            migration._backfill_typed_conflict_lookups()
+            _assert_conflict_lookup_backfill(connection)
+    finally:
+        engine.dispose()
+
+
+def test_0006_typed_conflict_backfills_and_round_trips(legacy_database):
+    config, engine = legacy_database
+    with Session(engine) as session, session.begin():
+        _seed_legacy_chapter(session)
+        _seed_conflict_lookup_backfill(session.connection())
+    for _ in range(2):
+        command.upgrade(config, "0006_planning_v6")
+        _assert_planning_schema(engine)
+        with engine.connect() as connection:
+            _assert_conflict_lookup_backfill(connection)
+        command.downgrade(config, "0005_world_plan_conflicts")
+        inspector = sa.inspect(engine)
+        assert "world_conflict_result_refs" not in inspector.get_table_names()
+        assert {"decision_option", "superseded_by_delta"}.isdisjoint(c["name"] for c in inspector.get_columns("world_plan_conflicts"))
+        assert {"tick_id", "beat_sheet_id"}.isdisjoint(c["name"] for c in inspector.get_columns("graph_deltas"))
+    command.upgrade(config, "0006_planning_v6")
+    with Session(engine) as session, session.begin():
+        sheet = models.ArcBeatSheetRow(project_id="project-1", arc_plan_id="arc-1", protagonist_ref="actor")
+        session.add(sheet)
+        session.flush()
+        values = dict(project_id="project-1", arc_plan_id="arc-1", beat_sheet_id=sheet.id,
+                      band_index=0, chapter_start=1, chapter_end=5, version=1)
+        session.add(models.BandPlanRow(**values))
+        session.flush()
+        with pytest.raises(sa.exc.IntegrityError, match="uq_band_plans_arc_band_version"):
+            with session.begin_nested():
+                session.add(models.BandPlanRow(**values))
+                session.flush()
+        session.add(models.BandPlanRow(**dict(values, version=2)))
+        session.add(models.BandPlanRow(**dict(values, band_index=1)))

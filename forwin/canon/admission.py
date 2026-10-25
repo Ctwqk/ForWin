@@ -624,14 +624,10 @@ class CanonAdmissionService:
         project = session.scalar(select(Project).where(Project.id == project_id).with_for_update(key_share=True))
         if project is None:
             raise CanonStaleVersion("project no longer exists")
-        escaped = json.dumps(constraint_set_id, ensure_ascii=False)[1:-1]
-        rows = session.execute(select(GraphDeltaRow.id, GraphDeltaRow.metadata_json).where(
+        existing = tuple(session.scalars(select(GraphDeltaRow.id).where(
             GraphDeltaRow.project_id == project_id, GraphDeltaRow.source_type == PLAN_CONSTRAINT_SOURCE_TYPE,
-            GraphDeltaRow.metadata_json.contains(escaped, autoescape=True),
-        ).order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)).all()
-        existing = tuple(
-            ref for ref, metadata in rows if _json_object(metadata).get("beat_sheet_id") == constraint_set_id
-        )
+            GraphDeltaRow.beat_sheet_id == constraint_set_id,
+        ).order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)))
         if existing:
             return CanonPlanConstraintOutcome(existing, True)
         chapter = BookStateRepository(session).latest_canon_chapter(project_id) or 0
@@ -843,22 +839,13 @@ def _ignore_failure_stage(_stage: str) -> None:
 
 def _world_tick_delta_ids(session: Session, project_id: str, tick_id: str) -> tuple[str, ...]:
     """Ids of the world_engine deltas a tick committed, in commit order."""
-    # metadata_json is the repository's json.dumps(ensure_ascii=False), so the tick id
-    # appears in it as its JSON escape; the parsed metadata then decides.
-    escaped = json.dumps(tick_id, ensure_ascii=False)[1:-1]
-    rows = session.execute(
-        select(GraphDeltaRow.id, GraphDeltaRow.metadata_json)
-        .where(
+    return tuple(session.scalars(
+        select(GraphDeltaRow.id).where(
             GraphDeltaRow.project_id == project_id,
             GraphDeltaRow.source_type == WORLD_ENGINE_SOURCE_TYPE,
-            GraphDeltaRow.metadata_json.contains(escaped, autoescape=True),
-        )
-        .order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
-    ).all()
-    return tuple(
-        delta_id for delta_id, metadata_json in rows
-        if _json_object(metadata_json).get("tick_id") == tick_id
-    )
+            GraphDeltaRow.tick_id == tick_id,
+        ).order_by(GraphDeltaRow.created_at, GraphDeltaRow.id)
+    ))
 
 
 def _json_object(raw: str | None) -> dict:

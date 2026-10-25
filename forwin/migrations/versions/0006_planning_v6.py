@@ -136,6 +136,7 @@ def upgrade() -> None:
 
     op.drop_column("chapter_plans", "task_contract_json")
     op.drop_column("band_experience_plans", "task_contract_json")
+    _add_typed_conflict_lookups()
 
 
 def _drop_simulation_from_policies() -> None:
@@ -162,6 +163,7 @@ def _drop_simulation_from_policies() -> None:
 
 def downgrade() -> None:
     """Revert schema; the maintenance step data rewrite is not reversed."""
+    _drop_typed_conflict_lookups()
     op.add_column(
         "band_experience_plans",
         sa.Column("task_contract_json", sa.Text(), server_default="[]", nullable=False),
@@ -527,3 +529,65 @@ def _restore_subworld_character_paths() -> None:
         ["project_id", "subworld_id"],
         unique=False,
     )
+
+
+def _add_typed_conflict_lookups() -> None:
+    op.add_column("world_plan_conflicts", sa.Column("decision_option", sa.String(), nullable=False, server_default=""))
+    op.add_column("world_plan_conflicts", sa.Column("superseded_by_delta", sa.String(), nullable=True))
+    op.create_index("ix_world_plan_conflicts_decision_option", "world_plan_conflicts", ["decision_option"])
+    op.create_table(
+        "world_conflict_result_refs",
+        sa.Column("conflict_id", sa.String(), nullable=False),
+        sa.Column("ref", sa.String(), nullable=False),
+        sa.ForeignKeyConstraint(["conflict_id"], ["world_plan_conflicts.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("conflict_id", "ref"),
+    )
+    op.create_index("ix_world_conflict_result_refs_ref", "world_conflict_result_refs", ["ref"])
+    for column, index in (("tick_id", "ix_graph_deltas_project_tick"),
+                          ("beat_sheet_id", "ix_graph_deltas_project_beat_sheet")):
+        op.add_column("graph_deltas", sa.Column(column, sa.String(), nullable=True))
+        op.create_index(index, "graph_deltas", ["project_id", column])
+    _backfill_typed_conflict_lookups()
+    op.create_unique_constraint("uq_band_plans_arc_band_version", "band_plans", ["arc_plan_id", "band_index", "version"])
+
+
+def _backfill_typed_conflict_lookups() -> None:
+    bind = op.get_bind()
+
+    def parsed(raw, expected):
+        try:
+            value = json.loads(raw or "null")
+        except (ValueError, TypeError):
+            return expected()
+        return value if isinstance(value, expected) else expected()
+
+    for row_id, raw_decision, raw_refs in bind.execute(sa.text(
+        "SELECT id, decision_json, result_refs_json FROM world_plan_conflicts"
+    )).all():
+        decision = parsed(raw_decision, dict)
+        option, superseded = decision.get("option"), decision.get("superseded_by_delta")
+        bind.execute(sa.text(
+            "UPDATE world_plan_conflicts SET decision_option = :option, superseded_by_delta = :superseded WHERE id = :id"
+        ), {"id": row_id, "option": option if isinstance(option, str) else "",
+            "superseded": superseded if isinstance(superseded, str) and superseded else None})
+        for ref in dict.fromkeys(ref for ref in parsed(raw_refs, list) if isinstance(ref, str)):
+            bind.execute(sa.text("INSERT INTO world_conflict_result_refs (conflict_id, ref) VALUES (:id, :ref)"),
+                         {"id": row_id, "ref": ref})
+    for row_id, raw_metadata in bind.execute(sa.text("SELECT id, metadata_json FROM graph_deltas")).all():
+        metadata = parsed(raw_metadata, dict)
+        bind.execute(sa.text("UPDATE graph_deltas SET tick_id = :tick_id, beat_sheet_id = :beat_sheet_id WHERE id = :id"),
+                     {"id": row_id, **{key: metadata.get(key) if isinstance(metadata.get(key), str) else None
+                                      for key in ("tick_id", "beat_sheet_id")}})
+
+
+def _drop_typed_conflict_lookups() -> None:
+    op.drop_constraint("uq_band_plans_arc_band_version", "band_plans", type_="unique")
+    for column, index in (("beat_sheet_id", "ix_graph_deltas_project_beat_sheet"),
+                          ("tick_id", "ix_graph_deltas_project_tick")):
+        op.drop_index(index, table_name="graph_deltas")
+        op.drop_column("graph_deltas", column)
+    op.drop_index("ix_world_conflict_result_refs_ref", table_name="world_conflict_result_refs")
+    op.drop_table("world_conflict_result_refs")
+    op.drop_index("ix_world_plan_conflicts_decision_option", table_name="world_plan_conflicts")
+    op.drop_column("world_plan_conflicts", "superseded_by_delta")
+    op.drop_column("world_plan_conflicts", "decision_option")

@@ -29,7 +29,6 @@ from forwin.protocol.book_state import CognitionOverlay, MapNode, WorldNode
 from forwin.runtime.policy import WorldPolicy
 from forwin.skills import serialize_prompt_layers
 from forwin.utils import parse_llm_json
-from forwin.world_engine.conflict_repository import SUPERSEDED_BY_DELTA_KEY
 from forwin.world_engine.constraints import ConstraintIssue, is_living_actor
 from forwin.world_engine.effect_validation import scoped_effect_reference_issues
 from forwin.world_engine.travel import estimate_travel_from
@@ -58,9 +57,6 @@ _PENDING_INTENT_STATUSES = frozenset({"planned", "due", "held"})
 # News of an event reaches an actor only through propagation's recorded knowledge.
 _EVENT_FACT_TYPE = "event"
 _VETO_OPTION = "veto_world"
-# conflict_repository.serialize_conflict_decision must preserve these compact SQL LIKE prefilters.
-_VETO_DECISION_PATTERN = f'%"option":"{_VETO_OPTION}"%'
-_SUPERSEDED_DECISION_PATTERN = f'%"{SUPERSEDED_BY_DELTA_KEY}":%'
 # The priority an agenda without one ranks at, as the tick's budget reads it.
 _DEFAULT_AGENDA_PRIORITY = 3
 # Travel minutes absorb float noise before rounding up.
@@ -419,8 +415,8 @@ def recent_vetoes(
                 WorldPlanConflictRow.project_id == project_id,
                 WorldPlanConflictRow.actor_ref == actor_id,
                 WorldPlanConflictRow.status == "resolved",
-                WorldPlanConflictRow.decision_json.like(_VETO_DECISION_PATTERN),
-                WorldPlanConflictRow.decision_json.not_like(_SUPERSEDED_DECISION_PATTERN),
+                WorldPlanConflictRow.decision_option == _VETO_OPTION,
+                WorldPlanConflictRow.superseded_by_delta.is_(None),
             )
             .order_by(
                 WorldPlanConflictRow.story_time.desc(), WorldPlanConflictRow.detected_after_chapter.desc(),
@@ -439,7 +435,7 @@ def _recent_vetoes(
     rows = [
         row for row in vetoes
         if row.status == "resolved" and row.actor_ref == actor_id
-        and json.loads(row.decision_json or "{}").get("option") == _VETO_OPTION
+        and row.decision_option == _VETO_OPTION and not row.superseded_by_delta
     ]
     rows.sort(key=lambda row: (row.story_time, row.detected_after_chapter, row.id), reverse=True)
     return [

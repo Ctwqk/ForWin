@@ -15,7 +15,7 @@ from .planning_control import BandCheckpoint, NarrativeConstraint
 from .planning_v6 import ArcBeatSheetRow, BandPlanRow
 from .audit import DecisionEvent
 from .book_frame import BookLexiconRow, StoryCalendarRow
-from .world_conflict import WorldPlanConflictRow
+from .world_conflict import WorldConflictResultRefRow, WorldPlanConflictRow
 from .observability import PerformanceSpan
 from .outbox import OutboxEvent
 from .maintenance import PostCanonMaintenanceRun
@@ -166,6 +166,7 @@ __all__ = [
     "NarrativeNodeRow",
     "NarrativeEdgeRow",
     "WorldPlanConflictRow",
+    "WorldConflictResultRefRow",
     # book frame
     "StoryCalendarRow",
     "BookLexiconRow",

@@ -39,6 +39,7 @@ class ArcBeatSheetRow(Base):
 class BandPlanRow(Base):
     __tablename__ = "band_plans"
     __table_args__ = (
+        UniqueConstraint("arc_plan_id", "band_index", "version", name="uq_band_plans_arc_band_version"),
         Index("ix_band_plans_project_arc_band_status", "project_id", "arc_plan_id", "band_index", "status"),
     )
 

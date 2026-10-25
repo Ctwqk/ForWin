@@ -171,6 +171,8 @@ class GraphDeltaRow(Base):
         Index("ix_graph_deltas_project_chapter", "project_id", "chapter_number"),
         Index("ix_graph_deltas_project_type", "project_id", "delta_type"),
         Index("ix_graph_deltas_project_line", "project_id", "world_line_id"),
+        Index("ix_graph_deltas_project_tick", "project_id", "tick_id"),
+        Index("ix_graph_deltas_project_beat_sheet", "project_id", "beat_sheet_id"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -190,6 +192,8 @@ class GraphDeltaRow(Base):
     evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
     review_verdict_id: Mapped[str] = mapped_column(String, default="")
     allowed_for_canon: Mapped[bool] = mapped_column(Boolean, default=True)
+    tick_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    beat_sheet_id: Mapped[str | None] = mapped_column(String, nullable=True)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 

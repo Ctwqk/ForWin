@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.models.project import ChapterPlan
-from forwin.models.world_conflict import WorldPlanConflictRow
+from forwin.models.world_conflict import WorldConflictResultRefRow, WorldPlanConflictRow
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativePlanPatch
 from forwin.planning.future_plan_audit.patches import FuturePlanPatchMixin
@@ -45,19 +45,16 @@ def supersede_resolutions(
     already accepted stays. A goal or marker another still-active resolution also put into the plan
     stays with it (Ruling P34).
     """
-    rows = [
-        row
-        for row in session.scalars(
-            select(WorldPlanConflictRow)
-            .where(
-                WorldPlanConflictRow.project_id == project_id,
-                WorldPlanConflictRow.status == "resolved",
-                WorldPlanConflictRow.result_refs_json.contains(graph_delta_id, autoescape=True),
-            )
-            .order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id)
-        )
-        if graph_delta_id in _result_refs(row)
-    ]
+    rows = list(session.scalars(
+        select(WorldPlanConflictRow).where(
+            WorldPlanConflictRow.project_id == project_id,
+            WorldPlanConflictRow.status == "resolved",
+            select(WorldConflictResultRefRow.conflict_id).where(
+                WorldConflictResultRefRow.conflict_id == WorldPlanConflictRow.id,
+                WorldConflictResultRefRow.ref.in_((graph_delta_id, PLAN_PATCH_REF_PREFIX + graph_delta_id)),
+            ).exists(),
+        ).order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id)
+    ))
     ledger = NarrativeObligationRepository(session)
     superseded_ids = {row.id for row in rows}
     cancelled: list[str] = []

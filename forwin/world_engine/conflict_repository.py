@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from forwin.models.project import ChapterPlan, Project
-from forwin.models.world_conflict import WorldPlanConflictRow
+from forwin.models.world_conflict import WorldConflictResultRefRow, WorldPlanConflictRow
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativePlanPatch
 
@@ -21,7 +21,7 @@ SUPERSEDED_BY_DELTA_KEY = "superseded_by_delta"
 
 
 def serialize_conflict_decision(payload: dict) -> str:
-    """Compact JSON required by actor_turns' veto SQL LIKE prefilter."""
+    """Serialize the API-facing decision payload consistently."""
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -132,6 +132,7 @@ class WorldConflictRepository:
         if row.status != "open":
             raise ConflictNotOpen(f"Conflict {row.id} is {row.status}")
         row.decision_json = serialize_conflict_decision({"reason": reason})
+        row.decision_option = ""
         row.status = "expired"
         self.session.flush()
 
@@ -142,11 +143,11 @@ class WorldConflictRepository:
                 WorldPlanConflictRow.source == "chapter_extraction",
                 WorldPlanConflictRow.blocks_from_chapter == chapter_number,
                 WorldPlanConflictRow.status == "resolved",
+                WorldPlanConflictRow.decision_option.in_(("rewrite_chapter", "amend_plan")),
             ).order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id)
         )
         return [row for row in rows
-                if json.loads(row.decision_json or "{}").get("option") in {"rewrite_chapter", "amend_plan"}
-                and not any(ref.startswith("candidate:") for ref in conflict_result_refs(row))]
+                if not any(ref.startswith("candidate:") for ref in conflict_result_refs(row))]
 
     def mark_resolved(
         self,
@@ -162,7 +163,8 @@ class WorldConflictRepository:
         if pending_plan_response:
             payload["pending_plan_response"] = True
         row.decision_json = serialize_conflict_decision(payload)
-        row.result_refs_json = json.dumps(list(result_refs), ensure_ascii=False)
+        row.decision_option = decision.option
+        self._set_result_refs(row, result_refs)
         row.status = "resolved"
         self.session.flush()
 
@@ -170,13 +172,14 @@ class WorldConflictRepository:
         """Record that canon dropped the delta the resolution committed through; it stays resolved."""
         payload = json.loads(row.decision_json or "{}")
         payload[SUPERSEDED_BY_DELTA_KEY] = graph_delta_id
+        row.superseded_by_delta = graph_delta_id or None
         row.decision_json = serialize_conflict_decision(payload)
         self.session.flush()
 
     def clear_pending_plan_response(self, row: WorldPlanConflictRow) -> None:
         """Retire response work, retaining the once-per-intent resolution history."""
         payload = json.loads(row.decision_json or "{}")
-        if payload.get("option") == "plot_responds":
+        if row.decision_option == "plot_responds":
             payload["pending_plan_response"] = False
             payload["response_retired"] = True
             row.decision_json = serialize_conflict_decision(payload)
@@ -186,10 +189,10 @@ class WorldConflictRepository:
         """Outstanding hold responses, oldest first; resolutions from before holding stay historical."""
         rows = self.session.scalars(select(WorldPlanConflictRow).where(
             WorldPlanConflictRow.project_id == project_id, WorldPlanConflictRow.status == "resolved",
+            WorldPlanConflictRow.decision_option == "plot_responds",
         ).order_by(WorldPlanConflictRow.created_at, WorldPlanConflictRow.id))
         return [row for row in rows
-                if (decision := json.loads(row.decision_json or "{}")).get("option") == "plot_responds"
-                and decision.get("pending_plan_response") is not False
+                if (decision := json.loads(row.decision_json or "{}")).get("pending_plan_response") is not False
                 and not decision.get("response_retired")
                 and (decision.get("pending_plan_response") is True or self.response_patches(row))]
 
@@ -227,8 +230,13 @@ class WorldConflictRepository:
 
     def attach_result_refs(self, row: WorldPlanConflictRow, refs: Sequence[str]) -> None:
         """Append ``refs`` to the row's result_refs, each once."""
-        row.result_refs_json = json.dumps(list(dict.fromkeys([*conflict_result_refs(row), *refs])), ensure_ascii=False)
+        self._set_result_refs(row, list(dict.fromkeys([*conflict_result_refs(row), *refs])))
         self.session.flush()
+
+    def _set_result_refs(self, row: WorldPlanConflictRow, refs: Sequence[str]) -> None:
+        row.result_refs_json = json.dumps(list(refs), ensure_ascii=False)
+        self.session.execute(delete(WorldConflictResultRefRow).where(WorldConflictResultRefRow.conflict_id == row.id))
+        self.session.add_all(WorldConflictResultRefRow(conflict_id=row.id, ref=ref) for ref in dict.fromkeys(refs))
 
     def escalate(self, row: WorldPlanConflictRow) -> None:
         row.required_decider = "human"
@@ -238,30 +246,27 @@ class WorldConflictRepository:
         """A resolved response consumes the intent's one offer, including after a rewrite."""
         if not intent_ref:
             return False
-        decisions = self.session.scalars(select(WorldPlanConflictRow.decision_json).where(
+        return self.session.scalar(select(WorldPlanConflictRow.id).where(
             WorldPlanConflictRow.project_id == project_id,
             WorldPlanConflictRow.intent_ref == intent_ref,
             WorldPlanConflictRow.status == "resolved",
-        ))
-        return any(json.loads(decision or "{}").get("option") == "plot_responds" for decision in decisions)
+            WorldPlanConflictRow.decision_option == "plot_responds",
+        ).limit(1)) is not None
 
     def reroll_count(self, project_id: str, *, actor_ref: str, since_chapter: int = 0) -> int:
         """The actor's veto_world resolutions on conflicts whose detected_after_chapter >= ``since_chapter``.
 
         A veto a historical rewrite superseded no longer counts.
         """
-        decisions = self.session.scalars(
-            select(WorldPlanConflictRow.decision_json).where(
+        return self.session.scalar(
+            select(func.count()).select_from(WorldPlanConflictRow).where(
                 WorldPlanConflictRow.project_id == project_id,
                 WorldPlanConflictRow.actor_ref == actor_ref,
                 WorldPlanConflictRow.status == "resolved",
+                WorldPlanConflictRow.decision_option == "veto_world",
+                WorldPlanConflictRow.superseded_by_delta.is_(None),
                 WorldPlanConflictRow.detected_after_chapter >= since_chapter,
             )
-        )
-        return sum(
-            (decision := json.loads(payload)).get("option") == "veto_world"
-            and not decision.get(SUPERSEDED_BY_DELTA_KEY)
-            for payload in decisions
         )
 
 

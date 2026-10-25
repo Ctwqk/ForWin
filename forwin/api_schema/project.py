@@ -9,7 +9,6 @@ from forwin.planning.checkpoints import (
     BlockingReasonInfo,
 )
 from forwin.audit.events import DecisionEventInfo
-from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.long_run_policy import LongRunPolicy
 from forwin.publishers.platforms import normalize_supported_platform
 from forwin.protocol.subworld import SubWorldSummary
@@ -193,7 +192,6 @@ class ProjectDetail(ProjectArcSnapshotFields):
     blocking_reason: BlockingReasonInfo = Field(default_factory=BlockingReasonInfo)
     next_gate: str = ""
     decision_timeline: list[DecisionEventInfo] = Field(default_factory=list)
-    narrative_constraints: list[NarrativeConstraintInfo] = Field(default_factory=list)
 
 
 class ProjectDeleteResponse(BaseModel):

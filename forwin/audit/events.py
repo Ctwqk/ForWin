@@ -47,9 +47,6 @@ class DecisionEventType:
     RUNTIME_POLICY_UPDATED = "runtime_policy_updated"
     MANUAL_CHECKPOINT_CREATED = "manual_checkpoint_created"
     MANUAL_CHECKPOINT_HIT = "manual_checkpoint_hit"
-    CONSTRAINT_CREATED = "constraint_created"
-    CONSTRAINT_UPDATED = "constraint_updated"
-    CONSTRAINT_ARCHIVED = "constraint_archived"
     FUTURE_PLAN_AUDIT_RUN = "future_plan_audit_run"
     FUTURE_PLAN_PATCH_APPLIED = "future_plan_patch_applied"
     GENERATION_AUDIT_CHECKPOINT_REACHED = "generation_audit_checkpoint_reached"
@@ -209,9 +206,6 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.RUNTIME_POLICY_UPDATED,
     DecisionEventType.MANUAL_CHECKPOINT_CREATED,
     DecisionEventType.MANUAL_CHECKPOINT_HIT,
-    DecisionEventType.CONSTRAINT_CREATED,
-    DecisionEventType.CONSTRAINT_UPDATED,
-    DecisionEventType.CONSTRAINT_ARCHIVED,
     DecisionEventType.FUTURE_PLAN_AUDIT_RUN,
     DecisionEventType.FUTURE_PLAN_PATCH_APPLIED,
     DecisionEventType.GENERATION_AUDIT_CHECKPOINT_REACHED,

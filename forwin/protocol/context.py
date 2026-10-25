@@ -5,7 +5,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from forwin.planning.checkpoints import NextBandSummary
-from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.world_view.types import ChapterWorldView
 
 from .experience import (
@@ -198,9 +197,6 @@ class ChapterContextPack(BaseModel):
     allowed_entities: list[str] = Field(default_factory=list)
     chapter_entry_targets: list[ChapterEntryTarget] = Field(default_factory=list)
     entity_admission_rule: str = ""
-    active_future_constraints: list[NarrativeConstraintInfo] = Field(
-        default_factory=list
-    )
     next_band_summary: NextBandSummary | None = None
     world_context: WorldContextPack = Field(default_factory=WorldContextPack)
     map_context: dict[str, Any] = Field(default_factory=dict)
@@ -233,9 +229,6 @@ class ReviewContextPack(BaseModel):
     arc_payoff_map: ArcPayoffMap | None = None
     band_delight_schedule: BandDelightSchedule | None = None
     chapter_experience_plan: ChapterExperiencePlan | None = None
-    active_future_constraints: list[NarrativeConstraintInfo] = Field(
-        default_factory=list
-    )
     next_band_summary: NextBandSummary | None = None
     world_context: WorldContextPack = Field(default_factory=WorldContextPack)
     map_context: dict[str, Any] = Field(default_factory=dict)

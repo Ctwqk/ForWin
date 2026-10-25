@@ -133,7 +133,6 @@ class ChapterContextAssembler:
                 if chapter_experience_plan is not None
                 else ""
             ),
-            active_future_constraints=data.get("active_constraints", []),
             next_band_summary=data.get("next_band_summary"),
             world_context=data.get("world_context", WorldContextPack()),
             map_context=data.get("map_context", {}),

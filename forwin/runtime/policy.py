@@ -65,7 +65,6 @@ class ReviewPolicy(FrozenPolicyModel):
 
 
 class PlanningPolicy(FrozenPolicyModel):
-    future_constraints: bool
     plan_health: bool
     band_size: int = Field(default=6, ge=4, le=12)
     max_replans_per_band: int = Field(default=2, ge=0, le=5)
@@ -76,14 +75,12 @@ class PlanningPolicy(FrozenPolicyModel):
     def for_profile(cls, quality_profile: str) -> PlanningPolicy:
         if quality_profile == "pulp":
             return cls(
-                future_constraints=False,
                 plan_health=False,
                 band_size=8,
                 max_replans_per_band=1,
                 digest_budget_chars=6000,
             )
         return cls(
-            future_constraints=True,
             plan_health=True,
         )
 
@@ -170,6 +167,8 @@ class RuntimePolicy(FrozenPolicyModel):
             }
             loaded["planning"].pop("use_llm_simulation", None)
             loaded["planning"].pop("context_recency_" + "window", None)
+            # Policies stored before narrative constraint removal carry this key; remove after deploy.
+            loaded["planning"].pop("future_constraints", None)
         writer = data.get("writer", {})
         if isinstance(writer, dict):
             loaded["writer"] = {

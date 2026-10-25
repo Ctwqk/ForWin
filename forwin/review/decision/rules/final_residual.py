@@ -13,7 +13,6 @@ _HARD_ISSUE_TYPES = {
     "continuity",
     "entity_admission_plan_conflict",
     "entity_admission_plan_invalid",
-    "future_constraint",
     "intra_band_consistency",
     "world_consistency",
 }

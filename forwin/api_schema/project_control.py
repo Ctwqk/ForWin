@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from forwin.planning.constraints import NarrativeConstraintInfo
 from .project import ProjectAutomationPublishSettings, ProjectAutomationSettings
 
 
@@ -17,38 +16,6 @@ class ManualCheckpointRequest(BaseModel):
 class BandCheckpointApproveRequest(BaseModel):
     status: Literal["pass", "overridden"] = "overridden"
     reason: str = ""
-
-
-class NarrativeConstraintCreateRequest(BaseModel):
-    constraint_type: str
-    level: str = "hard"
-    subject_name: str = ""
-    description: str = ""
-    payload: dict[str, Any] = Field(default_factory=dict)
-    arc_id: str = ""
-    band_id: str = ""
-    effective_from_chapter: int = 1
-    protect_until_chapter: int = 0
-    status: str = "active"
-    reason: str = ""
-
-
-class NarrativeConstraintUpdateRequest(BaseModel):
-    constraint_type: str | None = None
-    level: str | None = None
-    subject_name: str | None = None
-    description: str | None = None
-    payload: dict[str, Any] | None = None
-    arc_id: str | None = None
-    band_id: str | None = None
-    effective_from_chapter: int | None = None
-    protect_until_chapter: int | None = None
-    status: str | None = None
-    reason: str = ""
-
-
-class NarrativeConstraintsResponse(BaseModel):
-    items: list[NarrativeConstraintInfo] = Field(default_factory=list)
 
 
 class ProjectAutomationUpdateRequest(BaseModel):
@@ -75,9 +42,6 @@ class ProjectAutomationUpdateResponse(BaseModel):
 __all__ = [
     "ManualCheckpointRequest",
     "BandCheckpointApproveRequest",
-    "NarrativeConstraintCreateRequest",
-    "NarrativeConstraintUpdateRequest",
-    "NarrativeConstraintsResponse",
     "ProjectAutomationUpdateRequest",
     "ProjectAutomationUpdateResponse",
 ]

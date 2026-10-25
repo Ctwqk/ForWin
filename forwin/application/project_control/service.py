@@ -7,8 +7,6 @@ from forwin.api_schema import (
     BandCheckpointApproveRequest,
     BandExperienceOverrideRequest,
     ManualCheckpointRequest,
-    NarrativeConstraintCreateRequest,
-    NarrativeConstraintUpdateRequest,
     TropeTemplateValidationRequest,
 )
 
@@ -20,9 +18,7 @@ class ProjectControlApplicationDeps:
     get_session: Callable[[], Any]
     get_pipeline: Callable[[], Any]
     require_reason: Callable[..., str]
-    validate_constraint_payload: Callable[..., tuple[str, str, str]]
     serialize_band_checkpoint: Callable[..., Any]
-    serialize_constraint: Callable[..., Any]
     list_decision_event_rows: Callable[..., list[Any]]
     serialize_decision_event: Callable[[Any], Any]
     build_causal_replay: Callable[..., Any]
@@ -30,7 +26,6 @@ class ProjectControlApplicationDeps:
     latest_band_checkpoint_row: Callable[..., Any]
     latest_related_decision_event: Callable[..., Any]
     log_decision_event: Callable[..., Any]
-    json_load_object: Callable[[str | None], dict[str, Any]]
 
 
 def _build_operations(
@@ -39,9 +34,7 @@ def _build_operations(
     get_session = deps.get_session
     get_pipeline = deps.get_pipeline
     require_reason = deps.require_reason
-    validate_constraint_payload = deps.validate_constraint_payload
     serialize_band_checkpoint = deps.serialize_band_checkpoint
-    serialize_constraint = deps.serialize_constraint
     list_decision_event_rows = deps.list_decision_event_rows
     serialize_decision_event = deps.serialize_decision_event
     build_causal_replay = deps.build_causal_replay
@@ -49,7 +42,6 @@ def _build_operations(
     latest_band_checkpoint_row = deps.latest_band_checkpoint_row
     latest_related_decision_event = deps.latest_related_decision_event
     log_decision_event = deps.log_decision_event
-    json_load_object = deps.json_load_object
     def create_manual_checkpoint(project_id: str, req: ManualCheckpointRequest):
         return operations.create_manual_checkpoint(
             project_id,
@@ -84,42 +76,6 @@ def _build_operations(
             serialize_band_checkpoint=serialize_band_checkpoint,
         )
 
-    def list_project_constraints(project_id: str):
-        return operations.list_project_constraints(
-            project_id,
-            get_session=get_session,
-            serialize_constraint=serialize_constraint,
-        )
-
-    def create_project_constraint(
-        project_id: str, req: NarrativeConstraintCreateRequest
-    ):
-        return operations.create_project_constraint(
-            project_id,
-            req,
-            get_session=get_session,
-            require_reason=require_reason,
-            validate_constraint_payload=validate_constraint_payload,
-            log_decision_event=log_decision_event,
-            serialize_constraint=serialize_constraint,
-        )
-
-    def update_project_constraint(
-        project_id: str,
-        constraint_id: str,
-        req: NarrativeConstraintUpdateRequest,
-    ):
-        return operations.update_project_constraint(
-            project_id,
-            constraint_id,
-            req,
-            get_session=get_session,
-            require_reason=require_reason,
-            validate_constraint_payload=validate_constraint_payload,
-            log_decision_event=log_decision_event,
-            serialize_constraint=serialize_constraint,
-            json_load_object=json_load_object,
-        )
 
     def list_project_decision_events(
         project_id: str,
@@ -239,9 +195,6 @@ def _build_operations(
         "create_manual_checkpoint": create_manual_checkpoint,
         "get_band_checkpoint": get_band_checkpoint,
         "approve_band_checkpoint": approve_band_checkpoint,
-        "list_project_constraints": list_project_constraints,
-        "create_project_constraint": create_project_constraint,
-        "update_project_constraint": update_project_constraint,
         "list_project_decision_events": list_project_decision_events,
         "get_project_causal_replay": get_project_causal_replay,
         "get_project_audit_insights": get_project_audit_insights,

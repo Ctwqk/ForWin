@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from types import SimpleNamespace
 
 from forwin.application.projects.common import _overlay_active_generation_task
 from forwin.application.read_models import build_generation_control
@@ -138,62 +137,6 @@ class GenerationControlPayloadTests(unittest.TestCase):
         self.assertEqual(control.next_gate, "completed")
         self.assertEqual(control.blocking_reason.code, "")
 
-    def test_future_constraint_failure_exposes_blocking_reason_and_event_id(
-        self,
-    ) -> None:
-        control = build_generation_control(
-            plans=[
-                _plan(1, "failed"),
-                _plan(2, "planned"),
-            ],
-            review_interval_chapters=0,
-            decision_events=[
-                DecisionEventInfo(
-                    id="evt-future-constraint-1",
-                    project_id="project-control-1",
-                    chapter_number=1,
-                    scope="chapter",
-                    event_family="evaluation_verdict",
-                    event_type="review_verdict_recorded",
-                    payload={
-                        "verdict": "fail",
-                        "issue_types": ["future_constraint"],
-                    },
-                )
-            ],
-        )
-
-        self.assertEqual(control.blocking_reason.code, "future_constraint_block")
-        self.assertEqual(control.blocking_reason.chapter_number, 1)
-        self.assertEqual(
-            control.blocking_reason.decision_event_id, "evt-future-constraint-1"
-        )
-        self.assertEqual(control.next_gate, "future_constraint_block")
-
-    def test_future_constraint_blocking_reason_accepts_raw_decision_event_rows(
-        self,
-    ) -> None:
-        control = build_generation_control(
-            plans=[
-                _plan(1, "failed"),
-                _plan(2, "planned"),
-            ],
-            review_interval_chapters=0,
-            decision_events=[
-                SimpleNamespace(
-                    id="evt-row-future-constraint-1",
-                    chapter_number=1,
-                    event_type="review_verdict_recorded",
-                    payload_json='{"verdict":"fail","issue_types":["future_constraint"]}',
-                    summary="future constraint failed",
-                )
-            ],
-        )
-
-        self.assertEqual(control.blocking_reason.code, "future_constraint_block")
-        self.assertEqual(
-            control.blocking_reason.decision_event_id, "evt-row-future-constraint-1"
-        )
 
     def test_active_task_overlay_does_not_replace_project_chapter_sets(self) -> None:
         detail = ProjectDetail(

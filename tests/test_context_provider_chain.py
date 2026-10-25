@@ -102,11 +102,6 @@ class _FakeRepo:
     def get_audience_hints(self, project_id: str, before_chapter: int):
         return None
 
-    def future_constraints_enabled(self, project_id: str):
-        return False
-
-    def list_active_narrative_constraints(self, project_id: str, chapter_number: int):
-        return []
 
     def get_next_band_summary(self, project_id: str, chapter_number: int):
         return None

@@ -6,7 +6,6 @@ from forwin.planning.checkpoints import (
     BlockingReasonInfo,
 )
 from forwin.audit.events import DecisionEventInfo
-from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.protocol.subworld import SubWorldSummary
 
 from .world_conflicts import WorldConflictInfo, WorldConflictResolveRequest
@@ -184,9 +183,6 @@ from .observability import (
 from .project_control import (
     ManualCheckpointRequest,
     BandCheckpointApproveRequest,
-    NarrativeConstraintCreateRequest,
-    NarrativeConstraintUpdateRequest,
-    NarrativeConstraintsResponse,
     ProjectAutomationUpdateRequest,
     ProjectAutomationUpdateResponse,
 )
@@ -220,7 +216,6 @@ __all__ = [
     "BandCheckpointDetail",
     "BlockingReasonInfo",
     "DecisionEventInfo",
-    "NarrativeConstraintInfo",
     "SubWorldSummary",
     "ModelProfile",
     "RuntimeCatalogResponse",
@@ -364,9 +359,6 @@ __all__ = [
     "RuleProvenanceReportResponse",
     "ManualCheckpointRequest",
     "BandCheckpointApproveRequest",
-    "NarrativeConstraintCreateRequest",
-    "NarrativeConstraintUpdateRequest",
-    "NarrativeConstraintsResponse",
     "ProjectAutomationUpdateRequest",
     "ProjectAutomationUpdateResponse",
     "ChapterDetail",

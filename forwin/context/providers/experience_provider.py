@@ -26,15 +26,6 @@ class ExperienceContextProvider:
             repo, "get_band_experience_plan_for_chapter", None
         )
         chapter_experience_getter = getattr(repo, "get_chapter_experience_plan", None)
-        constraints_enabled_getter = getattr(repo, "future_constraints_enabled", None)
-        constraints_enabled = (
-            bool(constraints_enabled_getter(project_id))
-            if callable(constraints_enabled_getter)
-            else True
-        )
-        active_constraints_getter = getattr(
-            repo, "list_active_narrative_constraints", None
-        )
         next_band_summary_getter = getattr(repo, "get_next_band_summary", None)
 
         chapter_experience_plan = (
@@ -89,13 +80,6 @@ class ExperienceContextProvider:
                     else None
                 ),
                 "chapter_experience_plan": chapter_experience_plan,
-                "active_constraints": (
-                    active_constraints_getter(
-                        project_id, chapter_number=chapter_plan.chapter_number
-                    )
-                    if constraints_enabled and callable(active_constraints_getter)
-                    else []
-                ),
                 "next_band_summary": (
                     next_band_summary_getter(project_id, chapter_plan.chapter_number)
                     if callable(next_band_summary_getter)

@@ -52,6 +52,8 @@ The repository defaults to the Swarm manager endpoints at `ccttww-lap.local`. Us
 
 ### P4a Planning And Conflict Recovery
 
+Narrative constraints were removed on 2026-10-24; protections come only from beat sheets.
+
 - Source schema head is `0006_planning_v6` (parent `0005_world_plan_conflicts`); inspect the running service before assuming it matches. Handoff creates `arc_beat_sheets` and protections, with fixed Genesis arc ranges; `band_plans` and ChapterPlans are prepared just in time. `plan.arc_beats` / `plan.band` produce PromptTrace and decision evidence.
 - Post-Canon order is `("world", "plan", "feedback")`, then order controls. Plan separately commits arc activation, beat-sheet work, audit/replanning and next-band preparation before committing step completion and trace outbox; feedback analyzes comments before aggregation. Synchronous raw-artifact store errors can fail the current unit/step; retries retain and conditionally reuse earlier committed planning work. Post-commit outbox retries only upload.
 - Read `world_conflict_list` / `world_conflict_get` for `plan_feasibility` or `band_planning` issues. Both require human `amend_plan` with rationale; PlanAmender revises the beat sheet for milestone/exit-state problems, otherwise forces replanning. World-tick amendments commit the change, release protections with `payload.status = "released"`, then replan remaining chapters; a failed replan leaves a follow-up conflict. Use only returned options.

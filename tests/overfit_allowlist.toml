@@ -19,7 +19,7 @@ completed_phase = "P4"
 
 [story_id_literal]
 allowed_values = ["main", "fact_ref", "fact_type", "fact_id", "thread_id", "world_line_id", "fact_refs",
-  "fact_conflict", "thread_keep_open", "thread_already_closed",
+  "fact_conflict", "thread_already_closed",
   "thread_drift", "thread_time_extraction", "fact_nodes", "gap_between_public_and_actual",
   # protocol field / enum / ref-namespace names (not story content); "fact_" is the bare
   # prefix of generated ids such as f"fact_{new_id()}"
@@ -953,7 +953,7 @@ path = "forwin/writer/prompt_core/sections.py"
 checks = ["cjk_regex", "cjk_membership", "cjk_inline_iteration"]
 category = "prompt_text"
 justification = "writer prompt 构造模块（拼接 LLM 说明文字与解析 premise 中的主角标注）"
-max_literals = 20
+max_literals = 15
 
 [[entry]]
 path = "forwin/writer/prompt_core/world_engine.py"

@@ -31,9 +31,7 @@ from forwin.application.project_control.support import (
     log_decision_event as _log_decision_event,
     persist_project_automation as _persist_project_automation,
     serialize_band_checkpoint as _serialize_band_checkpoint,
-    serialize_constraint as _serialize_constraint,
     serialize_decision_event as _serialize_decision_event,
-    validate_constraint_payload as _validate_constraint_payload,
 )
 from forwin.application.tasks import TaskApplicationDeps, TaskApplicationService
 from forwin.http.adapters import api_observability_routes
@@ -176,9 +174,7 @@ def _build_project_control_application(
             get_session=lambda: _get_session(runtime),
             get_pipeline=runtime.get_pipeline,
             require_reason=_require_reason,
-            validate_constraint_payload=_validate_constraint_payload,
             serialize_band_checkpoint=_serialize_band_checkpoint,
-            serialize_constraint=_serialize_constraint,
             list_decision_event_rows=_list_decision_event_rows,
             serialize_decision_event=_serialize_decision_event,
             build_causal_replay=_build_causal_replay,
@@ -186,7 +182,6 @@ def _build_project_control_application(
             latest_band_checkpoint_row=_latest_band_checkpoint_row,
             latest_related_decision_event=_latest_related_decision_event,
             log_decision_event=_log_decision_event,
-            json_load_object=_json_load_object,
         )
     )
 

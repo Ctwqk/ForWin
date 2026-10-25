@@ -350,107 +350,6 @@
       });
     }
 
-    async function executeCreateNarrativeConstraint(projectId, payload) {
-      try {
-        await requestJson(`/api/projects/${projectId}/constraints`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        setGlobalStatus('narrative constraint 已创建。', '治理设置');
-        await loadBooks();
-        if (currentDrawerTask?.project_id === projectId) {
-          await openTaskDrawer(currentDrawerTask.task_kind, currentDrawerTask.task_id);
-        }
-      } catch (error) {
-        setGlobalStatus(error.message || String(error), 'narrative constraint 创建失败');
-      }
-    }
-
-    function createNarrativeConstraintFromDrawer(projectId) {
-      openProjectControlActionModal({
-        title: '新增 Narrative Constraint',
-        description: 'constraint 可保存展示；只有启用 future constraints 后才参与 review/checkpoint 判定。',
-        confirmLabel: '创建 Constraint',
-        errorTitle: 'narrative constraint 创建失败',
-        fields: [
-          { name: 'constraint_type', label: '约束类型', type: 'select', value: 'character_availability', options: ['character_availability', 'secret_withhold', 'relationship_preserve', 'thread_keep_open', 'location_availability', 'rule_preserve'] },
-          { name: 'level', label: '级别', type: 'select', value: 'hard', options: ['hard', 'soft', 'hint'] },
-          { name: 'subject_name', label: '主体', type: 'text', value: '' },
-          { name: 'description', label: '说明', type: 'text', value: '' },
-          { name: 'effective_from_chapter', label: '起始章节', type: 'number', value: 1, min: 1, step: 1 },
-          { name: 'protect_until_chapter', label: '保护到章节', type: 'number', value: 0, min: 0, step: 1 },
-        ],
-        onSubmit: ({ reason, constraint_type, level, subject_name, description, effective_from_chapter, protect_until_chapter }) => executeCreateNarrativeConstraint(projectId, {
-          constraint_type,
-          level,
-          subject_name,
-          description,
-          effective_from_chapter: Number.isFinite(Number(effective_from_chapter)) ? Number(effective_from_chapter) : 1,
-          protect_until_chapter: Number.isFinite(Number(protect_until_chapter)) ? Number(protect_until_chapter) : 0,
-          reason,
-        }),
-      });
-    }
-
-    async function executeUpdateNarrativeConstraint(projectId, constraintId, payload) {
-      try {
-        await requestJson(`/api/projects/${projectId}/constraints/${constraintId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        setGlobalStatus('narrative constraint 已更新。', '治理设置');
-        await loadBooks();
-        if (currentDrawerTask?.project_id === projectId) {
-          await openTaskDrawer(currentDrawerTask.task_kind, currentDrawerTask.task_id);
-        }
-      } catch (error) {
-        setGlobalStatus(error.message || String(error), 'narrative constraint 更新失败');
-      }
-    }
-
-    function editNarrativeConstraintFromDrawer(projectId, constraint) {
-      if (!constraint?.id) return;
-      openProjectControlActionModal({
-        title: '编辑 Narrative Constraint',
-        description: '修改会写入 constraint_updated 决策事件。',
-        confirmLabel: '保存 Constraint',
-        errorTitle: 'narrative constraint 更新失败',
-        fields: [
-          { name: 'constraint_type', label: '约束类型', type: 'select', value: constraint.constraint_type || 'character_availability', options: ['character_availability', 'secret_withhold', 'relationship_preserve', 'thread_keep_open', 'location_availability', 'rule_preserve'] },
-          { name: 'level', label: '级别', type: 'select', value: constraint.level || 'hard', options: ['hard', 'soft', 'hint'] },
-          { name: 'subject_name', label: '主体', type: 'text', value: constraint.subject_name || '' },
-          { name: 'description', label: '说明', type: 'text', value: constraint.description || '' },
-          { name: 'effective_from_chapter', label: '起始章节', type: 'number', value: constraint.effective_from_chapter || 1, min: 1, step: 1 },
-          { name: 'protect_until_chapter', label: '保护到章节', type: 'number', value: constraint.protect_until_chapter || 0, min: 0, step: 1 },
-        ],
-        onSubmit: ({ reason, constraint_type, level, subject_name, description, effective_from_chapter, protect_until_chapter }) => executeUpdateNarrativeConstraint(projectId, constraint.id, {
-          constraint_type,
-          level,
-          subject_name,
-          description,
-          effective_from_chapter: Number.isFinite(Number(effective_from_chapter)) ? Number(effective_from_chapter) : 1,
-          protect_until_chapter: Number.isFinite(Number(protect_until_chapter)) ? Number(protect_until_chapter) : 0,
-          reason,
-        }),
-      });
-    }
-
-    function archiveNarrativeConstraintFromDrawer(projectId, constraint) {
-      if (!constraint?.id) return;
-      openProjectControlActionModal({
-        title: '停用 Narrative Constraint',
-        description: '停用后 constraint 仍会保留展示，但不再作为 active constraint。',
-        confirmLabel: '停用 Constraint',
-        errorTitle: 'narrative constraint 停用失败',
-        onSubmit: ({ reason }) => executeUpdateNarrativeConstraint(projectId, constraint.id, {
-          status: 'inactive',
-          reason,
-        }),
-      });
-    }
-
     async function executeApproveBandCheckpoint(projectId, bandId, status, reason) {
       try {
         await requestJson(`/api/projects/${projectId}/bands/${bandId}/checkpoint/approve`, {
@@ -793,29 +692,11 @@
         boundary_kind: latestCheckpoint?.boundary_kind || 'band_end',
         boundary_chapter: latestCheckpoint?.boundary_chapter || item.current_chapter || 0,
       }), 'secondary'));
-      actions.appendChild(createButton('新增 Constraint', () => createNarrativeConstraintFromDrawer(item.project_id), 'ghost'));
       if (latestCheckpoint?.band_id && ['warn', 'fail', 'pending', 'error'].includes(String(latestCheckpoint.status || ''))) {
         actions.appendChild(createButton('Override Checkpoint', () => approveBandCheckpointFromDrawer(item.project_id, latestCheckpoint.band_id, 'overridden'), 'ghost'));
       }
       card.appendChild(actions);
 
-      const constraints = Array.isArray(project.narrative_constraints) ? project.narrative_constraints : [];
-      if (constraints.length) {
-        const constraintsList = createNode('div', '', 'list');
-        constraints.slice(0, 8).forEach((constraint) => {
-          const row = createNode('div', '', 'list-item');
-          row.appendChild(createNode('strong', `${constraint.status || 'active'} · ${constraint.level || 'hard'} · ${constraint.constraint_type || ''}`));
-          row.appendChild(createNode('div', `${constraint.subject_name || constraint.description || '-'}${constraint.protect_until_chapter ? `\nprotect_until=${constraint.protect_until_chapter}` : ''}`, 'meta-line'));
-          const constraintActions = createNode('div', '', 'action-row');
-          constraintActions.appendChild(createButton('编辑', () => editNarrativeConstraintFromDrawer(item.project_id, constraint), 'ghost'));
-          if (String(constraint.status || 'active') === 'active') {
-            constraintActions.appendChild(createButton('停用', () => archiveNarrativeConstraintFromDrawer(item.project_id, constraint), 'ghost'));
-          }
-          row.appendChild(constraintActions);
-          constraintsList.appendChild(row);
-        });
-        card.appendChild(constraintsList);
-      }
       return card;
     }
 

@@ -860,7 +860,7 @@ def test_legacy_governance_namespace_is_replaced_by_real_domain_owners() -> None
 
     assert (ROOT / "forwin/audit/events.py").exists()
     assert not (ROOT / "forwin/planning/contracts.py").exists()
-    assert (ROOT / "forwin/planning/constraints.py").exists()
+    assert not (ROOT / "forwin/planning/constraints.py").exists()
     assert (ROOT / "forwin/planning/checkpoints.py").exists()
     assert (ROOT / "forwin/review/plan_checks.py").exists()
     assert not (ROOT / "forwin/review/constraint_keywords.py").exists()
@@ -1505,3 +1505,37 @@ def test_subworld_role_paths_are_gone() -> None:
         for token in forbidden if token in path.read_text(encoding="utf-8")
     ]
     assert offenders == []
+
+
+def test_narrative_constraints_are_removed() -> None:
+    from fastapi.testclient import TestClient
+    from forwin import models
+    from forwin.api_schema.project import ProjectDetail
+    from forwin.http import create_app
+    from forwin.protocol.context import ChapterContextPack
+
+    assert not hasattr(models, "NarrativeConstraint")
+    assert "narrative_constraints" not in models.Base.metadata.tables
+    assert not (ROOT / "forwin/planning/constraints.py").exists()
+    assert "narrative_constraints" not in ProjectDetail.model_fields
+    assert "active_future_constraints" not in ChapterContextPack.model_fields
+    client = TestClient(create_app())
+    try:
+        assert not any("/constraints" in route.path for route in client.app.routes)
+        for method, suffix in (("GET", ""), ("POST", ""), ("PATCH", "/constraint-1")):
+            assert client.request(method, f"/api/projects/project-1/constraints{suffix}").status_code in {404, 405}
+    finally:
+        client.close()
+    editor = _read("forwin/ui_assets/home/app_task_control.js")
+    for token in ("NarrativeConstraint", "narrative_constraints", "/constraints", "新增 Constraint"):
+        assert token not in editor
+    for path in (ROOT / "forwin").rglob("*.py"):
+        if "migrations" in path.parts:
+            continue
+        source = path.read_text()
+        if path == ROOT / "forwin/runtime/policy.py":
+            # Allow only the load shim until post-deploy cleanup.
+            source = source.replace('loaded["planning"].pop("future_constraints", None)', "")
+        for token in ("NarrativeConstraint", "narrative_constraints", "thread_keep_open",
+                      "future_constraint", "CONSTRAINT_CREATED", "CONSTRAINT_UPDATED", "CONSTRAINT_ARCHIVED"):
+            assert token not in source, (path, token)

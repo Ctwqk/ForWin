@@ -138,6 +138,7 @@ def upgrade() -> None:
     op.drop_column("band_experience_plans", "task_contract_json")
     _add_typed_conflict_lookups()
     _add_canon_ordering()
+    op.drop_table("narrative_constraints")
 
 
 def _drop_simulation_from_policies() -> None:
@@ -163,6 +164,7 @@ def _drop_simulation_from_policies() -> None:
 
 
 def downgrade() -> None:
+    _restore_narrative_constraints()
     """Revert schema; the maintenance step data rewrite is not reversed."""
     op.drop_column("projection_checkpoints", "run_seq")
     for table in reversed(_CANON_ORDERING):
@@ -619,3 +621,40 @@ def _add_canon_ordering():
                           COALESCE(MAX(seq), 1), MAX(seq) IS NOT NULL) FROM {table}
         """)
     op.add_column("projection_checkpoints", sa.Column("run_seq", sa.Integer(), nullable=False, server_default="0"))
+
+
+def _restore_narrative_constraints() -> None:
+    op.create_table(
+        "narrative_constraints",
+        sa.Column("id", sa.String(), nullable=False),
+        sa.Column("project_id", sa.String(), nullable=False),
+        sa.Column("arc_id", sa.String(), nullable=False),
+        sa.Column("band_id", sa.String(), nullable=False),
+        sa.Column("constraint_type", sa.String(), nullable=False),
+        sa.Column("level", sa.String(), nullable=False),
+        sa.Column("subject_name", sa.String(), nullable=False),
+        sa.Column("description", sa.Text(), nullable=False),
+        sa.Column("payload_json", sa.Text(), nullable=False),
+        sa.Column("effective_from_chapter", sa.Integer(), nullable=False),
+        sa.Column("protect_until_chapter", sa.Integer(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_narrative_constraints_project_band",
+        "narrative_constraints",
+        ["project_id", "band_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_narrative_constraints_project_status",
+        "narrative_constraints",
+        ["project_id", "status"],
+        unique=False,
+    )

@@ -15,10 +15,8 @@ from forwin.planning.checkpoints import (
     normalize_checkpoint_status,
 )
 from forwin.audit.events import DecisionEventInfo
-from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.models.planning_control import (
     BandCheckpoint,
-    NarrativeConstraint,
 )
 from forwin.models.audit import DecisionEvent
 from .common import (
@@ -93,51 +91,6 @@ def _decision_timeline_by_project(
                     parent_event_id=str(getattr(row, "parent_event_id", "") or ""),
                     causal_root_id=str(getattr(row, "causal_root_id", "") or ""),
                     created_at=row.created_at.isoformat() if row.created_at else "",
-                )
-            )
-    return dict(grouped)
-
-
-def _narrative_constraints_by_project(
-    session: Session,
-    project_ids: list[str],
-    *,
-    limit: int,
-) -> dict[str, list[NarrativeConstraintInfo]]:
-    rows_by_project = _recent_rows_by_project(
-        session,
-        NarrativeConstraint,
-        NarrativeConstraint.project_id,
-        project_ids,
-        order_by=(
-            NarrativeConstraint.created_at.desc(),
-            NarrativeConstraint.id.desc(),
-        ),
-        limit=limit,
-    )
-    grouped: dict[str, list[NarrativeConstraintInfo]] = defaultdict(list)
-    for project_id, rows in rows_by_project.items():
-        for row in rows:
-            try:
-                payload = json.loads(row.payload_json or "{}") or {}
-            except (json.JSONDecodeError, TypeError):
-                payload = {}
-            grouped[project_id].append(
-                NarrativeConstraintInfo(
-                    id=row.id,
-                    project_id=row.project_id,
-                    arc_id=row.arc_id,
-                    band_id=row.band_id,
-                    constraint_type=row.constraint_type,
-                    level=row.level,
-                    subject_name=row.subject_name,
-                    description=row.description,
-                    payload=payload if isinstance(payload, dict) else {},
-                    effective_from_chapter=row.effective_from_chapter,
-                    protect_until_chapter=row.protect_until_chapter,
-                    status=row.status,
-                    created_at=row.created_at.isoformat() if row.created_at else "",
-                    updated_at=row.updated_at.isoformat() if row.updated_at else "",
                 )
             )
     return dict(grouped)
@@ -260,7 +213,6 @@ def project_arc_snapshot_payload(
 __all__ = [
     "_latest_band_checkpoint_by_project",
     "_decision_timeline_by_project",
-    "_narrative_constraints_by_project",
     "_band_checkpoint_detail",
     "project_arc_snapshot_payload",
 ]

@@ -152,7 +152,6 @@ def build_project_summaries(
             latest_band_checkpoint=latest_checkpoint,
             decision_events=decision_timeline_map.get(project.id, []),
             open_world_conflicts=open_world_conflicts_map.get(project.id, []),
-            future_constraints_enabled=policy_record.policy.planning.future_constraints,
             writable_chapters=writable_chapters_map.get(project.id, range(0)),
         )
         payload.append(

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, Callable
+from typing import Callable
 
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -16,10 +15,7 @@ from forwin.planning.checkpoints import (
     BlockingReasonInfo,
     chapter_blocking_message,
 )
-from forwin.audit.events import (
-    DecisionEventInfo,
-    DecisionEventType,
-)
+from forwin.audit.events import DecisionEventInfo
 from forwin.models.planning_control import BandCheckpoint
 from forwin.generation.continue_workset import writable_chapter_ranges
 from forwin.models.project import ChapterPlan, Project
@@ -102,7 +98,6 @@ def _derive_blocking_reason(
     plans: list[ChapterPlan],
     latest_band_checkpoint: BandCheckpoint | None,
     decision_events: list[DecisionEventInfo] | None = None,
-    future_constraints_enabled: bool = True,
     open_world_conflicts: Sequence[WorldConflictBlockInfo] = (),
     next_chapter: int = 0,
 ) -> BlockingReasonInfo:
@@ -142,16 +137,6 @@ def _derive_blocking_reason(
         str(getattr(ordered_events[0], "id", "") or "") if ordered_events else ""
     )
 
-    def _event_payload(event) -> dict[str, Any]:  # noqa: ANN001
-        payload = getattr(event, "payload", None)
-        if isinstance(payload, dict):
-            return payload
-        try:
-            parsed = json.loads(getattr(event, "payload_json", "") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            parsed = {}
-        return parsed if isinstance(parsed, dict) else {}
-
     def _latest_event_id_for_chapter(chapter_number: int) -> str:
         for event in ordered_events:
             if int(getattr(event, "chapter_number", 0) or 0) == int(
@@ -182,70 +167,6 @@ def _derive_blocking_reason(
             if str(getattr(event, "band_id", "") or "") == band_id:
                 return str(getattr(event, "id", "") or "")
         return fallback_event_id
-
-    def _latest_future_constraint_event(
-        chapter_number: int,
-    ) -> DecisionEventInfo | None:
-        for event in ordered_events:
-            if int(getattr(event, "chapter_number", 0) or 0) != int(
-                chapter_number or 0
-            ):
-                continue
-            payload = _event_payload(event)
-            if (
-                str(getattr(event, "event_type", "") or "")
-                == DecisionEventType.HARD_GATE_HIT
-                and str(payload.get("blocking_reason") or "")
-                == "future_constraint_block"
-            ):
-                return event
-            if (
-                str(getattr(event, "event_type", "") or "")
-                != DecisionEventType.REVIEW_VERDICT_RECORDED
-            ):
-                continue
-            issue_types = payload.get("issue_types") or []
-            if not isinstance(issue_types, list):
-                continue
-            if "future_constraint" not in {str(item or "") for item in issue_types}:
-                continue
-            if str(payload.get("verdict") or "").strip() != "fail":
-                continue
-            return event
-        return None
-
-    constraint_block_plan = (
-        next(
-            (
-                plan
-                for plan in sorted(plans, key=lambda item: item.chapter_number)
-                if plan.status in {"needs_review", "failed"}
-                and _latest_future_constraint_event(plan.chapter_number) is not None
-            ),
-            None,
-        )
-        if future_constraints_enabled
-        else None
-    )
-    if constraint_block_plan is not None:
-        event = _latest_future_constraint_event(constraint_block_plan.chapter_number)
-        detail = ""
-        if event is not None:
-            detail = str(getattr(event, "summary", "") or "").strip()
-            if not detail:
-                detail = str(_event_payload(event).get("error_summary") or "").strip()
-        return BlockingReasonInfo(
-            code="future_constraint_block",
-            message=chapter_blocking_message("future_constraint_block"),
-            chapter_number=constraint_block_plan.chapter_number,
-            decision_event_id=str(
-                getattr(event, "id", "")
-                if event is not None
-                else _latest_event_id_for_chapter(constraint_block_plan.chapter_number)
-            ),
-            detail=detail
-            or f"第 {constraint_block_plan.chapter_number} 章命中了 hard future constraint。",
-        )
 
     if blocking_plan is not None and blocking_plan.chapter_number > 1:
         previous_plan = next(
@@ -367,7 +288,6 @@ def build_generation_control(
     can_pause: bool = False,
     latest_band_checkpoint: BandCheckpoint | None = None,
     decision_events: list[DecisionEventInfo] | None = None,
-    future_constraints_enabled: bool = True,
     writable_chapters: range = range(0),
     open_world_conflicts: Sequence[WorldConflictBlockInfo] = (),
 ) -> GenerationControlInfo:
@@ -437,7 +357,6 @@ def build_generation_control(
         plans=plans,
         latest_band_checkpoint=latest_band_checkpoint,
         decision_events=decision_events,
-        future_constraints_enabled=future_constraints_enabled,
         open_world_conflicts=open_world_conflicts,
         next_chapter=next_chapter,
     )

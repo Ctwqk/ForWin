@@ -50,6 +50,8 @@ def test_project_control_actions_review_and_chapter_operations(
     switch_home_tab(page, "task")
     page.get_by_role("button", name="查看详情").first.click()
     expect(page.locator("#drawer_body")).to_contain_text("RuntimePolicy v1")
+    expect(page.get_by_role("button", name="新增 Constraint")).to_have_count(0)
+    expect(page.locator("#drawer_body")).not_to_contain_text("Narrative Constraint")
     expect(
         page.locator("#runtime_policy_generation_audit_interval")
     ).to_have_count(0)
@@ -83,36 +85,6 @@ def test_project_control_actions_review_and_chapter_operations(
     assert backend.captured_payloads("/api/projects/project-1/manual-checkpoints")[-1][
         "boundary_kind"
     ]
-
-    page.get_by_role("button", name="新增 Constraint").click()
-    page.locator("#project_control_action_field_subject_name").fill("潮门密钥")
-    page.locator("#project_control_action_field_description").fill("第 4 章前保密")
-    _submit_project_control_reason(page)
-    assert (
-        backend.captured_payloads("/api/projects/project-1/constraints")[-1][
-            "subject_name"
-        ]
-        == "潮门密钥"
-    )
-
-    page.get_by_role("button", name="编辑", exact=True).first.click()
-    page.locator("#project_control_action_field_description").fill("第 5 章前保密")
-    _submit_project_control_reason(page)
-    assert (
-        backend.captured_payloads(
-            "/api/projects/project-1/constraints/constraint-1", method="PATCH"
-        )[-1]["description"]
-        == "第 5 章前保密"
-    )
-
-    page.get_by_role("button", name="停用").first.click()
-    _submit_project_control_reason(page)
-    assert (
-        backend.captured_payloads(
-            "/api/projects/project-1/constraints/constraint-1", method="PATCH"
-        )[-1]["status"]
-        == "inactive"
-    )
 
     page.get_by_role("button", name="Override Checkpoint").click()
     _submit_project_control_reason(page)

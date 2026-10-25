@@ -271,7 +271,7 @@ def test_world_conflict_reason_precedes_plan_and_checkpoint_reasons(status):
         latest_band_checkpoint=SimpleNamespace(status="fail"),
         decision_events=[SimpleNamespace(
             id="event", chapter_number=3, event_type="hard_gate_hit",
-            payload={"blocking_reason": "future_constraint_block"}, summary="Constraint",
+            payload={"blocking_reason": "chapter_not_canon"}, summary="Prior chapter",
         )],
         open_world_conflicts=[
             WorldConflictBlockInfo(conflict_id="later", blocks_from_chapter=4, summary="Later"),

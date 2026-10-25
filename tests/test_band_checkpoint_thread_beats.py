@@ -123,7 +123,6 @@ def test_checkpoint_reads_only_accepted_chapter_extraction_beats(
     ("reveal_too_early", "fact_conflict"),
     ("milestone_uncovered", "director_imbalance"),
     ("intra_band_consistency", "fact_conflict"),
-    ("future_constraint", "fact_conflict"),
 ])
 def test_live_plan_issue_groups(code, expected) -> None:
     from forwin.review.issue_groups import issue_group_for_issue

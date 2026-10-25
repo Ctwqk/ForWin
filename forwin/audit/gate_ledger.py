@@ -589,8 +589,6 @@ class GateLedgerService:
                     if issue_group:
                         issue_group_counter[issue_group] += 1
                     warn_allowed_counter[code] += 1
-                    if code == "future_constraint":
-                        constraint_counter[code] += 1
                 recent_examples.append(
                     {
                         **self._example(row),

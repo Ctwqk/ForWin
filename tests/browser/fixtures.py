@@ -781,18 +781,6 @@ class MockForWinBackend:
             self.capture(route, payload)
             json_reply(route, {"message": "manual checkpoint 已创建"})
             return
-        if method == "POST" and re.fullmatch(r"/api/projects/[^/]+/constraints", path):
-            payload = read_json(route)
-            self.capture(route, payload)
-            json_reply(route, {"message": "constraint created", "id": "constraint-new"})
-            return
-        if method == "PATCH" and re.fullmatch(
-            r"/api/projects/[^/]+/constraints/[^/]+", path
-        ):
-            payload = read_json(route)
-            self.capture(route, payload)
-            json_reply(route, {"message": "constraint updated"})
-            return
         if method == "POST" and re.fullmatch(
             r"/api/projects/[^/]+/bands/[^/]+/checkpoint/approve", path
         ):
@@ -987,7 +975,6 @@ class MockForWinBackend:
             ],
         )
         project.setdefault("latest_band_checkpoint", sample_band_checkpoint())
-        project.setdefault("narrative_constraints", [sample_constraint()])
         project.setdefault("decision_timeline", sample_decision_events())
         project.setdefault("automation", sample_automation())
         project.setdefault(
@@ -1062,7 +1049,6 @@ def sample_runtime_policy() -> dict[str, Any]:
             "repair_models": ["deepseek-reasoner"],
         },
         "planning": {
-            "future_constraints": True,
             "plan_health": True,
         },
         "canon": {
@@ -1337,19 +1323,6 @@ def sample_band_checkpoint() -> dict[str, Any]:
             }
         ],
         "decision_refs": [{"id": "decision-3", "event_type": "band_checkpoint_hit"}],
-    }
-
-
-def sample_constraint() -> dict[str, Any]:
-    return {
-        "id": "constraint-1",
-        "status": "active",
-        "level": "hard",
-        "constraint_type": "secret_withhold",
-        "subject_name": "潮门密钥",
-        "description": "第 4 章前不能揭示真相",
-        "effective_from_chapter": 1,
-        "protect_until_chapter": 4,
     }
 
 

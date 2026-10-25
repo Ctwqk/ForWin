@@ -108,7 +108,6 @@ def build_review_context_pack(
         arc_payoff_map=context.arc_payoff_map,
         band_delight_schedule=band,
         chapter_experience_plan=context.chapter_experience_plan,
-        active_future_constraints=list(context.active_future_constraints),
         next_band_summary=context.next_band_summary,
         world_context=context.world_context,
         map_context=map_context,

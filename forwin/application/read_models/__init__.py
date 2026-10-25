@@ -15,7 +15,6 @@ from .common import (
 from .arc_snapshot import (
     _latest_band_checkpoint_by_project,
     _decision_timeline_by_project,
-    _narrative_constraints_by_project,
     _band_checkpoint_detail,
     project_arc_snapshot_payload,
 )
@@ -66,7 +65,6 @@ __all__ = [
     '_load_json_list',
     '_latest_band_checkpoint_by_project',
     '_decision_timeline_by_project',
-    '_narrative_constraints_by_project',
     '_band_checkpoint_detail',
     'project_arc_snapshot_payload',
     '_derive_blocking_reason',

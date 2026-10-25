@@ -320,6 +320,18 @@ def test_stored_policy_with_removed_keys_loads() -> None:
     assert json.dumps(stored) == original
 
 
+@pytest.mark.parametrize("profile, future_constraints", [("standard", True), ("pulp", False)])
+def test_stored_policy_with_future_constraints_loads(profile, future_constraints) -> None:
+    stored = RuntimePolicy.for_profile(profile).model_dump(mode="json")
+    stored["planning"]["future_constraints"] = future_constraints
+    stored["planning"]["band_size"] = 10
+
+    policy = RuntimePolicy.model_validate_json(json.dumps(stored))
+
+    assert "future_constraints" not in policy.planning.model_dump()
+    assert policy.planning.band_size == 10
+
+
 @pytest.mark.parametrize("profile", ["standard", "pulp"])
 def test_with_user_settings_resets_planning_writer_knobs_on_profile_switch(profile) -> None:
     stored = RuntimePolicy.for_profile(profile).model_dump(mode="json")

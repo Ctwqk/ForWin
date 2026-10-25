@@ -9,7 +9,7 @@ ForWin is built around an instance-owned FastAPI runtime, durable generation wor
 While the user-facing surface is a novel-generation platform, the engineering substance is a multi-stage **content production and admission pipeline** for LLM-produced text:
 
 - **Rule extraction → constraint checking → quality gate → LLM reviewer → automated repair → human override**, modeled as **6-state checkpoint transitions** (`pending` / `pass` / `warn` / `fail` / `error` / `overridden`) for full auditability.
-- A **rule engine** over **6 constraint families** (character availability, secret withhold, relationship preservation, thread keep-open, location availability, rule preservation) with hard / soft / hint severity levels, persisted via an active-rule store and an artifact ledger.
+- Narrative constraints were removed on 2026-10-24; protections come only from beat sheets.
 - An **agentic remediation loop** with a repair-scope router and loop detector that automatically routes failed reviews to specialized handlers and escalates pathological repair cycles to human override.
 - An **MCP tool server** that lets LLM agents query project state, trigger reviews, and apply controlled overrides through a typed tool interface.
 - Backed by **FastAPI + PostgreSQL + Qdrant + MinIO + Alembic** with a substantial automated test suite covering the governance, review, repair, and publishing paths.

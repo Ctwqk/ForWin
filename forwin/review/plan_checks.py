@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-from forwin.book_state.extraction.chapter_delta_schema import (
-    NEW_REF_PREFIX,
-    ChapterDeltaExtraction,
-)
-from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.review.issue_groups import issue_group_for_issue
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.protocol.experience import BandDelightSchedule
@@ -347,74 +342,3 @@ def evaluate_director_imbalance(
             )
         )
     return issues
-
-
-def evaluate_constraint_issues(
-    constraints: list[NarrativeConstraintInfo],
-    *,
-    chapter_delta: ChapterDeltaExtraction | None,
-    reviewer: str,
-    issue_type: str,
-    target_scope: str,
-) -> list[ContinuityIssue]:
-    issues: list[ContinuityIssue] = []
-    for constraint in constraints:
-        severity = _constraint_severity(constraint.level)
-        entity_names = [constraint.subject_name] if constraint.subject_name else []
-        evidence_refs = [
-            f"constraint={constraint.id}",
-            f"constraint_type={constraint.constraint_type}",
-        ]
-        matched, detail = _constraint_triggered(
-            constraint,
-            chapter_delta=chapter_delta,
-        )
-        if not matched:
-            continue
-        issues.append(
-            ContinuityIssue(
-                rule_name="future_constraint_violation",
-                severity=severity,
-                description=f"叙事约束被触发：{constraint.description or constraint.subject_name or constraint.constraint_type}",
-                entity_names=entity_names,
-                reviewer=reviewer,
-                issue_type=issue_type,
-                target_scope=target_scope,
-                issue_group=issue_group_for_issue(
-                    issue_type=issue_type, rule_name="future_constraint_violation"
-                ),
-                evidence_refs=[*evidence_refs, detail],
-                suggested_fix="撤回会锁死未来空间的写法，或下调/修改该约束。",
-            )
-        )
-    return issues
-
-
-def _constraint_severity(level: str) -> str:
-    return {
-        "hard": "error",
-        "soft": "warning",
-        "hint": "info",
-    }.get(str(level or "soft"), "warning")
-
-
-def _ref_label(ref: str) -> str:
-    """A chapter delta ref as compared with constraint subjects: ``new:`` names lose the prefix."""
-    return ref.strip().removeprefix(NEW_REF_PREFIX).strip()
-
-
-def _constraint_triggered(
-    constraint: NarrativeConstraintInfo,
-    *,
-    chapter_delta: ChapterDeltaExtraction | None,
-) -> tuple[bool, str]:
-    if constraint.constraint_type != "thread_keep_open" or chapter_delta is None:
-        return False, ""
-    subject = str(constraint.subject_name or "").strip()
-    for beat in chapter_delta.thread_beats:
-        thread_name = _ref_label(beat.thread_ref or beat.new_thread_title)
-        if subject and thread_name != subject:
-            continue
-        if beat.beat_type == "resolution":
-            return True, f"thread={thread_name}"
-    return False, ""

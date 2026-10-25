@@ -66,8 +66,6 @@ from forwin.api_schema import (
     MapEnsureResponse,
     MapPathResponse,
     MapRuntimeResponse,
-    NarrativeConstraintInfo,
-    NarrativeConstraintsResponse,
     PerformanceReportResponse,
     PerformanceSpanInfo,
     PostCanonMaintenanceStatusResponse,
@@ -781,24 +779,6 @@ def register_api_routes(
             ["POST"],
             handlers["approve_band_checkpoint"],
             {"response_model": BandCheckpointDetail},
-        ),
-        (
-            "/api/projects/{project_id}/constraints",
-            ["GET"],
-            handlers["list_project_constraints"],
-            {"response_model": NarrativeConstraintsResponse},
-        ),
-        (
-            "/api/projects/{project_id}/constraints",
-            ["POST"],
-            handlers["create_project_constraint"],
-            {"response_model": NarrativeConstraintInfo},
-        ),
-        (
-            "/api/projects/{project_id}/constraints/{constraint_id}",
-            ["PATCH"],
-            handlers["update_project_constraint"],
-            {"response_model": NarrativeConstraintInfo},
         ),
         (
             "/api/projects/{project_id}/decision-events",

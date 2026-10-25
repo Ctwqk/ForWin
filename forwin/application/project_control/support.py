@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import HTTPException
 from sqlalchemy import select
 
 from forwin.application.read_models import normalize_project_automation
@@ -15,17 +14,11 @@ from forwin.api_schema import (
     CausalReplayResponse,
     DecisionEventInfo,
     AuditInsightsResponse,
-    NarrativeConstraintInfo,
     ProjectAutomationSettings,
 )
 from forwin.planning.checkpoints import (
     BandCheckpointIssueInfo,
     normalize_checkpoint_status,
-)
-from forwin.planning.constraints import (
-    CONSTRAINT_LEVELS,
-    CONSTRAINT_STATUSES,
-    CONSTRAINT_TYPES,
 )
 from forwin.audit.events import (
     DecisionEventType,
@@ -33,7 +26,6 @@ from forwin.audit.events import (
 )
 from forwin.models.planning_control import (
     BandCheckpoint,
-    NarrativeConstraint,
 )
 from forwin.models.audit import DecisionEvent
 from forwin.models.phase import BandExperiencePlan
@@ -64,27 +56,6 @@ def _json_load_object(raw: str | None) -> dict[str, Any]:
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
-
-
-def validate_constraint_payload(
-    *, constraint_type: str, level: str, status: str
-) -> tuple[str, str, str]:
-    normalized_type = str(constraint_type or "").strip()
-    normalized_level = str(level or "hard").strip()
-    normalized_status = str(status or "active").strip() or "active"
-    if normalized_type not in CONSTRAINT_TYPES:
-        raise HTTPException(
-            400, f"未知 constraint_type: {normalized_type or '<empty>'}"
-        )
-    if normalized_level not in CONSTRAINT_LEVELS:
-        raise HTTPException(
-            400, f"未知 constraint level: {normalized_level or '<empty>'}"
-        )
-    if normalized_status not in CONSTRAINT_STATUSES:
-        raise HTTPException(
-            400, f"未知 constraint status: {normalized_status or '<empty>'}"
-        )
-    return normalized_type, normalized_level, normalized_status
 
 
 def persist_project_automation(
@@ -197,32 +168,6 @@ def serialize_band_checkpoint(
             row.resolved_at
             or (row.updated_at if normalized_status in {"pass", "overridden"} else None)
         ),
-    )
-
-
-def serialize_constraint(row: NarrativeConstraint) -> NarrativeConstraintInfo:
-    payload = (
-        json.loads(row.payload_json or "{}")
-        if str(row.payload_json or "").strip()
-        else {}
-    )
-    if not isinstance(payload, dict):
-        payload = {}
-    return NarrativeConstraintInfo(
-        id=row.id,
-        project_id=row.project_id,
-        arc_id=row.arc_id,
-        band_id=row.band_id,
-        constraint_type=row.constraint_type,
-        level=row.level,
-        subject_name=row.subject_name,
-        description=row.description,
-        payload=payload,
-        effective_from_chapter=int(row.effective_from_chapter or 1),
-        protect_until_chapter=int(row.protect_until_chapter or 0),
-        status=row.status,
-        created_at=_display_datetime(row.created_at),
-        updated_at=_display_datetime(row.updated_at),
     )
 
 

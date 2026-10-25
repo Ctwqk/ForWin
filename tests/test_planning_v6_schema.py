@@ -67,6 +67,7 @@ def _seed_legacy_chapter(session: Session) -> None:
 def _assert_planning_schema(engine: sa.Engine) -> None:
     inspector = sa.inspect(engine)
     assert {"arc_beat_sheets", "band_plans"} <= set(inspector.get_table_names())
+    assert "narrative_constraints" not in inspector.get_table_names()
     assert "sub_world_" + "roster_" + "items" not in inspector.get_table_names()
     assert "roster_" + "item_ids_json" not in {c["name"] for c in inspector.get_columns("character_identity_map")}
     assert {"project_stage_analyses", "project_replan_events"}.isdisjoint(inspector.get_table_names())
@@ -702,3 +703,53 @@ def test_0006_projection_run_sequence_backfills_and_round_trips(legacy_database)
             assert connection.execute(sa.text("SELECT run_seq FROM projection_checkpoints")).scalar_one() == 1
         command.downgrade(config, "0005_world_plan_conflicts")
         assert "run_seq" not in {c["name"] for c in sa.inspect(engine).get_columns("projection_checkpoints")}
+
+
+def test_0006_drops_narrative_constraints_and_restores_baseline_schema(legacy_database) -> None:
+    config, engine = legacy_database
+
+    def schema():
+        inspector = sa.inspect(engine)
+        table = "narrative_constraints"
+        return {
+            "columns": [(c["name"], str(c["type"]), c["nullable"], c["default"])
+                        for c in inspector.get_columns(table)],
+            "pk": inspector.get_pk_constraint(table),
+            "fk": inspector.get_foreign_keys(table),
+            "indexes": inspector.get_indexes(table),
+            "unique": inspector.get_unique_constraints(table),
+        }
+
+    original = schema()
+    command.upgrade(config, "0006_planning_v6")
+    assert "narrative_constraints" not in sa.inspect(engine).get_table_names()
+    command.downgrade(config, "0005_world_plan_conflicts")
+    assert schema() == original
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("SELECT count(*) FROM narrative_constraints")).scalar_one() == 0
+    command.upgrade(config, "0006_planning_v6")
+    assert "narrative_constraints" not in sa.inspect(engine).get_table_names()
+
+
+def test_0006_narrative_constraint_downgrade_definitions_match_baseline() -> None:
+    import ast
+    import inspect
+
+    baseline = importlib.import_module("forwin.migrations.versions.0001_v5_baseline")
+    migration = importlib.import_module("forwin.migrations.versions.0006_planning_v6")
+
+    def definitions(function):
+        result = {}
+        for node in ast.walk(ast.parse(inspect.getsource(function))):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in {"create_table", "create_index"}:
+                continue
+            table_arg = node.args[0 if node.func.attr == "create_table" else 1]
+            if isinstance(table_arg, ast.Constant) and table_arg.value == "narrative_constraints":
+                result[node.args[0].value] = ast.dump(node, include_attributes=False)
+        return result
+
+    expected = definitions(baseline.upgrade)
+    assert len(expected) == 3
+    assert definitions(migration._restore_narrative_constraints) == expected

@@ -26,7 +26,6 @@ from forwin.state.query_helpers import (
 from .arc_snapshot import (
     _decision_timeline_by_project,
     _latest_band_checkpoint_by_project,
-    _narrative_constraints_by_project,
     project_arc_snapshot_payload,
 )
 from .generation import (
@@ -199,9 +198,6 @@ def build_project_detail(
     decision_timeline = _decision_timeline_by_project(
         session, [project_id], limit=30
     ).get(project_id, [])
-    narrative_constraints = _narrative_constraints_by_project(
-        session, [project_id], limit=50
-    ).get(project_id, [])
     latest_beat_sheet = runtime_maps["latest_beat_sheet_map"].get(project_id)
     latest_band_experience = runtime_maps["latest_band_experience_map"].get(project_id)
     active_subworld_ids = {
@@ -224,7 +220,6 @@ def build_project_detail(
         latest_band_checkpoint=latest_checkpoint,
         decision_events=decision_timeline,
         open_world_conflicts=load_open_world_conflicts(session, project_id),
-        future_constraints_enabled=policy_record.policy.planning.future_constraints,
         writable_chapters=load_writable_chapter_ranges(
             session, [project_id]
         ).get(project_id, range(0)),
@@ -268,7 +263,6 @@ def build_project_detail(
         blocking_reason=generation_control.blocking_reason,
         next_gate=generation_control.next_gate,
         decision_timeline=decision_timeline,
-        narrative_constraints=narrative_constraints,
     )
 
 

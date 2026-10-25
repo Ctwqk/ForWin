@@ -5,14 +5,8 @@ import json
 
 import pytest
 
-from forwin.book_state.extraction.chapter_delta_schema import (
-    ChapterDeltaExtraction,
-    PlanFulfillment,
-    ThreadBeat,
-)
 from forwin.book_state.extraction.chapter_input import _fulfillment_targets
 from forwin.models.project import ChapterPlan
-from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.review.plan_reviewer import PlanContractReviewer
 from forwin.runtime.policy import RuntimePolicy
 
@@ -76,10 +70,6 @@ def test_keyword_module_is_gone() -> None:
 
 def test_done_goals_ignore_wording_and_other_target_types() -> None:
     context = _context(["A description absent from the prose"])
-    context.active_future_constraints = [NarrativeConstraintInfo(
-        id="legacy", constraint_type="secret_withhold", level="hard",
-        subject_name="packet", payload={"forbidden_keywords": ["packet"]},
-    )]
     review = PlanContractReviewer().review(
         context,
         _output(
@@ -117,27 +107,6 @@ def test_duplicate_fulfillment_uses_best_status(statuses, verdict, expected_issu
 
     assert review.verdict == verdict
     assert [(issue.rule_name, issue.severity) for issue in review.issues] == expected_issues
-
-
-def test_structured_thread_keep_open_constraint_remains_enforced() -> None:
-    context = _context([])
-    context.active_future_constraints = [NarrativeConstraintInfo(
-        id="thread-contract", constraint_type="thread_keep_open", level="hard",
-        subject_name="thread-1",
-    )]
-    output = _output()
-    output.chapter_delta.thread_beats = [ThreadBeat(
-        thread_ref="thread-1", beat_type="resolution", evidence=output.body,
-    )]
-
-    review = PlanContractReviewer().review(context, output)
-
-    assert review.verdict == "fail"
-    assert [(issue.rule_name, issue.severity) for issue in review.issues] == [
-        ("future_constraint_violation", "error"),
-    ]
-    output.chapter_delta.thread_beats[0].beat_type = "advance"
-    assert PlanContractReviewer().review(context, output).issues == []
 
 
 def test_goal_numbering_preserves_blank_and_non_string_positions() -> None:

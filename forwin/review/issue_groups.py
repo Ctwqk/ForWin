@@ -5,7 +5,6 @@ from forwin.planning.checkpoints import IssueGroup
 
 _FACT_CONFLICT_HINTS = {
     "continuity",
-    "future_constraint",
     "timeline",
     "state",
     "state_conflict",

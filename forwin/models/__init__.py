@@ -11,7 +11,7 @@ from .canon_quality import (
 )
 from .entity import Entity, EntityAlias
 from .genesis import BookGenesisRevision, PromptTrace
-from .planning_control import BandCheckpoint, NarrativeConstraint
+from .planning_control import BandCheckpoint
 from .planning_v6 import ArcBeatSheetRow, BandPlanRow
 from .audit import DecisionEvent
 from .book_frame import BookLexiconRow, StoryCalendarRow
@@ -107,7 +107,6 @@ __all__ = [
     "BookGenesisRevision",
     "PromptTrace",
     "BandCheckpoint",
-    "NarrativeConstraint",
     "DecisionEvent",
     "PerformanceSpan",
     "NarrativeObligationRow",

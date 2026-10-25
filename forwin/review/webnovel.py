@@ -166,7 +166,6 @@ class WebNovelExperienceReviewer:
             arc_payoff_map=context.arc_payoff_map,
             band_delight_schedule=context.band_delight_schedule,
             chapter_experience_plan=context.chapter_experience_plan,
-            active_future_constraints=list(context.active_future_constraints),
             next_band_summary=context.next_band_summary,
             map_context=dict(context.map_context),
             recent_canon_events=[],

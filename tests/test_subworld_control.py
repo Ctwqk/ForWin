@@ -369,7 +369,6 @@ class SubWorldControlTests(unittest.TestCase):
             allowed_entities=["阿青", "未出场者"],
             chapter_entry_targets=[ChapterEntryTarget(chapter_hint=1, entity_name="沈知遥", subworld_id="sw2", role_hint="新盟友")],
             entity_admission_rule="strict_named_character",
-            active_future_constraints=[],
             next_band_summary=None,
             retrieved_memories=[],
             world_view=ChapterWorldView(onstage=[OnstageEntity(ref="char-a", name="阿青")]),
@@ -415,7 +414,6 @@ class SubWorldControlTests(unittest.TestCase):
             allowed_entities=["陆明"],
             chapter_entry_targets=[],
             entity_admission_rule="strict_named_character",
-            active_future_constraints=[],
             next_band_summary=None,
             retrieved_memories=[],
         )
@@ -478,7 +476,6 @@ class SubWorldControlTests(unittest.TestCase):
             allowed_entities=["陆明"],
             chapter_entry_targets=[],
             entity_admission_rule="strict_named_character",
-            active_future_constraints=[],
             next_band_summary=None,
             retrieved_memories=[],
         )

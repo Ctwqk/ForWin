@@ -10,7 +10,6 @@ from forwin.models.project import ChapterPlan
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review.issue_groups import issue_group_for_issue
-from forwin.review.plan_checks import evaluate_constraint_issues
 
 from forwin.writer.prompt_core.world_repair import PLAN_BINDING_REPAIR_TEXT
 
@@ -103,15 +102,6 @@ class PlanContractReviewer:
                 suggested_fix=PLAN_BINDING_REPAIR_TEXT["fix"].format(n=index + 1, kind=kind),
                 original_result={**details, "index": index}, blocking=not partial,
             ))
-        issues.extend(
-            evaluate_constraint_issues(
-                context.active_future_constraints,
-                chapter_delta=delta,
-                reviewer="plan_contract",
-                issue_type="future_constraint",
-                target_scope="chapter",
-            )
-        )
         return issues
 
 

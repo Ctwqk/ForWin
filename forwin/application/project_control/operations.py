@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -19,9 +18,6 @@ from forwin.api_schema import (
     CostLedgerReportResponse,
     RuleProvenanceReportResponse,
     ManualCheckpointRequest,
-    NarrativeConstraintCreateRequest,
-    NarrativeConstraintUpdateRequest,
-    NarrativeConstraintsResponse,
     TropeRegistrySummaryResponse,
     TropeTemplateInfo,
     TropeTemplateValidationRequest,
@@ -42,7 +38,6 @@ from forwin.observability.cost_ledger import (
 from forwin.models.base import Base
 from forwin.models.planning_control import (
     BandCheckpoint,
-    NarrativeConstraint,
 )
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import Project
@@ -322,189 +317,6 @@ def approve_band_checkpoint(
         session.commit()
         session.refresh(row)
         return serialize_band_checkpoint(row, session=session)
-    finally:
-        session.close()
-
-
-def list_project_constraints(
-    project_id: str,
-    *,
-    get_session,
-    serialize_constraint,
-) -> NarrativeConstraintsResponse:
-    session = get_session()
-    try:
-        rows = (
-            session.execute(
-                select(NarrativeConstraint)
-                .where(NarrativeConstraint.project_id == project_id)
-                .order_by(
-                    NarrativeConstraint.created_at.desc(), NarrativeConstraint.id.desc()
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return NarrativeConstraintsResponse(
-            items=[serialize_constraint(row) for row in rows]
-        )
-    finally:
-        session.close()
-
-
-def create_project_constraint(
-    project_id: str,
-    req: NarrativeConstraintCreateRequest,
-    *,
-    get_session,
-    require_reason,
-    validate_constraint_payload,
-    log_decision_event,
-    serialize_constraint,
-) -> Any:
-    session = get_session()
-    try:
-        project = session.get(Project, project_id)
-        if project is None:
-            raise HTTPException(404, "项目不存在")
-        reason = require_reason(req.reason, action="创建 narrative constraint")
-        constraint_type, level, status = validate_constraint_payload(
-            constraint_type=req.constraint_type,
-            level=req.level,
-            status=req.status,
-        )
-        row = NarrativeConstraint(
-            project_id=project_id,
-            arc_id=str(req.arc_id or "").strip(),
-            band_id=str(req.band_id or "").strip(),
-            constraint_type=constraint_type,
-            level=level,
-            subject_name=str(req.subject_name or "").strip(),
-            description=str(req.description or "").strip(),
-            payload_json=json.dumps(req.payload or {}, ensure_ascii=False),
-            effective_from_chapter=max(1, int(req.effective_from_chapter or 1)),
-            protect_until_chapter=max(0, int(req.protect_until_chapter or 0)),
-            status=status,
-        )
-        session.add(row)
-        session.flush()
-        log_decision_event(
-            session,
-            project_id=project_id,
-            band_id=row.band_id,
-            event_family="audit_action",
-            event_type=DecisionEventType.CONSTRAINT_CREATED,
-            actor_type="manual_ui",
-            scope="project",
-            summary="已新增 narrative constraint。",
-            reason=reason,
-            related_object_type="narrative_constraint",
-            related_object_id=row.id,
-        )
-        session.commit()
-        session.refresh(row)
-        return serialize_constraint(row)
-    finally:
-        session.close()
-
-
-def update_project_constraint(
-    project_id: str,
-    constraint_id: str,
-    req: NarrativeConstraintUpdateRequest,
-    *,
-    get_session,
-    require_reason,
-    validate_constraint_payload,
-    log_decision_event,
-    serialize_constraint,
-    json_load_object,
-) -> Any:
-    session = get_session()
-    try:
-        project = session.get(Project, project_id)
-        if project is None:
-            raise HTTPException(404, "项目不存在")
-        row = session.get(NarrativeConstraint, constraint_id)
-        if row is None or row.project_id != project_id:
-            raise HTTPException(404, "narrative constraint 不存在")
-        reason = require_reason(req.reason, action="更新 narrative constraint")
-        old_status = str(row.status or "")
-        changes: dict[str, Any] = {}
-        next_constraint_type, next_level, next_status = validate_constraint_payload(
-            constraint_type=req.constraint_type
-            if req.constraint_type is not None
-            else row.constraint_type,
-            level=req.level if req.level is not None else row.level,
-            status=req.status if req.status is not None else row.status,
-        )
-
-        def _set_if_present(attr: str, value: Any, transform=lambda item: item):
-            if value is None:
-                return
-            next_value = transform(value)
-            if getattr(row, attr) != next_value:
-                changes[attr] = {"from": getattr(row, attr), "to": next_value}
-                setattr(row, attr, next_value)
-
-        _set_if_present(
-            "constraint_type", req.constraint_type, lambda _item: next_constraint_type
-        )
-        _set_if_present("level", req.level, lambda _item: next_level)
-        _set_if_present(
-            "subject_name", req.subject_name, lambda item: str(item or "").strip()
-        )
-        _set_if_present(
-            "description", req.description, lambda item: str(item or "").strip()
-        )
-        if req.payload is not None:
-            payload_json = json.dumps(req.payload or {}, ensure_ascii=False)
-            if row.payload_json != payload_json:
-                changes["payload"] = {
-                    "from": json_load_object(row.payload_json),
-                    "to": req.payload or {},
-                }
-                row.payload_json = payload_json
-        _set_if_present("arc_id", req.arc_id, lambda item: str(item or "").strip())
-        _set_if_present("band_id", req.band_id, lambda item: str(item or "").strip())
-        _set_if_present(
-            "effective_from_chapter",
-            req.effective_from_chapter,
-            lambda item: max(1, int(item or 1)),
-        )
-        _set_if_present(
-            "protect_until_chapter",
-            req.protect_until_chapter,
-            lambda item: max(0, int(item or 0)),
-        )
-        _set_if_present("status", req.status, lambda _item: next_status)
-        event_type = (
-            DecisionEventType.CONSTRAINT_ARCHIVED
-            if old_status == "active"
-            and str(row.status or "") in {"inactive", "archived"}
-            else DecisionEventType.CONSTRAINT_UPDATED
-        )
-        session.add(row)
-        session.flush()
-        log_decision_event(
-            session,
-            project_id=project_id,
-            band_id=row.band_id,
-            event_family="audit_action",
-            event_type=event_type,
-            actor_type="manual_ui",
-            scope="project",
-            summary="已停用 narrative constraint。"
-            if event_type == DecisionEventType.CONSTRAINT_ARCHIVED
-            else "已更新 narrative constraint。",
-            reason=reason,
-            payload={"changes": changes},
-            related_object_type="narrative_constraint",
-            related_object_id=row.id,
-        )
-        session.commit()
-        session.refresh(row)
-        return serialize_constraint(row)
     finally:
         session.close()
 

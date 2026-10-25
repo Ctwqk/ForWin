@@ -11,7 +11,6 @@ from forwin.audience.feedback import (
     keyword_dominant_sentiment,
     keyword_feedback_summary,
 )
-from forwin.planning.constraints import NarrativeConstraintInfo
 from forwin.planning.checkpoints import NextBandSummary
 from forwin.models import (
     ArcPlanVersion,
@@ -22,7 +21,6 @@ from forwin.models import (
     ChapterRewriteAttempt,
     FeedbackActionRecord,
     MapRegionRow,
-    NarrativeConstraint,
     Project,
     PublisherRawComment,
     ReaderScaleSnapshot,
@@ -31,7 +29,6 @@ from forwin.models import (
 )
 from forwin.book_state import BookStateQuery
 from forwin.map.subworlds import location_subworld_ids
-from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.protocol import (
     ArcPayoffMap,
     BandDelightSchedule,
@@ -486,60 +483,6 @@ class StateRepository:
                 drafts.append(draft_payload)
         return drafts
 
-    def list_active_narrative_constraints(
-        self,
-        project_id: str,
-        *,
-        chapter_number: int,
-    ) -> list[NarrativeConstraintInfo]:
-        rows = (
-            self.session.execute(
-                select(NarrativeConstraint)
-                .where(
-                    NarrativeConstraint.project_id == project_id,
-                    NarrativeConstraint.status == "active",
-                    NarrativeConstraint.effective_from_chapter <= chapter_number,
-                    or_(
-                        NarrativeConstraint.protect_until_chapter == 0,
-                        NarrativeConstraint.protect_until_chapter >= chapter_number,
-                    ),
-                )
-                .order_by(
-                    NarrativeConstraint.level.asc(),
-                    NarrativeConstraint.protect_until_chapter.desc(),
-                    NarrativeConstraint.created_at.desc(),
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return [
-            NarrativeConstraintInfo(
-                id=row.id,
-                project_id=row.project_id,
-                arc_id=row.arc_id,
-                band_id=row.band_id,
-                constraint_type=row.constraint_type,
-                level=row.level,
-                subject_name=row.subject_name,
-                description=row.description,
-                payload=_load_json_object(row.payload_json, {}),
-                effective_from_chapter=row.effective_from_chapter,
-                protect_until_chapter=row.protect_until_chapter,
-                status=row.status,
-            )
-            for row in rows
-        ]
-
-    def future_constraints_enabled(self, project_id: str) -> bool:
-        project = self.session.get(Project, project_id)
-        if project is None:
-            return False
-        return (
-            ProjectPolicyStore(self.session)
-            .load(project)
-            .policy.planning.future_constraints
-        )
 
     def get_recent_reader_feedback(
         self,

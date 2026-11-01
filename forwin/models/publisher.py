@@ -15,11 +15,13 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    and_,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
+from sqlalchemy.sql.elements import ColumnElement
 
 from .base import Base, new_id
 
@@ -239,6 +241,32 @@ class PublisherUploadJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+# Task kinds that only publish-hub runs (Task 5 mirrors its create_destination job this way).
+HUB_ONLY_TASK_KINDS = frozenset({"create_book"})
+
+
+def upload_job_is_hub_owned(job: PublisherUploadJob) -> bool:
+    """True for a row publish-hub runs: ForWin's extension queue must never touch it.
+
+    A row becomes hub-owned when its request body is stored, before the request goes out, so a
+    row whose submit is still in doubt is already off the extension queue.
+    """
+    return (
+        job.hub_submit_body_json is not None
+        or job.hub_job_id is not None
+        or str(job.task_kind or "") in HUB_ONLY_TASK_KINDS
+    )
+
+
+def upload_job_not_hub_owned() -> ColumnElement[bool]:
+    """SQL form of `not upload_job_is_hub_owned(job)`, for every extension-queue query."""
+    return and_(
+        PublisherUploadJob.hub_submit_body_json.is_(None),
+        PublisherUploadJob.hub_job_id.is_(None),
+        PublisherUploadJob.task_kind.notin_(sorted(HUB_ONLY_TASK_KINDS)),
     )
 
 

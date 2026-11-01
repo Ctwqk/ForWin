@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -17,6 +18,7 @@ from forwin.models.publisher import (
     PublisherUploadAttempt,
     PublisherUploadJob,
     PublisherUploadReceipt,
+    upload_job_is_hub_owned,
 )
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.writer import WriterOutput
@@ -33,6 +35,7 @@ from .receipts import PublisherReceiptValidationError
 from .connection_state import ExtensionConnectionService
 from .platform_catalog import PlatformCatalog, PlatformSpec
 
+logger = logging.getLogger(__name__)
 
 LOGIN_FAILURE_ERROR_CODES = {
     "login-required",
@@ -57,6 +60,9 @@ LOGIN_FAILURE_FRAGMENTS = (
     "登录过期",
     "请先完成扫码",
 )
+
+
+_CLIENT_NOT_FETCHED = object()
 
 
 def _load_json_object(raw: str | None) -> dict[str, Any]:
@@ -165,6 +171,8 @@ class UploadJobService:
         )
         self.attempts = None
         self.receipts = None
+        # Returns the publish-hub client, or None when publish-hub is not configured.
+        self.publish_hub_client_provider = None
 
     def review_publisher_compliance(
         self,
@@ -615,7 +623,11 @@ class UploadJobService:
         if missing:
             raise ValueError(f"publisher jobs not found: {', '.join(missing)}")
 
+        # publish_hub.payloads imports this module, so the submit module is imported here.
+        from forwin.publish_hub.submit import client_from, hub_binding_for
+
         released: list[PublisherUploadJob] = []
+        hub_client: Any = _CLIENT_NOT_FETCHED
         for job_id in job_ids:
             job = by_id[job_id]
             if (
@@ -674,6 +686,20 @@ class UploadJobService:
                 )
                 continue
 
+            hub_binding = hub_binding_for(session, job.project_id, job.platform_id)
+            if hub_binding is not None:
+                if hub_client is _CLIENT_NOT_FETCHED:
+                    hub_client = client_from(self.publish_hub_client_provider)
+                if self._release_to_hub(
+                    session,
+                    job,
+                    destination_id=hub_binding.hub_destination_id,
+                    client=hub_client,
+                    actor_type=actor_type,
+                ):
+                    released.append(job)
+                continue
+
             job.status = "pending"
             job.abort_requested = False
             job.result_message = "Canon 发布任务已通过配额门并进入执行队列。"
@@ -687,6 +713,50 @@ class UploadJobService:
             )
             released.append(job)
         return released
+
+    def _release_to_hub(
+        self,
+        session,
+        job: PublisherUploadJob,
+        *,
+        destination_id: str | None,
+        client,
+        actor_type: str,
+    ) -> bool:
+        """Release a job whose binding routes to publish-hub; False when it stays scheduled."""
+        from forwin.publish_hub.submit import (
+            SubmitOutcome,
+            hub_event_payload,
+            submit_released_job,
+        )
+
+        if not destination_id:
+            logger.warning(
+                "publish binding of upload job %s routes to publish-hub without a destination",
+                job.id,
+            )
+            job.result_message = "绑定已切换到 publish-hub，但还没有发布目标，任务继续保持排程状态。"
+            self.audit.record_upload_job_event(
+                session,
+                job=job,
+                event_type=DecisionEventType.UPLOAD_JOB_PROGRESS,
+                summary="Canon 发布上传任务等待 publish-hub 发布目标。",
+                actor_type=str(actor_type or "system"),
+                extra_payload={"transition": "release_waiting_for_hub_destination"},
+            )
+            return False
+        outcome = submit_released_job(session, job, client, now=utc_now())
+        if outcome == SubmitOutcome.HELD:
+            return False
+        self.audit.record_upload_job_event(
+            session,
+            job=job,
+            event_type=terminal_upload_event_type(job.status),
+            summary="Canon 发布上传任务已释放并交给 publish-hub。",
+            actor_type=str(actor_type or "system"),
+            extra_payload=hub_event_payload(job, outcome, transition="scheduled_to_hub"),
+        )
+        return True
 
     def _canon_release_preflight(
         self,
@@ -743,6 +813,8 @@ class UploadJobService:
     ) -> bool:
         return bool(
             payload.get("publish_mode_frozen_at")
+            # A request stored for publish-hub carries the mode; resending it must not change.
+            or job.hub_submit_body_json is not None
             or job.current_attempt_id
             or job.claimed_at
             or job.started_at
@@ -805,6 +877,8 @@ class UploadJobService:
                 raise ValueError("上传任务不存在。")
             if job.status in UPLOAD_JOB_TERMINAL_STATUSES:
                 raise ValueError("终态上传任务不能再次终止。")
+            if upload_job_is_hub_owned(job):
+                raise ValueError("该上传任务由 publish-hub 执行，请在 publish-hub 中取消。")
             if job.status in {"scheduled", "pending"}:
                 job.status = "cancelled"
                 job.abort_requested = True
@@ -1298,6 +1372,12 @@ class UploadJobService:
             ).scalar_one_or_none()
             if job is None:
                 raise PublisherResourceNotFoundError("job", str(job_id or ""))
+            if upload_job_is_hub_owned(job):
+                raise PublisherAttemptFenceError(
+                    "publisher job is owned by publish-hub",
+                    job_status=job.status,
+                    current_attempt_id=job.current_attempt_id,
+                )
             attempt = session.execute(
                 select(PublisherUploadAttempt)
                 .where(
@@ -1578,6 +1658,8 @@ class UploadJobService:
             else ""
         )
         terminal = job.status in UPLOAD_JOB_TERMINAL_STATUSES
+        # publish-hub runs these: cancelling or resuming is done there, not here.
+        extension_queue_job = not upload_job_is_hub_owned(job)
         return {
             "task_kind": str(job.task_kind or "chapter_upload"),
             "job_id": job.id,
@@ -1610,10 +1692,16 @@ class UploadJobService:
             "pause_reason": str(job.pause_reason or ""),
             "pause_token": pause_token,
             "resumable": bool(
-                job.status == "paused" and not job.abort_requested and pause_token
+                extension_queue_job
+                and job.status == "paused"
+                and not job.abort_requested
+                and pause_token
             ),
             "terminable": bool(
-                job.deleted_at is None and not terminal and not job.abort_requested
+                extension_queue_job
+                and job.deleted_at is None
+                and not terminal
+                and not job.abort_requested
             ),
             "deletable": bool(job.deleted_at is None and terminal),
         }

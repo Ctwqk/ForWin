@@ -107,6 +107,10 @@ class PublisherRuntimeService:
         )
         self.upload_jobs.attempts = self.attempts
         self.upload_jobs.receipts = self.receipts
+        self.upload_jobs.publish_hub_client_provider = lambda: self.publish_hub_client
+        self.cover_service.publish_hub_client_provider = (
+            self.upload_jobs.publish_hub_client_provider
+        )
         self.canon_jobs = CanonPublisherJobService(
             session_factory=session_factory,
             upload_jobs=self.upload_jobs,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 import struct
 from pathlib import Path
@@ -20,9 +21,17 @@ from forwin.models.publisher import (
     PublisherUploadJob,
     PublisherWorkBinding,
 )
+from forwin.publish_hub.submit import (
+    HubSubmitConflict,
+    client_from,
+    hub_binding_for,
+    submit_released_job,
+)
 
 from .browser_sessions import utc_now
 from .idempotency import publisher_cover_upload_idempotency_key
+
+logger = logging.getLogger(__name__)
 
 
 def _load_json_object(raw: str | None) -> dict[str, Any]:
@@ -164,6 +173,8 @@ class PublisherCoverService:
             or os.environ.get("FORWIN_PUBLISHER_COVER_DIR", "data/publisher_covers")
         )
         self.minimax_model = str(minimax_model or "image-01")
+        # Returns the publish-hub client, or None when publish-hub is not configured.
+        self.publish_hub_client_provider = None
 
     def _request_cover_candidates(
         self,
@@ -630,12 +641,22 @@ class PublisherCoverService:
                     raise ValueError("封面对应多个平台作品，请先明确作品绑定。")
             if work_binding is None:
                 raise ValueError("封面尚未绑定平台作品，不能上传。")
-            upload_job, _created = self._ensure_cover_upload_job(
+            hub_binding = hub_binding_for(
+                session, work_binding.project_id, work_binding.platform_id
+            )
+            if hub_binding is not None and not hub_binding.hub_destination_id:
+                raise ValueError(
+                    "该平台已切换到 publish-hub，但绑定还没有 publish-hub 发布目标，不能上传封面。"
+                )
+            upload_job, created = self._ensure_cover_upload_job(
                 session,
                 cover=cover,
                 work_binding=work_binding,
                 auto_upload=False,
             )
+            if created and hub_binding is not None:
+                # A HubSubmitConflict reaches the operator and nothing is committed.
+                self._submit_to_hub(session, upload_job)
             session.commit()
             session.refresh(upload_job)
             return upload_job
@@ -689,13 +710,41 @@ class PublisherCoverService:
         )
         if cover is None:
             return None
+        hub_binding = hub_binding_for(
+            session, work_binding.project_id, work_binding.platform_id
+        )
+        if hub_binding is not None and not hub_binding.hub_destination_id:
+            logger.warning(
+                "cover for work binding %s not queued: publish-hub route without a destination",
+                work_binding.id,
+            )
+            return None
         upload_job, created = self._ensure_cover_upload_job(
             session,
             cover=cover,
             work_binding=work_binding,
             auto_upload=True,
         )
+        if created and hub_binding is not None:
+            try:
+                self._submit_to_hub(session, upload_job)
+            except HubSubmitConflict:
+                # This runs inside another job's result; that result must still be recorded.
+                # The row keeps its stored request and stays off the extension queue.
+                logger.exception("publish-hub refused cover upload job %s", upload_job.id)
         return upload_job if created else None
+
+    def _submit_to_hub(self, session, upload_job: PublisherUploadJob) -> None:
+        """A new cover job on a publish-hub binding goes there now: creation is its release.
+
+        No book-existence check: the extension defers a cover whose destination has no book yet.
+        """
+        submit_released_job(
+            session,
+            upload_job,
+            client_from(self.publish_hub_client_provider),
+            now=utc_now(),
+        )
 
     def _ensure_cover_upload_job(
         self,

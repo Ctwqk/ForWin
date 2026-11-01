@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -54,11 +54,20 @@ class ProjectAutomationPublishSettings(BaseModel):
     book_meta: "PublisherBookMetaRequest" = Field(
         default_factory=lambda: PublisherBookMetaRequest()
     )
+    # "hub" sends this platform's uploads through publish-hub; hub_destination_id is the
+    # publish-hub destination (one book on one account) they go to.
+    route: Literal["legacy", "hub"] = "legacy"
+    hub_destination_id: str | None = None
 
     @field_validator("platform")
     @classmethod
     def _supported_platform(cls, value: str) -> str:
         return normalize_supported_platform(value, allow_empty=True)
+
+    @field_validator("hub_destination_id")
+    @classmethod
+    def _blank_destination_is_none(cls, value: str | None) -> str | None:
+        return str(value or "").strip() or None
 
 
 class ProjectAutomationSettings(BaseModel):

@@ -479,6 +479,9 @@ class RuntimeContainer:
             observability=core.observability,
             minimax_api_key=infrastructure.minimax_api_key,
             minimax_base_url=infrastructure.minimax_base_url,
+            publish_hub_url=infrastructure.publish_hub_url,
+            publish_hub_api_key=infrastructure.publish_hub_api_key,
+            publish_hub_timeout_seconds=infrastructure.publish_hub_timeout_seconds,
         )
 
     def _build_outbox_handlers(self) -> dict:

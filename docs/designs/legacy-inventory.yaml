@@ -419,6 +419,26 @@ entries:
       - 60 chapter audit reports legacy_compat.total_events == 0
     status: deleted
 
+  - id: publish_hub.route_legacy
+    category: runtime_delete
+    owner_area: publisher
+    paths:
+      - forwin/api_schema/project.py
+      - forwin/canon/outbox_events.py
+      - forwin/publisher_runtime/upload_jobs.py
+    allow_patterns:
+      - 'route: Literal["legacy", "hub"] = "legacy"'
+      - 'binding.get("route") or "legacy"'
+    reason: A publish binding's route says whether its uploads still go through ForWin's own extension queue ("legacy") or through publish-hub ("hub"). Both exist while platforms are cut over one at a time.
+    removal_phase: publish_hub_cutover
+    verification:
+      - publish_hub_client_tests
+      - inventory_check
+    delete_when:
+      - every platform is routed to publish-hub and the extension-queue upload runtime is removed
+      - the route field is dropped from publish settings and Canon binding snapshots
+    status: active
+
   - id: legacy_inventory.audit_gate_terms
     category: test_doc_followup
     owner_area: architecture

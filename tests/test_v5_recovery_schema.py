@@ -31,8 +31,17 @@ RECOVERY_TABLES = {
 TABLES_ADDED_AFTER_BASELINE = {
     "story_calendars", "book_lexicons", "world_plan_conflicts",
     "arc_beat_sheets", "band_plans", "world_conflict_result_refs",
+    "publish_hub_sync_state",
+}
+INDEXES_ADDED_AFTER_BASELINE = {
+    "publisher_upload_jobs": {"ux_publisher_upload_jobs_hub_job_id"},
 }
 COLUMNS_ADDED_AFTER_BASELINE = {
+    "publisher_upload_jobs": {
+        "hub_job_id", "hub_status", "hub_submit_body_json", "hub_superseded_reason",
+    },
+    "publisher_work_bindings": {"hub_destination_id"},
+    "publisher_chapter_bindings": {"hub_publication_id"},
     "graph_deltas": {"story_time_start", "story_time_end", "tick_id", "beat_sheet_id", "seq"},
     "world_node_states": {"name", "aliases_json", "profile_json", "is_active", "seq"},
     "map_snapshots": {"seq"},
@@ -540,7 +549,11 @@ def test_baseline_matches_recovery_metadata_and_dependency_order(
         assert _unique_constraints(migration_table) == _unique_constraints(
             metadata_table
         )
-        assert capture.indexes[table_name] == _metadata_indexes(metadata_table)
+        assert capture.indexes[table_name] == {
+            index
+            for index in _metadata_indexes(metadata_table)
+            if index[0] not in INDEXES_ADDED_AFTER_BASELINE.get(table_name, set())
+        }
 
     create_position = {
         table_name: capture.create_order.index(table_name)
@@ -590,6 +603,9 @@ def test_post_baseline_schema_is_absent_from_0001_and_present_in_orm(
     for table_name, column_names in COLUMNS_ADDED_AFTER_BASELINE.items():
         assert column_names <= set(_table(table_name).c.keys())
         assert not column_names & set(capture.tables[table_name].c.keys())
+    for table_name, index_names in INDEXES_ADDED_AFTER_BASELINE.items():
+        assert index_names <= {index[0] for index in _metadata_indexes(_table(table_name))}
+        assert not index_names & {index[0] for index in capture.indexes[table_name]}
 
 
 def test_baseline_revision_is_rotated_and_followed_only_by_later_migrations() -> None:
@@ -608,6 +624,7 @@ def test_baseline_revision_is_rotated_and_followed_only_by_later_migrations() ->
         "0005_world_plan_conflicts.py",
         "0006_planning_v6.py",
         "0007_drop_codex.py",
+        "0008_publish_hub.py",
     ]
     assert migration.revision == "0001_v5_recovery"
     assert migration.down_revision is None

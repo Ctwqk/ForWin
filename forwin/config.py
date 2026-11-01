@@ -243,6 +243,11 @@ def _infrastructure_env_values() -> dict[str, object]:
         "publisher_session_encryption_required": _env_bool(
             env, "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED", False
         ),
+        "publish_hub_url": _env_str(env, "FORWIN_PUBLISH_HUB_URL"),
+        "publish_hub_api_key": _env_str(env, "FORWIN_PUBLISH_HUB_API_KEY"),
+        "publish_hub_timeout_seconds": _env_int(
+            env, "FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS", 20
+        ),
         "publisher_login_discord_webhook_enabled": False,
         "publisher_login_discord_webhook_url": "",
         "publisher_preferred_client_id": _env_str(
@@ -356,6 +361,9 @@ class _InfrastructureFields:
     publisher_extension_api_key: str = ""
     publisher_session_secret: str = ""
     publisher_session_encryption_required: bool = False
+    publish_hub_url: str = ""
+    publish_hub_api_key: str = ""
+    publish_hub_timeout_seconds: int = 20
     publisher_login_discord_webhook_enabled: bool = False
     publisher_login_discord_webhook_url: str = ""
     publisher_preferred_client_id: str = ""

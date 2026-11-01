@@ -2332,8 +2332,10 @@ def test_atomic_commit_writes_all_authoritative_state_once(
                 "cover_generation_enabled": True,
                 "cover_style_hint": "",
                 "create_if_missing": False,
+                "hub_destination_id": None,
                 "platform": "qidian",
                 "publisher_compliance_required": True,
+                "route": "legacy",
                 "upload_url": "https://write.example/prepared",
             }
         ]

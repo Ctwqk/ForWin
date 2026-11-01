@@ -65,6 +65,9 @@ class PublisherManager:
         publisher_session_secret: str = "",
         publisher_session_encryption_required: bool = False,
         publisher_login_discord_webhook_url: str = "",
+        publish_hub_url: str = "",
+        publish_hub_api_key: str = "",
+        publish_hub_timeout_seconds: int = 20,
     ) -> None:
         self.session_factory = session_factory
         self.extension_api_key = str(extension_api_key or "").strip()
@@ -91,6 +94,9 @@ class PublisherManager:
             publisher_session_secret=self.publisher_session_secret,
             publisher_session_encryption_required=self.publisher_session_encryption_required,
             strict_preferred_client=self.strict_preferred_client,
+            publish_hub_url=publish_hub_url,
+            publish_hub_api_key=publish_hub_api_key,
+            publish_hub_timeout_seconds=publish_hub_timeout_seconds,
         )
         self._plaintext_cookie_storage_warned = (
             self.runtime.browser_cookie_codec._plaintext_cookie_storage_warned

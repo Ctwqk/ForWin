@@ -47,6 +47,7 @@ from .publisher import (
     PublisherUploadJob,
     PublisherUploadReceipt,
     PublisherWorkBinding,
+    PublishHubSyncState,
     ReaderScaleSnapshot,
     SignalWindowAggregate,
 )
@@ -142,6 +143,7 @@ __all__ = [
     "PublisherMilestone",
     "PublisherCommentSyncJob",
     "PublisherRawComment",
+    "PublishHubSyncState",
     "ReaderScaleSnapshot",
     "SignalWindowAggregate",
     # final book state

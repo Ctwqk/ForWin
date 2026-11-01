@@ -73,11 +73,18 @@ class CanonPublisherBindingSnapshot(_FrozenCanonEventModel):
     book_meta: CanonPublisherBookMetaSnapshot = Field(
         default_factory=CanonPublisherBookMetaSnapshot
     )
+    route: Literal["legacy", "hub"] = "legacy"
+    hub_destination_id: str | None = None
 
     @field_validator("platform")
     @classmethod
     def _supported_platform(cls, value: str) -> str:
         return normalize_supported_platform(value)
+
+    @field_validator("hub_destination_id")
+    @classmethod
+    def _blank_destination_is_none(cls, value: str | None) -> str | None:
+        return str(value or "").strip() or None
 
     @field_validator("book_name")
     @classmethod

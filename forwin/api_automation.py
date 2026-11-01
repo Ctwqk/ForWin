@@ -6,6 +6,7 @@ from typing import Any, Callable
 from fastapi import HTTPException
 
 from forwin.api_schema import ProjectAutomationSettings
+from forwin.models.publisher import UPLOAD_JOB_TERMINAL_STATUSES
 from forwin.production.scheduler import ProductionScheduler
 
 
@@ -31,7 +32,7 @@ def run_automation_scheduler_pass(
             display_datetime=display_datetime,
             persist_project_automation=persist_project_automation,
             generation_terminal_statuses=terminal_statuses,
-            upload_terminal_statuses={"succeeded", "failed", "cancelled"},
+            upload_terminal_statuses=set(UPLOAD_JOB_TERMINAL_STATUSES),
             display_tz=display_tz,
             get_session=get_session,
             review_chapter=review_chapter,

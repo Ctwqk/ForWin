@@ -134,7 +134,7 @@
         const data = await res.json();
         renderUploadJob(data);
         await loadUploadJobs(true);
-        if (['succeeded', 'failed', 'cancelled', 'paused'].includes(data.status)) {
+        if (['succeeded', 'failed', 'cancelled', 'superseded', 'paused'].includes(data.status)) {
           await loadPlatforms();
           return;
         }

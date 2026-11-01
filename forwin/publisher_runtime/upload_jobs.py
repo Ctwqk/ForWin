@@ -12,6 +12,7 @@ from forwin.audit.events import DecisionEventType
 from forwin.models.base import new_id
 from forwin.models.project import Project
 from forwin.models.publisher import (
+    UPLOAD_JOB_TERMINAL_STATUSES,
     PublisherConnectionState,
     PublisherUploadAttempt,
     PublisherUploadJob,
@@ -440,6 +441,13 @@ class UploadJobService:
             ),
             "book_meta": normalized_book_meta,
         }
+        # Only a binding that is routed to publish-hub records that. The snapshot of any other
+        # binding stays exactly what earlier code stored, because a replay compares it.
+        if str(binding.get("route") or "legacy").strip() != "legacy":
+            immutable_binding["route"] = str(binding["route"]).strip()
+        hub_destination_id = str(binding.get("hub_destination_id") or "").strip()
+        if hub_destination_id:
+            immutable_binding["hub_destination_id"] = hub_destination_id
         body_text = str(body or "")
         body_sha256 = hashlib.sha256(body_text.encode("utf-8")).hexdigest()
         expected = {
@@ -802,7 +810,7 @@ class UploadJobService:
             ).scalar_one_or_none()
             if job is None:
                 raise ValueError("上传任务不存在。")
-            if job.status in {"succeeded", "failed", "cancelled"}:
+            if job.status in UPLOAD_JOB_TERMINAL_STATUSES:
                 raise ValueError("终态上传任务不能再次终止。")
             if job.status in {"scheduled", "pending"}:
                 job.status = "cancelled"
@@ -876,7 +884,7 @@ class UploadJobService:
             ).scalar_one_or_none()
             if job is None:
                 raise ValueError("上传任务不存在。")
-            if job.status not in {"succeeded", "failed", "cancelled"}:
+            if job.status not in UPLOAD_JOB_TERMINAL_STATUSES:
                 raise ValueError("运行中的上传任务不能删除，请先终止。")
             job.deleted_at = now
             session.commit()
@@ -1576,7 +1584,7 @@ class UploadJobService:
             if isinstance(risk_pause, dict)
             else ""
         )
-        terminal = job.status in {"succeeded", "failed", "cancelled"}
+        terminal = job.status in UPLOAD_JOB_TERMINAL_STATUSES
         return {
             "task_kind": str(job.task_kind or "chapter_upload"),
             "job_id": job.id,

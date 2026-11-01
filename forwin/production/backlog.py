@@ -12,6 +12,9 @@ class ProductionPublishJob(BaseModel):
     candidate_id: str
     chapter_number: int
     platform: str
+    # Why publish-hub's release gate holds this job now ("" when it does not); a held job does
+    # not take a slot of the day's publish quota (R38).
+    hold_reason: str = ""
 
 
 class ProductionBacklog(BaseModel):
@@ -34,11 +37,31 @@ class ProductionBacklog(BaseModel):
         *,
         platforms: set[str],
     ) -> list[dict[str, Any]]:
+        """The jobs to release for the selected chapters; held jobs are left out."""
         selected = {int(item) for item in chapter_numbers}
         return [
             item.model_dump(mode="json")
             for item in self.scheduled_publish_jobs
-            if int(item.chapter_number) in selected and item.platform in platforms
+            if int(item.chapter_number) in selected
+            and item.platform in platforms
+            and not item.hold_reason
+        ]
+
+    def held_publish_jobs(self, *, platforms: set[str]) -> list[dict[str, Any]]:
+        """The lowest held job of each platform: the release point runs the gate on it alone.
+
+        Running it creates a missing book and records why the binding's chapters wait; one job
+        per binding is enough for both.
+        """
+        lowest: dict[str, ProductionPublishJob] = {}
+        for item in self.scheduled_publish_jobs:
+            if not item.hold_reason or item.platform not in platforms:
+                continue
+            current = lowest.get(item.platform)
+            if current is None or int(item.chapter_number) < int(current.chapter_number):
+                lowest[item.platform] = item
+        return [
+            lowest[platform].model_dump(mode="json") for platform in sorted(lowest)
         ]
 
 

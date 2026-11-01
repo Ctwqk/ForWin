@@ -166,3 +166,47 @@ def test_planner_releases_only_snapshotted_jobs_for_current_platform_policy() ->
 
     assert plan.publish_chapters == [8]
     assert [job["job_id"] for job in plan.publish_jobs] == ["job-qidian-8"]
+
+
+def _job(chapter_number: int, platform: str, hold_reason: str = "") -> ProductionPublishJob:
+    return ProductionPublishJob(
+        job_id=f"job-{platform}-{chapter_number}",
+        idempotency_key=f"key-{platform}-{chapter_number}",
+        canon_commit_id=f"canon-{chapter_number}",
+        candidate_id=f"candidate-{chapter_number}",
+        chapter_number=chapter_number,
+        platform=platform,
+        hold_reason=hold_reason,
+    )
+
+
+def test_planner_spends_no_quota_on_chapters_whose_jobs_are_all_held() -> None:
+    # fanqie is held by publish-hub's release gate; qidian's chapters 1 and 2 are out already.
+    plan = ProductionPlanner().plan(
+        policy=ProductionPolicy(
+            enabled=True,
+            auto_publish=True,
+            quota=ProductionQuota(write=0, publish=2),
+            publish_bindings=[
+                {"platform": "qidian", "book_name": "起点版"},
+                {"platform": "fanqie", "book_name": "番茄版"},
+            ],
+        ),
+        backlog=ProductionBacklog(
+            project_id="project-1",
+            reviewed_unpublished=[1, 2, 3, 4],
+            scheduled_publish_jobs=[
+                _job(1, "fanqie", "account_paused_risk"),
+                _job(2, "fanqie", "account_paused_risk"),
+                _job(3, "fanqie", "account_paused_risk"),
+                _job(3, "qidian"),
+                _job(4, "qidian"),
+            ],
+        ),
+        now=datetime(2026, 5, 5, tzinfo=timezone.utc),
+    )
+
+    assert plan.publish_chapters == [3, 4]
+    assert [job["job_id"] for job in plan.publish_jobs] == ["job-qidian-3", "job-qidian-4"]
+    # The lowest held job of the binding runs the gate (book creation, reason); never released.
+    assert [job["job_id"] for job in plan.hold_jobs] == ["job-fanqie-1"]

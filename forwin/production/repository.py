@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from forwin.generation.continue_workset import build_continue_generation_workset
 from forwin.models.project import ChapterPlan
-from forwin.models.publisher import CREATE_BOOK_TASK_KIND, PublisherUploadJob
+from forwin.models.publisher import PublisherUploadJob, upload_job_not_hub_owned
 from forwin.models.task import GenerationTask
+from forwin.publish_hub.gate import hold_reason_for
 from .backlog import ProductionBacklog, ProductionPublishJob
 
 
@@ -139,11 +140,18 @@ class ProductionRepository:
             .all()
         )
         seen_chapters: dict[str, set[int]] = defaultdict(set)
+        # Read-only release gate of publish-hub, once per binding: held jobs take no quota (R38).
+        hold_reasons: dict[tuple[str, str], str] = {}
         for job in jobs:
             project_id = str(job.project_id or "").strip()
             backlog = backlogs.get(project_id)
             if backlog is None:
                 continue
+            binding_key = (project_id, job.platform_id)
+            if binding_key not in hold_reasons:
+                hold_reasons[binding_key] = hold_reason_for(
+                    self.session, project_id, job.platform_id
+                )
             chapter_number = int(job.chapter_number or 0)
             if chapter_number not in seen_chapters[project_id]:
                 backlog.reviewed_unpublished.append(chapter_number)
@@ -156,6 +164,7 @@ class ProductionRepository:
                     candidate_id=job.candidate_id,
                     chapter_number=chapter_number,
                     platform=job.platform_id,
+                    hold_reason=hold_reasons[binding_key],
                 )
             )
 
@@ -200,8 +209,16 @@ class ProductionRepository:
                     PublisherUploadJob.project_id.in_(project_ids),
                     PublisherUploadJob.status.notin_(tuple(terminal_statuses)),
                     PublisherUploadJob.status != "scheduled",
-                    # A book being created on one platform must not stop the other's releases.
-                    PublisherUploadJob.task_kind != CREATE_BOOK_TASK_KIND,
+                    # R39: of publish-hub's rows only chapters it has a job for are uploads in
+                    # flight. A stored chapter waiting for an earlier one, a cover waiting for its
+                    # book and a book being created must not stop the project's other releases.
+                    or_(
+                        upload_job_not_hub_owned(),
+                        and_(
+                            PublisherUploadJob.task_kind == "chapter_upload",
+                            PublisherUploadJob.hub_job_id.is_not(None),
+                        ),
+                    ),
                 )
                 .distinct()
             )

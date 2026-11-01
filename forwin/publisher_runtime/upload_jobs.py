@@ -65,6 +65,23 @@ LOGIN_FAILURE_FRAGMENTS = (
 _CLIENT_NOT_FETCHED = object()
 
 
+def _normalized_ids(job_ids) -> list[str]:
+    normalized = dict.fromkeys(str(job_id or "").strip() for job_id in job_ids)
+    return [job_id for job_id in normalized if job_id]
+
+
+def _require_canon_job(job: PublisherUploadJob, project_id: str) -> None:
+    if (
+        job.project_id != project_id
+        or not job.canon_commit_id
+        or not job.idempotency_key
+        or job.task_kind != "chapter_upload"
+    ):
+        raise ValueError(f"publisher job is not a Canon job: {job.id}")
+    if job.deleted_at is not None:
+        raise ValueError(f"publisher job is deleted: {job.id}")
+
+
 def _load_json_object(raw: str | None) -> dict[str, Any]:
     try:
         payload = json.loads(raw or "{}")
@@ -578,13 +595,19 @@ class UploadJobService:
         publish: bool,
         actor_type: str,
         session=None,
+        hold_job_ids: list[str] | tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
+        """Release scheduled Canon jobs; the released ones, serialized.
+
+        `hold_job_ids` are chapters the production planner found held by publish-hub's release
+        gate (R38). They run the gate (book creation, hold reason) and are never released here.
+        """
         normalized_project_id = str(project_id or "").strip()
-        normalized_ids = list(
-            dict.fromkeys(str(job_id or "").strip() for job_id in job_ids)
-        )
-        normalized_ids = [job_id for job_id in normalized_ids if job_id]
-        if not normalized_project_id or not normalized_ids:
+        normalized_ids = _normalized_ids(job_ids)
+        hold_ids = [
+            job_id for job_id in _normalized_ids(hold_job_ids) if job_id not in normalized_ids
+        ]
+        if not normalized_project_id or not (normalized_ids or hold_ids):
             return []
         if session is not None:
             released = self._release_scheduled_canon_jobs(
@@ -593,6 +616,7 @@ class UploadJobService:
                 job_ids=normalized_ids,
                 publish=bool(publish),
                 actor_type=actor_type,
+                hold_job_ids=hold_ids,
             )
             session.flush()
             return [self.serialize_upload_job(job) for job in released]
@@ -604,6 +628,7 @@ class UploadJobService:
                 job_ids=normalized_ids,
                 publish=bool(publish),
                 actor_type=actor_type,
+                hold_job_ids=hold_ids,
             )
             managed_session.commit()
             for job in released:
@@ -618,18 +643,20 @@ class UploadJobService:
         job_ids: list[str],
         publish: bool,
         actor_type: str,
+        hold_job_ids: list[str] | tuple[str, ...] = (),
     ) -> list[PublisherUploadJob]:
+        all_ids = [*job_ids, *hold_job_ids]
         jobs = (
             session.execute(
                 select(PublisherUploadJob)
-                .where(PublisherUploadJob.id.in_(job_ids))
+                .where(PublisherUploadJob.id.in_(all_ids))
                 .with_for_update()
             )
             .scalars()
             .all()
         )
         by_id = {job.id: job for job in jobs}
-        missing = [job_id for job_id in job_ids if job_id not in by_id]
+        missing = [job_id for job_id in all_ids if job_id not in by_id]
         if missing:
             raise ValueError(f"publisher jobs not found: {', '.join(missing)}")
 
@@ -638,6 +665,7 @@ class UploadJobService:
             NOT_RELEASED_OUTCOMES,
             SubmitOutcome,
             client_from,
+            gate_chapter,
             hub_binding_for,
             submit_released_job,
         )
@@ -646,15 +674,7 @@ class UploadJobService:
         hub_client: Any = _CLIENT_NOT_FETCHED
         for job_id in job_ids:
             job = by_id[job_id]
-            if (
-                job.project_id != project_id
-                or not job.canon_commit_id
-                or not job.idempotency_key
-                or job.task_kind != "chapter_upload"
-            ):
-                raise ValueError(f"publisher job is not a Canon job: {job.id}")
-            if job.deleted_at is not None:
-                raise ValueError(f"publisher job is deleted: {job.id}")
+            _require_canon_job(job, project_id)
 
             payload = _load_json_object(job.result_payload_json)
             if bool(job.publish) != publish:
@@ -736,6 +756,26 @@ class UploadJobService:
                 extra_payload={"transition": "scheduled_to_pending"},
             )
             released.append(job)
+
+        # R38: chapters the planner did not count. The gate runs (it submits a missing book's
+        # create job and records the hold reason) and nothing is released, even when it is open.
+        for job_id in hold_job_ids:
+            job = by_id[job_id]
+            _require_canon_job(job, project_id)
+            if job.status != "scheduled":
+                continue
+            if hub_binding_for(session, job.project_id, job.platform_id) is None:
+                continue
+            if hub_client is _CLIENT_NOT_FETCHED:
+                hub_client = client_from(self.publish_hub_client_provider)
+            gate_chapter(
+                session,
+                job,
+                hub_client,
+                now=utc_now(),
+                audit=self.audit,
+                actor_type=str(actor_type or "system"),
+            )
         return released
 
     def _canon_release_preflight(

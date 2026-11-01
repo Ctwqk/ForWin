@@ -95,6 +95,7 @@ class CanonPublisherJobService:
         publish: bool,
         actor_type: str,
         session=None,
+        hold_job_ids: Sequence[str] = (),
     ) -> list[dict[str, Any]]:
         return self.upload_jobs.release_scheduled_canon_jobs(
             project_id=project_id,
@@ -102,6 +103,7 @@ class CanonPublisherJobService:
             publish=publish,
             actor_type=actor_type,
             session=session,
+            hold_job_ids=list(hold_job_ids),
         )
 
     def find(

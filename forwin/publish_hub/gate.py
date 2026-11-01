@@ -11,6 +11,10 @@ There are two questions, both answered from ForWin's own tables:
   out jobs by `available_at`, so chapter N+1 could otherwise overtake chapter N while N is backing
   off.
 
+The production planner reads `check_destination` too (through `hold_reason_for`), so a held
+chapter does not take a slot of the day's publish quota (R38). It never submits anything: the
+create_destination job is submitted by the release point (`submit.release_gate`).
+
 Nothing here writes.
 """
 
@@ -21,6 +25,8 @@ from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import case, exists, func, select
 
+from forwin.application.read_models import normalize_project_automation
+from forwin.models.project import Project
 from forwin.models.publisher import (
     PublisherChapterBinding,
     PublisherCoverAsset,
@@ -34,6 +40,8 @@ if TYPE_CHECKING:
     from forwin.api_schema.project import ProjectAutomationPublishSettings
 
 GateResult = Literal["ok", "wait_destination", "wait_account"]
+
+HUB_ROUTE = "hub"
 
 PAUSED_RISK = "paused_risk"
 # Why a chapter is held. Each value is recorded on the held row, and a change is audited.
@@ -53,6 +61,40 @@ class DestinationCheck:
     result: GateResult
     cause: str  # "" when ok
     destination_id: str | None
+
+
+def hub_binding_for(
+    session, project_id: str, platform_id: str
+) -> ProjectAutomationPublishSettings | None:
+    """The project's publish binding for a platform when it routes to publish-hub, else None.
+
+    Read from the project's settings as they are now, never from a job's frozen binding
+    snapshot (R21): jobs scheduled before a cutover go where the binding points at release.
+    """
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_project_id:
+        return None
+    project = session.get(Project, normalized_project_id)
+    if project is None:
+        return None
+    settings = normalize_project_automation(project.automation_json)
+    for binding in settings.publish_bindings:
+        if binding.platform == platform_id:
+            return binding if binding.route == HUB_ROUTE else None
+    return None
+
+
+def hold_reason_for(session, project_id: str, platform_id: str) -> str:
+    """Why the release gate would hold the project's chapters on this platform now, or "".
+
+    Read-only: a missing book reads as BOOK_MISSING whether or not its create job was
+    submitted. "" for a binding that does not route to publish-hub.
+    """
+    binding = hub_binding_for(session, project_id, platform_id)
+    if binding is None:
+        return ""
+    check = check_destination(session, binding, project_id=project_id)
+    return check.cause if check.result != "ok" else ""
 
 
 def check_destination(
@@ -143,6 +185,7 @@ def selected_cover(
 
 __all__ = [
     "ACCOUNT_PAUSED",
+    "HUB_ROUTE",
     "BOOK_MISSING",
     "DESTINATION_NOT_SYNCED",
     "DESTINATION_ON_OTHER_PLATFORM",
@@ -153,6 +196,8 @@ __all__ = [
     "GateResult",
     "check_destination",
     "earlier_chapter_not_done",
+    "hold_reason_for",
+    "hub_binding_for",
     "selected_cover",
     "work_binding_for",
 ]

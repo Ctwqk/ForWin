@@ -22,7 +22,7 @@ Chapters go through the release gate first (R36). A chapter whose destination ca
 chapters is held: it stays `scheduled`, nothing is stored or counted as released, and the reason
 is recorded on the row (audited when it changes). That covers no destination id, a destination
 the sync cache does not list, an account paused for risk, and no book yet. For the missing book,
-the binding's create_destination job is submitted once and never again. Any other chapter is
+the binding's create_destination job is submitted once per request key (R40). Any other chapter is
 released the way the extension queue releases it: its request is stored and counted. It is
 POSTed only when every earlier released chapter of the binding is done (D9). The rest are sent in
 chapter order by `recover_unsubmitted` as their turn comes.
@@ -43,9 +43,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from forwin.application.read_models import normalize_project_automation
 from forwin.audit.events import DecisionEventType
-from forwin.models.project import Project
 from forwin.models.publisher import (
     CREATE_BOOK_TASK_KIND,
     PublisherUploadJob,
@@ -59,6 +57,7 @@ from forwin.publisher_runtime.audit import (
 from .client import HubRequestError, HubUnavailable, PublishHubClient
 from .gate import (
     ACCOUNT_PAUSED,
+    HUB_ROUTE,
     BOOK_MISSING,
     DESTINATION_NOT_SYNCED,
     DESTINATION_ON_OTHER_PLATFORM,
@@ -66,18 +65,17 @@ from .gate import (
     GateResult,
     check_destination,
     earlier_chapter_not_done,
+    hub_binding_for,
     selected_cover,
     work_binding_for,
 )
-from .payloads import chapter_body, cover_body, create_body
-from .refs import job_payload
+from .payloads import binding_snapshot_sha256, chapter_body, cover_body, create_body
+from .refs import create_key, job_payload
 
 if TYPE_CHECKING:
     from forwin.api_schema.project import ProjectAutomationPublishSettings
 
 logger = logging.getLogger(__name__)
-
-HUB_ROUTE = "hub"
 
 # The state map: publish-hub job status -> local PublisherUploadJob.status. The sync process
 # applies it; at submit time a terminal hub status is not applied (R30, see _adopt).
@@ -136,6 +134,7 @@ CREATE_UNSENT = "create_unsent"
 CREATE_RUNNING = "create_running"
 CREATE_SUCCEEDED = "create_succeeded"
 CREATE_FAILED = "create_failed"
+CREATE_REFUSED = "create_refused"
 CREATE_UNBUILDABLE = "create_unbuildable"
 # result_payload_json key of a held chapter: its last gate verdict, to audit only changes.
 _HOLD_KEY = "hub_hold"
@@ -151,27 +150,6 @@ class GateDecision:
     result: GateResult
     cause: str
     message: str
-
-
-def hub_binding_for(
-    session, project_id: str, platform_id: str
-) -> ProjectAutomationPublishSettings | None:
-    """The project's publish binding for a platform when it routes to publish-hub, else None.
-
-    Read from the project's settings as they are now, never from a job's frozen binding
-    snapshot (R21): jobs scheduled before a cutover go where the binding points at release.
-    """
-    normalized_project_id = str(project_id or "").strip()
-    if not normalized_project_id:
-        return None
-    project = session.get(Project, normalized_project_id)
-    if project is None:
-        return None
-    settings = normalize_project_automation(project.automation_json)
-    for binding in settings.publish_bindings:
-        if binding.platform == platform_id:
-            return binding if binding.route == HUB_ROUTE else None
-    return None
 
 
 def client_from(
@@ -209,25 +187,48 @@ def submit_released_job(
     sending several jobs passes None for the rest of the pass once one comes back
     DEFERRED_UNAVAILABLE (R32).
     """
-    binding = None
     if _gated(job):
-        binding = hub_binding_for(session, job.project_id, job.platform_id)
-        if binding is None:
-            raise ValueError(f"publisher job is not routed to publish-hub: {job.id}")
-        decision = release_gate(
-            session,
-            binding,
-            project_id=job.project_id,
-            client=client,
-            now=now,
-            audit=audit,
-            actor_type=actor_type,
+        decision = gate_chapter(
+            session, job, client, now=now, audit=audit, actor_type=actor_type
         )
         if decision.result != "ok":
-            return _hold(session, job, decision, audit=audit, actor_type=actor_type)
-    outcome = _submit(session, job, client, now=now, binding=binding)
+            return SubmitOutcome.HELD
+    outcome = _submit(session, job, client, now=now)
     _record(audit, session, job, outcome, actor_type=actor_type, transition=transition)
     return outcome
+
+
+def gate_chapter(
+    session,
+    job: PublisherUploadJob,
+    client: PublishHubClient | None,
+    *,
+    now: datetime,
+    audit: PublisherAuditService | None = None,
+    actor_type: str = "system",
+) -> GateDecision:
+    """Run the release gate for a scheduled chapter on a hub-routed binding; release nothing.
+
+    A held chapter gets the reason recorded (audited only when it changes), and a missing book
+    gets its create_destination job (submitted once). The release point calls this directly for
+    the planner's hold-only jobs (R38): the chapter is not released even when the gate is open,
+    since the planner did not count it against the day's quota.
+    """
+    binding = hub_binding_for(session, job.project_id, job.platform_id)
+    if binding is None:
+        raise ValueError(f"publisher job is not routed to publish-hub: {job.id}")
+    decision = release_gate(
+        session,
+        binding,
+        project_id=job.project_id,
+        client=client,
+        now=now,
+        audit=audit,
+        actor_type=actor_type,
+    )
+    if decision.result != "ok":
+        _hold(session, job, decision, audit=audit, actor_type=actor_type)
+    return decision
 
 
 def release_gate(
@@ -244,10 +245,12 @@ def release_gate(
 
     "ok", or why they are held: "wait_destination" (no destination id; the destination not in
     the sync cache or on another platform; no book yet) or "wait_account" (the account is paused
-    for risk). While the book is missing, the binding's create_destination job is submitted the
-    first time and never again, whatever became of it (R3, R33): a failed one is retried by an
-    operator in publish-hub's /ops, and the held chapter says so. The order of chapters (D9) is
-    not checked here; a released chapter waits for its turn when it would be sent.
+    for risk). While the book is missing, the binding's create_destination job is submitted
+    unless an existing one blocks it (R3, R40, `_blocking_create_job`). A job publish-hub took
+    and failed is retried by an operator in publish-hub's /ops; a request refused when it was
+    sent waits for corrected book settings, which change the key. The held chapter says which.
+    The order of chapters (D9) is not checked here; a released chapter waits for its turn when it
+    would be sent.
     """
     check = check_destination(session, binding, project_id=project_id)
     if check.cause != BOOK_MISSING:
@@ -363,18 +366,12 @@ def _gated(job: PublisherUploadJob) -> bool:
 
 
 def _submit(
-    session,
-    job: PublisherUploadJob,
-    client: PublishHubClient | None,
-    *,
-    now: datetime,
-    binding: ProjectAutomationPublishSettings | None = None,
+    session, job: PublisherUploadJob, client: PublishHubClient | None, *, now: datetime
 ) -> SubmitOutcome:
     if job.hub_job_id is not None:
         return SubmitOutcome.SUBMITTED
     if job.hub_submit_body_json is None:
-        if binding is None:
-            binding = hub_binding_for(session, job.project_id, job.platform_id)
+        binding = hub_binding_for(session, job.project_id, job.platform_id)
         destination_id = binding.hub_destination_id if binding is not None else None
         if not destination_id:
             raise ValueError(
@@ -503,17 +500,19 @@ def _ensure_create_job(
     audit: PublisherAuditService | None,
     actor_type: str,
 ) -> PublisherUploadJob:
-    """The binding's create_destination job for this destination, submitted if there was none.
+    """The create_destination job the chapter waits for, submitted when nothing blocks one (R40).
 
     The work binding is locked first, so two releases of the same binding cannot both find no
-    job and submit two. Any existing create_book row for the destination counts, deleted or
-    failed included: the same key would only get the same hub job back (R33). The selected
-    cover, if any, goes with the request.
+    job and submit two. `_blocking_create_job` says which existing row stands for the book.
+    Otherwise a new row is stored and sent, with the selected cover, if any.
     """
     work = _locked_work_binding(session, project_id, binding)
     if work.hub_destination_id != destination_id:
         work.hub_destination_id = destination_id
-    existing = _create_job_for(session, project_id, binding.platform, destination_id)
+    key = create_key(project_id, binding.platform, binding_snapshot_sha256(binding, destination_id))
+    existing = _blocking_create_job(
+        session, project_id, binding.platform, destination_id=destination_id, key=key
+    )
     if existing is not None:
         return existing
     cover = selected_cover(session, project_id=project_id, work_binding_id=work.id)
@@ -566,9 +565,22 @@ def _locked_work_binding(
         return work
 
 
-def _create_job_for(
-    session, project_id: str, platform_id: str, destination_id: str
+def _blocking_create_job(
+    session, project_id: str, platform_id: str, *, destination_id: str, key: str
 ) -> PublisherUploadJob | None:
+    """The existing create_book row that stops a new create request, if any (R40, amends R33).
+
+    These rows block:
+    * a row with this request's key, whatever became of it. Resending the same key only gets
+      the same answer back, and the unique key allows no second row.
+    * a row for this destination that publish-hub accepted (it has a hub job; a failed one is
+      retried by an operator in publish-hub's /ops).
+    * a row for this destination still on its way: stored, its answer not known yet. It may
+      have been accepted.
+    A row refused when it was sent (local failed, no hub job) with another key does not block:
+    corrected book settings, or another destination, change the key and get a new request.
+    Deleted rows count like the others.
+    """
     rows = (
         session.execute(
             select(PublisherUploadJob)
@@ -583,8 +595,13 @@ def _create_job_for(
         .all()
     )
     for row in rows:
+        if row.idempotency_key == key:
+            return row
+    for row in rows:
         body = row.hub_submit_body_json if isinstance(row.hub_submit_body_json, Mapping) else {}
-        if str(body.get("destination_id") or "") == destination_id:
+        if str(body.get("destination_id") or "") != destination_id:
+            continue
+        if row.hub_job_id is not None or row.status != "failed":
             return row
     return None
 
@@ -593,18 +610,26 @@ def _waiting_for_book(create: PublisherUploadJob) -> GateDecision:
     """Why a chapter waits for its book, from what became of the create_destination job."""
     hub_job_id = str(create.hub_job_id or "")
     hub_status = str(create.hub_status or "")
-    if create.status in _STOPPED_STATUSES or hub_status in _STOPPED_STATUSES:
-        reason = str(create.error_message or "") or hub_status or create.status
-        if reason == "destination_already_created":
+    if not hub_job_id and create.status == "failed":
+        code = str(create.error_message or "") or "refused"
+        if code == "destination_already_created":
             message = (
                 "publish-hub 报告这个发布目标已经建好书（destination_already_created），"
                 "等同步进程记下平台书号后放行。"
             )
         else:
             message = (
-                f"建书任务没有成功（{reason}），不会自动重新提交：请在 publish-hub /ops 重试"
-                f"（任务 {hub_job_id or '未建立'}），书建好后本章自动放行。"
+                f"建书请求被 publish-hub 拒绝（{code}），没有建立任务。请修正这本书的设置"
+                "（书名、简介、分类、标签等）；设置改动后会自动重新提交建书请求。"
             )
+        return GateDecision("wait_destination", CREATE_REFUSED, message)
+    if create.status in _STOPPED_STATUSES or hub_status in _STOPPED_STATUSES:
+        stopped = create.status if create.status in _STOPPED_STATUSES else hub_status
+        reason = str(create.error_message or "") or stopped
+        message = (
+            f"建书任务没有成功（{reason}），不会自动重新提交：请在 publish-hub /ops 重试"
+            f"（任务 {hub_job_id}），书建好后本章自动放行。"
+        )
         return GateDecision("wait_destination", CREATE_FAILED, message)
     if create.status == "succeeded" or hub_status == "succeeded":
         return GateDecision(
@@ -816,6 +841,7 @@ def _fail(
 __all__ = [
     "ACTIVE_JOB_CODES",
     "CREATE_FAILED",
+    "CREATE_REFUSED",
     "CREATE_RUNNING",
     "CREATE_SUCCEEDED",
     "CREATE_TRANSITION",
@@ -831,6 +857,7 @@ __all__ = [
     "GateDecision",
     "SubmitOutcome",
     "client_from",
+    "gate_chapter",
     "hub_binding_for",
     "hub_event_payload",
     "recover_unsubmitted",

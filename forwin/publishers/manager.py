@@ -394,6 +394,7 @@ class PublisherManager:
         publish: bool,
         actor_type: str,
         session=None,
+        hold_job_ids: list[str] | tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         return self.runtime.canon_jobs.release(
             project_id=project_id,
@@ -401,6 +402,7 @@ class PublisherManager:
             publish=publish,
             actor_type=actor_type,
             session=session,
+            hold_job_ids=hold_job_ids,
         )
 
     def list_work_bindings(

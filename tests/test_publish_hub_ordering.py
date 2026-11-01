@@ -48,6 +48,7 @@ from tests.test_publish_hub_submit import (
     FANQIE,
     FANQIE_DESTINATION,
     NOW,
+    QIDIAN,
     QIDIAN_DESTINATION,
     FakeHub,
     _attach_hub,
@@ -86,8 +87,8 @@ def _seed_cache(fixture, *, account_status="active", remote_id=BOOK_ID, platform
         )
 
 
-def _add_chapter(fixture, number: int, *, bindings=(FANQIE,)) -> str:
-    """Commit chapter `number` to Canon and materialize its scheduled job; the job id."""
+def _add_chapter(fixture, number: int, *, bindings=(FANQIE,)) -> dict[str, str]:
+    """Commit chapter `number` to Canon and materialize its scheduled jobs: platform -> job id."""
     body = f"第{number}章的正文，旧城的钟声又响了一次。"
     title = f"第{number}章 钟声"
     plan_id, candidate_id, commit_id = new_id(), new_id(), new_id()
@@ -166,8 +167,7 @@ def _add_chapter(fixture, number: int, *, bindings=(FANQIE,)) -> str:
         body_sha256=candidate_body_hash(body),
         bindings=list(bindings),
     )
-    (job,) = created
-    return job["job_id"]
+    return {job["platform"]: job["job_id"] for job in created}
 
 
 def _ordered_fixture(
@@ -185,7 +185,7 @@ def _ordered_fixture(
     _set_routes(fixture, {"fanqie": (route, destination)})
     if cache is not None:
         _seed_cache(fixture, **cache)
-    ids = {number: _add_chapter(fixture, number) for number in chapters}
+    ids = {number: _add_chapter(fixture, number)["fanqie"] for number in chapters}
     return fixture, hub, client, ids
 
 
@@ -231,7 +231,7 @@ def _force_status(fixture, job_id, status: str) -> None:
         session.get(PublisherUploadJob, job_id).status = status
 
 
-def _run_publish(fixture, *, quota: int, publish: bool = True):
+def _run_publish(fixture, *, quota: int, publish: bool = True, platforms=("fanqie",)):
     """One scheduler run's publishing step: the real backlog, planner and executor.
 
     The scheduler reserves the day exactly when the run's publish_job_count (or a generation
@@ -241,7 +241,12 @@ def _run_publish(fixture, *, quota: int, publish: bool = True):
         enabled=True,
         auto_publish=publish,
         quota=ProductionQuota(write=0, publish=quota),
-        publish_bindings=[{"platform": "fanqie", "book_name": FANQIE["book_name"]}],
+        publish_bindings=[
+            {"platform": platform, "book_name": (FANQIE if platform == "fanqie" else QIDIAN)[
+                "book_name"
+            ]}
+            for platform in platforms
+        ],
     )
     with fixture.runtime.session_factory() as session:
         backlog = ProductionRepository(session).load_backlogs(
@@ -414,7 +419,8 @@ def test_no_destination_id_holds_without_any_hub_request() -> None:
         plan, result = _run_publish(fixture, quota=1)
 
         stored = _job(fixture, ids[1])
-        assert plan.publish_chapters == [1]
+        assert plan.publish_chapters == []  # a held chapter takes no slot (R38)
+        assert [item["job_id"] for item in plan.hold_jobs] == [ids[1]]
         assert result.publish_job_count == 0  # the day is not reserved
         assert result.action == "idle"
         assert stored.status == "scheduled"
@@ -450,6 +456,9 @@ def test_account_paused_for_risk_holds_every_chapter_and_uses_no_quota() -> None
     try:
         for _ in range(2):
             plan, result = _run_publish(fixture, quota=2)
+            assert plan.publish_chapters == []  # held chapters take no slot (R38)
+            # Only the binding's lowest held chapter runs the gate, to record why it waits.
+            assert [item["job_id"] for item in plan.hold_jobs] == [ids[1]]
             assert result.publish_job_count == 0
             assert result.action == "idle"
         assert hub.requests == []
@@ -457,6 +466,10 @@ def test_account_paused_for_risk_holds_every_chapter_and_uses_no_quota() -> None
             stored = _job(fixture, job_id)
             assert (stored.status, stored.hub_submit_body_json) == ("scheduled", None)
         assert "风控" in _job(fixture, ids[1]).result_message
+        assert [event["hub_gate_cause"] for event in _hold_events(fixture, ids[1])] == [
+            "account_paused_risk"
+        ]
+        assert _hold_events(fixture, ids[2]) == []
 
         _seed_cache(fixture)  # the account is active again
         plan, result = _run_publish(fixture, quota=2)
@@ -528,8 +541,10 @@ def test_book_creation_is_submitted_once_and_the_first_chapter_goes_out_once_the
     try:
         for _ in range(3):
             plan, result = _run_publish(fixture, quota=2)
-            # A book being created is not an active upload: the planner keeps planning.
-            assert plan.publish_chapters == [1, 2]
+            # Held chapters take no slot; the lowest one runs the gate, which creates the book.
+            # A book being created is not an active upload, so this goes on every run.
+            assert plan.publish_chapters == []
+            assert [item["job_id"] for item in plan.hold_jobs] == [ids[1]]
             assert result.publish_job_count == 0
 
         assert hub.post_count() == 1
@@ -555,7 +570,7 @@ def test_book_creation_is_submitted_once_and_the_first_chapter_goes_out_once_the
         for job_id in ids.values():
             stored = _job(fixture, job_id)
             assert (stored.status, stored.hub_submit_body_json) == ("scheduled", None)
-            assert "建书" in stored.result_message
+        assert "建书" in _job(fixture, ids[1]).result_message
 
         _seed_cache(fixture)  # the sync saw the book's remote_id
         plan, result = _run_publish(fixture, quota=2)
@@ -567,30 +582,100 @@ def test_book_creation_is_submitted_once_and_the_first_chapter_goes_out_once_the
         fixture.engine.dispose()
 
 
-@pytest.mark.parametrize("how", ["refused", "failed_on_hub"])
-def test_failed_book_creation_is_not_resubmitted_and_shows_on_the_held_chapter(how) -> None:
+def _fail_the_book_creation(fixture, hub, chapter_job_id, how: str) -> PublisherUploadJob:
+    """Release a chapter whose book is missing, and let its create_destination job fail."""
+    if how == "refused":
+        hub.refusals.append((422, "invalid_payload"))
+    elif how == "conflict":  # R29: the key is taken and publish-hub shows no job for it
+        hub.refusals.append((409, "idempotency_conflict"))
+    _release(fixture, [chapter_job_id])
+    (create,) = _create_rows(fixture)
+    if how == "failed_on_hub":
+        assert create.hub_job_id is not None
+        _force_status(fixture, create.id, "failed")  # mirrored by the sync
+    return _create_rows(fixture)[0]
+
+
+@pytest.mark.parametrize(
+    ("how", "code"),
+    [
+        ("refused", "invalid_payload"),
+        ("conflict", "idempotency_conflict_unresolved"),
+        ("failed_on_hub", "failed"),
+    ],
+)
+def test_failed_book_creation_is_not_resubmitted_and_the_chapter_says_why(how, code) -> None:
     fixture, hub, _client_, ids = _ordered_fixture(
         f"hub-order-create-{how}", chapters=(1,), cache={"remote_id": None}
     )
     try:
-        if how == "refused":
-            hub.refusals.append((422, "invalid_payload"))
-        _release(fixture, [ids[1]])
-        (create,) = _create_rows(fixture)
-        if how == "failed_on_hub":
-            _force_status(fixture, create.id, "failed")  # mirrored by the sync
-        assert _create_rows(fixture)[0].status == "failed"
+        create = _fail_the_book_creation(fixture, hub, ids[1], how)
+        assert create.status == "failed"
+        requests_before = len(hub.requests)
 
         for _ in range(2):
             assert _release(fixture, [ids[1]]) == []
 
-        assert hub.post_count() == 1
+        assert len(hub.requests) == requests_before  # the same key is never sent again
         assert len(_create_rows(fixture)) == 1
         stored = _job(fixture, ids[1])
         assert stored.status == "scheduled"
-        assert "/ops" in stored.result_message
+        assert code in stored.result_message
         causes = [event["hub_gate_cause"] for event in _hold_events(fixture, ids[1])]
-        assert causes[-1] == "create_failed"
+        if how == "failed_on_hub":
+            # publish-hub has the job: an operator retries it there.
+            assert "/ops" in stored.result_message
+            assert create.hub_job_id in stored.result_message
+            assert causes[-1] == "create_failed"
+        else:
+            # Refused when sent: there is no job in publish-hub, the book settings need fixing.
+            assert "/ops" not in stored.result_message
+            assert "设置" in stored.result_message
+            assert causes == ["create_refused"]
+    finally:
+        fixture.engine.dispose()
+
+
+@pytest.mark.parametrize("how", ["refused", "failed_on_hub"])
+def test_corrected_book_settings_get_a_new_create_only_after_a_refusal(how) -> None:
+    fixture, hub, _client_, ids = _ordered_fixture(
+        f"hub-order-create-retry-{how}", chapters=(1,), cache={"remote_id": None}
+    )
+    try:
+        first = _fail_the_book_creation(fixture, hub, ids[1], how)
+        posts_before = hub.post_count()
+        with fixture.runtime.session_factory.begin() as session:
+            project = session.get(Project, fixture.project_id)
+            project.automation_json = json.dumps(
+                {
+                    "publish_bindings": [
+                        {
+                            **FANQIE,
+                            "book_meta": {"intro": "改过的简介"},
+                            "route": "hub",
+                            "hub_destination_id": FANQIE_DESTINATION,
+                        }
+                    ]
+                }
+            )
+
+        for _ in range(2):
+            _release(fixture, [ids[1]])
+
+        rows = _create_rows(fixture)
+        if how == "refused":
+            # The corrected settings are another request (another key): sent once.
+            assert hub.post_count() == posts_before + 1
+            (second,) = [row for row in rows if row.id != first.id]
+            assert second.idempotency_key != first.idempotency_key
+            assert second.hub_job_id is not None
+            assert json.loads(hub.posts[-1])["payload"]["book_meta"]["intro"] == "改过的简介"
+            assert "等待 publish-hub 建书" in _job(fixture, ids[1]).result_message
+        else:
+            # publish-hub took the first request: it stands for the book until it is resolved.
+            assert hub.post_count() == posts_before
+            assert [row.id for row in rows] == [first.id]
+            assert "/ops" in _job(fixture, ids[1]).result_message
     finally:
         fixture.engine.dispose()
 
@@ -694,25 +779,186 @@ def test_a_book_creation_stored_while_the_hub_is_down_is_sent_by_recovery_not_ag
         fixture.engine.dispose()
 
 
-def test_a_book_being_created_is_not_an_active_upload_but_a_chapter_is() -> None:
-    fixture, hub, _client_, ids = _ordered_fixture(
-        "hub-order-active-flag", chapters=(1,), cache={"remote_id": None}
+def _active_upload(fixture) -> bool:
+    with fixture.runtime.session_factory() as session:
+        return ProductionRepository(session).load_backlogs(
+            [fixture.project_id],
+            generation_terminal_statuses={"completed", "failed", "cancelled"},
+            upload_terminal_statuses=set(UPLOAD_JOB_TERMINAL_STATUSES),
+        )[fixture.project_id].has_active_upload_task
+
+
+def _add_row(fixture, **fields) -> str:
+    with fixture.runtime.session_factory.begin() as session:
+        row = PublisherUploadJob(
+            project_id=fixture.project_id,
+            platform_id="fanqie",
+            status="pending",
+            body_text="",
+            **fields,
+        )
+        session.add(row)
+        session.flush()
+        return row.id
+
+
+@pytest.mark.parametrize(
+    ("row", "active"),
+    [
+        ("create_book", False),
+        ("hub_chapter_stored_not_sent", False),
+        ("hub_cover_waiting_for_its_book", False),
+        ("hub_chapter_with_a_hub_job", True),
+        ("extension_queue_chapter", True),
+        ("extension_queue_cover", True),
+    ],
+)
+def test_only_uploads_in_flight_count_as_an_active_upload(row, active) -> None:
+    fixture = _fixture(f"hub-order-active-{row[:24]}")
+    try:
+        body = {"idempotency_key": f"forwin:{row}"}
+        kinds = {
+            "create_book": {"task_kind": "create_book", "hub_submit_body_json": body},
+            "hub_chapter_stored_not_sent": {"task_kind": "chapter_upload", "hub_submit_body_json": body},
+            "hub_cover_waiting_for_its_book": {
+                "task_kind": "cover_upload",
+                "hub_submit_body_json": body,
+                "hub_job_id": new_id(),
+                "hub_status": "pending",
+            },
+            "hub_chapter_with_a_hub_job": {
+                "task_kind": "chapter_upload",
+                "hub_submit_body_json": body,
+                "hub_job_id": new_id(),
+                "hub_status": "pending",
+            },
+            "extension_queue_chapter": {"task_kind": "chapter_upload"},
+            "extension_queue_cover": {"task_kind": "cover_upload"},
+        }
+        _add_row(fixture, **kinds[row])
+
+        assert _active_upload(fixture) is active
+    finally:
+        fixture.engine.dispose()
+
+
+# --- the planner does not spend the quota on held chapters (R38, R39) --------------------------
+
+
+def _two_platform_fixture(name: str, *, chapters, fanqie_cache: dict):
+    """qidian on the extension queue, fanqie on publish-hub; returns (fixture, hub, ids)."""
+    fixture = _fixture(name)
+    hub = FakeHub()
+    _attach_hub(fixture.runtime, hub)
+    _set_routes(fixture, {"qidian": ("legacy", None), "fanqie": ("hub", FANQIE_DESTINATION)})
+    _seed_cache(fixture, **fanqie_cache)
+    ids = {number: _add_chapter(fixture, number, bindings=(QIDIAN, FANQIE)) for number in chapters}
+    return fixture, hub, ids
+
+
+def _finish(fixture, *job_ids) -> None:
+    for job_id in job_ids:
+        _force_status(fixture, job_id, "succeeded")
+
+
+@pytest.mark.parametrize(
+    "fanqie_cache",
+    [{"account_status": "paused_risk"}, {"remote_id": None}],
+    ids=["paused_risk", "book_being_created"],
+)
+def test_qidian_moves_on_while_fanqie_is_held_for_days(fanqie_cache) -> None:
+    fixture, hub, ids = _two_platform_fixture(
+        f"hub-order-starve-{fanqie_cache.get('account_status', 'book')}",
+        chapters=(1, 2, 3, 4),
+        fanqie_cache=fanqie_cache,
     )
     try:
-        _release(fixture, [ids[1]])
+        plan, result = _run_publish(fixture, quota=2, platforms=("qidian", "fanqie"))
+        assert plan.publish_chapters == [1, 2]
+        assert [item["job_id"] for item in plan.publish_jobs] == [ids[1]["qidian"], ids[2]["qidian"]]
+        assert [item["job_id"] for item in plan.hold_jobs] == [ids[1]["fanqie"]]
+        assert result.publish_job_count == 2
+        _finish(fixture, ids[1]["qidian"], ids[2]["qidian"])  # the extension uploaded them
+
+        # The next day: chapters 1 and 2 have only held fanqie jobs left.
+        plan, result = _run_publish(fixture, quota=2, platforms=("qidian", "fanqie"))
+
+        assert plan.publish_chapters == [3, 4]
+        assert result.publish_job_count == 2
+        for number in (3, 4):
+            assert _job(fixture, ids[number]["qidian"]).status == "pending"
+        for number in (1, 2, 3, 4):
+            stored = _job(fixture, ids[number]["fanqie"])
+            assert (stored.status, stored.hub_submit_body_json) == ("scheduled", None)
+        # Whatever publish-hub got is book creation, never a chapter.
+        assert all(json.loads(post)["action"] == "create_destination" for post in hub.posts)
+        assert hub.post_count() == (1 if "remote_id" in fanqie_cache else 0)
+    finally:
+        fixture.engine.dispose()
+
+
+def test_a_failed_hub_chapter_stalls_only_its_own_binding() -> None:
+    fixture, hub, ids = _two_platform_fixture(
+        "hub-order-failed-stall", chapters=(1, 2, 3), fanqie_cache={}
+    )
+    try:
+        _release(fixture, [ids[1]["fanqie"], ids[2]["fanqie"]])
+        assert _job(fixture, ids[2]["fanqie"]).hub_job_id is None  # stored, waits for chapter 1
+        _force_status(fixture, ids[1]["fanqie"], "failed")  # mirrored from publish-hub
+
+        plan, result = _run_publish(fixture, quota=2, platforms=("qidian", "fanqie"))
+
+        assert "active_upload_task" not in plan.notes
+        assert plan.publish_chapters == [1, 2]
+        assert result.publish_job_count == 2
+        assert _job(fixture, ids[1]["qidian"]).status == "pending"
+        assert _job(fixture, ids[2]["qidian"]).status == "pending"
+        assert _job(fixture, ids[2]["fanqie"]).hub_job_id is None  # still waiting, D9
+        assert hub.post_count() == 1
+    finally:
+        fixture.engine.dispose()
+
+
+def test_a_hub_cover_waiting_for_its_book_does_not_stop_the_book_being_created() -> None:
+    fixture, hub, _client_, ids = _ordered_fixture(
+        "hub-order-cover-deadlock", chapters=(1,), cache={"remote_id": None}
+    )
+    try:
+        # A cover enqueued before the book exists: publish-hub has it, the extension defers it.
+        _add_row(
+            fixture,
+            task_kind="cover_upload",
+            idempotency_key="cover-before-the-book",
+            hub_submit_body_json={"idempotency_key": "forwin:cover-before-the-book"},
+            hub_job_id=new_id(),
+            hub_status="pending",
+        )
+
+        plan, result = _run_publish(fixture, quota=1)
+
+        assert "active_upload_task" not in plan.notes
+        assert [item["job_id"] for item in plan.hold_jobs] == [ids[1]]
+        assert [json.loads(post)["action"] for post in hub.posts] == ["create_destination"]
         assert len(_create_rows(fixture)) == 1
+    finally:
+        fixture.engine.dispose()
 
-        def active() -> bool:
-            with fixture.runtime.session_factory() as session:
-                return ProductionRepository(session).load_backlogs(
-                    [fixture.project_id],
-                    generation_terminal_statuses={"completed", "failed", "cancelled"},
-                    upload_terminal_statuses=set(UPLOAD_JOB_TERMINAL_STATUSES),
-                )[fixture.project_id].has_active_upload_task
 
-        assert active() is False
-        _force_status(fixture, ids[1], "pending")
-        assert active() is True
+def test_a_hold_only_job_is_never_released_even_when_the_gate_has_opened() -> None:
+    fixture, hub, _client_, ids = _ordered_fixture("hub-order-hold-only", chapters=(1,), cache={})
+    try:
+        released = fixture.runtime.canon_jobs.release(
+            project_id=fixture.project_id,
+            job_ids=[],
+            publish=True,
+            actor_type="scheduler",
+            hold_job_ids=[ids[1]],
+        )
+
+        assert released == []
+        stored = _job(fixture, ids[1])
+        assert (stored.status, stored.hub_submit_body_json) == ("scheduled", None)
+        assert hub.requests == []
     finally:
         fixture.engine.dispose()
 

@@ -30,6 +30,7 @@ from .refs import (
 )
 
 PAYLOAD_VERSION = 1
+TAG_GROUPS = ("theme", "role", "plot")
 _HASH_CHUNK = 1024 * 1024
 
 
@@ -74,12 +75,15 @@ def create_body(
     project = str(project_id or "").strip()
     if not project:
         raise ValueError("project_id must be non-empty")
+    destination = _destination(destination_id)
     content_refs = []
     if cover is not None:
         content_refs.append(_file_content_ref(cover.file_path, expected_sha256=None))
     return {
-        "idempotency_key": create_key(project, platform, binding_snapshot_sha256(binding)),
-        "destination_id": _destination(destination_id),
+        "idempotency_key": create_key(
+            project, platform, binding_snapshot_sha256(binding, destination)
+        ),
+        "destination_id": destination,
         "action": "create_destination",
         "payload_version": PAYLOAD_VERSION,
         "payload": {"book_meta": hub_book_meta(fields)},
@@ -112,8 +116,12 @@ def cover_body(job: Any, destination_id: str) -> dict[str, Any]:
 def hub_book_meta(binding: Mapping[str, Any] | BaseModel) -> dict[str, Any]:
     """ForWin's book meta in the create_destination schema.
 
-    ForWin keeps theme, role and plot tags apart; the schema has one `tags` list, so they are
-    joined in that order. Values are normalised the way the existing upload job does it.
+    Values are normalised the way the existing upload job does it. ForWin keeps theme, role and
+    plot tags apart (Fanqie's form has three tag fields) but the schema has one flat `tags`
+    list, so each tag carries its group in front: "<group>:<tag>" with group theme, role or
+    plot, in that order. The reader splits on the FIRST ":" only, so a tag may contain ":".
+    A tag with no group would stay a plain string (the reader treats an entry without a known
+    group as ungrouped); every tag ForWin holds has a group, so none is plain today.
     """
     fields = _binding_fields(binding)
     meta = UploadJobService.normalize_book_meta(fields.get("book_meta"))
@@ -121,23 +129,28 @@ def hub_book_meta(binding: Mapping[str, Any] | BaseModel) -> dict[str, Any]:
         "audience": meta.get("audience", ""),
         "category": meta.get("primary_category", ""),
         "tags": [
-            *meta.get("theme_tags", []),
-            *meta.get("role_tags", []),
-            *meta.get("plot_tags", []),
+            f"{group}:{tag}"
+            for group in TAG_GROUPS
+            for tag in meta.get(f"{group}_tags", [])
         ],
         "protagonist_names": meta.get("protagonist_names", []),
         "intro": meta.get("intro", ""),
     }
 
 
-def binding_snapshot_sha256(binding: Mapping[str, Any] | BaseModel) -> str:
-    """Digest of what a create_destination request creates: platform, book name and book meta.
+def binding_snapshot_sha256(
+    binding: Mapping[str, Any] | BaseModel, destination_id: str
+) -> str:
+    """Digest of what a create_destination request creates, and where.
 
-    Routing fields (route, hub_destination_id) and upload settings are left out, so changing
-    them does not give the same book a second create key.
+    Destination (the one the request is sent to, not the one the binding happens to name),
+    platform, book name and book meta. Pointing the same binding at another destination is
+    another create and gets another key; route and upload settings are left out, so changing
+    them does not give the same book a second key.
     """
     fields = _binding_fields(binding)
     snapshot = {
+        "destination_id": _destination(destination_id),
         "platform": str(fields.get("platform") or "").strip(),
         "book_name": str(fields.get("book_name") or "").strip(),
         "book_meta": hub_book_meta(fields),

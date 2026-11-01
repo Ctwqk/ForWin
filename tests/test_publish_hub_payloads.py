@@ -121,7 +121,7 @@ def _binding(**overrides) -> dict:
 def test_create_body_maps_the_existing_book_meta_into_the_hub_schema() -> None:
     body = create_body(_binding(), DESTINATION, "p1")
 
-    snapshot_sha = binding_snapshot_sha256(_binding())
+    snapshot_sha = binding_snapshot_sha256(_binding(), DESTINATION)
     assert body == {
         "idempotency_key": create_key("p1", "fanqie", snapshot_sha),
         "destination_id": DESTINATION,
@@ -131,7 +131,13 @@ def test_create_body_maps_the_existing_book_meta_into_the_hub_schema() -> None:
             "book_meta": {
                 "audience": "male",
                 "category": "悬疑灵异",
-                "tags": ["都市", "悬疑", "刑警", "旧案", "港区"],
+                "tags": [
+                    "theme:都市",
+                    "theme:悬疑",
+                    "role:刑警",
+                    "plot:旧案",
+                    "plot:港区",
+                ],
                 "protagonist_names": ["韩砚", "苏晚"],
                 "intro": "一桩旧案重启，港区的谜团层层展开。",
             }
@@ -175,9 +181,13 @@ def test_create_body_accepts_the_canon_snapshot_model_and_the_settings_model() -
 
 def test_create_body_key_changes_only_when_what_is_created_changes() -> None:
     base = create_body(_binding(), DESTINATION, "p1")["idempotency_key"]
+    assert create_body(_binding(), "another-destination", "p1")["idempotency_key"] != base
 
     other_route = _binding(route="legacy", hub_destination_id=None, upload_url="https://x/")
     assert create_body(other_route, DESTINATION, "p1")["idempotency_key"] == base
+    # What counts is the destination the request is sent to, not the one the binding names.
+    stale_destination = _binding(hub_destination_id="stale-destination")
+    assert create_body(stale_destination, DESTINATION, "p1")["idempotency_key"] == base
     changed_intro = _binding(book_meta={**BOOK_META, "intro": "另一个简介"})
     assert create_body(changed_intro, DESTINATION, "p1")["idempotency_key"] != base
     assert create_body(_binding(), DESTINATION, "p2")["idempotency_key"] != base
@@ -378,3 +388,93 @@ def test_builders_return_plain_json_serialisable_dicts(tmp_path) -> None:
     # create_body is given an ORM-free namespace-like cover too.
     namespace_cover = SimpleNamespace(file_path=str(cover_file), id="asset-1")
     assert create_body(_binding(), DESTINATION, "p1", cover=namespace_cover)["content_refs"]
+
+
+def test_repointing_a_binding_to_another_destination_gives_another_create_key() -> None:
+    first = create_body(_binding(), DESTINATION, "p1")
+    second_destination = "9d1e5a70-0000-4000-8000-000000000009"
+    second = create_body(_binding(hub_destination_id=second_destination), second_destination, "p1")
+
+    assert first["payload"] == second["payload"], "same meta"
+    assert first["destination_id"] != second["destination_id"]
+    assert first["idempotency_key"] != second["idempotency_key"]
+    assert binding_snapshot_sha256(_binding(), DESTINATION) != binding_snapshot_sha256(
+        _binding(), second_destination
+    )
+    with pytest.raises(ValueError, match="destination"):
+        binding_snapshot_sha256(_binding(), "")
+
+
+def test_fanqie_tags_carry_their_group_in_front_of_the_tag() -> None:
+    """book_meta.tags is a flat list; the group rides in the string: "<group>:<tag>".
+
+    The group is theme, role or plot, and the reader splits on the first ":" only, so a tag may
+    itself contain ":". The order is theme, role, plot, each in the order ForWin keeps them.
+    """
+    binding = _binding(
+        platform="fanqie",
+        book_meta={
+            **BOOK_META,
+            "theme_tags": ["末世:重生", "都市"],
+            "role_tags": ["刑警"],
+            "plot_tags": ["theme:像分组的标签", "旧案"],
+        },
+    )
+
+    tags = create_body(binding, DESTINATION, "p1")["payload"]["book_meta"]["tags"]
+
+    assert tags == [
+        "theme:末世:重生",
+        "theme:都市",
+        "role:刑警",
+        "plot:theme:像分组的标签",
+        "plot:旧案",
+    ]
+    decoded = [tuple(tag.split(":", 1)) for tag in tags]
+    assert decoded[0] == ("theme", "末世:重生")
+    assert decoded[3] == ("plot", "theme:像分组的标签")
+    assert {group for group, _ in decoded} == {"theme", "role", "plot"}
+
+
+def test_fanqie_groups_survive_with_one_group_empty_and_the_two_tag_limit_per_group() -> None:
+    binding = _binding(
+        book_meta={
+            **BOOK_META,
+            "theme_tags": [],
+            "role_tags": ["a", "b", "c"],
+            "plot_tags": [" ", "x"],
+        }
+    )
+
+    tags = create_body(binding, DESTINATION, "p1")["payload"]["book_meta"]["tags"]
+
+    assert tags == ["role:a", "role:b", "plot:x"]
+
+
+def test_qidian_without_tags_has_an_empty_tag_list_and_keeps_the_rest() -> None:
+    qidian_meta = {
+        "audience": "male",
+        "primary_category": "悬疑",
+        "intro": "一桩旧事重启，现实与悬念交织。",
+    }
+
+    body = create_body(
+        _binding(platform="qidian", book_meta=qidian_meta), DESTINATION, "p1"
+    )
+
+    assert body["payload"]["book_meta"] == {
+        "audience": "male",
+        "category": "悬疑",
+        "tags": [],
+        "protagonist_names": [],
+        "intro": "一桩旧事重启，现实与悬念交织。",
+    }
+    assert body["idempotency_key"].startswith("forwin:create:p1:qidian:")
+
+
+def test_a_qidian_binding_that_does_have_tags_gets_the_same_encoding() -> None:
+    body = create_body(
+        _binding(platform="qidian", book_meta={"plot_tags": ["旧案"]}), DESTINATION, "p1"
+    )
+
+    assert body["payload"]["book_meta"]["tags"] == ["plot:旧案"]

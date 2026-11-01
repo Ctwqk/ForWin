@@ -55,7 +55,9 @@ const noRisk = () => ({ detected: false, riskPause: false });
 
 const RUN_CREATE_NAMES = [
   'includesAny', 'canonicalPublisherUrl', 'remoteBookIdFromPublisherUrl', 'isCreateBookPage',
-  'isPublisherHost', 'createBookFailureResult', 'createBookOnCurrentPage', 'runCreateBook',
+  'isPublisherHost', 'startWritingEntries', 'startWritingEntryUrl', 'startWritingContainerText',
+  'visibleCreationEvidence', 'createBookFailureResult', 'createBookFallbackReply',
+  'createBookOnCurrentPage', 'runCreateBook',
 ];
 
 function createBookHarness({
@@ -64,14 +66,18 @@ function createBookHarness({
   qidian = async () => false,
   risk = noRisk,
   text = '',
+  nodes = [],
 } = {}) {
   const calls = [];
   const location = { href };
+  const state = { running: false, submitted: false };
   const context = {
     window: { location },
-    document: {},
+    document: { querySelectorAll: () => nodes },
+    isVisibleElement: () => true,
+    createBookRun: state,
     setDebugStep() {},
-    pageText: () => text,
+    pageText: () => (typeof text === 'function' ? text() : text),
     buildRiskPauseResult: risk,
     createFanqieBook: async (...args) => {
       calls.push({ platform: 'fanqie', args });
@@ -82,8 +88,15 @@ function createBookHarness({
       return qidian({ location }, ...args);
     },
   };
-  const { runCreateBook } = load(RUN_CREATE_NAMES, context);
-  return { run: async (payload) => plain(await runCreateBook(payload)), calls, location };
+  const { runCreateBook, createBookFallbackReply } = load(RUN_CREATE_NAMES, context);
+  return {
+    run: async (payload) => plain(await runCreateBook(payload)),
+    fallback: (error) => plain(createBookFallbackReply(error)),
+    calls,
+    location,
+    nodes,
+    state,
+  };
 }
 
 const FANQIE_CREATE_URL = 'https://fanqienovel.com/main/writer/create';
@@ -215,6 +228,281 @@ test('run-create-book treats an unexpected error after the submit click as an un
   assert.equal(result.ok, false);
   assert.equal(result.errorCode, 'create-book-outcome-unknown');
   assert.equal(result.resultPayload.cause_message, '页面对象已失效');
+});
+
+// --- fix round 1, item 1: a refusal phrase is not final next to a success marker
+
+test('run-create-book does not call a refusal final while creation evidence is visible', async () => {
+  const limited = () => Object.assign(new Error('当日创建作品上限'), {
+    code: 'create-book-rate-limited',
+    resultPayload: { platform_reason: 'daily-create-limit' },
+  });
+  const startWriting = new FakeElement({ text: '开始写作', attrs: { href: '/x/CBID/5' } });
+  const cases = [
+    ['book-info-url', { text: '' }, (location) => { location.href = 'https://fanqienovel.com/main/writer/book-info/55'; }],
+    ['start-writing-entry', { nodes: [startWriting] }, () => {}],
+    ['success-text', { text: '已到达当日创建作品上限 作品创建成功' }, () => {}],
+  ];
+  for (const [marker, extra, prepare] of cases) {
+    const replacement = createBookHarness({
+      href: FANQIE_CREATE_URL,
+      ...extra,
+      fanqie: async ({ location }, _name, _meta, options) => {
+        options.onSubmitted();
+        prepare(location);
+        throw limited();
+      },
+    });
+
+    const result = await replacement.run({ platform: 'fanqie', book_name: 'B', book_meta: META });
+
+    assert.equal(result.ok, false, marker);
+    assert.equal(result.errorCode, 'create-book-outcome-unknown', marker);
+    assert.deepEqual(result.resultPayload.creation_evidence, [marker], marker);
+    assert.equal(result.resultPayload.cause_code, 'create-book-rate-limited', marker);
+    assert.equal(result.resultPayload.submitted, true, marker);
+  }
+});
+
+test('run-create-book keeps a validation refusal unknown when the success dialog is also visible', async () => {
+  const startWriting = new FakeElement({ text: '开始写作', attrs: { href: '/x/CBID/5' } });
+  const harness = createBookHarness({
+    href: QIDIAN_CREATE_URL,
+    nodes: [startWriting],
+    text: '请填写作品信息',
+    qidian: async (_page, _name, _meta, options) => {
+      options.onSubmitted();
+      throw Object.assign(new Error('起点创建书本未通过页面校验。'), {
+        code: 'create-book-validation-failed',
+      });
+    },
+  });
+
+  const result = await harness.run({ platform: 'qidian', book_name: 'B', book_meta: META });
+
+  assert.equal(result.errorCode, 'create-book-outcome-unknown');
+  assert.deepEqual(result.resultPayload.creation_evidence, ['start-writing-entry']);
+});
+
+test('run-create-book still ends a refusal as definitive when no creation evidence is visible', async () => {
+  const harness = createBookHarness({
+    href: FANQIE_CREATE_URL,
+    text: '已到达当日创建作品上限',
+    fanqie: async (_page, _name, _meta, options) => {
+      options.onSubmitted();
+      throw Object.assign(new Error('上限'), { code: 'create-book-rate-limited' });
+    },
+  });
+
+  const result = await harness.run({ platform: 'fanqie', book_name: 'B', book_meta: META });
+
+  assert.equal(result.errorCode, 'create-book-rate-limited');
+  assert.equal(result.resultPayload.submitted, true);
+});
+
+// --- fix round 1, item 2: the Qidian id must belong to the new book
+
+function startWritingQidianHarness({ before = [], after, bookName = '雾港潮生录', parent = null }) {
+  const nodes = [...before];
+  const harness = createBookHarness({
+    href: QIDIAN_CREATE_URL,
+    nodes,
+    qidian: async (_page, _name, _meta, options) => {
+      options.onBeforeSubmit();
+      options.onSubmitted();
+      if (after) {
+        if (parent) after.parentElement = parent;
+        nodes.push(after);
+      }
+      options.onStartWritingReady(after || before[0]);
+      return false;
+    },
+  });
+  return { ...harness, bookName };
+}
+
+test('run-create-book rejects a start-writing link that was already on the page before the click', async () => {
+  const old = new FakeElement({ text: '开始写作', attrs: { href: '/portal/booknovels/chaptertmp/CBID/111' } });
+  const harness = startWritingQidianHarness({ before: [old] });
+
+  const result = await harness.run({ platform: 'qidian', book_name: harness.bookName, book_meta: META });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'create-book-outcome-unknown');
+  assert.equal(result.remote_book_id, undefined);
+  assert.equal(result.resultPayload.start_writing_rejected, 'present-before-submit');
+});
+
+test('run-create-book rejects a new link that points at a book id that was already on the page', async () => {
+  const old = new FakeElement({ text: '开始写作', attrs: { href: '/portal/booknovels/chaptertmp/CBID/111' } });
+  const again = new FakeElement({
+    text: '开始写作', attrs: { href: '/portal/booknovels/chaptertmp/CBID/111#ccid=new' },
+  });
+  const harness = startWritingQidianHarness({ before: [old], after: again });
+
+  const result = await harness.run({ platform: 'qidian', book_name: harness.bookName, book_meta: META });
+
+  assert.equal(result.errorCode, 'create-book-outcome-unknown');
+  assert.equal(result.resultPayload.start_writing_rejected, 'present-before-submit');
+});
+
+test('run-create-book takes the new link and ignores one that was already there', async () => {
+  const old = new FakeElement({ text: '开始写作', attrs: { href: '/portal/booknovels/chaptertmp/CBID/111' } });
+  const fresh = new FakeElement({ text: '开始写作', attrs: { href: '/portal/booknovels/chaptertmp/CBID/222' } });
+  const harness = startWritingQidianHarness({ before: [old], after: fresh });
+
+  const result = await harness.run({ platform: 'qidian', book_name: harness.bookName, book_meta: META });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.remote_book_id, '222');
+});
+
+test('run-create-book requires the link container to name the book when it shows any text', async () => {
+  const wrongCard = new FakeElement({ text: '别的书 开始写作' });
+  const wrong = startWritingQidianHarness({
+    after: new FakeElement({ text: '开始写作', attrs: { href: '/portal/booknovels/chaptertmp/CBID/222' } }),
+    parent: wrongCard,
+  });
+  const rightCard = new FakeElement({ text: '雾港潮生录 创建成功 开始写作' });
+  const right = startWritingQidianHarness({
+    after: new FakeElement({ text: '开始写作', attrs: { href: '/portal/booknovels/chaptertmp/CBID/222' } }),
+    parent: rightCard,
+  });
+
+  const rejected = await wrong.run({ platform: 'qidian', book_name: wrong.bookName, book_meta: META });
+  const accepted = await right.run({ platform: 'qidian', book_name: right.bookName, book_meta: META });
+
+  assert.equal(rejected.errorCode, 'create-book-outcome-unknown');
+  assert.equal(rejected.resultPayload.start_writing_rejected, 'book-name-not-in-container');
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.remote_book_id, '222');
+});
+
+// --- fix round 1, item 3 (R46): guards for the irreversible create
+
+test('run-create-book fails before the click when book_meta is not an object', async () => {
+  for (const bad of [undefined, null, '悬疑', 7, ['悬疑'], true]) {
+    const harness = createBookHarness({ href: FANQIE_CREATE_URL });
+
+    const result = await harness.run({ platform: 'fanqie', book_name: 'B', book_meta: bad });
+
+    assert.equal(result.ok, false, String(bad));
+    assert.equal(result.errorCode, 'create-book-validation-failed', String(bad));
+    assert.equal(result.resultPayload.submitted, false, String(bad));
+    assert.deepEqual(harness.calls, [], String(bad));
+    assert.equal(harness.state.running, false);
+    assert.equal(harness.state.submitted, false);
+  }
+});
+
+test('run-create-book refuses a re-delivered message while the first one is still running', async () => {
+  let release;
+  // The timer keeps a regression (no latch) from hanging the run: the second
+  // call would then reach the create function and the assertions fail instead.
+  const gate = new Promise((resolve) => { release = resolve; setTimeout(resolve, 100); });
+  const harness = createBookHarness({
+    href: FANQIE_CREATE_URL,
+    fanqie: async ({ location }, _name, _meta, options) => {
+      await gate;
+      options.onSubmitted();
+      location.href = 'https://fanqienovel.com/main/writer/book-info/7650001';
+      return true;
+    },
+  });
+  const payload = { platform: 'fanqie', book_name: 'B', book_meta: META };
+
+  const first = harness.run(payload);
+  const second = await harness.run(payload);
+  release();
+  const firstResult = await first;
+
+  assert.equal(second.ok, false);
+  assert.equal(second.errorCode, 'create-book-already-running');
+  assert.equal(second.resultPayload.in_flight, true);
+  assert.equal(firstResult.ok, true);
+  assert.equal(harness.calls.length, 1);
+});
+
+test('run-create-book will not click create a second time on a page that already submitted', async () => {
+  const harness = createBookHarness({
+    href: QIDIAN_CREATE_URL,
+    qidian: async (_page, _name, _meta, options) => {
+      options.onSubmitted();
+      return false;
+    },
+  });
+  const payload = { platform: 'qidian', book_name: 'B', book_meta: META };
+
+  const first = await harness.run(payload);
+  const again = await harness.run(payload);
+
+  assert.equal(first.errorCode, 'create-book-outcome-unknown');
+  assert.equal(again.errorCode, 'create-book-already-running');
+  assert.equal(again.resultPayload.submitted, true);
+  assert.equal(harness.calls.length, 1);
+});
+
+test('run-create-book releases the latch after a failure that happened before the click', async () => {
+  let attempt = 0;
+  const harness = createBookHarness({
+    href: FANQIE_CREATE_URL,
+    fanqie: async ({ location }, _name, _meta, options) => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw Object.assign(new Error('标签失败'), { code: 'create-book-validation-failed' });
+      }
+      options.onSubmitted();
+      location.href = 'https://fanqienovel.com/main/writer/book-info/9';
+      return true;
+    },
+  });
+  const payload = { platform: 'fanqie', book_name: 'B', book_meta: META };
+
+  const first = await harness.run(payload);
+  const second = await harness.run(payload);
+
+  assert.equal(first.errorCode, 'create-book-validation-failed');
+  assert.equal(second.ok, true);
+  assert.equal(harness.calls.length, 2);
+});
+
+test('run-create-book answers unknown even when its own failure handling throws after the click', async () => {
+  let boundary = '';
+  const harness = createBookHarness({
+    href: FANQIE_CREATE_URL,
+    risk: (value) => {
+      boundary = value;
+      if (value === 'post-action') throw new Error('risk detector broke');
+      return { detected: false, riskPause: false };
+    },
+    fanqie: async (_page, _name, _meta, options) => {
+      options.onSubmitted();
+      throw new Error('页面异常');
+    },
+  });
+
+  const result = await harness.run({ platform: 'fanqie', book_name: 'B', book_meta: META });
+
+  assert.equal(boundary, 'post-action');
+  assert.equal(result.errorCode, 'create-book-outcome-unknown');
+  assert.equal(result.resultPayload.submitted, true);
+});
+
+test('the listener fallback for run-create-book never answers an uncoded failure after the click', () => {
+  const submitted = createBookHarness({ href: FANQIE_CREATE_URL });
+  submitted.state.submitted = true;
+  const clean = createBookHarness({ href: FANQIE_CREATE_URL });
+
+  const afterClick = submitted.fallback(new Error('boom'));
+  const beforeClick = clean.fallback(new Error('boom'));
+
+  assert.equal(afterClick.errorCode, 'create-book-outcome-unknown');
+  assert.equal(afterClick.resultPayload.submitted, true);
+  assert.equal(beforeClick.errorCode, 'create-book-failed');
+  assert.equal(beforeClick.resultPayload.submitted, false);
+  const dispatch = source.match(/message\.action === 'run-create-book'[^]*?\n    \}\n/)?.[0] || '';
+  assert.match(dispatch, /createBookFallbackReply\(error\)/);
+  assert.doesNotMatch(dispatch, /String\(error\.code \|\| ''\)/);
 });
 
 test('run-create-book keeps failures before the submit click definitive', async () => {
@@ -506,6 +794,20 @@ test('createQidianBook stayOnBookPage hands over start-writing without clicking 
   assert.deepEqual(seen, ['submitted-after-submit-click', 'node']);
   assert.ok(!harness.events.includes('start-writing-click'));
   assert.deepEqual(harness.navigations, []);
+});
+
+test('createQidianBook calls onBeforeSubmit right before the create click', async () => {
+  const harness = qidianCreateHarness({ withStartWriting: true });
+
+  await harness.createQidianBook('书名', {}, {
+    stayOnBookPage: true,
+    onBeforeSubmit: () => harness.events.push('before-submit-hook'),
+  });
+
+  assert.deepEqual(
+    harness.events.filter((event) => ['before-submit-hook', 'submit-click'].includes(event)),
+    ['before-submit-hook', 'submit-click'],
+  );
 });
 
 test('createQidianBook stayOnBookPage does not navigate when only the success text is visible', async () => {

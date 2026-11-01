@@ -10,8 +10,11 @@ import {
   decodeFileUri,
   decodeHubBookMeta,
   hubPauseReason,
+  storableJson,
+  storableText,
   translateHubClaim,
 } from '../lib/hub-adapter.js';
+import { HUB_CLIENT_ID_STORAGE_KEY, createHubClientIdStore } from '../lib/settings.js';
 import { createUploadJournal } from '../lib/upload-journal.js';
 
 const NOW_MS = Date.parse('2026-11-01T00:00:00Z');
@@ -290,6 +293,8 @@ function makeHubController({
 } = {}) {
   const calls = [];
   const forwinCalls = [];
+  const hubRounds = [];
+  const reportedErrors = [];
   const openedTabs = [];
   const closedTabs = [];
   const tabs = new Map();
@@ -336,6 +341,10 @@ function makeHubController({
     pauseUploadAttempt: async (...args) => {
       forwinCalls.push(['pause', ...args]);
       return { attempt_status: 'paused', job_status: 'paused' };
+    },
+    claimNextCommentSyncJob: async (payload) => {
+      forwinCalls.push(['comment-claim', payload]);
+      return { found: false, job: null };
     },
   };
   const controllerDeps = {
@@ -394,6 +403,12 @@ function makeHubController({
     hubBackend: createHubClient(hub.fetchImpl, fullSettings),
     hubHeartbeatIntervalMs: 3_600_000,
     nowMs: () => NOW_MS,
+    recordHubRound: async (round) => {
+      hubRounds.push({ ok: round.ok, error: round.error ? round.error.message : '' });
+    },
+    reportError: async (context, error) => {
+      reportedErrors.push({ context, message: error instanceof Error ? error.message : String(error) });
+    },
     ...deps,
     backend: { ...defaultBackend, ...backend },
   };
@@ -404,6 +419,8 @@ function makeHubController({
     hub,
     calls,
     forwinCalls,
+    hubRounds,
+    reportedErrors,
     openedTabs,
     closedTabs,
     journalStore,
@@ -1403,9 +1420,24 @@ test('an unreachable hub does not stop forwin claims and its error is still repo
     executed.push(claim.job.job_id);
     return { status: 'succeeded' };
   };
-  await assert.rejects(fixture.controller.dispatchPendingUploadJobs(), /Failed to fetch/);
+  assert.deepEqual(await fixture.controller.dispatchPendingUploadJobs(), { found: true, handled: 1 });
   assert.deepEqual(executed, ['forwin-job-1']);
   assert.deepEqual(hub.actions(), ['executor-heartbeat']);
+  assert.deepEqual(fixture.hubRounds, [{ ok: false, error: 'Failed to fetch' }]);
+});
+
+test('a forwin failure in a hub round is still raised as before', async () => {
+  const hub = makeFakeHub();
+  const fixture = makeHubController({
+    hub,
+    backend: {
+      claimNextUploadJob: async () => {
+        throw new TypeError('forwin claim failed');
+      },
+    },
+  });
+  await assert.rejects(fixture.controller.dispatchPendingUploadJobs(), /forwin claim failed/);
+  assert.deepEqual(fixture.hubRounds, [{ ok: true, error: '' }]);
 });
 
 test('with publish-hub unset the dispatch makes no hub request and behaves as before', async () => {
@@ -1578,9 +1610,9 @@ for (const fence of [...FENCE_CODES.map((code) => hubError(409, code)), hubError
 
 test('the forwin replay never sends a hub journal entry to forwin', async () => {
   const resultBody = { client_id: HUB_CLIENT_ID, epoch: 3, outcome: 'retryable_error' };
-  for (const [settings, hubError] of [
-    [{ hubBaseUrl: '', hubApiKey: '' }, null],
-    [{}, /down/],
+  for (const [settings, hubConfigured] of [
+    [{ hubBaseUrl: '', hubApiKey: '' }, false],
+    [{}, true],
   ]) {
     const journalStore = memoryJournalStore(legacySnapshotWithResult());
     await seedHubEntry(journalStore, {}, {
@@ -1592,12 +1624,12 @@ test('the forwin replay never sends a hub journal entry to forwin', async () => 
     });
     const fixture = makeHubController({ hub, journalStore, settings });
 
-    const round = fixture.controller.dispatchPendingUploadJobs();
-    if (hubError) {
-      await assert.rejects(round, hubError);
+    assert.deepEqual(await fixture.controller.dispatchPendingUploadJobs(), { found: false });
+    if (hubConfigured) {
+      assert.deepEqual(fixture.hubRounds, [{ ok: false, error: 'down' }]);
     } else {
-      assert.deepEqual(await round, { found: false });
       assert.equal(hub.requests.length, 0);
+      assert.deepEqual(fixture.hubRounds, []);
     }
 
     assert.deepEqual(fixture.forwinCalls.map((call) => call[0]), ['result', 'claim']);
@@ -1619,7 +1651,8 @@ test('a hub journal entry kept by a transient error is resent in the next round'
   });
   const fixture = makeHubController({ hub, journalStore, settings: { backendBaseUrl: '', apiKey: '' } });
 
-  await assert.rejects(fixture.controller.dispatchPendingUploadJobs(), /down/);
+  await fixture.controller.dispatchPendingUploadJobs();
+  assert.deepEqual(fixture.hubRounds, [{ ok: false, error: 'down' }]);
   assert.equal(hubRecords(journalStore)[0].local_phase, 'ack_pending');
   fail = false;
   await fixture.controller.dispatchPendingUploadJobs();
@@ -1680,7 +1713,7 @@ test('background wires the hub client, hub client id, create commands and the he
   assert.match(source, /createHubClient/);
   assert.match(source, /hubBackend:/);
   assert.match(source, /getHubClientId:/);
-  assert.match(source, /forwinPublisherHubClientId/);
+  assert.match(source, /getStorageValue\(HUB_CLIENT_ID_STORAGE_KEY/);
   assert.match(source, /async\s+function\s+runCreateBookCommand\s*\(/);
   assert.match(source, /'run-create-book'/);
   assert.match(source, /async\s+function\s+runReconcileCreateCommand\s*\(/);
@@ -1688,5 +1721,240 @@ test('background wires the hub client, hub client id, create commands and the he
   assert.match(source, /runCreateBookCommand,/);
   assert.match(source, /runReconcileCreateCommand,/);
   assert.match(source, /waitForRunnableTab:/);
-  assert.match(source, /controller\.heartbeatAndDispatchUploadJobs\(\)/);
+  assert.match(source, /controller\.heartbeatRound\(\)/);
+});
+
+// --- fix round 1 ------------------------------------------------------------------------------
+
+// What publish-hub accepts as text (app/payloads.py is_storable_text/is_storable_json).
+function isStorable(value) {
+  if (typeof value === 'string') {
+    return !value.includes('\u0000') && value.isWellFormed();
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+  if (Array.isArray(value)) {
+    return value.every(isStorable);
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value).every(([key, item]) => isStorable(key) && isStorable(item));
+  }
+  return true;
+}
+
+function codePoints(value) {
+  return Array.from(String(value)).length;
+}
+
+for (const [name, on] of [
+  ['an unreachable hub', { 'executor-heartbeat': () => { throw new TypeError('Failed to fetch'); } }],
+  ['a hub that refuses the key (401)', { claim: () => hubError(401, 'unauthorized', 'missing or invalid API key') }],
+]) {
+  test(`${name} does not stop forwin comment sync or the heartbeat round`, async () => {
+    const hub = makeFakeHub({ on });
+    const fixture = makeHubController({ hub });
+
+    await fixture.controller.heartbeatRound();
+
+    const order = fixture.forwinCalls.map((call) => call[0]);
+    assert.ok(order.includes('heartbeat'), order.join(','));
+    assert.ok(order.includes('comment-claim'), order.join(','));
+    assert.equal(fixture.hubRounds.length, 1);
+    assert.equal(fixture.hubRounds[0].ok, false);
+    assert.doesNotMatch(JSON.stringify(fixture.hubRounds), new RegExp(HUB_KEY));
+  });
+}
+
+test('settings-updated still runs forwin comment sync when publish-hub is down', async () => {
+  const hub = makeFakeHub({ on: { 'executor-heartbeat': () => { throw new TypeError('Failed to fetch'); } } });
+  const fixture = makeHubController({ hub, deps: { refreshContentBridge: async () => {} } });
+
+  await fixture.controller.handleMessage({ action: 'settings-updated', payload: {} });
+
+  assert.ok(fixture.forwinCalls.some((call) => call[0] === 'comment-claim'));
+  assert.deepEqual(fixture.hubRounds, [{ ok: false, error: 'Failed to fetch' }]);
+});
+
+test('a successful hub round is recorded as such', async () => {
+  const hub = makeFakeHub({ claims: [claimReply(hubChapterClaim())] });
+  const fixture = makeHubController({ hub });
+  await fixture.controller.heartbeatRound();
+  assert.deepEqual(fixture.hubRounds, [{ ok: true, error: '' }]);
+});
+
+test('when the forwin heartbeat fails, hub and dispatch errors are surfaced, not swallowed', async () => {
+  const hub = makeFakeHub({ on: { claim: () => hubError(401, 'unauthorized', 'missing or invalid API key') } });
+  const fixture = makeHubController({
+    hub,
+    backend: {
+      heartbeat: async () => {
+        throw new TypeError('forwin down');
+      },
+      claimNextUploadJob: async () => {
+        throw new TypeError('forwin claim down');
+      },
+    },
+  });
+
+  await assert.rejects(fixture.controller.heartbeatAndDispatchUploadJobs(), /forwin down/);
+
+  assert.deepEqual(fixture.hubRounds, [{ ok: false, error: 'missing or invalid API key' }]);
+  assert.equal(fixture.reportedErrors.length, 1);
+  assert.match(fixture.reportedErrors[0].message, /forwin claim down/);
+  assert.doesNotMatch(JSON.stringify(fixture.reportedErrors), new RegExp(HUB_KEY));
+});
+
+test('storableText and storableJson remove what publish-hub refuses and cut on code points', () => {
+  assert.equal(storableText('a\u0000b'), 'a�b');
+  assert.equal(storableText('x\uD800y\uDC00z'), 'x�y�z');
+  assert.equal(storableText('ok 😀'), 'ok 😀');
+  const emoji = '😀'.repeat(10);
+  const cut = storableText(emoji, 5);
+  assert.ok(cut.isWellFormed());
+  assert.equal(codePoints(cut), 5);
+  const json = storableJson({
+    'k\uDC00': ['v\u0000', 1, Number.NaN, Number.POSITIVE_INFINITY, true, null, { deep: '\uD800' }],
+    fine: 'text',
+    skipped: undefined,
+  });
+  assert.ok(isStorable(json));
+  assert.deepEqual(json, {
+    'k�': ['v�', 1, null, null, true, null, { deep: '�' }],
+    fine: 'text',
+  });
+});
+
+test('hub reports built from page text with NUL and lone surrogates stay storable', async () => {
+  const dirty = 'bad\u0000text\uD800tail\uDFFF';
+  const longMessage = `${'😀'.repeat(2500)}\uD83D`;
+  const cases = [
+    {
+      name: 'failure result',
+      result: {
+        ok: false,
+        errorCode: 'platform-\u0000rejected',
+        error: longMessage,
+        currentUrl: 'https://fanqienovel.com/\uD800',
+        resultPayload: { platform_message: dirty, ['key\uDC00']: [dirty, { nested: dirty }], score: Number.NaN },
+      },
+      check: (hub) => {
+        const body = finalBody(hub, 'result');
+        assert.ok(isStorable(body), JSON.stringify(body).slice(0, 200));
+        assert.ok(codePoints(body.error.message) <= 2000);
+        assert.equal(body.error.details.score, null);
+      },
+    },
+    {
+      name: 'risk pause',
+      result: { ok: false, riskPause: true, riskReason: 'captcha', riskEvidence: { message: `${longMessage}${dirty}` } },
+      check: (hub) => {
+        const body = finalBody(hub, 'pause');
+        assert.equal(body.reason, 'captcha');
+        assert.ok(isStorable(body));
+        assert.ok(codePoints(body.detail) <= 2000);
+      },
+    },
+    {
+      name: 'receipt',
+      result: { ...okChapterResult(), message: dirty, resultPayload: { ...okChapterResult().resultPayload, platform_message: dirty } },
+      check: (hub) => {
+        const receipt = finalBody(hub, 'receipt');
+        assert.ok(isStorable(receipt));
+        assert.equal(receipt.raw.evidence.confirmation_text, 'bad�text�tail�');
+        assert.equal(finalBody(hub, 'result').outcome, 'succeeded');
+      },
+    },
+  ];
+  for (const item of cases) {
+    const hub = makeFakeHub({ claims: [claimReply(hubChapterClaim())] });
+    const fixture = makeHubController({ hub, deps: { runUploadCommand: async () => item.result } });
+    await fixture.controller.dispatchPendingUploadJobs();
+    item.check(hub);
+  }
+});
+
+test('hub create reconcile with candidates pauses for a human and puts the candidates in the detail', async () => {
+  const candidates = Array.from({ length: 40 }, (_value, index) => ({
+    text: `港区旧案 第${index}卷 ${'很长的作品卡片文字'.repeat(30)}\u0000`,
+    remote_book_id: String(8000 + index),
+    remote_url: `https://fanqienovel.com/main/writer/chapter-manage/${8000 + index}`,
+    exact_title: null,
+  }));
+  const hub = makeFakeHub({ claims: [claimReply(hubCreateClaim({ mode: 'reconcile' }))] });
+  const fixture = makeHubController({
+    hub,
+    deps: {
+      runReconcileCreateCommand: async () => ({
+        finding: 'unknown',
+        candidates,
+        works_list_complete: false,
+        reason: 'exact-title-matching-and-list-completeness-unavailable',
+      }),
+    },
+  });
+
+  await fixture.controller.dispatchPendingUploadJobs();
+
+  assert.equal(finalBody(hub, 'phase').phase, 'observation_started');
+  assert.equal(hub.byAction('reconcile').length, 0);
+  const pause = finalBody(hub, 'pause');
+  assert.equal(pause.reason, 'needs_human');
+  assert.ok(isStorable(pause));
+  assert.ok(codePoints(pause.detail) <= 2000);
+  assert.match(pause.detail, /港区旧案/);
+  assert.match(pause.detail, /8000/);
+  assert.match(pause.detail, /https:\/\/fanqienovel\.com\/main\/writer\/chapter-manage\/8000/);
+  assert.match(pause.detail, /8001/);
+
+  const riskHub = makeFakeHub({ claims: [claimReply(hubCreateClaim({ mode: 'reconcile' }))] });
+  const risk = makeHubController({
+    hub: riskHub,
+    deps: {
+      runReconcileCreateCommand: async () => ({ finding: 'unknown', outcome: 'risk_pause', riskReason: 'captcha', candidates }),
+    },
+  });
+  await risk.controller.dispatchPendingUploadJobs();
+  assert.equal(finalBody(riskHub, 'pause').reason, 'captcha');
+});
+
+test('the hub client id is available before any job, stable across reloads and the one claims use', async () => {
+  let stored = '';
+  const storage = { read: async () => stored, write: async (value) => { stored = value; } };
+  const firstStore = createHubClientIdStore(storage);
+  const first = makeHubController({ deps: { getHubClientId: () => firstStore.ensure() } });
+  const shown = await first.controller.handleMessage({ action: 'hub-client-id', payload: {} });
+  assert.match(shown.hubClientId, /^magi3-ext-[a-z0-9]{8}$/);
+
+  const afterReloadStore = createHubClientIdStore(storage);
+  const hub = makeFakeHub();
+  const reloaded = makeHubController({ hub, deps: { getHubClientId: () => afterReloadStore.ensure() } });
+  assert.deepEqual(await reloaded.controller.handleMessage({ action: 'hub-client-id', payload: {} }), shown);
+  await reloaded.controller.dispatchPendingUploadJobs();
+  assert.equal(hub.byAction('executor-heartbeat')[0].body.client_id, shown.hubClientId);
+  assert.equal(hub.byAction('claim')[0].body.client_id, shown.hubClientId);
+});
+
+test('options page and background share the hub client id key and the options page asks for it on open and save', async () => {
+  const [optionsSource, backgroundSource] = await Promise.all([
+    readFile(new URL('../options.js', import.meta.url), 'utf8'),
+    readFile(new URL('../background.js', import.meta.url), 'utf8'),
+  ]);
+  assert.equal(HUB_CLIENT_ID_STORAGE_KEY, 'forwinPublisherHubClientId');
+  for (const source of [optionsSource, backgroundSource]) {
+    assert.match(source, /HUB_CLIENT_ID_STORAGE_KEY/);
+    assert.match(source, /createHubClientIdStore/);
+    assert.doesNotMatch(source, /'forwinPublisherHubClientId'/);
+  }
+  assert.match(optionsSource, /action:\s*'hub-client-id'/);
+  assert.match(optionsSource, /async function boot\(\)[\s\S]*renderHubClientId\(\)/);
+  assert.match(optionsSource, /settings-updated[\s\S]*renderHubClientId\(\)/);
+});
+
+test('background alarm bookkeeping follows the whole heartbeat round and hub rounds are recorded', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+  assert.match(source, /controller\.heartbeatRound\(\)\s*\.then\(\(\)\s*=>\s*updateBackgroundStatus\(\{\s*lastHeartbeatSuccessAt/);
+  assert.match(source, /recordHubRound,/);
+  assert.match(source, /reportError:\s*reportBackgroundError/);
+  assert.match(source, /lastHubError/);
 });

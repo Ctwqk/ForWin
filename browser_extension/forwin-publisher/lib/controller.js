@@ -101,6 +101,15 @@ export class PublisherExtensionController {
     if (action === 'open-login') {
       return this.openLogin(String(payload.platform || '').trim(), sender?.tab?.id || 0);
     }
+    if (action === 'hub-client-id') {
+      // The options page shows it so it can go into publish-hub's
+      // create-account --preferred-client-id before any job runs. Generated on first
+      // request, the same id the publish-hub adapter uses.
+      const hubClientId = typeof this.deps.getHubClientId === 'function'
+        ? String(await this.deps.getHubClientId())
+        : '';
+      return { hubClientId };
+    }
     throw new Error(`Unsupported action: ${action}`);
   }
 
@@ -1170,18 +1179,55 @@ export class PublisherExtensionController {
     return { found: true, handled, truncated: true };
   }
 
-  // The heartbeat alarm's round. With publish-hub configured, a ForWin heartbeat
-  // failure does not hold back publish-hub jobs; the ForWin error is still raised.
+  // The heartbeat alarm's whole round: ForWin heartbeat, upload jobs, comment sync.
+  // A publish-hub failure never stops it (the hub round records its own errors).
+  async heartbeatRound() {
+    await this.heartbeatAndDispatchUploadJobs();
+    return this.dispatchPendingCommentSyncJobs();
+  }
+
+  // With publish-hub configured, a ForWin heartbeat failure does not hold back
+  // publish-hub jobs; the ForWin error is still raised, and a dispatch failure in
+  // that round is reported, not dropped.
   async heartbeatAndDispatchUploadJobs() {
     try {
       await this.sendHeartbeat();
     } catch (error) {
       if (this._hubEnabled(await this.deps.getSettings())) {
-        await this.dispatchPendingUploadJobs().catch(() => ({ skipped: true }));
+        try {
+          await this.dispatchPendingUploadJobs();
+        } catch (dispatchError) {
+          await this._reportError('upload dispatch after the ForWin heartbeat failed', dispatchError);
+        }
       }
       throw error;
     }
     return this.dispatchPendingUploadJobs();
+  }
+
+  async _reportError(context, error) {
+    if (typeof this.deps.reportError !== 'function') {
+      return;
+    }
+    try {
+      await this.deps.reportError(context, error);
+    } catch (_error) {
+      // Diagnostics must not change the round's outcome.
+    }
+  }
+
+  // Records how the publish-hub part of a round went (background status and error
+  // log). Hub errors are recorded here instead of raised, so an unreachable hub or a
+  // refused key never stops ForWin's own work in the same round.
+  async _recordHubRound(error) {
+    if (typeof this.deps.recordHubRound !== 'function') {
+      return;
+    }
+    try {
+      await this.deps.recordHubRound(error ? { ok: false, error } : { ok: true });
+    } catch (_error) {
+      // Diagnostics must not change the round's outcome.
+    }
   }
 
   async _dispatchPendingUploadJobs() {
@@ -1218,21 +1264,21 @@ export class PublisherExtensionController {
 
   // Both backends in one round, one job at a time (D7): publish-hub is asked first,
   // then ForWin, alternating until neither has work or eight jobs ran. A backend that
-  // fails is left alone for the rest of the round so the other keeps working; the
-  // first error is raised at the end. publish-hub's 409 attempt_in_progress only
-  // means "next round".
+  // fails is left alone for the rest of the round so the other keeps working.
+  // publish-hub errors are recorded (_recordHubRound), never raised, so the hub
+  // being down (the VPS tunnel, a refused key) does not stop comment sync or the
+  // heartbeat bookkeeping; a ForWin error is raised at the end, as before.
+  // publish-hub's 409 attempt_in_progress only means "next round".
   async _dispatchUploadJobsWithHub(settings, hub) {
-    let firstError = null;
-    const fail = (error) => {
-      firstError = firstError || error;
-    };
+    let hubError = null;
+    let forwinError = null;
     let hubOpen = true;
     try {
       await hub.sendExecutorHeartbeat();
       await hub.replayJournal();
     } catch (error) {
       hubOpen = false;
-      fail(error);
+      hubError = error;
     }
     let forwinOpen = Boolean(settings.backendBaseUrl && settings.apiKey);
     if (forwinOpen) {
@@ -1240,7 +1286,7 @@ export class PublisherExtensionController {
         await this.syncUploadJournal();
       } catch (error) {
         forwinOpen = false;
-        fail(error);
+        forwinError = error;
       }
     }
     const connectedPlatforms = await this._collectConnectedPlatforms();
@@ -1266,7 +1312,7 @@ export class PublisherExtensionController {
             }
           } catch (error) {
             hubOpen = false;
-            fail(error);
+            hubError = hubError || error;
           }
         }
         if (forwinOpen) {
@@ -1288,7 +1334,7 @@ export class PublisherExtensionController {
             }
           } catch (error) {
             forwinOpen = false;
-            fail(error);
+            forwinError = forwinError || error;
           }
         }
         if (!progressed) {
@@ -1296,8 +1342,9 @@ export class PublisherExtensionController {
         }
       }
     }
-    if (firstError) {
-      throw firstError;
+    await this._recordHubRound(hubError);
+    if (forwinError) {
+      throw forwinError;
     }
     if (!connectedPlatforms.length) {
       return { skipped: true };

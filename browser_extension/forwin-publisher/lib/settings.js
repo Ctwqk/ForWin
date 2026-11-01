@@ -9,6 +9,9 @@ export const DEFAULT_SETTINGS = {
   hubApiKey: '',
 };
 
+// Where the publish-hub client id is stored; the background and the options page
+// both read and generate it through createHubClientIdStore on this key.
+export const HUB_CLIENT_ID_STORAGE_KEY = 'forwinPublisherHubClientId';
 const HUB_CLIENT_ID_PREFIX = 'magi3-ext-';
 const HUB_CLIENT_ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const HUB_CLIENT_ID_LENGTH = 8;

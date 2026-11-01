@@ -27,6 +27,8 @@ const MAX_ERROR_BYTES = 16 * 1024;
 const MAX_RAW_BYTES = 64 * 1024;
 const MAX_TEXT = 2000;
 const MAX_REMOTE_URL = 2048;
+const MAX_REMOTE_ID = 512;
+const MAX_CANDIDATE_TEXT = 160;
 const FENCE_CODES = new Set(['stale_epoch', 'lease_expired', 'job_cancelled', 'not_found']);
 const TAG_GROUPS = ['theme', 'role', 'plot'];
 const CREATE_URLS = {
@@ -55,9 +57,63 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+const MAX_JSON_DEPTH = 32;
+
+// Text publish-hub can store (its is_storable_text refuses NUL and unpaired
+// surrogates, and a refused report would be resent unchanged until the lease
+// runs out): both become U+FFFD. With `max`, cut to at most `max` code points
+// (the hub counts code points), never inside a surrogate pair.
+export function storableText(value, max = 0) {
+  const clean = String(value ?? '').replace(LONE_SURROGATE, '\uFFFD').replace(/\u0000/g, '\uFFFD');
+  if (!(max > 0)) {
+    return clean;
+  }
+  const points = Array.from(clean);
+  return points.length > max ? `${points.slice(0, max - 1).join('')}…` : clean;
+}
+
+// A JSON value publish-hub can store: every string and key through storableText,
+// non-finite numbers as null (what JSON.stringify sends anyway), undefined and
+// functions left out, nesting deeper than MAX_JSON_DEPTH replaced by a marker.
+export function storableJson(value, depth = 0) {
+  if (typeof value === 'string') {
+    return storableText(value);
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (value === null || typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value !== 'object') {
+    return undefined;
+  }
+  if (depth >= MAX_JSON_DEPTH) {
+    return '[depth limit]';
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const stored = storableJson(item, depth + 1);
+      return stored === undefined ? null : stored;
+    });
+  }
+  const result = {};
+  for (const [key, item] of Object.entries(value)) {
+    const stored = storableJson(item, depth + 1);
+    if (stored !== undefined) {
+      result[storableText(key)] = stored;
+    }
+  }
+  return result;
+}
+
 function truncate(value, max = MAX_TEXT) {
-  const string = String(value ?? '');
-  return string.length > max ? `${string.slice(0, max - 1)}…` : string;
+  return storableText(value, max);
+}
+
+function codePointLength(value) {
+  return Array.from(String(value ?? '')).length;
 }
 
 function jsonBytes(value) {
@@ -371,12 +427,12 @@ function fence(entry) {
 }
 
 function boundedError(error) {
-  const bounded = {
+  const bounded = storableJson({
     code: truncate(first(error?.code, 'extension-execution-failed'), 200),
     message: truncate(error?.message ?? ''),
     ...(text(error?.current_url) ? { current_url: truncate(error.current_url) } : {}),
     ...(isPlainObject(error?.details) ? { details: error.details } : {}),
-  };
+  });
   if (jsonBytes(bounded) > MAX_ERROR_BYTES) {
     delete bounded.details;
     bounded.details_truncated = true;
@@ -395,45 +451,48 @@ function platformError(result, fallbackCode) {
 }
 
 function boundedRaw(raw) {
-  if (jsonBytes(raw) <= MAX_RAW_BYTES) {
-    return raw;
+  const stored = storableJson(raw);
+  if (jsonBytes(stored) <= MAX_RAW_BYTES) {
+    return stored;
   }
-  const { evidence: _evidence, ...identity } = raw;
+  const { evidence: _evidence, ...identity } = stored;
   return { ...identity, evidence_truncated: true };
 }
 
+// Every report body is built here and passed through storableJson last, so no
+// page text can make publish-hub refuse it.
 function resultRecord(entry, outcome, extras = {}) {
   return {
     report: 'result',
     outcome,
-    body: {
+    body: storableJson({
       ...fence(entry),
       outcome,
       ...(extras.error ? { error: boundedError(extras.error) } : {}),
       ...(extras.defer_until ? { defer_until: extras.defer_until } : {}),
-    },
+    }),
   };
 }
 
 function reconcileRecord(entry, finding) {
-  return { report: 'reconcile', outcome: finding, body: { ...fence(entry), finding } };
+  return { report: 'reconcile', outcome: finding, body: storableJson({ ...fence(entry), finding }) };
 }
 
 function pauseRecord(entry, reason, detail) {
-  return { body: { ...fence(entry), reason, detail: truncate(detail) } };
+  return { body: storableJson({ ...fence(entry), reason, detail: truncate(detail) }) };
 }
 
 function receiptRecord(entry, receipt) {
+  const remoteId = storableText(text(receipt.remote_id));
+  const remoteUrl = storableText(text(receipt.remote_url));
   return {
-    body: {
+    body: storableJson({
       ...fence(entry),
-      official_state: receipt.official_state,
-      ...(text(receipt.remote_id) ? { remote_id: text(receipt.remote_id) } : {}),
-      ...(text(receipt.remote_url) && text(receipt.remote_url).length <= MAX_REMOTE_URL
-        ? { remote_url: text(receipt.remote_url) }
-        : {}),
+      official_state: truncate(receipt.official_state, 64),
+      ...(remoteId && codePointLength(remoteId) <= MAX_REMOTE_ID ? { remote_id: remoteId } : {}),
+      ...(remoteUrl && codePointLength(remoteUrl) <= MAX_REMOTE_URL ? { remote_url: remoteUrl } : {}),
       raw: boundedRaw(receipt.raw || {}),
-    },
+    }),
   };
 }
 
@@ -491,6 +550,20 @@ function riskDetail(result) {
     payload.platform_message,
     `publisher risk signal: ${first(result?.riskReason, result?.risk_reason, payload.risk_reason)}`,
   );
+}
+
+function candidatesDetail(bookName, observation, candidates) {
+  const lines = [
+    `reconcile-create found no exact title for "${bookName}" (${first(observation?.reason, 'unknown')}); `
+      + `${candidates.length} candidate card(s):`,
+  ];
+  candidates.forEach((candidate, index) => {
+    lines.push(
+      `${index + 1}) id ${first(candidate?.remote_book_id) || '-'} ${first(candidate?.remote_url) || '-'} `
+        + `"${storableText(first(candidate?.text).replace(/\s+/g, ' '), MAX_CANDIDATE_TEXT)}"`,
+    );
+  });
+  return truncate(lines.join('\n'));
 }
 
 function sameBook(left, right) {
@@ -878,7 +951,7 @@ export class HubExecutor {
         platform: job.platform,
         book_name: job.input.book_name,
       });
-      decision = this._createFinding(observation, observedAt);
+      decision = this._createFinding(job, observation, observedAt);
     } else {
       const observation = await this._observe(this.deps.runReconciliationCommand, tabId, {
         platform: job.platform,
@@ -929,8 +1002,10 @@ export class HubExecutor {
   }
 
   // reconcile-create (Task 7 answers unknown today). absent only with a positive
-  // "works list complete" signal, because a wrong absent creates a second book.
-  _createFinding(observation, observedAt) {
+  // "works list complete" signal, because a wrong absent creates a second book. An
+  // unknown that came with candidate cards pauses for a human with the candidates
+  // in the detail (ruling R48): the job ends paused either way, but /ops shows them.
+  _createFinding(job, observation, observedAt) {
     if (text(observation?.outcome) === 'risk_pause') {
       return { pause: { reason: hubPauseReason(first(observation.riskReason, observation.risk_reason)), detail: riskDetail(observation) } };
     }
@@ -944,6 +1019,10 @@ export class HubExecutor {
     }
     if (finding === 'absent' && observation?.works_list_complete === true) {
       return { finding: 'absent' };
+    }
+    const candidates = Array.isArray(observation?.candidates) ? observation.candidates : [];
+    if (candidates.length) {
+      return { pause: { reason: 'needs_human', detail: candidatesDetail(job.input.book_name, observation, candidates) } };
     }
     return { finding: 'unknown' };
   }

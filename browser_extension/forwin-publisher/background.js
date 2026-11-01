@@ -5,7 +5,7 @@ import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js?v=0.1.64';
 import { guardRiskInspection } from './lib/risk-inspection.js?v=0.1.64';
-import { DEFAULT_SETTINGS, createHubClientIdStore, getBackendOrigin, normalizeSettings } from './lib/settings.js';
+import { DEFAULT_SETTINGS, HUB_CLIENT_ID_STORAGE_KEY, createHubClientIdStore, getBackendOrigin, normalizeSettings } from './lib/settings.js';
 import { READY_CHANNELS, TabReadyRegistry } from './lib/tab-ready-registry.js';
 import { uploadMessageTimeoutMs } from './lib/upload-timeouts.js?v=0.1.23';
 import { createUploadJournal } from './lib/upload-journal.js?v=0.1.64';
@@ -19,7 +19,6 @@ import {
 
 const SETTINGS_KEY = 'forwinPublisherSettings';
 const CLIENT_ID_KEY = 'forwinPublisherClientId';
-const HUB_CLIENT_ID_KEY = 'forwinPublisherHubClientId';
 const PLATFORM_STATE_KEY = 'forwinPublisherPlatformStates';
 const BACKGROUND_STATUS_KEY = 'forwinPublisherBackgroundStatus';
 const BACKGROUND_ERRORS_KEY = 'forwinPublisherBackgroundErrors';
@@ -267,6 +266,19 @@ function reportBackgroundError(context, error) {
   appendBackgroundError(context, error).catch(() => {});
 }
 
+// How the publish-hub part of the last round went. The message comes from the hub's
+// error envelope or the network error, never from the request (no key in it).
+async function recordHubRound({ ok, error } = {}) {
+  const at = new Date().toISOString();
+  if (ok) {
+    await updateBackgroundStatus({ lastHubRoundAt: at, lastHubSuccessAt: at, lastHubError: '' });
+    return;
+  }
+  const message = error instanceof Error ? error.message : String(error || '');
+  await updateBackgroundStatus({ lastHubRoundAt: at, lastHubErrorAt: at, lastHubError: message.slice(0, 500) });
+  reportBackgroundError('publish-hub round', error);
+}
+
 async function ensureClientId() {
   let clientId = await getStorageValue(CLIENT_ID_KEY, '');
   if (!clientId) {
@@ -279,8 +291,8 @@ async function ensureClientId() {
 // publish-hub's executor client_id (magi3-ext-<8 chars>), separate from the ForWin
 // client id above so the legacy path is unchanged.
 const hubClientIdStore = createHubClientIdStore({
-  read: () => getStorageValue(HUB_CLIENT_ID_KEY, ''),
-  write: (value) => setStorageValue(HUB_CLIENT_ID_KEY, value),
+  read: () => getStorageValue(HUB_CLIENT_ID_STORAGE_KEY, ''),
+  write: (value) => setStorageValue(HUB_CLIENT_ID_STORAGE_KEY, value),
 });
 
 async function ensureHubClientId() {
@@ -2387,6 +2399,8 @@ const controller = new PublisherExtensionController({
     },
   },
   getHubClientId: ensureHubClientId,
+  recordHubRound,
+  reportError: reportBackgroundError,
   uploadJournal,
   ensureClientId,
   getClientId: ensureClientId,
@@ -2491,8 +2505,7 @@ extensionApi.alarms.onAlarm.addListener((alarm) => {
       lastHeartbeatAttemptAt: new Date().toISOString(),
       lastHeartbeatAttemptSource: 'alarm',
     }).catch(() => {});
-    controller.heartbeatAndDispatchUploadJobs()
-      .then(() => controller.dispatchPendingCommentSyncJobs())
+    controller.heartbeatRound()
       .then(() => updateBackgroundStatus({
         lastHeartbeatSuccessAt: new Date().toISOString(),
         lastHeartbeatError: '',

@@ -9,6 +9,10 @@ platform's publish-hub jobs. Two things in the settings update path could undo i
   keeps what is stored;
 * an explicit route other than "hub" (R31): refused, and so is clearing a hub binding's
   destination.
+
+Pointing a hub binding at another destination stays allowed, except while requests built for the
+old one wait to be sent (`refuse_repointing_with_waiting_requests`): the sync sends a stored body
+unchanged, so those chapters would still go to the old book.
 """
 
 from __future__ import annotations
@@ -16,9 +20,11 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import select
 
 from forwin.api_schema import ProjectAutomationSettings
 from forwin.api_schema.project import ProjectAutomationPublishSettings
+from forwin.models.publisher import PublisherUploadJob
 from forwin.publish_hub.gate import HUB_ROUTE
 
 
@@ -132,3 +138,64 @@ def refuse_dropping_publish_hub(
                 "再从 git 历史重新部署旧代码。",
             )
         _refuse_leaving_hub(platform, before, after.route, after.hub_destination_id)
+
+
+def _waiting_requests(session, project_id: str, platform: str, destination_id: str) -> int:
+    """Rows of the platform whose stored request names another destination and has not been sent:
+    the ones `recover_unsubmitted` would still send, unchanged."""
+    bodies = session.execute(
+        select(PublisherUploadJob.hub_submit_body_json).where(
+            PublisherUploadJob.project_id == project_id,
+            PublisherUploadJob.platform_id == platform,
+            PublisherUploadJob.hub_submit_body_json.is_not(None),
+            PublisherUploadJob.hub_job_id.is_(None),
+            PublisherUploadJob.status == "pending",
+            PublisherUploadJob.deleted_at.is_(None),
+        )
+    ).scalars()
+    return sum(
+        1
+        for body in bodies
+        if not isinstance(body, dict) or str(body.get("destination_id") or "") != destination_id
+    )
+
+
+def refuse_repointing_with_waiting_requests(
+    session,
+    project_id: str,
+    stored: dict[str, ProjectAutomationPublishSettings],
+    requested: list[dict[str, Any]],
+    updated: ProjectAutomationSettings,
+) -> None:
+    """400 when a hub binding would get another destination while requests built for the old one
+    wait to be sent.
+
+    A request body is stored before it is sent and names its destination; the sync sends it
+    unchanged, so the waiting chapters (and covers) would still go to the old book. Re-pointing is
+    allowed again once none waits. Like `refuse_leaving_publish_hub`, the entries are checked as
+    they were asked for (a change the primary entry would outvote is refused too, not dropped
+    without a word) and as they would be saved. Clearing a destination is `_refuse_leaving_hub`'s.
+    """
+    asked = [
+        (str(entry.get("platform") or ""), entry.get("route"), entry.get("hub_destination_id"))
+        for entry in requested
+    ]
+    saved = [
+        (binding.platform, binding.route, binding.hub_destination_id)
+        for binding in updated.publish_bindings
+    ]
+    for platform, route, destination_id in [*asked, *saved]:
+        if route != HUB_ROUTE or not destination_id:
+            continue
+        before = stored.get(platform)
+        if before is not None and before.hub_destination_id == destination_id:
+            continue
+        waiting = _waiting_requests(session, project_id, platform, str(destination_id))
+        if waiting:
+            raise HTTPException(
+                400,
+                f"平台 {platform} 还有 {waiting} 条请求已保存、尚未发到 publish-hub，请求里写的是原来的"
+                "发布目标，同步进程会原样发送：现在改 hub_destination_id，这些章节仍会发到原来那本书。"
+                "请等它们发出（在 /publishers 页可以看到）后再改发布目标；如果它们不能发到原来那本书，"
+                "先停掉 publish-hub-sync，由运维处理这些请求后再改。",
+            )

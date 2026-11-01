@@ -16,6 +16,7 @@ import json
 import re
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,7 @@ from forwin.application.read_models import normalize_project_automation
 from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.project import Project
+from forwin.models.publisher import PublisherUploadJob
 from tests.http_runtime_harness import HttpRuntimeHarness
 from tests.postgres import postgres_test_url
 
@@ -452,6 +454,84 @@ def test_a_legacy_platform_stays_changeable_in_every_way() -> None:
         assert database.routing()["fanqie"] == ("legacy", None)
     finally:
         database.dispose()
+
+
+# --- re-pointing a hub binding while stored requests wait (final review, item 4) ----------
+
+
+def _store_request(
+    database,
+    destination: str,
+    *,
+    platform: str = "fanqie",
+    status: str = "pending",
+    hub_job_id: str | None = None,
+    deleted: bool = False,
+    task_kind: str = "chapter_upload",
+) -> None:
+    """A row whose request body is stored for `destination` (sent once the sync gets to it)."""
+    with database.session_factory.begin() as session:
+        session.add(
+            PublisherUploadJob(
+                project_id=database.project_id,
+                platform_id=platform,
+                task_kind=task_kind,
+                idempotency_key=new_id(),
+                book_name="番茄书名",
+                body_text="",
+                status=status,
+                hub_submit_body_json={"destination_id": destination, "idempotency_key": new_id()},
+                hub_job_id=hub_job_id,
+                deleted_at=datetime(2026, 11, 1) if deleted else None,
+            )
+        )
+
+
+@pytest.mark.parametrize("entry", ["publish", "publish_bindings"])
+def test_re_pointing_a_hub_binding_while_stored_requests_wait_is_refused(hub_project, entry) -> None:
+    """A stored body names the destination it was built for and is sent unchanged, so the waiting
+    chapters would still go to the old book."""
+    _store_request(hub_project, DESTINATION)
+    _store_request(hub_project, DESTINATION, task_kind="cover_upload")
+    before = hub_project.stored_json()
+    repointed = {**HUB_FANQIE, "hub_destination_id": OTHER_DESTINATION}
+    body = (
+        {"publish": repointed}
+        if entry == "publish"
+        else {"publish_bindings": [repointed, LEGACY_QIDIAN]}
+    )
+
+    error = _refusal(lambda: hub_project.update(body))
+
+    assert error.status_code == 400
+    assert "fanqie" in error.detail and "hub_destination_id" in error.detail
+    assert "2 条" in error.detail
+    assert hub_project.stored_json() == before
+
+
+def test_re_pointing_is_allowed_once_no_stored_request_waits(hub_project) -> None:
+    # None of these is resent to the old destination by the sync.
+    _store_request(hub_project, DESTINATION, hub_job_id="5b1f0c2e-0000-4000-8000-0000000000aa")
+    _store_request(hub_project, DESTINATION, status="failed")
+    _store_request(hub_project, DESTINATION, status="superseded")
+    _store_request(hub_project, DESTINATION, deleted=True)
+    _store_request(hub_project, DESTINATION, platform="qidian")
+    _store_request(hub_project, OTHER_DESTINATION)  # already built for the new destination
+
+    hub_project.update({"publish": {**HUB_FANQIE, "hub_destination_id": OTHER_DESTINATION}})
+
+    assert hub_project.routing()["fanqie"] == ("hub", OTHER_DESTINATION)
+
+
+def test_a_save_that_keeps_the_destination_is_not_held_up_by_waiting_requests(hub_project) -> None:
+    _store_request(hub_project, DESTINATION)
+
+    hub_project.update({"daily_chapter_quota": 4})
+    hub_project.update({"publish": {**HUB_FANQIE, "book_name": "番茄新名"}})
+    hub_project.update({"publish": {"platform": "fanqie", "book_name": "番茄新名"}})
+
+    assert hub_project.routing()["fanqie"] == ("hub", DESTINATION)
+    assert hub_project.stored().publish.book_name == "番茄新名"
 
 
 def test_the_refusal_comes_back_as_a_400_over_http() -> None:

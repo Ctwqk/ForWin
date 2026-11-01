@@ -29,9 +29,11 @@ from forwin.models.publisher import (
 )
 from forwin.publish_hub import sync as sync_module
 from forwin.publish_hub.gate import earlier_chapter_not_done, hold_reason_for
+from forwin.publish_hub.payloads import cover_body
 from forwin.publish_hub.state import DESTINATIONS_KEY, cached_destination
 from forwin.publish_hub.submit import SubmitOutcome
 from forwin.publish_hub.sync import CHANGES_KEY, run_forever, sync_once
+from forwin.publisher_runtime.audit import PublisherAuditService
 from forwin.publisher_runtime.bindings import PublisherBindingService
 from tests.test_canon_publisher_jobs import _fixture, _materialize
 from tests.test_publish_hub_submit import (
@@ -43,11 +45,13 @@ from tests.test_publish_hub_submit import (
     QIDIAN_DESTINATION,
     FakeHub,
     _attach_hub,
+    _canonical,
     _cover_setup,
     _job,
     _release,
     _set_routes,
 )
+from tests.test_publisher_runtime_covers import PNG_1X1
 
 FANQIE_BOOK = "fanqie-book"
 QIDIAN_BOOK = "qidian-book"
@@ -1044,6 +1048,278 @@ def test_a_succeeded_cover_upload_marks_the_cover_uploaded(tmp_path, official_st
         fixture.engine.dispose()
 
 
+# --- the cover after the first chapter (final review, item 2) -----------------------------
+
+
+def _select_cover(fixture, tmp_path, *, work_binding_id: str = "") -> str:
+    """A selected cover for the project (a project-wide one unless a work binding is named)."""
+    cover_file = tmp_path / "cover.png"
+    cover_file.write_bytes(PNG_1X1)
+    with fixture.runtime.session_factory.begin() as session:
+        cover = PublisherCoverAsset(
+            project_id=fixture.project_id,
+            work_binding_id=work_binding_id,
+            status="selected",
+            selection_state="selected",
+            file_path=str(cover_file),
+            mime_type="image/png",
+        )
+        session.add(cover)
+        session.flush()
+        return cover.id
+
+
+def _cover_jobs(fixture) -> list[PublisherUploadJob]:
+    with fixture.runtime.session_factory() as session:
+        rows = session.execute(
+            select(PublisherUploadJob).where(PublisherUploadJob.task_kind == "cover_upload")
+        ).scalars().all()
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
+def _cover_posts(hub: SyncHub) -> list[bytes]:
+    return [post for post in hub.posts if json.loads(post)["action"] == "upload_cover"]
+
+
+def _add_work_binding(fixture, platform: str, book_id: str) -> str:
+    with fixture.runtime.session_factory.begin() as session:
+        work = PublisherWorkBinding(project_id=fixture.project_id, platform_id=platform,
+                                    book_name="番茄版", remote_book_id=book_id)
+        session.add(work)
+        session.flush()
+        return work.id
+
+
+def test_the_first_hub_chapter_success_submits_the_selected_cover_to_publish_hub(
+    tmp_path,
+) -> None:
+    """The legacy receipt path queues the book's cover once its first chapter is on the
+    platform; a hub chapter's success does the same. On a hub-routed binding, queueing the
+    cover is its submit to publish-hub (R26)."""
+    fixture, hub, client, created = _sync_fixture("hub-sync-cover-first-chapter")
+    job_id = created["fanqie"]
+    try:
+        # The book's work binding is there before its first chapter lands: made when publish-hub
+        # was asked to create the book, or by uploads before the switch.
+        work_id = _add_work_binding(fixture, "fanqie", FANQIE_BOOK)
+        cover_id = _select_cover(fixture, tmp_path)
+        _round(fixture, client)
+        assert _cover_jobs(fixture) == [] and _cover_posts(hub) == []
+        _succeed_chapter(hub, _job(fixture, job_id).hub_job_id)
+
+        _round(fixture, client)
+
+        assert _job(fixture, job_id).status == "succeeded"
+        (cover_job,) = _cover_jobs(fixture)
+        work = _work_binding(fixture, "fanqie")
+        assert (cover_job.platform_id, cover_job.project_id) == ("fanqie", fixture.project_id)
+        payload = json.loads(cover_job.result_payload_json)
+        assert work.id == work_id
+        assert (payload["cover_asset_id"], payload["work_binding_id"]) == (cover_id, work.id)
+        assert cover_job.hub_submit_body_json == cover_body(cover_job, FANQIE_DESTINATION)
+        assert _cover_posts(hub) == [_canonical(cover_job.hub_submit_body_json)]
+        assert cover_job.hub_job_id is not None and cover_job.status == "pending"
+        assert (work.cover_asset_id, work.cover_state) == (cover_id, "queued")
+        chapter_payload = json.loads(_job(fixture, job_id).result_payload_json)
+        assert chapter_payload["cover_upload_job_id"] == cover_job.id
+        assert len(_events(fixture, cover_job.id, DecisionEventType.UPLOAD_JOB_CREATED)) == 1
+    finally:
+        fixture.engine.dispose()
+
+
+def test_applying_a_chapter_success_again_queues_no_second_cover(tmp_path) -> None:
+    fixture, hub, client, created = _sync_fixture("hub-sync-cover-applied-again")
+    job_id = created["fanqie"]
+    try:
+        _add_work_binding(fixture, "fanqie", FANQIE_BOOK)
+        _select_cover(fixture, tmp_path)
+        _succeed_chapter(hub, _job(fixture, job_id).hub_job_id)
+        _round(fixture, client)
+        (cover_job,) = _cover_jobs(fixture)
+
+        # The whole feed again: the chapter has succeeded, nothing is projected twice.
+        with fixture.runtime.session_factory.begin() as session:
+            session.get(PublishHubSyncState, CHANGES_KEY).cursor = 0
+        _round(fixture, client)
+        # Its success projected again (as if it had not been recorded): the cover job exists.
+        with fixture.runtime.session_factory.begin() as session:
+            session.get(PublisherUploadJob, job_id).status = "pending"
+            session.get(PublishHubSyncState, CHANGES_KEY).cursor = 0
+        _round(fixture, client)
+        _age(fixture, job_id)
+        _round(fixture, client)
+
+        assert _job(fixture, job_id).status == "succeeded"
+        assert [row.id for row in _cover_jobs(fixture)] == [cover_job.id]
+        assert len(_cover_posts(hub)) == 1
+        assert len(hub.jobs("upload_cover")) == 1
+        assert len(_events(fixture, cover_job.id, DecisionEventType.UPLOAD_JOB_CREATED)) == 1
+    finally:
+        fixture.engine.dispose()
+
+
+def test_a_crash_after_the_cover_was_sent_replays_to_the_same_hub_job(tmp_path) -> None:
+    """The cover goes out inside the chapter item's savepoint. If the page dies before it
+    commits, the replay stores the cover again and sends the same bytes: publish-hub answers
+    with the job it already has."""
+    fixture, hub, client, created = _sync_fixture(
+        "hub-sync-cover-crash", platforms=("qidian", "fanqie")
+    )
+    try:
+        work_id = _add_work_binding(fixture, "fanqie", FANQIE_BOOK)  # part of the cover's key
+        _select_cover(fixture, tmp_path, work_binding_id=work_id)
+        _round(fixture, client)
+        fanqie_hub = _job(fixture, created["fanqie"]).hub_job_id
+        qidian_hub = _job(fixture, created["qidian"]).hub_job_id
+        _succeed_chapter(hub, fanqie_hub, chapter_id="f-7")
+        _succeed_chapter(hub, qidian_hub, chapter_id="q-7")
+
+        def die(job_id: str) -> None:
+            if job_id == qidian_hub:  # the fanqie item, with its cover, is applied already
+                raise ProcessDied()
+
+        hub.on_get_job = die
+        with pytest.raises(ProcessDied):
+            _round(fixture, client)
+        assert len(_cover_posts(hub)) == 1 and _cover_jobs(fixture) == []
+
+        hub.on_get_job = None
+        _round(fixture, client)
+        _round(fixture, client)
+
+        (cover_job,) = _cover_jobs(fixture)
+        (hub_cover,) = hub.jobs("upload_cover")
+        assert cover_job.hub_job_id == hub_cover["id"]
+        posts = _cover_posts(hub)
+        assert len(posts) == 2 and posts[0] == posts[1]
+        assert _job(fixture, created["fanqie"]).status == "succeeded"
+        assert _job(fixture, created["qidian"]).status == "succeeded"
+    finally:
+        fixture.engine.dispose()
+
+
+def test_a_work_binding_made_by_the_chapter_itself_gets_its_cover_with_the_next_success(
+    tmp_path,
+) -> None:
+    """A replay would make that binding again under another id, so the cover's key would differ
+    and publish-hub would take the cover twice: it waits until the binding is committed."""
+    fixture, hub, client, created = _sync_fixture("hub-sync-cover-new-work")
+    job_id = created["fanqie"]
+    try:
+        cover_id = _select_cover(fixture, tmp_path)
+        assert _work_binding(fixture, "fanqie") is None
+        _succeed_chapter(hub, _job(fixture, job_id).hub_job_id)
+
+        _round(fixture, client)
+
+        assert _job(fixture, job_id).status == "succeeded"
+        work = _work_binding(fixture, "fanqie")
+        assert work is not None and work.remote_book_id == FANQIE_BOOK
+        assert _cover_jobs(fixture) == [] and _cover_posts(hub) == []
+
+        # The next chapter's success (here the same one, applied again) finds it committed.
+        with fixture.runtime.session_factory.begin() as session:
+            session.get(PublisherUploadJob, job_id).status = "pending"
+            session.get(PublishHubSyncState, CHANGES_KEY).cursor = 0
+        _round(fixture, client)
+
+        (cover_job,) = _cover_jobs(fixture)
+        payload = json.loads(cover_job.result_payload_json)
+        assert (payload["cover_asset_id"], payload["work_binding_id"]) == (cover_id, work.id)
+        assert len(_cover_posts(hub)) == 1 and cover_job.hub_job_id is not None
+    finally:
+        fixture.engine.dispose()
+
+
+def test_a_work_binding_made_earlier_in_the_same_open_page_still_waits_for_its_commit(
+    tmp_path,
+) -> None:
+    """Two items of one page: the second sees the binding the first made, but it is not committed
+    yet, so a replay could still remake it under another id."""
+    fixture, hub, client, created = _sync_fixture("hub-sync-cover-same-page")
+    job_id = created["fanqie"]
+    try:
+        _select_cover(fixture, tmp_path)
+        view = _succeed_chapter(hub, _job(fixture, job_id).hub_job_id)
+        mirror = sync_module._Mirror(  # noqa: SLF001
+            PublisherAuditService(session_factory=None),
+            covers=sync_module._cover_queue(client),  # noqa: SLF001
+        )
+        with fixture.runtime.session_factory() as session:
+            row = session.get(PublisherUploadJob, job_id)
+            assert mirror.apply(session, row, view, now=NOW)  # makes the work binding
+            row.status = "pending"  # the next item of the same page, before the commit
+            assert mirror.apply(session, row, view, now=NOW)
+            assert _cover_posts(hub) == []
+            session.commit()
+            mirror.committed()
+            row.status = "pending"  # a later page
+            assert mirror.apply(session, row, view, now=NOW)
+            session.commit()
+
+        assert len(_cover_jobs(fixture)) == 1 and len(_cover_posts(hub)) == 1
+    finally:
+        fixture.engine.dispose()
+
+
+def test_a_cover_that_cannot_be_queued_leaves_the_chapter_success_as_it_is(
+    tmp_path, caplog
+) -> None:
+    fixture, hub, client, created = _sync_fixture("hub-sync-cover-unreadable")
+    job_id = created["fanqie"]
+    try:
+        _add_work_binding(fixture, "fanqie", FANQIE_BOOK)
+        _select_cover(fixture, tmp_path)
+        (tmp_path / "cover.png").unlink()
+        _succeed_chapter(hub, _job(fixture, job_id).hub_job_id)
+
+        with caplog.at_level(logging.WARNING, logger="forwin.publish_hub.sync"):
+            report = _round(fixture, client)
+
+        assert report.failed == []
+        assert _job(fixture, job_id).status == "succeeded"
+        assert _chapter_binding(fixture, "fanqie").remote_chapter_id == "chapter-701"
+        assert _cover_jobs(fixture) == [] and _cover_posts(hub) == []
+        assert any("cover" in record.getMessage() for record in caplog.records)
+    finally:
+        fixture.engine.dispose()
+
+
+def test_a_legacy_chapter_never_gets_its_cover_from_the_sync(tmp_path) -> None:
+    """The extension queue's own receipt path queues a legacy book's cover; the sync never
+    touches a legacy row, its chapter or its cover."""
+    fixture, hub, client, created = _sync_fixture(
+        "hub-sync-cover-legacy",
+        platforms=("qidian",),
+        routes={"qidian": ("legacy", None), "fanqie": ("hub", FANQIE_DESTINATION)},
+    )
+    try:
+        legacy_id = created["qidian"]
+        with fixture.runtime.session_factory.begin() as session:
+            work = PublisherWorkBinding(project_id=fixture.project_id, platform_id="qidian",
+                                        book_name="事件时书名", remote_book_id="q-book")
+            session.add(work)
+            session.flush()
+            session.add(PublisherChapterBinding(
+                work_binding_id=work.id, project_id=fixture.project_id, platform_id="qidian",
+                chapter_number=7, remote_chapter_id="q-7", publish_state="published",
+            ))
+            session.get(PublisherUploadJob, legacy_id).status = "succeeded"
+            work_id = work.id
+        _select_cover(fixture, tmp_path, work_binding_id=work_id)
+        _age(fixture, legacy_id, minutes=60)
+
+        _round(fixture, client)
+        _round(fixture, client)
+
+        assert _cover_jobs(fixture) == []
+        assert [request for request in hub.requests if request.method == "POST"] == []
+    finally:
+        fixture.engine.dispose()
+
+
 def test_a_publication_change_updates_the_chapter_binding_state() -> None:
     fixture, hub, client, created = _sync_fixture("hub-sync-publication-change")
     job_id = created["fanqie"]
@@ -1214,7 +1490,8 @@ def test_cli_runs_the_sync_with_the_configured_publish_hub(monkeypatch) -> None:
 
 
 def test_the_sync_process_does_not_load_the_api_schema() -> None:
-    """The publish-hub-sync container has 128 MiB; the settings models are not needed in it."""
+    """The publish-hub-sync container is small (256 MiB): the settings models are loaded only
+    when a cover is queued, never at start."""
     import subprocess
     import sys
     from pathlib import Path

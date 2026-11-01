@@ -42,7 +42,14 @@ The bindings are written by the same functions the extension-queue success path 
 same receipt-shaped payload:
 
 * chapter_upload: work binding and chapter binding upserts, plus the chapter's
-  `hub_publication_id`; the book id comes from the destinations snapshot;
+  `hub_publication_id`; the book id comes from the destinations snapshot. Then, last in the
+  item, the book's selected cover is queued the way the receipt path queues it
+  (`enqueue_cover_upload_if_ready`), which on a hub-routed binding submits it to publish-hub
+  (R26). Once per cover: its job's key is the cover's, and a chapter already mirrored as
+  succeeded is not projected again. A work binding not committed before the item (the chapter's
+  own success made it) gets its cover with the next chapter (see `_Mirror._queue_cover`). A cover that cannot be queued is logged in
+  a savepoint of its own and the chapter's success stands; the next chapter's success tries
+  again;
 * create_book: the work binding's `remote_book_id`, `remote_url` and `hub_destination_id`;
 * cover_upload: the work binding's cover state.
 
@@ -66,6 +73,7 @@ from forwin.models.publisher import (
     CREATE_BOOK_TASK_KIND,
     PublisherChapterBinding,
     PublisherUploadJob,
+    PublisherWorkBinding,
     PublishHubSyncState,
     upload_job_is_hub_owned,
 )
@@ -78,6 +86,7 @@ from forwin.publisher_runtime.bindings import (
     _normalize_publish_state,
 )
 from forwin.publisher_runtime.browser_sessions import utc_now
+from forwin.publisher_runtime.covers import PublisherCoverService
 from forwin.publisher_runtime.upload_jobs import _receipt_projection_payload
 
 from .client import HubRequestError, HubUnavailable, PublishHubClient
@@ -152,7 +161,9 @@ def sync_once(
     Raises HubUnavailable, or HubRequestError when publish-hub refuses the key or the feed
     request, after rolling back what the open step had done; earlier steps stay committed.
     """
-    mirror = _Mirror(audit or PublisherAuditService(session_factory=None))
+    mirror = _Mirror(
+        audit or PublisherAuditService(session_factory=None), covers=_cover_queue(client)
+    )
     report = SyncReport()
     try:
         report.resubmitted = recover_unsubmitted(session, client, now, audit=mirror.audit)
@@ -160,6 +171,7 @@ def sync_once(
         _read_feed(session, client, now, mirror, report)
         _catch_up(session, client, now, mirror, report)
         session.commit()
+        mirror.committed()
         if refresh_destinations:
             report.destinations_refreshed = _refresh_destinations(session, client, now)
     except BaseException:
@@ -261,6 +273,14 @@ def _backoff(failures: int, interval: float, max_backoff: float) -> float:
     return min(float(interval) * 2 ** max(failures - 1, 0), float(max_backoff))
 
 
+def _cover_queue(client: PublishHubClient) -> PublisherCoverService:
+    """The cover service of the receipt path, used here only to queue a cover (it makes no
+    images), sending to publish-hub with this round's client."""
+    covers = PublisherCoverService(session_factory=None)
+    covers.publish_hub_client_provider = lambda: client
+    return covers
+
+
 # --- feed ---------------------------------------------------------------------------------
 
 
@@ -275,6 +295,7 @@ def _read_feed(session, client, now: datetime, mirror: _Mirror, report: SyncRepo
             state.cursor = next_after
             state.updated_at = now
         session.commit()
+        mirror.committed()
         report.cursor = int(state.cursor)
         if len(items) < PAGE_SIZE or next_after <= after:
             return
@@ -503,9 +524,18 @@ def _refresh_destinations(session, client, now: datetime) -> bool:
 class _Mirror:
     """Writes one publish-hub job view onto its local row, by the state map."""
 
-    def __init__(self, audit: PublisherAuditService) -> None:
+    def __init__(
+        self, audit: PublisherAuditService, *, covers: PublisherCoverService | None = None
+    ) -> None:
         self.audit = audit
         self.bindings = PublisherBindingService(session_factory=None)
+        self.covers = covers
+        # Work bindings made by items whose transaction has not committed yet (_queue_cover).
+        self.uncommitted_work_ids: set[str] = set()
+
+    def committed(self) -> None:
+        """The open transaction committed: the work bindings it made are durable now."""
+        self.uncommitted_work_ids.clear()
 
     def apply(
         self, session, row: PublisherUploadJob, view: Any, *, now: datetime
@@ -557,8 +587,10 @@ class _Mirror:
     def _succeed(self, session, row: PublisherUploadJob, view: Mapping, *, now: datetime) -> None:
         result = _hub_result(view)
         payload = _load_object(row.result_payload_json)
+        work = None
         if row.task_kind == "chapter_upload":
-            self._project_chapter(session, row, view, result, payload)
+            known = _work_binding_ids(session, row)
+            work = self._project_chapter(session, row, view, result, payload)
         elif row.task_kind == CREATE_BOOK_TASK_KIND:
             self._project_book(session, row, view, result, payload)
         else:
@@ -587,6 +619,13 @@ class _Mirror:
                 "hub_publication_id": result["publication_id"],
             },
         )
+        if work is not None:
+            new_work = work.id not in known or work.id in self.uncommitted_work_ids
+            if work.id not in known:
+                self.uncommitted_work_ids.add(work.id)
+            # Last in the item, so that once the cover's request is out only the flush and the
+            # page's commit are left to fail.
+            self._queue_cover(session, row, work, payload, new_work=new_work)
 
     def _pause(
         self,
@@ -677,7 +716,7 @@ class _Mirror:
 
     def _project_chapter(
         self, session, row: PublisherUploadJob, view: Mapping, result: dict, payload: dict
-    ) -> None:
+    ) -> PublisherWorkBinding:
         destination = cached_destination(session, _destination_id(row, view))
         projected = _receipt_projection_payload(
             payload,
@@ -704,6 +743,82 @@ class _Mirror:
         session.flush()
         payload["work_binding"] = self.bindings.serialize_work_binding(work)
         payload["chapter_binding"] = self.bindings.serialize_chapter_binding(chapter)
+        return work
+
+    def _queue_cover(
+        self,
+        session,
+        row: PublisherUploadJob,
+        work: PublisherWorkBinding,
+        payload: dict,
+        *,
+        new_work: bool,
+    ) -> None:
+        """After a chapter lands, queue the book's cover as the receipt path does.
+
+        `enqueue_cover_upload_if_ready` decides: a selected cover, a chapter of the book on the
+        platform, and no job for that cover yet (the job's key is made from the work binding id,
+        the cover and its bytes, so a later chapter finds the first job and queues nothing). On
+        a hub-routed binding it submits the cover to publish-hub (R26). If the page dies after
+        that request and before its commit, the replay stores the cover again and sends the
+        same bytes, and publish-hub answers with the job it already has.
+
+        That holds only for a work binding that was committed before: one made by this chapter's
+        success (or by another item of the same uncommitted page) would get another id on a
+        replay, hence another key, and publish-hub would take the cover a second time. Its cover
+        waits for the next chapter's success, when the binding is committed (books created
+        through publish-hub, and books uploaded before the switch, have theirs already).
+
+        In a savepoint of its own: a cover that cannot be queued (its file unreadable, say) is
+        logged and the chapter's success stands; the next chapter's success tries again.
+        """
+        if self.covers is None or not str(work.remote_book_id or "").strip():
+            return  # a cover job needs the platform book id
+        if new_work:
+            logger.info(
+                "work binding %s was made by upload job %s; its cover is queued with the next "
+                "chapter",
+                work.id,
+                row.id,
+            )
+            return
+        try:
+            with session.begin_nested():
+                cover_job = self.covers.enqueue_cover_upload_if_ready(
+                    session, job=row, payload=payload, work_binding=work
+                )
+                if cover_job is not None:
+                    self.audit.record_upload_job_event(
+                        session,
+                        job=cover_job,
+                        event_type=DecisionEventType.UPLOAD_JOB_CREATED,
+                        summary="封面上传任务已创建（publish-hub 章节完成后）。",
+                        actor_type="worker",
+                        actor_id=SYNC_ACTOR_ID,
+                        extra_payload={
+                            "transition": "cover_after_hub_chapter",
+                            "chapter_upload_job_id": row.id,
+                        },
+                    )
+        except ValueError as exc:
+            logger.warning(
+                "cover of work binding %s not queued after upload job %s: %s",
+                work.id,
+                row.id,
+                exc,
+            )
+            return
+        except Exception:
+            logger.exception(
+                "queueing the cover of work binding %s after upload job %s failed; the next "
+                "chapter tries again",
+                work.id,
+                row.id,
+            )
+            return
+        if cover_job is not None:
+            payload["cover_upload_job_id"] = cover_job.id
+            row.result_payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
     def _project_book(
         self, session, row: PublisherUploadJob, view: Mapping, result: dict, payload: dict
@@ -780,6 +895,18 @@ class _Mirror:
                 **extra,
             },
         )
+
+
+def _work_binding_ids(session, row: PublisherUploadJob) -> set[str]:
+    """The work bindings of the row's project and platform, as they are before it is projected."""
+    return set(
+        session.execute(
+            select(PublisherWorkBinding.id).where(
+                PublisherWorkBinding.project_id == row.project_id,
+                PublisherWorkBinding.platform_id == row.platform_id,
+            )
+        ).scalars()
+    )
 
 
 def _hub_result(view: Mapping) -> dict[str, str]:

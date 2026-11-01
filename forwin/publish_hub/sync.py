@@ -12,10 +12,12 @@ It is the only writer of terminal state for hub-owned upload rows (D1). Each rou
    events are written only when the local status changes). An item that cannot be applied is
    rolled back on its own and logged, and its row stays in flight for step 3. An item naming no
    local row is skipped without asking publish-hub;
-3. catches up (R30): hub-owned rows still `pending` or `paused` locally whose recorded hub status
-   is already terminal (adopted that way at submit) or that the sync has not looked at for ten
-   minutes are read back with `get_job`, oldest first, at most 50 a round. The feed cursor may
-   already be past their changes;
+3. catches up (R30, R43): hub-owned rows are read back with `get_job`, at most 50 a round. Rows
+   still `pending` or `paused` locally qualify when their recorded hub status is already
+   terminal (adopted that way at submit; these go first) or when the sync has not looked at them
+   for ten minutes. Locally `failed` rows qualify after the same ten minutes: an operator may
+   retry the job in publish-hub's /ops, and that is the one terminal state publish-hub reopens.
+   The feed cursor may already be past their changes;
 4. refreshes the destinations snapshot the release gate reads, when asked (`run_forever` asks on
    its first round and every tenth).
 
@@ -47,7 +49,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 
 from forwin.audit.events import DecisionEventType
 from forwin.models.publisher import (
@@ -92,6 +94,8 @@ DESTINATIONS_EVERY_ROUNDS = 10
 
 MIRRORED_TASK_KINDS = frozenset({"chapter_upload", "cover_upload", CREATE_BOOK_TASK_KIND})
 _IN_FLIGHT_STATUSES = ("pending", "paused")
+# The only terminal state publish-hub reopens (an operator retry in /ops), so it is rechecked.
+_REOPENABLE_STATUS = "failed"
 _KEY_REFUSED = frozenset({401, 403})
 _ERROR_LIMIT = 500
 # What publish-hub's own operator confirmation of a receipt is called (ruling R33 of its spec).
@@ -406,21 +410,31 @@ def _publication_state(session, publication_id: str, official_state: str, now) -
 
 
 def _catch_up(session, client, now: datetime, mirror: _Mirror, report: SyncReport) -> None:
+    in_flight = PublisherUploadJob.status.in_(_IN_FLIGHT_STATUSES)
+    adopted_terminal = and_(
+        in_flight, PublisherUploadJob.hub_status.in_(sorted(TERMINAL_HUB_STATUSES))
+    )
+    # The database clock, the one that wrote updated_at.
+    stale = PublisherUploadJob.updated_at < func.now() - CATCH_UP_AFTER
     rows = (
         session.execute(
             select(PublisherUploadJob)
             .where(
                 PublisherUploadJob.hub_job_id.is_not(None),
-                PublisherUploadJob.status.in_(_IN_FLIGHT_STATUSES),
                 PublisherUploadJob.task_kind.in_(sorted(MIRRORED_TASK_KINDS)),
                 PublisherUploadJob.deleted_at.is_(None),
                 or_(
-                    PublisherUploadJob.hub_status.in_(sorted(TERMINAL_HUB_STATUSES)),
-                    # The database clock, the one that wrote updated_at.
-                    PublisherUploadJob.updated_at < func.now() - CATCH_UP_AFTER,
+                    adopted_terminal,
+                    and_(in_flight, stale),
+                    # Its hub status is terminal too, so only the ten minutes count (R43).
+                    and_(PublisherUploadJob.status == _REOPENABLE_STATUS, stale),
                 ),
             )
-            .order_by(PublisherUploadJob.updated_at.asc(), PublisherUploadJob.id.asc())
+            .order_by(
+                case((adopted_terminal, 0), else_=1),
+                PublisherUploadJob.updated_at.asc(),
+                PublisherUploadJob.id.asc(),
+            )
             .limit(CATCH_UP_LIMIT)
             .with_for_update(skip_locked=True)
         )

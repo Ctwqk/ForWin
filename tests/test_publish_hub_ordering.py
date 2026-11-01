@@ -318,6 +318,40 @@ def test_one_run_releases_three_chapters_but_sends_only_the_first_then_recovery_
         fixture.engine.dispose()
 
 
+def test_a_chapter_whose_resend_raises_still_blocks_the_next_one() -> None:
+    """R44 with R36: the row that raised is rolled back alone and counts as not done."""
+    fixture, hub, client, ids = _ordered_fixture("hub-order-resend-raises", chapters=(1, 2), cache={})
+    try:
+        hub.down = True
+        _release(fixture, [ids[1], ids[2]])
+        hub.down = False
+
+        def raise_on_post(_request) -> None:
+            raise RuntimeError("bug on the way out")
+
+        hub.on_post = raise_on_post
+        outcomes = _recover(fixture, client)
+
+        assert outcomes == {
+            ids[1]: SubmitOutcome.ERRORED,
+            ids[2]: SubmitOutcome.WAITING_PREVIOUS,
+        }
+        assert hub.post_count() == 1  # chapter 2 was never sent
+        first = _job(fixture, ids[1])
+        assert (first.status, first.hub_job_id) == ("pending", None)
+        assert first.hub_submit_body_json is not None
+
+        hub.on_post = None
+        outcomes = _recover(fixture, client)
+        assert outcomes == {
+            ids[1]: SubmitOutcome.SUBMITTED,
+            ids[2]: SubmitOutcome.WAITING_PREVIOUS,
+        }
+        assert _posted_refs(hub)[-1] == _chapter_ref(fixture, 1)
+    finally:
+        fixture.engine.dispose()
+
+
 def test_next_chapter_waits_while_the_previous_one_is_pending_on_publish_hub() -> None:
     fixture, hub, client, ids = _ordered_fixture("hub-order-pending", chapters=(1, 2), cache={})
     try:

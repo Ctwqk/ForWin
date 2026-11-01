@@ -110,6 +110,9 @@ class SubmitOutcome(StrEnum):
     FAILED = "failed"
     # Released and stored; sent once every earlier released chapter of the binding is done (D9).
     WAITING_PREVIOUS = "waiting_previous"
+    # Resending raised something unexpected: the row was rolled back on its own and is resent
+    # next round; the rest of the round goes on (R44).
+    ERRORED = "errored"
 
 
 # Outcomes that leave the row pending with its body and no hub job: recovery sends it again.
@@ -118,6 +121,7 @@ DEFERRED_OUTCOMES = frozenset(
         SubmitOutcome.DEFERRED_UNAVAILABLE,
         SubmitOutcome.DEFERRED_ACTIVE_JOB,
         SubmitOutcome.WAITING_PREVIOUS,
+        SubmitOutcome.ERRORED,
     }
 )
 # Outcomes of a release that leave nothing to upload: the row is not counted as released, so it
@@ -298,6 +302,11 @@ def recover_unsubmitted(
     row's outcome. The first DEFERRED_UNAVAILABLE ends the round: the rows after it are reported
     deferred and left untouched, without a request (R32). Deferrals and waits are not audited
     (they repeat every round).
+
+    Each row is sent in a savepoint of its own (R44). Anything unexpected rolls back that row
+    only: it is logged, reported ERRORED and stays as it was (pending, body stored, no hub job),
+    so it still counts as not done for the later chapters of its binding, and the next row goes
+    on. publish-hub unreachable or refusing the key still ends the pass.
     """
     if client is None:
         logger.warning("publish-hub is not configured; stored job requests wait until it is")
@@ -325,10 +334,8 @@ def recover_unsubmitted(
     )
     outcomes: dict[str, SubmitOutcome] = {}
     for index, job in enumerate(jobs):
-        outcome = _send_in_order(session, job, client, now=now)
+        outcome = _resend_isolated(session, job, client, now=now, audit=audit)
         outcomes[job.id] = outcome
-        if outcome not in DEFERRED_OUTCOMES:
-            _record(audit, session, job, outcome, actor_type="system", transition="hub_resubmitted")
         if outcome == SubmitOutcome.DEFERRED_UNAVAILABLE:
             waiting = jobs[index + 1 :]
             if waiting:
@@ -340,6 +347,42 @@ def recover_unsubmitted(
             break
     session.flush()
     return outcomes
+
+
+def _resend_isolated(
+    session,
+    job: PublisherUploadJob,
+    client: PublishHubClient,
+    *,
+    now: datetime,
+    audit: PublisherAuditService | None,
+) -> SubmitOutcome:
+    """One row of `recover_unsubmitted`, in its own savepoint (R44)."""
+    job_id = job.id
+    try:
+        with session.begin_nested():
+            outcome = _send_in_order(session, job, client, now=now)
+            if outcome not in DEFERRED_OUTCOMES:
+                _record(
+                    audit, session, job, outcome, actor_type="system", transition="hub_resubmitted"
+                )
+        return outcome
+    except HubUnavailable as exc:
+        # The send path answers these itself; one that gets here still ends the pass (R32).
+        logger.warning("publish-hub unavailable resending upload job %s: %s", job_id, exc)
+        return SubmitOutcome.DEFERRED_UNAVAILABLE
+    except HubRequestError as exc:
+        if exc.status in _KEY_REFUSED:
+            logger.error("publish-hub refused ForWin's API key resending upload job %s", job_id)
+            return SubmitOutcome.DEFERRED_UNAVAILABLE
+        logger.exception("resending the stored request of upload job %s failed", job_id)
+        return SubmitOutcome.ERRORED
+    except Exception:
+        logger.exception(
+            "resending the stored request of upload job %s failed; it is resent next round",
+            job_id,
+        )
+        return SubmitOutcome.ERRORED
 
 
 def hub_event_payload(

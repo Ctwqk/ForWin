@@ -521,6 +521,126 @@ def test_catch_up_rechecks_only_rows_the_sync_has_not_touched_for_ten_minutes() 
         fixture.engine.dispose()
 
 
+@pytest.mark.parametrize("fault", ["projection_error", "not_found"])
+def test_a_failed_row_retried_in_ops_is_recovered_by_the_catch_up_pass(monkeypatch, fault) -> None:
+    """R43: the retry's feed item cannot be applied and the cursor passes it; the catch-up pass
+    still finds the locally failed row once it is ten minutes old."""
+    fixture, hub, client, created = _sync_fixture(f"hub-sync-ops-retry-{fault}")
+    job_id = created["fanqie"]
+    try:
+        hub_job_id = _job(fixture, job_id).hub_job_id
+        hub.finish(hub_job_id, "failed", last_error={"reason": "max_attempts", "detail": "x"})
+        _round(fixture, client)
+        assert _job(fixture, job_id).status == "failed"
+        hub.get_job_calls.clear()
+        _round(fixture, client)
+        assert hub.get_job_calls == []  # a failed row just looked at is not asked about again
+
+        hub.finish(hub_job_id, "scheduled")  # an operator retried it in /ops
+        _succeed_chapter(hub, hub_job_id, chapter_id="chapter-after-retry")
+        original = PublisherBindingService.upsert_chapter_binding_from_upload_job
+        if fault == "projection_error":
+            def broken(self, session, **kwargs):
+                raise RuntimeError("cannot project the retry")
+
+            monkeypatch.setattr(
+                PublisherBindingService, "upsert_chapter_binding_from_upload_job", broken
+            )
+        else:
+            hub.get_job_refusal = (404, "not_found")
+        _round(fixture, client)
+        assert _cursor(fixture) == hub.last_seq()  # the feed went past the retry
+        assert _job(fixture, job_id).status == "failed"
+
+        monkeypatch.setattr(
+            PublisherBindingService, "upsert_chapter_binding_from_upload_job", original
+        )
+        hub.get_job_refusal = None
+        _round(fixture, client)
+        assert _job(fixture, job_id).status == "failed"  # not ten minutes yet
+        _age(fixture, job_id)
+        report = _round(fixture, client)
+
+        assert report.caught_up == [job_id]
+        stored = _job(fixture, job_id)
+        assert (stored.status, stored.hub_status, stored.error_message) == (
+            "succeeded", "succeeded", ""
+        )
+        assert _chapter_binding(fixture, "fanqie").remote_chapter_id == "chapter-after-retry"
+
+        hub.finish(hub_job_id, "failed")  # cannot happen on publish-hub: a success stays
+        _age(fixture, job_id)
+        _round(fixture, client)
+        assert _job(fixture, job_id).status == "succeeded"
+        assert _chapter_binding(fixture, "fanqie").remote_chapter_id == "chapter-after-retry"
+    finally:
+        fixture.engine.dispose()
+
+
+def test_adopted_terminal_rows_are_caught_up_before_old_failed_rows(monkeypatch) -> None:
+    """The ≤50 batch is shared: rows waiting for their R30 result go first."""
+    fixture, hub, client, created = _sync_fixture(
+        "hub-sync-catch-up-order", platforms=("qidian", "fanqie")
+    )
+    try:
+        _round(fixture, client)
+        qidian_hub = _job(fixture, created["qidian"]).hub_job_id
+        hub.finish(qidian_hub, "failed")
+        _round(fixture, client)
+        _age(fixture, created["qidian"], minutes=60)  # an old failed row, due for a recheck
+        fanqie_hub = _job(fixture, created["fanqie"]).hub_job_id
+        _succeed_chapter(hub, fanqie_hub)
+        with fixture.runtime.session_factory.begin() as session:  # adopted terminal (R30)
+            session.get(PublisherUploadJob, created["fanqie"]).hub_status = "succeeded"
+            session.get(PublishHubSyncState, CHANGES_KEY).cursor = hub.last_seq()
+        monkeypatch.setattr(sync_module, "CATCH_UP_LIMIT", 1)
+
+        report = _round(fixture, client)
+
+        assert report.caught_up == [created["fanqie"]]
+        assert _job(fixture, created["fanqie"]).status == "succeeded"
+        report = _round(fixture, client)
+        assert report.caught_up == [created["qidian"]]
+    finally:
+        fixture.engine.dispose()
+
+
+def test_a_stored_request_that_raises_on_resend_does_not_stop_the_round() -> None:
+    """R44: one row of `recover_unsubmitted` raising is rolled back alone; the others are
+    resent and the feed is still read."""
+    fixture, hub, client, created = _sync_fixture(
+        "hub-sync-resend-raises", platforms=("qidian", "fanqie"), release=False
+    )
+    try:
+        hub.down = True
+        _release(fixture, [created["qidian"], created["fanqie"]])
+        hub.down = False
+
+        def broken_for_fanqie(request) -> None:
+            if json.loads(request.content)["destination_id"] == FANQIE_DESTINATION:
+                raise RuntimeError("bug on the way out")
+
+        hub.on_post = broken_for_fanqie
+        report = _round(fixture, client)
+
+        assert report.resubmitted == {
+            created["fanqie"]: SubmitOutcome.ERRORED,
+            created["qidian"]: SubmitOutcome.SUBMITTED,
+        }
+        stuck = _job(fixture, created["fanqie"])
+        assert (stuck.status, stuck.hub_job_id) == ("pending", None)
+        assert stuck.hub_submit_body_json is not None
+        assert _job(fixture, created["qidian"]).hub_job_id is not None
+        assert _cursor(fixture) == hub.last_seq() > 0  # the feed was read in the same round
+
+        hub.on_post = None
+        report = _round(fixture, client)
+        assert report.resubmitted == {created["fanqie"]: SubmitOutcome.SUBMITTED}
+        assert _job(fixture, created["fanqie"]).hub_job_id is not None
+    finally:
+        fixture.engine.dispose()
+
+
 # --- isolation ----------------------------------------------------------------------------
 
 

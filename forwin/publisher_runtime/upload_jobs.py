@@ -441,13 +441,6 @@ class UploadJobService:
             ),
             "book_meta": normalized_book_meta,
         }
-        # Only a binding that is routed to publish-hub records that. The snapshot of any other
-        # binding stays exactly what earlier code stored, because a replay compares it.
-        if str(binding.get("route") or "legacy").strip() != "legacy":
-            immutable_binding["route"] = str(binding["route"]).strip()
-        hub_destination_id = str(binding.get("hub_destination_id") or "").strip()
-        if hub_destination_id:
-            immutable_binding["hub_destination_id"] = hub_destination_id
         body_text = str(body or "")
         body_sha256 = hashlib.sha256(body_text.encode("utf-8")).hexdigest()
         expected = {

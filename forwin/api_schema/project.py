@@ -40,6 +40,10 @@ class ProjectArcSnapshotFields(BaseModel):
     active_band_template_ids: list[str] = Field(default_factory=list)
 
 
+PublishRoute = Literal["legacy", "hub"]
+DEFAULT_PUBLISH_ROUTE: PublishRoute = "legacy"
+
+
 class ProjectAutomationPublishSettings(BaseModel):
     platform: str = ""
     book_name: str = ""
@@ -56,7 +60,7 @@ class ProjectAutomationPublishSettings(BaseModel):
     )
     # "hub" sends this platform's uploads through publish-hub; hub_destination_id is the
     # publish-hub destination (one book on one account) they go to.
-    route: Literal["legacy", "hub"] = "legacy"
+    route: PublishRoute = DEFAULT_PUBLISH_ROUTE
     hub_destination_id: str | None = None
 
     @field_validator("platform")

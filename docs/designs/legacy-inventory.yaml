@@ -425,10 +425,10 @@ entries:
     paths:
       - forwin/api_schema/project.py
       - forwin/canon/outbox_events.py
-      - forwin/publisher_runtime/upload_jobs.py
     allow_patterns:
+      - 'PublishRoute = Literal["legacy", "hub"]'
+      - 'DEFAULT_PUBLISH_ROUTE: PublishRoute = "legacy"'
       - 'route: Literal["legacy", "hub"] = "legacy"'
-      - 'binding.get("route") or "legacy"'
     reason: A publish binding's route says whether its uploads still go through ForWin's own extension queue ("legacy") or through publish-hub ("hub"). Both exist while platforms are cut over one at a time.
     removal_phase: publish_hub_cutover
     verification:

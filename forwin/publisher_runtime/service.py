@@ -127,6 +127,7 @@ class PublisherRuntimeService:
             platform_catalog=self.platform_catalog,
             connection_state=self.connection_state,
             bindings=self.bindings,
+            audit=self.audit,
         )
 
     @property

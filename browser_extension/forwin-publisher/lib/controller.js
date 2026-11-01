@@ -10,6 +10,7 @@ import {
   buildExecutionReceipt,
   buildReconciliationRequest,
   buildRiskPauseRequest,
+  isRiskReason,
 } from './reconciliation.js?v=0.1.64';
 import { guardRiskInspection } from './risk-inspection.js?v=0.1.64';
 import { HUB_BACKEND, HubExecutor } from './hub-adapter.js?v=0.1.64';
@@ -17,6 +18,10 @@ import { HUB_BACKEND, HubExecutor } from './hub-adapter.js?v=0.1.64';
 const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
 const LOGIN_QR_PLATFORM_THROTTLE_URL = '__platform__';
 const MAX_AUDIT_REQUESTS_PER_DISPATCH = 8;
+// What an upload or comment sync dispatch answers while an audit round is running: one
+// dispatcher at a time, and the audit tab takes the browser's focus. The next round (or the
+// next trigger) tries again; waiting here would hold up the options page and login flows.
+const AUDIT_RUNNING = Object.freeze({ skipped: true, reason: 'audit-running' });
 
 function defaultNowMs() {
   return Date.now();
@@ -1134,6 +1139,9 @@ export class PublisherExtensionController {
     if (this.dispatchInFlight) {
       return this.dispatchInFlight;
     }
+    if (this.auditDispatchInFlight) {
+      return AUDIT_RUNNING;
+    }
     this.dispatchInFlight = this._dispatchPendingUploadJobs();
     try {
       return await this.dispatchInFlight;
@@ -1146,6 +1154,9 @@ export class PublisherExtensionController {
     if (this.commentDispatchInFlight) {
       return this.commentDispatchInFlight;
     }
+    if (this.auditDispatchInFlight) {
+      return AUDIT_RUNNING;
+    }
     this.commentDispatchInFlight = this._dispatchPendingCommentSyncJobs();
     try {
       return await this.commentDispatchInFlight;
@@ -1154,17 +1165,17 @@ export class PublisherExtensionController {
     }
   }
 
-  _otherJobDispatchRunning() {
-    return Boolean(this.dispatchInFlight || this.commentDispatchInFlight);
-  }
-
-  // Never starts while an upload (ForWin or publish-hub) or a comment sync dispatch is
-  // running; the alarm round runs it after them.
+  // One dispatcher at a time, in both directions: an audit round never starts while an
+  // upload (ForWin or publish-hub) or a comment sync dispatch is running, and while it runs
+  // those two skip (dispatchPendingUploadJobs / dispatchPendingCommentSyncJobs). The alarm
+  // round runs the audit after them.
   async dispatchPendingAuditRequests() {
     if (this.auditDispatchInFlight) {
-      return this.auditDispatchInFlight;
+      // Not shared like the upload dispatch: callers (settings-updated, the next alarm)
+      // must not wait for a round that can take minutes.
+      return AUDIT_RUNNING;
     }
-    if (this._otherJobDispatchRunning()) {
+    if (this.dispatchInFlight || this.commentDispatchInFlight) {
       return { skipped: true, reason: 'busy' };
     }
     this.auditDispatchInFlight = this._dispatchPendingAuditRequests();
@@ -1440,9 +1451,7 @@ export class PublisherExtensionController {
     let handled = 0;
     while (handled < MAX_AUDIT_REQUESTS_PER_DISPATCH) {
       const platforms = connectedPlatforms.filter((platformId) => !blockedPlatforms.has(platformId));
-      // One job at a time: an upload or comment sync that started meanwhile (another
-      // trigger) ends this round before the next audit is claimed.
-      if (!platforms.length || this._otherJobDispatchRunning()) {
+      if (!platforms.length) {
         break;
       }
       const request = await this.deps.backend.claimNextAuditRequest({
@@ -1465,25 +1474,26 @@ export class PublisherExtensionController {
 
   // Reads one book's audit state with the existing read-only audit page action and posts
   // {work, chapters, cover, milestones} to ForWin. Nothing is mutated and nothing goes to
-  // publish-hub. When the page cannot be read nothing is posted: the request stays claimed
-  // and ForWin hands it out again once its lease has run out.
+  // publish-hub. When the page cannot be read (or shows a platform risk page) the failure and
+  // its reason are posted instead: ForWin retries the request after its lease, gives it up at
+  // the attempt cap, and fails it at once on a risk page.
   async executeAuditRequest(request) {
     const clientId = await this.deps.getClientId();
     const taskKey = `audit-request:${request.request_id}`;
     try {
-      const adapter = getPlatformAdapter(request.platform);
-      const targetUrl = String(
-        request.upload_url
-        || request.remote_url
-        || adapter.dashboardUrl
-        || adapter.publishUrl
-        || '',
-      );
-      const tab = await this.deps.openUploadTab(targetUrl);
-      this.registerExecutionTask(taskKey, tab.tabId);
-      await this.waitForOpenedUploadTab(tab.tabId, request.platform, 8000);
       let platformResult;
       try {
+        const adapter = getPlatformAdapter(request.platform);
+        const targetUrl = String(
+          request.upload_url
+          || request.remote_url
+          || adapter.dashboardUrl
+          || adapter.publishUrl
+          || '',
+        );
+        const tab = await this.deps.openUploadTab(targetUrl);
+        this.registerExecutionTask(taskKey, tab.tabId);
+        await this.waitForOpenedUploadTab(tab.tabId, request.platform, 8000);
         platformResult = await this.deps.runAuditSyncCommand(tab.tabId, {
           platform: request.platform,
           task_kind: 'audit_sync',
@@ -1492,14 +1502,25 @@ export class PublisherExtensionController {
           remote_url: request.remote_url || '',
         });
       } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
         await this._reportError(`audit request ${request.request_id} page read failed`, error);
+        await this._postAuditFailure(request, clientId, { reason });
         return { status: 'failed' };
       }
       if (this._isRiskPauseSignal(platformResult)) {
+        const rawRiskReason = String(platformResult?.riskReason || platformResult?.risk_reason || '');
+        const reason = String(platformResult?.error || platformResult?.errorMessage || '')
+          || `Publisher ${rawRiskReason || 'risk'} risk signal detected.`;
         await this._reportError(
           `audit request ${request.request_id} stopped at a platform risk page`,
-          new Error(String(platformResult?.riskReason || platformResult?.risk_reason || 'risk page')),
+          new Error(reason),
         );
+        await this._postAuditFailure(request, clientId, {
+          reason,
+          // only the reasons ForWin knows; anything else is a plain failure
+          riskReason: isRiskReason(rawRiskReason) ? rawRiskReason : '',
+          currentUrl: String(platformResult?.currentUrl || platformResult?.current_url || ''),
+        });
         return { status: 'risk', riskBlocked: true };
       }
       const observed = buildAttemptResult({
@@ -1507,10 +1528,15 @@ export class PublisherExtensionController {
         result: platformResult,
       });
       if (observed.outcome !== 'succeeded') {
+        const reason = observed.error_message || observed.error_code || 'audit page read failed';
         await this._reportError(
           `audit request ${request.request_id} was not read`,
-          new Error(observed.error_message || observed.error_code || 'audit page read failed'),
+          new Error(reason),
         );
+        await this._postAuditFailure(request, clientId, {
+          reason,
+          currentUrl: observed.current_url,
+        });
         return { status: 'failed' };
       }
       try {
@@ -1520,9 +1546,10 @@ export class PublisherExtensionController {
           current_url: observed.current_url,
         });
       } catch (error) {
-        // 404 / 409: ForWin no longer wants this answer (finished, or taken over by another
-        // client after the lease). Nothing to retry.
-        if (error?.status === 404 || error?.status === 409) {
+        // 404 / 409 / 422: ForWin no longer wants this answer (finished, taken over by
+        // another client after the lease, or not the book's page, which it records as a
+        // failure itself). Nothing to retry.
+        if ([404, 409, 422].includes(error?.status)) {
           await this._reportError(`audit request ${request.request_id} result refused`, error);
           return { status: 'refused', code: String(error.code || '') };
         }
@@ -1531,6 +1558,29 @@ export class PublisherExtensionController {
       return { status: 'succeeded' };
     } finally {
       await this.cleanupExecutionTabs(taskKey).catch(() => ({ attempted: false }));
+    }
+  }
+
+  // Tells ForWin why a request could not be read. A delivery problem is only reported: the
+  // request stays claimed and comes back after its lease, so nothing is lost.
+  async _postAuditFailure(request, clientId, { reason, riskReason = '', currentUrl = '' }) {
+    if (typeof this.deps.backend?.submitAuditRequestFailure !== 'function') {
+      return;
+    }
+    const body = {
+      client_id: clientId,
+      reason: String(reason || 'audit page could not be read').slice(0, 2000),
+    };
+    if (riskReason) {
+      body.risk_reason = riskReason;
+    }
+    if (currentUrl) {
+      body.current_url = String(currentUrl).slice(0, 2000);
+    }
+    try {
+      await this.deps.backend.submitAuditRequestFailure(request.request_id, body);
+    } catch (error) {
+      await this._reportError(`audit request ${request.request_id} failure not delivered`, error);
     }
   }
 

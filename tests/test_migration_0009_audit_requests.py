@@ -31,6 +31,8 @@ COLUMNS = {
     "claimed_at",
     "lease_expires_at",
     "finished_at",
+    "error_message",
+    "risk_reason",
     "result_summary_json",
     "created_at",
     "updated_at",
@@ -65,6 +67,8 @@ def _insert(engine, request_id: str, **extra) -> None:
         "status": "pending",
         "extension_client_id": "",
         "attempt_count": 0,
+        "error_message": "",
+        "risk_reason": "",
         "result_summary_json": "{}",
         "created_at": datetime(2026, 11, 1),
         "updated_at": datetime(2026, 11, 1),
@@ -107,6 +111,7 @@ def test_only_one_open_request_per_book_may_exist(database) -> None:
     # finished requests do not count, any number of them may pile up
     _insert(engine, "r3", status="succeeded", work_binding_id="w1")
     _insert(engine, "r4", status="succeeded", work_binding_id="w1")
+    _insert(engine, "r6", status="failed", work_binding_id="w1", error_message="x", risk_reason="captcha")
     # another book is independent
     _insert(engine, "r5", work_binding_id="w2")
 
@@ -169,6 +174,7 @@ def test_model_round_trips_through_the_migrated_table(database) -> None:
     with Session(engine) as session:
         row = session.get(PublisherAuditRequest, "r-model")
         assert (row.status, row.attempt_count, row.extension_client_id) == ("pending", 0, "")
+        assert (row.error_message, row.risk_reason) == ("", "")
         assert row.claimed_at is None and row.lease_expires_at is None
         assert row.result_summary_json == "{}"
         assert row.created_at is not None

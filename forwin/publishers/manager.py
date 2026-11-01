@@ -514,6 +514,29 @@ class PublisherManager:
             now=now,
         )
 
+    def fail_audit_request(
+        self,
+        *,
+        request_id: str,
+        client_id: str,
+        reason: str,
+        risk_reason: str = "",
+        current_url: str = "",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        return self.runtime.audit_requests.report_failure(
+            request_id=request_id,
+            client_id=client_id,
+            reason=reason,
+            risk_reason=risk_reason,
+            current_url=current_url,
+            now=now,
+        )
+
+    def latest_audit_request(self, *, work_binding_id: str) -> dict[str, Any] | None:
+        """A work binding's most recent audit request (status, reason, finished_at...), or None."""
+        return self.runtime.audit_requests.latest_for_work_binding(work_binding_id)
+
     def get_preflight(
         self,
         *,

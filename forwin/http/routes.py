@@ -587,6 +587,12 @@ def register_api_routes(
             {"response_model": ExtensionAuditRequestResultResponse},
         ),
         (
+            audit_direct_routes.FAILURE_PATH,
+            ["POST"],
+            handlers["report_audit_request_failure"],
+            {"response_model": ExtensionAuditRequestResultResponse},
+        ),
+        (
             "/api/publishers/extension/comments/batch",
             ["POST"],
             handlers["ingest_publisher_comments_batch"],

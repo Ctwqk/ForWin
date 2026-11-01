@@ -704,7 +704,10 @@ class PublisherCommentSyncJob(Base):
 # A request to read a book's audit state from the platform, claimed by the browser extension and
 # answered with the observation (D8: audit sync is a direct ForWin <-> extension channel, not an
 # upload job). "pending" and "claimed" are the open states; a claimed request nobody answers
-# becomes claimable again once lease_expires_at has passed. All timestamps are naive UTC.
+# becomes claimable again once lease_expires_at has passed, until attempt_count reaches the cap.
+# "succeeded" and "failed" are final (error_message says why a request failed; risk_reason is set
+# when the platform showed a risk page) and leave the open set, so the book can be asked about
+# again. All timestamps are naive UTC.
 AUDIT_REQUEST_OPEN_STATUSES = ("pending", "claimed")
 
 
@@ -742,6 +745,8 @@ class PublisherAuditRequest(Base):
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    risk_reason: Mapped[str] = mapped_column(String, default="")
     result_summary_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

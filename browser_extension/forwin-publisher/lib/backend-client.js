@@ -118,6 +118,20 @@ export function createBackendClient(fetchImpl, rawSettings) {
       return parseJson(response);
     },
 
+    // The page could not be read (or showed a platform risk page): tell ForWin, which
+    // keeps the reason and either retries after the lease or gives the request up.
+    async submitAuditRequestFailure(requestId, payload) {
+      const response = await fetchImpl(
+        `${settings.backendBaseUrl}/api/publishers/extension/audit-requests/${encodeURIComponent(requestId)}/failure`,
+        {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify(payload),
+        },
+      );
+      return parseJson(response);
+    },
+
     async syncBrowserSession(payload) {
       const response = await fetchImpl(`${settings.backendBaseUrl}/api/publishers/extension/session-sync`, {
         method: 'POST',

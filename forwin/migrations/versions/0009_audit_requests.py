@@ -12,7 +12,9 @@ itself and the browser extension claims them, the way comment sync works.
 publisher_audit_requests holds one row per request. A request is open while it is
 "pending" or "claimed"; a unique partial index allows one open request per work binding,
 so a second ask for the same book returns the open one. A claimed request nobody answers
-becomes claimable again once lease_expires_at has passed.
+becomes claimable again once lease_expires_at has passed; after a capped number of attempts,
+or when the extension reports a failure at the cap or a platform risk page, it becomes
+"failed" (error_message says why, risk_reason names a risk page) and leaves the open set.
 
 In-flight legacy `audit_sync` upload jobs are not migrated; the legacy runtime finishes
 them. The downgrade drops the table: open requests are only reads that can be asked for
@@ -48,6 +50,8 @@ def upgrade() -> None:
         sa.Column("claimed_at", sa.DateTime(), nullable=True),
         sa.Column("lease_expires_at", sa.DateTime(), nullable=True),
         sa.Column("finished_at", sa.DateTime(), nullable=True),
+        sa.Column("error_message", sa.Text(), nullable=False),
+        sa.Column("risk_reason", sa.String(), nullable=False),
         sa.Column("result_summary_json", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),

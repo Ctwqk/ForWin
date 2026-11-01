@@ -2371,6 +2371,9 @@ const controller = new PublisherExtensionController({
     async submitAuditRequestResult(requestId, payload) {
       return withBackendClient((client) => client.submitAuditRequestResult(requestId, payload));
     },
+    async submitAuditRequestFailure(requestId, payload) {
+      return withBackendClient((client) => client.submitAuditRequestFailure(requestId, payload));
+    },
     async syncBrowserSession(payload) {
       return withBackendClient((client) => client.syncBrowserSession(payload));
     },

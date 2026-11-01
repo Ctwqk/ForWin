@@ -85,6 +85,10 @@ function makeFixture({
       calls.push(['audit-result', requestId, payload]);
       return { ok: true, status: 'succeeded' };
     },
+    submitAuditRequestFailure: async (requestId, payload) => {
+      calls.push(['audit-failure', requestId, payload]);
+      return { ok: true, status: payload.risk_reason ? 'failed' : 'claimed' };
+    },
   };
   const controllerDeps = {
     ensureClientId: async () => CLIENT_ID,
@@ -102,6 +106,7 @@ function makeFixture({
     getPlatformState: async () => ({}),
     setPlatformState: async () => {},
     notifyPage: async () => {},
+    refreshContentBridge: async () => {},
     openUploadTab: async (url) => {
       const tabId = nextTabId;
       nextTabId += 1;
@@ -247,38 +252,90 @@ test('no audit request is started while a comment sync dispatch is running', asy
   await comment;
 });
 
-test('an upload that starts during the audit round stops it before the next request', async () => {
-  let releaseUpload;
-  const uploadGate = new Promise((resolve) => {
-    releaseUpload = resolve;
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+test('upload and comment dispatch do not start while an audit round is in flight', async () => {
+  let releasePage;
+  const pageGate = new Promise((resolve) => {
+    releasePage = resolve;
   });
   const fixture = makeFixture({
     requests: [auditRequest({ request_id: 'audit-1' }), auditRequest({ request_id: 'audit-2' })],
-    backend: {
-      claimNextUploadJob: async () => {
-        await uploadGate;
-        return { found: false, claim: null };
-      },
-    },
   });
-  let upload = null;
   fixture.controller.deps.runAuditSyncCommand = async () => {
-    // another trigger (settings-updated, login) starts an upload dispatch mid-audit
-    upload = fixture.controller.dispatchPendingUploadJobs();
-    await new Promise((resolve) => setImmediate(resolve));
+    await pageGate;
     return observation();
   };
 
-  const outcome = await fixture.controller.dispatchPendingAuditRequests();
+  const audit = fixture.controller.dispatchPendingAuditRequests();
+  await tick();
+  const upload = await fixture.controller.dispatchPendingUploadJobs();
+  const comment = await fixture.controller.dispatchPendingCommentSyncJobs();
 
-  assert.deepEqual(outcome, { found: true, handled: 1 });
-  assert.deepEqual(
-    fixture.calls.filter((call) => call[0] === 'audit-claim').length,
-    1,
-  );
-  assert.equal(fixture.queue.length, 1);
-  releaseUpload();
-  await upload;
+  assert.deepEqual(upload, { skipped: true, reason: 'audit-running' });
+  assert.deepEqual(comment, { skipped: true, reason: 'audit-running' });
+  assert.ok(!names(fixture.calls).includes('upload-claim'));
+  assert.ok(!names(fixture.calls).includes('comment-claim'));
+
+  releasePage();
+  const outcome = await audit;
+  assert.deepEqual(outcome, { found: true, handled: 2 });
+
+  // once the audit round is over they run again
+  await fixture.controller.dispatchPendingUploadJobs();
+  await fixture.controller.dispatchPendingCommentSyncJobs();
+  assert.ok(names(fixture.calls).includes('upload-claim'));
+  assert.ok(names(fixture.calls).includes('comment-claim'));
+});
+
+test('the next alarm round starts no upload or comment dispatch while an audit is still running', async () => {
+  let releasePage;
+  const pageGate = new Promise((resolve) => {
+    releasePage = resolve;
+  });
+  const fixture = makeFixture({ requests: [auditRequest()] });
+  fixture.controller.deps.runAuditSyncCommand = async () => {
+    await pageGate;
+    return observation();
+  };
+
+  const audit = fixture.controller.dispatchPendingAuditRequests();
+  await tick();
+  const round = fixture.controller.heartbeatRound();
+  await tick();
+  await tick();
+
+  const during = names(fixture.calls);
+  assert.ok(during.includes('heartbeat'), during.join(','));
+  assert.ok(!during.includes('upload-claim'), during.join(','));
+  assert.ok(!during.includes('comment-claim'), during.join(','));
+
+  releasePage();
+  await Promise.all([audit, round]);
+  assert.equal(fixture.calls.filter((call) => call[0] === 'audit-result').length, 1);
+  assert.ok(!names(fixture.calls).includes('upload-claim'));
+});
+
+test('settings-updated and login dispatch return at once while an audit round runs', async () => {
+  let releasePage;
+  const pageGate = new Promise((resolve) => {
+    releasePage = resolve;
+  });
+  const fixture = makeFixture({ requests: [auditRequest()] });
+  fixture.controller.deps.runAuditSyncCommand = async () => {
+    await pageGate;
+    return observation();
+  };
+
+  const audit = fixture.controller.dispatchPendingAuditRequests();
+  await tick();
+  // the options page waits for this answer: it must not wait for the audit
+  await fixture.controller.handleMessage({ action: 'settings-updated', payload: {} });
+  assert.ok(!names(fixture.calls).includes('upload-claim'));
+  assert.ok(!names(fixture.calls).includes('comment-claim'));
+
+  releasePage();
+  await audit;
 });
 
 test('two audit dispatches never overlap', async () => {
@@ -434,10 +491,15 @@ test('an audit only reads: no upload, cover or create action runs', async () => 
   assert.ok(!names(fixture.calls).includes('upload-claim'));
 });
 
-test('a failed page read posts nothing and leaves the request to its lease', async () => {
+test('a failed page read posts the failure with its reason, not a result', async () => {
   const fixture = makeFixture({
     deps: {
-      runAuditSyncCommand: async () => ({ ok: false, error: '平台审核页面没有准备好', errorCode: 'audit-sync-page-not-ready' }),
+      runAuditSyncCommand: async () => ({
+        ok: false,
+        currentUrl: 'https://fanqienovel.com/main/writer/book-info/7001',
+        error: '平台审核页面没有准备好',
+        errorCode: 'audit-sync-page-not-ready',
+      }),
     },
   });
 
@@ -445,12 +507,16 @@ test('a failed page read posts nothing and leaves the request to its lease', asy
 
   assert.equal(outcome.handled, 1);
   assert.ok(!names(fixture.calls).includes('audit-result'));
+  const failure = fixture.calls.find((call) => call[0] === 'audit-failure');
+  assert.equal(failure[1], 'audit-1');
+  assert.equal(failure[2].client_id, CLIENT_ID);
+  assert.match(failure[2].reason, /没有准备好/);
+  assert.equal(failure[2].risk_reason, undefined);
+  assert.equal(failure[2].current_url, 'https://fanqienovel.com/main/writer/book-info/7001');
   assert.equal(fixture.closedTabs.length, 1);
-  const reported = fixture.calls.find((call) => call[0] === 'report-error');
-  assert.match(reported[2], /没有准备好/);
 });
 
-test('a page action that throws posts nothing and closes its tab', async () => {
+test('a page action that throws posts the failure and closes its tab', async () => {
   const fixture = makeFixture({
     deps: {
       runAuditSyncCommand: async () => {
@@ -463,10 +529,28 @@ test('a page action that throws posts nothing and closes its tab', async () => {
 
   assert.equal(outcome.handled, 1);
   assert.ok(!names(fixture.calls).includes('audit-result'));
+  const failure = fixture.calls.find((call) => call[0] === 'audit-failure');
+  assert.match(failure[2].reason, /tab crashed/);
   assert.equal(fixture.closedTabs.length, 1);
 });
 
-test('a risk signal posts nothing and stops auditing that platform for the round', async () => {
+test('a tab that cannot be opened posts the failure too', async () => {
+  const fixture = makeFixture({
+    deps: {
+      openUploadTab: async () => {
+        throw new Error('no window');
+      },
+    },
+  });
+
+  const outcome = await fixture.controller.dispatchPendingAuditRequests();
+
+  assert.equal(outcome.handled, 1);
+  const failure = fixture.calls.find((call) => call[0] === 'audit-failure');
+  assert.match(failure[2].reason, /no window/);
+});
+
+test('a risk signal posts the failure with its risk reason and stops that platform for the round', async () => {
   const fixture = makeFixture({
     connected: ['fanqie', 'qidian'],
     requests: [
@@ -476,7 +560,13 @@ test('a risk signal posts nothing and stops auditing that platform for the round
     deps: {
       runAuditSyncCommand: async (tabId, payload) => (
         payload.platform === 'fanqie'
-          ? { ok: false, riskPause: true, riskReason: 'captcha' }
+          ? {
+            ok: false,
+            riskPause: true,
+            riskReason: 'captcha',
+            currentUrl: 'https://fanqienovel.com/main/writer/verify',
+            error: 'Publisher captcha risk signal detected.',
+          }
           : observation()
       ),
     },
@@ -486,12 +576,73 @@ test('a risk signal posts nothing and stops auditing that platform for the round
 
   const results = fixture.calls.filter((call) => call[0] === 'audit-result');
   assert.deepEqual(results.map((call) => call[1]), ['audit-2']);
+  const failures = fixture.calls.filter((call) => call[0] === 'audit-failure');
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0][1], 'audit-1');
+  assert.deepEqual(failures[0][2], {
+    client_id: CLIENT_ID,
+    reason: 'Publisher captcha risk signal detected.',
+    risk_reason: 'captcha',
+    current_url: 'https://fanqienovel.com/main/writer/verify',
+  });
   const claims = fixture.calls.filter((call) => call[0] === 'audit-claim');
   assert.deepEqual(claims[0][1].connected_platforms, ['fanqie', 'qidian']);
   assert.deepEqual(claims[1][1].connected_platforms, ['qidian']);
 });
 
-for (const status of [404, 409]) {
+test('a risk signal with an unknown reason is posted as a plain failure', async () => {
+  const fixture = makeFixture({
+    deps: {
+      runAuditSyncCommand: async () => ({ ok: false, riskPause: true, riskReason: 'something-new', error: 'odd page' }),
+    },
+  });
+
+  await fixture.controller.dispatchPendingAuditRequests();
+
+  const failure = fixture.calls.find((call) => call[0] === 'audit-failure');
+  assert.equal(failure[2].risk_reason, undefined);
+  assert.match(failure[2].reason, /odd page|something-new/);
+});
+
+for (const status of [404, 409, 422]) {
+  test(`a failure the backend refuses (${status}) is dropped, not raised`, async () => {
+    const fixture = makeFixture({
+      deps: {
+        runAuditSyncCommand: async () => ({ ok: false, error: 'not ready' }),
+      },
+      backend: {
+        submitAuditRequestFailure: async () => {
+          throw Object.assign(new Error('refused'), { status, code: 'audit_request_not_owned' });
+        },
+      },
+    });
+
+    const outcome = await fixture.controller.dispatchPendingAuditRequests();
+
+    assert.equal(outcome.handled, 1);
+    assert.equal(fixture.closedTabs.length, 1);
+  });
+}
+
+test('a failure that cannot be delivered is reported and the lease retry covers it', async () => {
+  const fixture = makeFixture({
+    deps: {
+      runAuditSyncCommand: async () => ({ ok: false, error: 'not ready' }),
+    },
+    backend: {
+      submitAuditRequestFailure: async () => {
+        throw Object.assign(new Error('HTTP 502'), { status: 502 });
+      },
+    },
+  });
+
+  const outcome = await fixture.controller.dispatchPendingAuditRequests();
+
+  assert.equal(outcome.handled, 1);
+  assert.ok(fixture.calls.some((call) => call[0] === 'report-error' && /502/.test(call[2])));
+});
+
+for (const status of [404, 409, 422]) {
   test(`a result the backend refuses (${status}) is dropped, not retried or raised`, async () => {
     const refused = Object.assign(new Error('not owned'), {
       status,
@@ -588,6 +739,30 @@ test('the backend client surfaces a refused result with status and code', async 
   );
 });
 
+test('the backend client posts a failure to the encoded failure path with the ForWin key', async () => {
+  const { client, calls } = clientWith([{ ok: true, status: 200, json: async () => ({ ok: true, status: 'failed' }) }]);
+
+  const answer = await client.submitAuditRequestFailure('audit/1 x', {
+    client_id: CLIENT_ID,
+    reason: 'captcha',
+    risk_reason: 'captcha',
+  });
+
+  assert.equal(answer.status, 'failed');
+  assert.equal(
+    calls[0].url,
+    `${FORWIN_URL}/api/publishers/extension/audit-requests/audit%2F1%20x/failure`,
+  );
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.headers['X-Forwin-Extension-Key'], FORWIN_KEY);
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    client_id: CLIENT_ID,
+    reason: 'captcha',
+    risk_reason: 'captcha',
+  });
+  assert.ok(!JSON.stringify(calls[0]).includes(HUB_KEY));
+});
+
 test('background wires the audit calls to the ForWin backend client', () => {
   const source = readFileSync(new URL('../background.js', import.meta.url), 'utf8');
 
@@ -595,6 +770,10 @@ test('background wires the audit calls to the ForWin backend client', () => {
   assert.match(
     source,
     /async submitAuditRequestResult\(requestId, payload\)\s*\{\s*return withBackendClient\(\(client\) => client\.submitAuditRequestResult\(requestId, payload\)\)/,
+  );
+  assert.match(
+    source,
+    /async submitAuditRequestFailure\(requestId, payload\)\s*\{\s*return withBackendClient\(\(client\) => client\.submitAuditRequestFailure\(requestId, payload\)\)/,
   );
   assert.match(source, /controller\.heartbeatRound\(\)/);
 });

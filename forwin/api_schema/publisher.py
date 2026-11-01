@@ -746,6 +746,8 @@ class PublisherAuditRequestResponse(BaseModel):
     created: bool = True
     extension_client_id: str = ""
     attempt_count: int = 0
+    reason: str = ""
+    risk_reason: str = ""
     created_at: str = ""
     claimed_at: str = ""
     lease_expires_at: str = ""
@@ -777,6 +779,20 @@ class ExtensionAuditRequestResultRequest(BaseModel):
     cover: dict[str, Any]
     milestones: list[dict[str, Any]]
     current_url: str = ""
+
+
+class ExtensionAuditRequestFailureRequest(BaseModel):
+    """The extension could not read the book's page (or hit a platform risk page).
+
+    `risk_reason` is set only for a risk page and is one of the risk pause reasons the upload
+    attempts use (captcha, mfa, account_risk)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=2000)
+    risk_reason: str = Field(default="", max_length=40)
+    current_url: str = Field(default="", max_length=2000)
 
 
 class ExtensionAuditRequestResultResponse(BaseModel):
@@ -906,6 +922,7 @@ __all__ = [
     "PublisherAuditRequestResponse",
     "ExtensionClaimAuditRequestRequest",
     "ExtensionAuditRequestClaimResponse",
+    "ExtensionAuditRequestFailureRequest",
     "ExtensionAuditRequestResultRequest",
     "ExtensionAuditRequestResultResponse",
     "PublisherPreflightRequest",

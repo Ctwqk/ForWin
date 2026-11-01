@@ -556,6 +556,69 @@ def test_a_superseded_row_without_a_recorded_reason_says_so() -> None:
     assert "被取代原因：未记录" in _card_text(card)
 
 
+def test_a_superseded_row_without_a_hub_job_shows_its_result_not_a_wait() -> None:
+    # `_supersede` records no hub job: a chapter found already published never went out.
+    row = _row(
+        hub_owned=True,
+        status="superseded",
+        hub_superseded_reason="publication_already_published",
+        message="该章节已在平台上发布，本任务被取代。",
+    )
+
+    [card] = _cards(_run([row]))
+
+    text = _card_text(card)
+    assert "被取代原因：publication_already_published" in text
+    assert "说明：该章节已在平台上发布，本任务被取代。" in text
+    assert "等待原因" not in text and "尚未提交" not in text
+    assert _links(card) == [] and _buttons(card) == []
+
+
+def test_a_failed_row_without_a_hub_job_shows_the_failure_not_a_wait() -> None:
+    row = _row(
+        hub_owned=True,
+        status="failed",
+        message="publish-hub 拒绝了这个请求。",
+        error="publication_conflict",
+    )
+
+    [card] = _cards(_run([row]))
+
+    text = _card_text(card)
+    assert "说明：publish-hub 拒绝了这个请求。" in text
+    assert "错误：publication_conflict" in text
+    assert "等待原因" not in text and "尚未提交" not in text
+    assert "执行端" not in text
+
+
+@pytest.mark.parametrize("status", ["succeeded", "cancelled", "failed", "superseded"])
+def test_no_terminal_row_is_labelled_as_waiting(status) -> None:
+    held = {"hub_hold": {"result": "wait_destination", "cause": "no_destination"}}
+
+    cards = _cards(
+        _run(
+            [
+                _row(hub_owned=True, status=status, message="结果。"),
+                _row(job_id="job-2", status=status, message="结果。", result_payload=held),
+            ]
+        )
+    )
+
+    for card in cards:
+        text = _card_text(card)
+        assert "等待原因" not in text and "尚未提交" not in text
+        assert "说明：结果。" in text
+
+
+@pytest.mark.parametrize("status", ["scheduled", "pending", "paused"])
+def test_a_row_waits_only_in_the_statuses_that_can_wait(status) -> None:
+    [card] = _cards(_run([_row(hub_owned=True, status=status, message="等第 2 章。")]))
+
+    text = _card_text(card)
+    assert "等待原因：等第 2 章。" in text and "publish-hub：尚未提交" in text
+    assert "说明：等第 2 章。" not in text
+
+
 def test_a_hub_row_does_not_claim_to_wait_for_an_extension_client() -> None:
     [card] = _cards(_run([_hub_row()]))
 

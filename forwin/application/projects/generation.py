@@ -27,6 +27,7 @@ from .common import (
 )
 from .publish_routing import (
     publish_entry_payload,
+    refuse_dropping_publish_hub,
     refuse_leaving_publish_hub,
     stored_publish_settings,
 )
@@ -368,6 +369,7 @@ def update_project_automation(
             requested_publish.extend(payload["publish_bindings"])
         refuse_leaving_publish_hub(stored_publish, requested_publish)
         updated = normalize_project_automation(payload)
+        refuse_dropping_publish_hub(stored_publish, updated)
         stored = persist_project_automation(session, project, updated)
         session.commit()
         return ProjectAutomationUpdateResponse(

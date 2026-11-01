@@ -274,6 +274,133 @@ def test_a_second_platform_cannot_be_switched_back_either() -> None:
         database.dispose()
 
 
+def test_removing_a_hub_binding_by_replacing_both_lists_is_refused(hub_project) -> None:
+    before = hub_project.stored_json()
+
+    error = _refusal(
+        lambda: hub_project.update(
+            {
+                "publish": {"platform": "qidian", "book_name": "起点书名"},
+                "publish_bindings": [{"platform": "qidian", "book_name": "起点书名"}],
+            }
+        )
+    )
+
+    assert error.status_code == 400
+    assert "11.2" in error.detail and "fanqie" in error.detail
+    assert hub_project.stored_json() == before, "a refused save writes nothing"
+
+
+def test_emptying_both_lists_cannot_drop_a_hub_binding(hub_project) -> None:
+    before = hub_project.stored_json()
+
+    error = _refusal(
+        lambda: hub_project.update({"publish": {"platform": ""}, "publish_bindings": []})
+    )
+
+    assert error.status_code == 400 and "11.2" in error.detail
+    assert hub_project.stored_json() == before
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{"publish_bindings": []}, {"publish_bindings": [LEGACY_QIDIAN]}],
+    ids=["bindings-emptied", "bindings-without-the-hub-platform"],
+)
+def test_shrinking_the_bindings_cannot_drop_a_second_hub_binding(body) -> None:
+    # The stored primary entry is kept when a request leaves `publish` out, so the hub binding
+    # that can be lost this way is the one that is not the primary.
+    database = _Database(
+        "hub-guard-shrink-bindings",
+        {"publish": LEGACY_QIDIAN, "publish_bindings": [LEGACY_QIDIAN, HUB_FANQIE]},
+    )
+    try:
+        before = database.stored_json()
+
+        error = _refusal(lambda: database.update(body))
+
+        assert error.status_code == 400 and "11.2" in error.detail and "fanqie" in error.detail
+        assert database.stored_json() == before
+    finally:
+        database.dispose()
+
+
+def test_a_bindings_only_request_leaves_the_primary_hub_binding_where_it_is(hub_project) -> None:
+    # No refusal because nothing is lost: the stored primary entry outvotes the (empty) list.
+    hub_project.update({"publish_bindings": []})
+
+    assert hub_project.routing()["fanqie"] == ("hub", DESTINATION)
+
+
+def test_a_removed_hub_binding_cannot_come_back_on_the_default_route(hub_project) -> None:
+    # Remove, then re-add in a second request: the removal is already refused, so the re-add finds
+    # the binding on the hub and (route left out) keeps it there.
+    before = hub_project.stored_json()
+    removal = {
+        "publish": {"platform": "qidian", "book_name": "起点书名"},
+        "publish_bindings": [{"platform": "qidian", "book_name": "起点书名"}],
+    }
+    assert _refusal(lambda: hub_project.update(removal)).status_code == 400
+    assert hub_project.stored_json() == before
+
+    hub_project.update(
+        {
+            "publish": {"platform": "fanqie", "book_name": "番茄书名"},
+            "publish_bindings": [
+                {"platform": "fanqie", "book_name": "番茄书名"},
+                {"platform": "qidian", "book_name": "起点书名"},
+            ],
+        }
+    )
+
+    assert hub_project.routing() == {"fanqie": ("hub", DESTINATION), "qidian": ("legacy", None)}
+
+
+def test_a_second_hub_platform_cannot_be_removed_either() -> None:
+    database = _Database(
+        "hub-guard-remove-second",
+        {"publish": LEGACY_QIDIAN, "publish_bindings": [LEGACY_QIDIAN, HUB_FANQIE]},
+    )
+    try:
+        before = database.stored_json()
+
+        error = _refusal(
+            lambda: database.update(
+                {"publish": LEGACY_QIDIAN, "publish_bindings": [LEGACY_QIDIAN]}
+            )
+        )
+
+        assert error.status_code == 400 and "fanqie" in error.detail
+        assert database.stored_json() == before
+    finally:
+        database.dispose()
+
+
+def test_a_platform_that_is_not_on_the_hub_can_still_be_removed() -> None:
+    database = _Database(
+        "hub-guard-remove-legacy",
+        {"publish": HUB_FANQIE, "publish_bindings": [HUB_FANQIE, LEGACY_QIDIAN]},
+    )
+    try:
+        database.update(
+            {"publish": HUB_FANQIE, "publish_bindings": [HUB_FANQIE]}
+        )
+
+        assert database.routing() == {"fanqie": ("hub", DESTINATION)}
+    finally:
+        database.dispose()
+
+
+def test_a_project_without_a_hub_binding_can_clear_its_bindings() -> None:
+    database = _Database("hub-guard-clear-legacy", {"publish": LEGACY_QIDIAN})
+    try:
+        database.update({"publish": {"platform": ""}, "publish_bindings": []})
+
+        assert database.routing() == {}
+    finally:
+        database.dispose()
+
+
 def test_clearing_the_destination_of_a_hub_binding_is_refused(hub_project) -> None:
     before = hub_project.stored_json()
 
@@ -346,6 +473,17 @@ def test_the_refusal_comes_back_as_a_400_over_http() -> None:
         )
         assert refused.status_code == 400
         assert "11.2" in refused.json()["detail"]
+
+        removed = client.put(
+            url,
+            json={
+                "publish": {"platform": "qidian", "book_name": "起点书名"},
+                "publish_bindings": [{"platform": "qidian", "book_name": "起点书名"}],
+            },
+        )
+        assert removed.status_code == 400
+        assert "11.2" in removed.json()["detail"]
+        assert database.routing()["fanqie"] == ("hub", DESTINATION)
 
         # The form's save before this task: no route, no destination.
         kept = client.put(url, json={"publish": {"platform": "fanqie", "book_name": "改名"}})

@@ -56,6 +56,32 @@ def publish_entry_payload(
     return payload
 
 
+def _refuse_leaving_hub(
+    platform: str,
+    before: ProjectAutomationPublishSettings,
+    route: object,
+    destination_id: object,
+) -> None:
+    """400 when a binding that was on publish-hub would not be on it, or would lose its destination."""
+    if before.route != HUB_ROUTE:
+        return
+    if route != HUB_ROUTE:
+        raise HTTPException(
+            400,
+            f"平台 {platform} 已走 publish-hub，不能把 route 改回旧上传路径："
+            "切换后不保留可以切回去的旧路径（publish-hub 设计文档 §11.2）。"
+            "真要回退时，先停止向 publish-hub 提交该平台的任务，并在 publish-hub 上"
+            "处理完已开始改动的任务（resolve），再从 git 历史重新部署旧代码，"
+            "而不是改这个设置。",
+        )
+    if before.hub_destination_id and not destination_id:
+        raise HTTPException(
+            400,
+            f"平台 {platform} 走 publish-hub 时不能清空 hub_destination_id："
+            "没有发布目标，章节只会被挂起、不会发出。要换目标，请直接填新的 hub_destination_id。",
+        )
+
+
 def refuse_leaving_publish_hub(
     stored: dict[str, ProjectAutomationPublishSettings],
     requested: list[dict[str, Any]],
@@ -67,25 +93,42 @@ def refuse_leaving_publish_hub(
     normalised settings come out: a request to leave the hub that the primary entry would have
     outvoted is refused too, rather than dropped without a word. Moving a platform to the hub
     and pointing a hub binding at another destination stay allowed, and a platform the request
-    does not mention is not touched.
+    does not mention is not touched here (`refuse_dropping_publish_hub` sees the whole result).
     """
     for entry in requested:
         platform = str(entry.get("platform") or "")
         before = stored.get(platform)
-        if before is None or before.route != HUB_ROUTE:
+        if before is not None:
+            _refuse_leaving_hub(
+                platform, before, entry.get("route"), entry.get("hub_destination_id")
+            )
+
+
+def refuse_dropping_publish_hub(
+    stored: dict[str, ProjectAutomationPublishSettings],
+    updated: ProjectAutomationSettings,
+) -> None:
+    """400 when the settings that would be saved no longer keep a stored hub binding on the hub.
+
+    A request replaces the binding lists wholesale, so a hub binding can be lost without any
+    entry naming it: left out of `publish_bindings`, the lists emptied, or pushed off the end.
+    Without a binding nothing is published to the platform, but adding it again starts from the
+    default route and a release by job id never looks at the binding at all, so the platform
+    would come back on ForWin's extension queue past publish-hub's own duplicate check. Run on
+    the normalised result, it catches whatever the way the settings got there.
+    """
+    kept = {binding.platform: binding for binding in updated.publish_bindings}
+    for platform, before in stored.items():
+        if before.route != HUB_ROUTE:
             continue
-        if entry.get("route") != HUB_ROUTE:
+        after = kept.get(platform)
+        if after is None:
             raise HTTPException(
                 400,
-                f"平台 {platform} 已走 publish-hub，不能把 route 改回旧上传路径："
-                "切换后不保留可以切回去的旧路径（publish-hub 设计文档 §11.2）。"
-                "真要回退时，先停止向 publish-hub 提交该平台的任务，并在 publish-hub 上"
-                "处理完已开始改动的任务（resolve），再从 git 历史重新部署旧代码，"
-                "而不是改这个设置。",
+                f"平台 {platform} 已走 publish-hub，不能从设置里移除它的发布绑定："
+                "移除后重新添加会回到旧上传路径，切换后不保留可以切回去的旧路径"
+                "（publish-hub 设计文档 §11.2）。真要回退时，先停止向 publish-hub 提交"
+                "该平台的任务，并在 publish-hub 上处理完已开始改动的任务（resolve），"
+                "再从 git 历史重新部署旧代码。",
             )
-        if before.hub_destination_id and not entry.get("hub_destination_id"):
-            raise HTTPException(
-                400,
-                f"平台 {platform} 走 publish-hub 时不能清空 hub_destination_id："
-                "没有发布目标，章节只会被挂起、不会发出。要换目标，请直接填新的 hub_destination_id。",
-            )
+        _refuse_leaving_hub(platform, before, after.route, after.hub_destination_id)

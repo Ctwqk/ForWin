@@ -51,9 +51,11 @@
       return Boolean(item && item.hub_owned) || heldByGate;
     }
 
-    // A hub row publish-hub has not been given yet.
+    // A hub row publish-hub has not been given yet. Only a row that can still be sent waits: one
+    // that ended without ever getting a hub job (superseded, refused, cancelled) shows its result.
+    const HUB_WAITING_STATUSES = ['scheduled', 'pending', 'paused'];
     function isWaitingToReachHub(item) {
-      return !item.hub_job_id && isHubRow(item);
+      return !item.hub_job_id && isHubRow(item) && HUB_WAITING_STATUSES.includes(item.status);
     }
 
     // publish-hub's side of a row, as lines of its own: the lines above it are unchanged.

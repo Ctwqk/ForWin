@@ -118,7 +118,7 @@ _REOPENABLE_STATUS = "failed"
 _KEY_REFUSED = frozenset({401, 403})
 _ERROR_LIMIT = 500
 # publish-hub's pause reasons (its PAUSE_REASONS) in ForWin's words; the upload-job API takes no
-# other value. "account_risk" is the extension's legacy word for "risk". Anything else, or no
+# other value. "account_risk" is the older name of "risk" in the extension. Anything else, or no
 # reason at all, is for a person to look at.
 NEEDS_HUMAN = "needs_human"
 _PAUSE_REASONS = {

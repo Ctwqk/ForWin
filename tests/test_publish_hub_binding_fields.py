@@ -365,11 +365,11 @@ def test_persist_project_automation_keeps_route_and_destination() -> None:
 def test_update_project_automation_saves_and_changes_route_and_destination() -> None:
     engine, session_factory, project_id = _project_in_database("publish-hub-update")
     try:
-        def update(bindings):
+        def update(bindings, publish=None):
             return update_project_automation(
                 project_id,
                 ProjectAutomationUpdateRequest.model_validate(
-                    {"enabled": True, "publish_bindings": bindings}
+                    {"enabled": True, "publish": publish, "publish_bindings": bindings}
                 ),
                 get_session=session_factory,
                 persist_project_automation=persist_project_automation,
@@ -385,8 +385,11 @@ def test_update_project_automation_saves_and_changes_route_and_destination() -> 
             DESTINATION,
         )
 
-        # An update that leaves a field out puts the binding back on the default route.
-        update([{"platform": "fanqie", "book_name": "番茄书名"}])
+        # An update that leaves the fields out puts the binding back on the default route. The
+        # primary `publish` entry wins over a same-platform binding, as it always has, so the
+        # request sends both the way the settings form does.
+        plain = {"platform": "fanqie", "book_name": "番茄书名"}
+        update([plain], publish=plain)
         with session_factory() as session:
             back = normalize_project_automation(session.get(Project, project_id).automation_json)
         assert (_by_platform(back)["fanqie"].route, _by_platform(back)["fanqie"].hub_destination_id) == (

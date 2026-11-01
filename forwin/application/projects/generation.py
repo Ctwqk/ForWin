@@ -25,6 +25,11 @@ from .common import (
     _continue_workset_http_error,
     _extension_arc_synopsis,
 )
+from .publish_routing import (
+    publish_entry_payload,
+    refuse_leaving_publish_hub,
+    stored_publish_settings,
+)
 
 
 _DEFAULT_CHAPTER_PAGE_LIMIT = 60
@@ -350,12 +355,18 @@ def update_project_automation(
                 "auto_publish": bool(req.auto_publish),
             }
         )
+        stored_publish = stored_publish_settings(current)
+        requested_publish: list[dict] = []
         if req.publish is not None:
-            payload["publish"] = req.publish.model_dump(mode="json")
+            payload["publish"] = publish_entry_payload(req.publish, stored_publish)
+            requested_publish.append(payload["publish"])
         if req.publish_bindings is not None:
             payload["publish_bindings"] = [
-                binding.model_dump(mode="json") for binding in req.publish_bindings
+                publish_entry_payload(binding, stored_publish)
+                for binding in req.publish_bindings
             ]
+            requested_publish.extend(payload["publish_bindings"])
+        refuse_leaving_publish_hub(stored_publish, requested_publish)
         updated = normalize_project_automation(payload)
         stored = persist_project_automation(session, project, updated)
         session.commit()

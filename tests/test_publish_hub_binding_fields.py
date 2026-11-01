@@ -385,16 +385,18 @@ def test_update_project_automation_saves_and_changes_route_and_destination() -> 
             DESTINATION,
         )
 
-        # An update that leaves the fields out puts the binding back on the default route. The
-        # primary `publish` entry wins over a same-platform binding, as it always has, so the
-        # request sends both the way the settings form does.
+        # An update that leaves the fields out keeps what is stored (Task 11, R28): it does not
+        # put the binding back on the default route. The primary `publish` entry wins over a
+        # same-platform binding, as it always has, so the request sends both the way the
+        # settings form does. Taking the platform off the hub is refused (R31); the guards have
+        # their own tests in test_automation_publish_hub_guards.py.
         plain = {"platform": "fanqie", "book_name": "番茄书名"}
         update([plain], publish=plain)
         with session_factory() as session:
-            back = normalize_project_automation(session.get(Project, project_id).automation_json)
-        assert (_by_platform(back)["fanqie"].route, _by_platform(back)["fanqie"].hub_destination_id) == (
-            "legacy",
-            None,
+            kept = normalize_project_automation(session.get(Project, project_id).automation_json)
+        assert (_by_platform(kept)["fanqie"].route, _by_platform(kept)["fanqie"].hub_destination_id) == (
+            "hub",
+            DESTINATION,
         )
     finally:
         engine.dispose()

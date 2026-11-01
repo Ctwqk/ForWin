@@ -700,6 +700,18 @@
       return card;
     }
 
+    // The publish-hub routing the settings form started with, sent back unchanged: a save must
+    // not move a platform that went to publish-hub back to ForWin's own extension queue (the
+    // server also keeps what is stored when these are left out). Another platform's routing is
+    // not carried over when the platform is changed in the form: the server looks that one up.
+    function publishRoutingFields(automation, platform) {
+      const publish = (automation && automation.publish) || {};
+      if (!platform || (publish.platform || '') !== platform) return {};
+      const fields = { hub_destination_id: publish.hub_destination_id || null };
+      if (publish.route) fields.route = publish.route;
+      return fields;
+    }
+
     async function renderGenerationDrawer(item, drawerProject = null, drawerChapters = null, drawerChapterPage = null) {
       const body = document.getElementById('drawer_body');
       let projectDetail = drawerProject || null;
@@ -1037,6 +1049,7 @@
                 cover_style_hint: coverStyleHintInput.value.trim(),
                 auto_cover_upload_enabled: autoCoverUploadInput.checked,
                 publisher_compliance_required: true,
+                ...publishRoutingFields(automation, platformSelect.value),
                 book_meta: {
                   audience: audienceInput.value.trim(),
                   primary_category: primaryCategoryInput.value.trim(),

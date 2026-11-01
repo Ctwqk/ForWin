@@ -100,7 +100,8 @@ class PublisherUploadJobResponse(BaseModel):
     started_at: str = ""
     finished_at: str = ""
     paused_at: str = ""
-    pause_reason: Literal["", "captcha", "mfa", "account_risk"] = ""
+    # needs_human: publish-hub paused the job for a person (a hub-owned row only; never resumable here).
+    pause_reason: Literal["", "captcha", "mfa", "account_risk", "needs_human"] = ""
     pause_token: str = ""
     resumable: bool = False
     terminable: bool = False

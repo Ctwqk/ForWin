@@ -14,8 +14,8 @@ It is the only writer of terminal state for hub-owned upload rows (D1). Each rou
    local row is skipped without asking publish-hub;
 3. catches up (R30, R43): hub-owned rows are read back with `get_job`, at most 50 a round. Rows
    still `pending` or `paused` locally qualify when their recorded hub status is already
-   terminal (adopted that way at submit; these go first) or when the sync has not looked at them
-   for ten minutes. Locally `failed` rows qualify after the same ten minutes: an operator may
+   terminal, or paused with no pause reason recorded yet (adopted that way at submit; these go
+   first), or when the sync has not looked at them for ten minutes. Locally `failed` rows qualify after the same ten minutes: an operator may
    retry the job in publish-hub's /ops, and that is the one terminal state publish-hub reopens.
    The feed cursor may already be past their changes;
 4. refreshes the destinations snapshot the release gate reads, when asked (`run_forever` asks on
@@ -28,8 +28,18 @@ How a job is mirrored (the state map): scheduled/pending/reconciling -> `pending
 `paused` with one DecisionEvent, failed/cancelled -> the same with the hub's `last_error` in
 `error_message`, succeeded -> `succeeded` with the result written into the bindings. `hub_status`
 always records the raw hub status. A receipt an operator confirmed (`operator_confirmed`) is a
-success like any other. The bindings are written by the same functions the extension-queue
-success path uses, fed the same receipt-shaped payload:
+success like any other.
+
+A pause carries publish-hub's reason in ForWin's words (`pause_reason`, which the upload-job API
+only takes as captcha, mfa, account_risk or needs_human): risk -> account_risk, captcha and mfa
+as they are, needs_human and anything else (or none) -> needs_human; the hub's own text stays in
+`error_message`. A row that is paused on both sides already still gets this: one adopted while
+publish-hub had it paused is `paused` from the start without a reason (the catch-up pass reads it
+at once), and one paused again for another reason between two rounds records the new one. Each
+reason is recorded, with its event, once.
+
+The bindings are written by the same functions the extension-queue success path uses, fed the
+same receipt-shaped payload:
 
 * chapter_upload: work binding and chapter binding upserts, plus the chapter's
   `hub_publication_id`; the book id comes from the destinations snapshot;
@@ -98,6 +108,17 @@ _IN_FLIGHT_STATUSES = ("pending", "paused")
 _REOPENABLE_STATUS = "failed"
 _KEY_REFUSED = frozenset({401, 403})
 _ERROR_LIMIT = 500
+# publish-hub's pause reasons (its PAUSE_REASONS) in ForWin's words; the upload-job API takes no
+# other value. "account_risk" is the extension's legacy word for "risk". Anything else, or no
+# reason at all, is for a person to look at.
+NEEDS_HUMAN = "needs_human"
+_PAUSE_REASONS = {
+    "risk": "account_risk",
+    "account_risk": "account_risk",
+    "captcha": "captcha",
+    "mfa": "mfa",
+    NEEDS_HUMAN: NEEDS_HUMAN,
+}
 # What publish-hub's own operator confirmation of a receipt is called (ruling R33 of its spec).
 OPERATOR_CONFIRMED = "operator_confirmed"
 SYNC_ACTOR_ID = "publish-hub-sync"
@@ -411,8 +432,14 @@ def _publication_state(session, publication_id: str, official_state: str, now) -
 
 def _catch_up(session, client, now: datetime, mirror: _Mirror, report: SyncReport) -> None:
     in_flight = PublisherUploadJob.status.in_(_IN_FLIGHT_STATUSES)
-    adopted_terminal = and_(
-        in_flight, PublisherUploadJob.hub_status.in_(sorted(TERMINAL_HUB_STATUSES))
+    adopted = or_(
+        and_(in_flight, PublisherUploadJob.hub_status.in_(sorted(TERMINAL_HUB_STATUSES))),
+        # Adopted while publish-hub had it paused: paused from the start, its reason not read yet.
+        and_(
+            PublisherUploadJob.status == "paused",
+            PublisherUploadJob.hub_status == "paused",
+            PublisherUploadJob.pause_reason == "",
+        ),
     )
     # The database clock, the one that wrote updated_at.
     stale = PublisherUploadJob.updated_at < func.now() - CATCH_UP_AFTER
@@ -424,14 +451,14 @@ def _catch_up(session, client, now: datetime, mirror: _Mirror, report: SyncRepor
                 PublisherUploadJob.task_kind.in_(sorted(MIRRORED_TASK_KINDS)),
                 PublisherUploadJob.deleted_at.is_(None),
                 or_(
-                    adopted_terminal,
+                    adopted,
                     and_(in_flight, stale),
                     # Its hub status is terminal too, so only the ten minutes count (R43).
                     and_(PublisherUploadJob.status == _REOPENABLE_STATUS, stale),
                 ),
             )
             .order_by(
-                case((adopted_terminal, 0), else_=1),
+                case((adopted, 0), else_=1),
                 PublisherUploadJob.updated_at.asc(),
                 PublisherUploadJob.id.asc(),
             )
@@ -501,6 +528,8 @@ class _Mirror:
             )
             return False
         if row.status == target:
+            if target == "paused":
+                self._still_paused(session, row, fields, now=now)
             return False
         if row.status == "succeeded":
             # publish-hub never takes a success back; the bindings stay as they were written.
@@ -559,24 +588,54 @@ class _Mirror:
             },
         )
 
-    def _pause(self, session, row: PublisherUploadJob, view: Mapping, *, now: datetime) -> None:
-        reason = _error_reason(view.get("last_error")) or "paused"
+    def _pause(
+        self,
+        session,
+        row: PublisherUploadJob,
+        view: Mapping,
+        *,
+        now: datetime,
+        previous_reason: str = "",
+    ) -> None:
+        last_error = view.get("last_error")
+        reason = _pause_reason(last_error)
         row.status = "paused"
         row.paused_at = now
         row.pause_reason = reason
         row.finished_at = None
-        row.error_message = _error_text(view.get("last_error"))
+        row.error_message = _error_text(last_error)
         row.result_message = (
             f"publish-hub 暂停了这个任务（{reason}），请在 publish-hub /ops 处理"
             f"（任务 {row.hub_job_id}）。"
         )
+        extra = {
+            "pause_reason": reason,
+            "hub_pause_reason": _error_reason(last_error),
+            "error_message": row.error_message,
+        }
+        if previous_reason:
+            extra["previous_pause_reason"] = previous_reason
         self._record(
             session,
             row,
             DecisionEventType.UPLOAD_JOB_PAUSED,
             f"publish-hub 暂停了发布任务（{reason}）。",
-            extra={"pause_reason": reason, "error_message": row.error_message},
+            extra=extra,
         )
+
+    def _still_paused(
+        self, session, row: PublisherUploadJob, view: Mapping, *, now: datetime
+    ) -> None:
+        """Paused here and on publish-hub. A reason not recorded yet (the row was adopted
+        paused) or a new one (paused again between two rounds) is recorded with its one event;
+        the same reason again only refreshes the error text."""
+        reason = _pause_reason(view.get("last_error"))
+        if row.pause_reason != reason:
+            self._pause(session, row, view, now=now, previous_reason=row.pause_reason)
+            return
+        error = _error_text(view.get("last_error"))
+        if row.error_message != error:
+            row.error_message = error
 
     def _stop(
         self, session, row: PublisherUploadJob, view: Mapping, target: str, *, now: datetime
@@ -748,6 +807,11 @@ def _error_reason(last_error: Any) -> str:
     if isinstance(last_error, Mapping):
         return (_text(last_error.get("reason")) or _text(last_error.get("code")))[:64]
     return ""
+
+
+def _pause_reason(last_error: Any) -> str:
+    """The `pause_reason` ForWin records for a job publish-hub paused (see _PAUSE_REASONS)."""
+    return _PAUSE_REASONS.get(_error_reason(last_error), NEEDS_HUMAN)
 
 
 def _error_text(last_error: Any) -> str:

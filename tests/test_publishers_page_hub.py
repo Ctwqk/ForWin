@@ -476,6 +476,24 @@ def test_a_hub_owned_row_has_no_resume_button_even_if_the_row_says_it_is_resumab
     assert _buttons(card) == []
 
 
+@pytest.mark.parametrize(
+    "reason,label",
+    [
+        ("needs_human", "需要人工处理"),
+        ("account_risk", "账号风险"),
+        ("captcha", "CAPTCHA / 人机验证"),
+        ("mfa", "MFA / 二次验证"),
+    ],
+)
+def test_a_paused_hub_row_names_its_pause_reason(reason, label) -> None:
+    """Every pause reason the sync mirrors from publish-hub has a label of its own."""
+    row = _hub_row(status="paused", hub_status="paused", pause_reason=reason)
+
+    [card] = _cards(_run([row]))
+
+    assert f"暂停类型：{label}" in _card_text(card)
+
+
 def test_a_stored_request_not_posted_yet_hides_resume_and_shows_the_waiting_reason() -> None:
     reason = "请求已保存，等第 2 章在平台上完成后再提交到 publish-hub（同一本书的章节按顺序发出）。"
     row = _row(

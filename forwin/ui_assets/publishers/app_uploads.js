@@ -326,6 +326,8 @@
       captcha: 'CAPTCHA / 人机验证',
       mfa: 'MFA / 二次验证',
       account_risk: '账号风险',
+      // publish-hub paused the job for a person (a remote id conflict, the wrong book, an unclear reconcile).
+      needs_human: '需要人工处理',
     };
 
     function apiErrorMessage(data, fallback) {

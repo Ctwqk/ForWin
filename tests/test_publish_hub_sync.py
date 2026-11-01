@@ -384,6 +384,155 @@ def test_a_paused_hub_job_pauses_the_row_with_one_event_and_resumes_with_the_hub
         fixture.engine.dispose()
 
 
+# --- pause reasons (final review, item 1) -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "last_error,expected",
+    [
+        ({"reason": "risk", "detail": "account flagged"}, "account_risk"),
+        ({"reason": "account_risk", "detail": "the legacy name"}, "account_risk"),
+        ({"reason": "captcha", "detail": "slider"}, "captcha"),
+        ({"reason": "mfa", "detail": "sms code"}, "mfa"),
+        ({"reason": "needs_human", "detail": "remote_id_conflict"}, "needs_human"),
+        ({"reason": "needs_human", "detail": "reconcile_unknown"}, "needs_human"),
+        ({"reason": "some_future_reason", "detail": "x"}, "needs_human"),
+        (None, "needs_human"),
+    ],
+    ids=["risk", "legacy-account-risk", "captcha", "mfa", "needs-human-conflict",
+         "needs-human-reconcile", "unknown-reason", "no-last-error"],
+)
+def test_every_hub_pause_reason_mirrors_into_one_the_upload_job_api_accepts(
+    request, last_error, expected
+) -> None:
+    """publish-hub pauses for risk, captcha, mfa or needs_human; ForWin's response model takes
+    captcha, mfa, account_risk and needs_human. One row with another value used to make
+    GET /api/publishers/upload-jobs and /upload-jobs/{id} fail for every row."""
+    from forwin.application.publisher.operations import (
+        get_publisher_upload_job,
+        list_publisher_upload_jobs,
+    )
+
+    fixture, hub, client, created = _sync_fixture(f"hub-sync-pause-{request.node.callspec.id}")
+    job_id = created["fanqie"]
+    try:
+        hub_job_id = _job(fixture, job_id).hub_job_id
+        hub.finish(hub_job_id, "paused", last_error=last_error)
+
+        _round(fixture, client)
+
+        stored = _job(fixture, job_id)
+        assert (stored.status, stored.hub_status, stored.pause_reason) == (
+            "paused", "paused", expected
+        )
+        if last_error is not None:  # publish-hub's own word stays readable
+            assert last_error["reason"] in stored.error_message
+            assert last_error["detail"] in stored.error_message
+        listed = list_publisher_upload_jobs(publisher_manager=fixture.runtime.upload_jobs)
+        assert [item.pause_reason for item in listed if item.job_id == job_id] == [expected]
+        shown = get_publisher_upload_job(job_id, publisher_manager=fixture.runtime.upload_jobs)
+        assert shown.pause_reason == expected and shown.hub_owned is True
+        (paused,) = _events(fixture, job_id, DecisionEventType.UPLOAD_JOB_PAUSED)
+        assert json.loads(paused.payload_json)["pause_reason"] == expected
+    finally:
+        fixture.engine.dispose()
+
+
+def test_an_adopted_paused_job_gets_its_reason_and_one_paused_event_at_once() -> None:
+    """A job publish-hub had already paused when ForWin adopted it is locally `paused` from the
+    start (the state map), so mirroring it again as paused must still record why, once. The feed
+    passed it while no local row named it, so the catch-up pass reads it without waiting."""
+    fixture, hub, client, created = _sync_fixture("hub-sync-adopted-paused", release=False)
+    job_id = created["fanqie"]
+    try:
+        session = fixture.runtime.session_factory()
+        try:
+            _release(fixture, [job_id], session=session)
+            session.rollback()  # the process died before the release committed
+        finally:
+            session.close()
+        (hub_job,) = hub.jobs()
+        hub.finish(hub_job["id"], "paused", last_error={"reason": "risk", "detail": "flagged"})
+        _round(fixture, client)  # the feed passes the job while no local row names it
+        assert _cursor(fixture) == hub.last_seq()
+
+        _release(fixture, [job_id])  # replay: publish-hub answers with the paused job
+        adopted = _job(fixture, job_id)
+        assert (adopted.status, adopted.hub_status, adopted.pause_reason) == (
+            "paused", "paused", ""
+        )
+        assert _events(fixture, job_id, DecisionEventType.UPLOAD_JOB_PAUSED) == []
+        hub.get_job_calls.clear()
+
+        report = _round(fixture, client)
+
+        assert report.caught_up == [job_id]
+        stored = _job(fixture, job_id)
+        assert stored.pause_reason == "account_risk"
+        assert stored.paused_at is not None
+        assert stored.error_message == "risk: flagged"
+        assert len(_events(fixture, job_id, DecisionEventType.UPLOAD_JOB_PAUSED)) == 1
+
+        _round(fixture, client)  # recorded: no longer read at once
+        _age(fixture, job_id)
+        _round(fixture, client)  # read again after ten minutes: nothing new
+        assert hub.get_job_calls == [hub_job["id"], hub_job["id"]]
+        assert len(_events(fixture, job_id, DecisionEventType.UPLOAD_JOB_PAUSED)) == 1
+    finally:
+        fixture.engine.dispose()
+
+
+def test_an_adopted_paused_job_named_by_the_feed_gets_its_reason() -> None:
+    fixture, hub, client, created = _sync_fixture("hub-sync-adopted-paused-feed", release=False)
+    job_id = created["fanqie"]
+    try:
+        hub.new_job_status = "paused"
+        _release(fixture, [job_id])
+        (hub_job,) = hub.jobs()
+        hub_job["last_error"] = {"reason": "captcha", "detail": "slider"}
+        assert _job(fixture, job_id).status == "paused"
+
+        _round(fixture, client)
+        _round(fixture, client)
+
+        stored = _job(fixture, job_id)
+        assert stored.pause_reason == "captcha" and stored.paused_at is not None
+        assert len(_events(fixture, job_id, DecisionEventType.UPLOAD_JOB_PAUSED)) == 1
+    finally:
+        fixture.engine.dispose()
+
+
+def test_a_paused_row_paused_again_for_another_reason_records_the_new_one() -> None:
+    """Resumed in /ops and paused again between two rounds: the row never leaves `paused`, but
+    the reason it shows and the audit follow publish-hub."""
+    fixture, hub, client, created = _sync_fixture("hub-sync-repaused")
+    job_id = created["fanqie"]
+    try:
+        hub_job_id = _job(fixture, job_id).hub_job_id
+        hub.finish(hub_job_id, "paused", last_error={"reason": "captcha", "detail": "slider"})
+        _round(fixture, client)
+
+        hub.finish(hub_job_id, "scheduled")
+        hub.finish(hub_job_id, "paused", last_error={"reason": "risk", "detail": "flagged"})
+        _round(fixture, client)
+
+        stored = _job(fixture, job_id)
+        assert (stored.status, stored.pause_reason) == ("paused", "account_risk")
+        assert stored.error_message == "risk: flagged"
+        paused = _events(fixture, job_id, DecisionEventType.UPLOAD_JOB_PAUSED)
+        assert [json.loads(event.payload_json)["pause_reason"] for event in paused] == [
+            "captcha", "account_risk"
+        ]
+
+        # The same reason with a new detail: the text follows, no new event.
+        hub.finish(hub_job_id, "paused", last_error={"reason": "risk", "detail": "still flagged"})
+        _round(fixture, client)
+        assert _job(fixture, job_id).error_message == "risk: still flagged"
+        assert len(_events(fixture, job_id, DecisionEventType.UPLOAD_JOB_PAUSED)) == 2
+    finally:
+        fixture.engine.dispose()
+
+
 def test_the_cursor_moves_only_when_the_changes_it_covers_commit() -> None:
     fixture, hub, client, created = _sync_fixture(
         "hub-sync-cursor-commit", platforms=("qidian", "fanqie")

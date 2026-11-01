@@ -92,6 +92,32 @@ export function createBackendClient(fetchImpl, rawSettings) {
       return parseJson(response);
     },
 
+    // Audit sync is a direct request channel to ForWin, like comment sync: claim a
+    // request (null when there is nothing, 204), then post what the platform page showed.
+    async claimNextAuditRequest(payload) {
+      const response = await fetchImpl(`${settings.backendBaseUrl}/api/publishers/extension/audit-requests/claim`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(payload),
+      });
+      if (response.status === 204) {
+        return null;
+      }
+      return parseJson(response);
+    },
+
+    async submitAuditRequestResult(requestId, payload) {
+      const response = await fetchImpl(
+        `${settings.backendBaseUrl}/api/publishers/extension/audit-requests/${encodeURIComponent(requestId)}/result`,
+        {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify(payload),
+        },
+      );
+      return parseJson(response);
+    },
+
     async syncBrowserSession(payload) {
       const response = await fetchImpl(`${settings.backendBaseUrl}/api/publishers/extension/session-sync`, {
         method: 'POST',

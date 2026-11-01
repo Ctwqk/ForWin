@@ -7,6 +7,7 @@ from typing import Any, Callable
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
+from forwin.audit_direct import routes as audit_direct_routes
 from forwin.application.projects import (
     ProjectApplicationService,
 )
@@ -48,6 +49,8 @@ from forwin.api_schema import (
     ChapterReviewApproveResponse,
     ChapterReviewDetail,
     DecisionEventsResponse,
+    ExtensionAuditRequestClaimResponse,
+    ExtensionAuditRequestResultResponse,
     ExtensionBrowserSessionResponse,
     ExtensionClaimCommentSyncJobResponse,
     ExtensionClaimUploadJobResponse,
@@ -55,6 +58,7 @@ from forwin.api_schema import (
     ExtensionHeartbeatResponse,
     ExtensionLoginQrNotifyResponse,
     ExtensionSessionSyncResponse,
+    PublisherAuditRequestResponse,
     PublisherBrowserSessionSummaryResponse,
     PublisherChapterBindingResponse,
     PublisherCoverAssetResponse,
@@ -206,6 +210,9 @@ def register_api_routes(
         ),
         get_config=get_config,
     )
+    audit_direct_handlers = audit_direct_routes.build_handlers(
+        get_publisher_manager=get_publisher_manager,
+    )
     project_handlers = api_project_routes.build_handlers(service=deps.project.service)
     project_control_handlers = api_project_control_routes.build_handlers(
         service=deps.project_control.service,
@@ -247,6 +254,7 @@ def register_api_routes(
         **system_handlers,
         **task_handlers,
         **publisher_handlers,
+        **audit_direct_handlers,
         **project_handlers,
         **project_control_handlers,
         **world_model_handlers,
@@ -435,7 +443,7 @@ def register_api_routes(
             "/api/publishers/audit-sync",
             ["POST"],
             handlers["enqueue_publisher_audit_sync"],
-            {"response_model": PublisherUploadJobResponse},
+            {"response_model": PublisherAuditRequestResponse},
         ),
         (
             "/api/publishers/preflight",
@@ -562,6 +570,21 @@ def register_api_routes(
             ["POST"],
             handlers["update_publisher_comment_sync_job_result"],
             {"response_model": PublisherCommentSyncJobResponse},
+        ),
+        (
+            audit_direct_routes.CLAIM_PATH,
+            ["POST"],
+            handlers["claim_audit_request"],
+            {
+                "response_model": ExtensionAuditRequestClaimResponse | None,
+                "responses": {204: {"description": "No audit request to claim."}},
+            },
+        ),
+        (
+            audit_direct_routes.RESULT_PATH,
+            ["POST"],
+            handlers["submit_audit_request_result"],
+            {"response_model": ExtensionAuditRequestResultResponse},
         ),
         (
             "/api/publishers/extension/comments/batch",

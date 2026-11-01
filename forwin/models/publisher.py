@@ -701,6 +701,54 @@ class PublisherCommentSyncJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+# A request to read a book's audit state from the platform, claimed by the browser extension and
+# answered with the observation (D8: audit sync is a direct ForWin <-> extension channel, not an
+# upload job). "pending" and "claimed" are the open states; a claimed request nobody answers
+# becomes claimable again once lease_expires_at has passed. All timestamps are naive UTC.
+AUDIT_REQUEST_OPEN_STATUSES = ("pending", "claimed")
+
+
+class PublisherAuditRequest(Base):
+    __tablename__ = "publisher_audit_requests"
+    __table_args__ = (
+        Index(
+            "ux_publisher_audit_requests_open_work",
+            "work_binding_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'claimed')"),
+        ),
+        Index(
+            "ix_publisher_audit_requests_status",
+            "status",
+            "platform_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(String, default="")
+    platform_id: Mapped[str] = mapped_column(String, nullable=False)
+    work_binding_id: Mapped[str] = mapped_column(String, nullable=False)
+    book_name: Mapped[str] = mapped_column(String, default="")
+    remote_book_id: Mapped[str] = mapped_column(String, default="")
+    remote_url: Mapped[str] = mapped_column(String, default="")
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default="pending", server_default="pending"
+    )
+    extension_client_id: Mapped[str] = mapped_column(String, default="")
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    result_summary_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
 class PublisherRawComment(Base):
     __tablename__ = "publisher_raw_comments"
     __table_args__ = (

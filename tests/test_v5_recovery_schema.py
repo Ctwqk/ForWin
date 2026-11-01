@@ -625,6 +625,7 @@ def test_baseline_revision_is_rotated_and_followed_only_by_later_migrations() ->
         "0006_planning_v6.py",
         "0007_drop_codex.py",
         "0008_publish_hub.py",
+        "0009_audit_requests.py",
     ]
     assert migration.revision == "0001_v5_recovery"
     assert migration.down_revision is None

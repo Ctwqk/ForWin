@@ -2365,6 +2365,12 @@ const controller = new PublisherExtensionController({
     async claimNextCommentSyncJob(payload) {
       return withBackendClient((client) => client.claimNextCommentSyncJob(payload));
     },
+    async claimNextAuditRequest(payload) {
+      return withBackendClient((client) => client.claimNextAuditRequest(payload));
+    },
+    async submitAuditRequestResult(requestId, payload) {
+      return withBackendClient((client) => client.submitAuditRequestResult(requestId, payload));
+    },
     async syncBrowserSession(payload) {
       return withBackendClient((client) => client.syncBrowserSession(payload));
     },

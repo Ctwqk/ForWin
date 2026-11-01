@@ -495,6 +495,7 @@ def test_v5_schema_and_accepted_state_have_single_authorities() -> None:
         "0006_planning_v6.py",
         "0007_drop_codex.py",
         "0008_publish_hub.py",
+        "0009_audit_requests.py",
     ]
 
     base_source = _read("forwin/models/base.py")

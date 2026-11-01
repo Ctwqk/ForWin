@@ -89,7 +89,7 @@ def test_upgrade_adds_the_hub_columns_and_the_sync_state_table(database) -> None
     command.upgrade(config, PREVIOUS)
     assert "publish_hub_sync_state" not in sa.inspect(engine).get_table_names()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, MIGRATION)
 
     jobs = _columns(engine, "publisher_upload_jobs")
     for name, type_name in JOB_COLUMNS.items():
@@ -109,7 +109,7 @@ def test_upgrade_adds_the_hub_columns_and_the_sync_state_table(database) -> None
 
 def test_hub_job_id_is_unique_but_may_be_null_many_times(database) -> None:
     config, engine = database
-    command.upgrade(config, "head")
+    command.upgrade(config, MIGRATION)
 
     _insert_job(engine, "job-1")
     _insert_job(engine, "job-2")
@@ -124,7 +124,7 @@ def test_hub_job_id_is_unique_but_may_be_null_many_times(database) -> None:
 
 def test_status_superseded_is_accepted_by_the_database(database) -> None:
     config, engine = database
-    command.upgrade(config, "head")
+    command.upgrade(config, MIGRATION)
 
     _insert_job(
         engine,
@@ -147,9 +147,9 @@ def test_status_superseded_is_accepted_by_the_database(database) -> None:
 
 def test_downgrade_removes_everything_and_upgrade_runs_again(database) -> None:
     config, engine = database
-    command.upgrade(config, "head")
+    command.upgrade(config, MIGRATION)
 
-    command.downgrade(config, "-1")
+    command.downgrade(config, PREVIOUS)
 
     inspector = sa.inspect(engine)
     assert "publish_hub_sync_state" not in inspector.get_table_names()
@@ -168,7 +168,7 @@ def test_downgrade_removes_everything_and_upgrade_runs_again(database) -> None:
         revision = connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
     assert revision == PREVIOUS
 
-    command.upgrade(config, "head")
+    command.upgrade(config, MIGRATION)
 
     assert "publish_hub_sync_state" in sa.inspect(engine).get_table_names()
     assert set(JOB_COLUMNS) <= {
@@ -181,11 +181,11 @@ def test_downgrade_removes_everything_and_upgrade_runs_again(database) -> None:
 
 def test_downgrade_turns_superseded_rows_into_cancelled(database) -> None:
     config, engine = database
-    command.upgrade(config, "head")
+    command.upgrade(config, MIGRATION)
     _insert_job(engine, "job-1", status="superseded", hub_job_id="hub-1")
     _insert_job(engine, "job-2", status="pending")
 
-    command.downgrade(config, "-1")
+    command.downgrade(config, PREVIOUS)
 
     with engine.connect() as connection:
         statuses = dict(
@@ -199,7 +199,7 @@ def test_existing_job_rows_survive_the_round_trip_with_null_hub_columns(database
     command.upgrade(config, PREVIOUS)
     _insert_job(engine, "legacy-job", status="succeeded")
 
-    command.upgrade(config, "head")
+    command.upgrade(config, MIGRATION)
     with engine.connect() as connection:
         row = connection.execute(
             sa.text(
@@ -209,7 +209,7 @@ def test_existing_job_rows_survive_the_round_trip_with_null_hub_columns(database
         ).one()
     assert tuple(row) == ("succeeded", None, None, None, None)
 
-    command.downgrade(config, "-1")
+    command.downgrade(config, PREVIOUS)
     with engine.connect() as connection:
         status = connection.execute(
             sa.text("SELECT status FROM publisher_upload_jobs WHERE id = 'legacy-job'")
@@ -219,7 +219,7 @@ def test_existing_job_rows_survive_the_round_trip_with_null_hub_columns(database
 
 def test_migrated_schema_matches_the_models_for_the_tables_it_touches(database) -> None:
     config, engine = database
-    command.upgrade(config, "head")
+    command.upgrade(config, MIGRATION)
 
     def include_object(obj, name, type_, reflected, compare_to):
         if type_ == "table":
@@ -239,7 +239,7 @@ def test_migrated_schema_matches_the_models_for_the_tables_it_touches(database) 
 
 def test_model_stores_none_as_sql_null_not_json_null(database) -> None:
     config, engine = database
-    command.upgrade(config, "head")
+    command.upgrade(config, MIGRATION)
 
     with Session(engine) as session, session.begin():
         session.add(

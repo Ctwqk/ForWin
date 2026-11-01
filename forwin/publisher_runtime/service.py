@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 
+from forwin.audit_direct.service import AuditRequestService
 from forwin.publish_hub.client import PublishHubClient
 
 from .audit import PublisherAuditService
@@ -120,6 +121,12 @@ class PublisherRuntimeService:
             platform_catalog=self.platform_catalog,
             connection_state=self.connection_state,
             audit=self.audit,
+        )
+        self.audit_requests = AuditRequestService(
+            session_factory=session_factory,
+            platform_catalog=self.platform_catalog,
+            connection_state=self.connection_state,
+            bindings=self.bindings,
         )
 
     @property

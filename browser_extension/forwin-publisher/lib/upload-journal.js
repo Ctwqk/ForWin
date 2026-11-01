@@ -1,5 +1,31 @@
 const JOURNAL_VERSION = 1;
 const DEFAULT_MAX_ACKNOWLEDGED = 100;
+// Which backend an attempt belongs to. Its reports are replayed only to that
+// backend, and the attempt id is unique only within it, so a record is found by
+// backend plus attempt id. Records written before backends existed are ForWin's.
+export const JOURNAL_BACKENDS = Object.freeze(['forwin', 'hub']);
+const DEFAULT_BACKEND = 'forwin';
+const HUB_RESULT_OUTCOMES_WITHOUT_RECEIPT = ['retryable_error', 'permanent_error', 'defer'];
+
+function normalizeBackend(value) {
+  const backend = String(value || DEFAULT_BACKEND).trim() || DEFAULT_BACKEND;
+  if (!JOURNAL_BACKENDS.includes(backend)) {
+    throw new TypeError(`unknown upload journal backend: ${backend}`);
+  }
+  return backend;
+}
+
+function recordKey(backend, attemptId) {
+  return `${backend}:${attemptId}`;
+}
+
+function keyOf(record) {
+  return recordKey(record.backend || DEFAULT_BACKEND, record.attempt?.attempt_id);
+}
+
+function describe(backend, attemptId) {
+  return backend === DEFAULT_BACKEND ? attemptId : `${attemptId} (${backend})`;
+}
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -82,26 +108,34 @@ export function createUploadJournal({
     snapshot = stored && Array.isArray(stored.records)
       ? clone(stored)
       : emptySnapshot();
+    for (const record of snapshot.records) {
+      if (!record.backend) {
+        record.backend = DEFAULT_BACKEND;
+      }
+    }
   }
 
-  function findRecord(attemptId) {
-    return snapshot.records.find((record) => record.attempt?.attempt_id === attemptId);
+  function findIndex(attemptId, backend) {
+    const key = recordKey(backend, attemptId);
+    return snapshot.records.findIndex((record) => keyOf(record) === key);
   }
 
-  function requireRecord(attemptId) {
-    const record = findRecord(attemptId);
+  function findRecord(attemptId, backend) {
+    return snapshot.records[findIndex(attemptId, backend)];
+  }
+
+  function requireRecord(attemptId, backend) {
+    const record = findRecord(attemptId, backend);
     if (!record) {
-      throw new Error(`unknown upload attempt: ${attemptId}`);
+      throw new Error(`unknown upload attempt: ${describe(backend, attemptId)}`);
     }
     return record;
   }
 
-  async function updateRecord(attemptId, update, options = {}) {
-    const index = snapshot.records.findIndex(
-      (record) => record.attempt?.attempt_id === attemptId,
-    );
+  async function updateRecord(attemptId, backend, update, options = {}) {
+    const index = findIndex(attemptId, backend);
     if (index < 0) {
-      throw new Error(`unknown upload attempt: ${attemptId}`);
+      throw new Error(`unknown upload attempt: ${describe(backend, attemptId)}`);
     }
     const current = snapshot.records[index];
     const nextRecord = clone(current);
@@ -142,14 +176,15 @@ export function createUploadJournal({
       });
     },
 
-    async recordClaim({ clientId, claim }) {
+    async recordClaim({ clientId, claim, backend }) {
+      const owner = normalizeBackend(backend);
       return schedule(async () => {
         await ensureLoaded();
         const attemptId = String(claim?.attempt?.attempt_id || '').trim();
         if (!attemptId) {
           throw new TypeError('upload claim requires an attempt_id');
         }
-        const existing = findRecord(attemptId);
+        const existing = findRecord(attemptId, owner);
         if (existing) {
           const matches = existing.client_id === clientId
             && existing.execution_mode === claim.execution_mode
@@ -162,6 +197,7 @@ export function createUploadJournal({
         }
         const timestamp = now();
         const record = {
+          backend: owner,
           client_id: clientId,
           execution_mode: claim.execution_mode,
           job: clone(claim.job),
@@ -182,10 +218,37 @@ export function createUploadJournal({
       });
     },
 
-    async get(attemptId) {
+    async get(attemptId, backend) {
+      const owner = normalizeBackend(backend);
       return schedule(async () => {
         await ensureLoaded();
-        return clone(requireRecord(attemptId));
+        return clone(requireRecord(attemptId, owner));
+      });
+    },
+
+    // The record, or null when this backend has none for the attempt.
+    async find(attemptId, backend) {
+      const owner = normalizeBackend(backend);
+      return schedule(async () => {
+        await ensureLoaded();
+        return clone(findRecord(attemptId, owner) ?? null);
+      });
+    },
+
+    // Drops the record (an attempt the backend fenced off). Returns it, or null.
+    async remove(attemptId, backend) {
+      const owner = normalizeBackend(backend);
+      return schedule(async () => {
+        await ensureLoaded();
+        const index = findIndex(attemptId, owner);
+        if (index < 0) {
+          return null;
+        }
+        const next = clone(snapshot);
+        const [removed] = next.records.splice(index, 1);
+        await write(clone(next));
+        snapshot = next;
+        return clone(removed);
       });
     },
 
@@ -213,10 +276,11 @@ export function createUploadJournal({
       });
     },
 
-    async markMutationStarted(attemptId) {
+    async markMutationStarted(attemptId, backend) {
+      const owner = normalizeBackend(backend);
       return schedule(async () => {
         await ensureLoaded();
-        return updateRecord(attemptId, (record) => {
+        return updateRecord(attemptId, owner, (record) => {
           assertNotAcknowledged(record);
           if (record.local_phase === 'mutation_started') {
             return false;
@@ -232,10 +296,11 @@ export function createUploadJournal({
       });
     },
 
-    async saveReceipt(attemptId, receipt) {
+    async saveReceipt(attemptId, receipt, backend) {
+      const owner = normalizeBackend(backend);
       return schedule(async () => {
         await ensureLoaded();
-        return updateRecord(attemptId, (record) => {
+        return updateRecord(attemptId, owner, (record) => {
           assertNotAcknowledged(record);
           if (record.receipt) {
             if (!sameValue(record.receipt, receipt)) {
@@ -243,7 +308,12 @@ export function createUploadJournal({
             }
             return false;
           }
-          if (record.local_phase !== 'mutation_started') {
+          // A publish-hub reconcile attempt reports what it found as a receipt
+          // without ever starting a mutation.
+          const receiptPhase = owner === 'hub' && record.execution_mode === 'reconcile'
+            ? 'claimed'
+            : 'mutation_started';
+          if (record.local_phase !== receiptPhase) {
             throw new Error(
               `cannot save receipt from ${record.local_phase} for attempt ${attemptId}`,
             );
@@ -255,10 +325,11 @@ export function createUploadJournal({
       });
     },
 
-    async saveResult(attemptId, result) {
+    async saveResult(attemptId, result, backend) {
+      const owner = normalizeBackend(backend);
       return schedule(async () => {
         await ensureLoaded();
-        return updateRecord(attemptId, (record) => {
+        return updateRecord(attemptId, owner, (record) => {
           assertNotAcknowledged(record);
           if (record.result) {
             if (!sameValue(record.result, result)) {
@@ -268,7 +339,8 @@ export function createUploadJournal({
           }
           const maySkipReceipt = record.execution_mode === 'reconcile'
             || record.job?.task_kind === 'audit_sync'
-            || ['failed', 'cancelled'].includes(result?.outcome);
+            || ['failed', 'cancelled'].includes(result?.outcome)
+            || (owner === 'hub' && HUB_RESULT_OUTCOMES_WITHOUT_RECEIPT.includes(result?.outcome));
           if (!record.receipt && !maySkipReceipt) {
             throw new Error(`receipt is required before result for upload attempt ${attemptId}`);
           }
@@ -279,10 +351,11 @@ export function createUploadJournal({
       });
     },
 
-    async savePause(attemptId, pause) {
+    async savePause(attemptId, pause, backend) {
+      const owner = normalizeBackend(backend);
       return schedule(async () => {
         await ensureLoaded();
-        return updateRecord(attemptId, (record) => {
+        return updateRecord(attemptId, owner, (record) => {
           assertNotAcknowledged(record);
           if (record.pause) {
             if (!sameValue(record.pause, pause)) {
@@ -290,7 +363,12 @@ export function createUploadJournal({
             }
             return false;
           }
-          if (!['claimed', 'mutation_started'].includes(record.local_phase)) {
+          // publish-hub refuses a receipt that names another remote id
+          // (remote_id_conflict); the attempt is then paused for a human.
+          const pausePhases = owner === 'hub'
+            ? ['claimed', 'mutation_started', 'receipt_observed']
+            : ['claimed', 'mutation_started'];
+          if (!pausePhases.includes(record.local_phase)) {
             throw new Error(
               `cannot save pause from ${record.local_phase} for attempt ${attemptId}`,
             );
@@ -302,10 +380,11 @@ export function createUploadJournal({
       });
     },
 
-    async markAcknowledged(attemptId) {
+    async markAcknowledged(attemptId, backend) {
+      const owner = normalizeBackend(backend);
       return schedule(async () => {
         await ensureLoaded();
-        return updateRecord(attemptId, (record) => {
+        return updateRecord(attemptId, owner, (record) => {
           if (record.local_phase === 'acked') {
             return false;
           }

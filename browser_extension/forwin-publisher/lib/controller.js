@@ -4,14 +4,15 @@ import {
   getPlatformAdapter,
   getProbeUrl,
   shouldProbeLogin,
-} from './platforms.js?v=0.1.63';
+} from './platforms.js?v=0.1.64';
 import {
   buildAttemptResult,
   buildExecutionReceipt,
   buildReconciliationRequest,
   buildRiskPauseRequest,
-} from './reconciliation.js?v=0.1.63';
-import { guardRiskInspection } from './risk-inspection.js?v=0.1.63';
+} from './reconciliation.js?v=0.1.64';
+import { guardRiskInspection } from './risk-inspection.js?v=0.1.64';
+import { HUB_BACKEND, HubExecutor } from './hub-adapter.js?v=0.1.64';
 
 const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
 const LOGIN_QR_PLATFORM_THROTTLE_URL = '__platform__';
@@ -54,6 +55,24 @@ export class PublisherExtensionController {
     this.executionTasks = new Map();
     this.executionTabToTask = new Map();
     this.heartbeatLoginQrNotificationSessions = new Map();
+    this.hubExecutor = null;
+  }
+
+  // The publish-hub executor, when the extension was given a hub client. It is used
+  // only while the hub URL and key are both set (see _dispatchPendingUploadJobs).
+  _hubExecutor() {
+    if (!this.deps.hubBackend) {
+      return null;
+    }
+    if (!this.hubExecutor) {
+      this.hubExecutor = new HubExecutor(this, this.deps);
+    }
+    return this.hubExecutor;
+  }
+
+  _hubEnabled(settings) {
+    const hub = this._hubExecutor();
+    return hub && hub.isConfigured(settings) ? hub : null;
   }
 
   async bootstrap() {
@@ -545,7 +564,8 @@ export class PublisherExtensionController {
     }
     const journal = this._requireUploadJournal();
     await journal.load();
-    const entries = await journal.pending();
+    // publish-hub attempts are replayed to publish-hub only (HubExecutor.replayJournal).
+    const entries = (await journal.pending()).filter((entry) => entry.backend !== HUB_BACKEND);
     let handled = 0;
     for (const entry of entries) {
       await this._replayJournalEntry(entry);
@@ -1150,8 +1170,26 @@ export class PublisherExtensionController {
     return { found: true, handled, truncated: true };
   }
 
+  // The heartbeat alarm's round. With publish-hub configured, a ForWin heartbeat
+  // failure does not hold back publish-hub jobs; the ForWin error is still raised.
+  async heartbeatAndDispatchUploadJobs() {
+    try {
+      await this.sendHeartbeat();
+    } catch (error) {
+      if (this._hubEnabled(await this.deps.getSettings())) {
+        await this.dispatchPendingUploadJobs().catch(() => ({ skipped: true }));
+      }
+      throw error;
+    }
+    return this.dispatchPendingUploadJobs();
+  }
+
   async _dispatchPendingUploadJobs() {
     const settings = await this.deps.getSettings();
+    const hub = this._hubEnabled(settings);
+    if (hub) {
+      return this._dispatchUploadJobsWithHub(settings, hub);
+    }
     if (!settings.backendBaseUrl || !settings.apiKey) {
       return { skipped: true };
     }
@@ -1176,6 +1214,98 @@ export class PublisherExtensionController {
       await this.executeUploadClaim(claimed.claim, 0);
     }
     return { found: true, handled, truncated: true };
+  }
+
+  // Both backends in one round, one job at a time (D7): publish-hub is asked first,
+  // then ForWin, alternating until neither has work or eight jobs ran. A backend that
+  // fails is left alone for the rest of the round so the other keeps working; the
+  // first error is raised at the end. publish-hub's 409 attempt_in_progress only
+  // means "next round".
+  async _dispatchUploadJobsWithHub(settings, hub) {
+    let firstError = null;
+    const fail = (error) => {
+      firstError = firstError || error;
+    };
+    let hubOpen = true;
+    try {
+      await hub.sendExecutorHeartbeat();
+      await hub.replayJournal();
+    } catch (error) {
+      hubOpen = false;
+      fail(error);
+    }
+    let forwinOpen = Boolean(settings.backendBaseUrl && settings.apiKey);
+    if (forwinOpen) {
+      try {
+        await this.syncUploadJournal();
+      } catch (error) {
+        forwinOpen = false;
+        fail(error);
+      }
+    }
+    const connectedPlatforms = await this._collectConnectedPlatforms();
+    const MAX_JOBS_PER_DISPATCH = 8;
+    let handled = 0;
+    let truncated = false;
+    if (connectedPlatforms.length) {
+      const forwinClientId = forwinOpen ? await this.deps.getClientId() : '';
+      while (hubOpen || forwinOpen) {
+        let progressed = false;
+        if (hubOpen) {
+          if (handled >= MAX_JOBS_PER_DISPATCH) {
+            truncated = true;
+            break;
+          }
+          try {
+            const outcome = await hub.claimAndExecute(connectedPlatforms);
+            if (outcome.claimed) {
+              handled += 1;
+              progressed = true;
+            } else {
+              hubOpen = false;
+            }
+          } catch (error) {
+            hubOpen = false;
+            fail(error);
+          }
+        }
+        if (forwinOpen) {
+          if (handled >= MAX_JOBS_PER_DISPATCH) {
+            truncated = true;
+            break;
+          }
+          try {
+            const claimed = await this.deps.backend.claimNextUploadJob({
+              client_id: forwinClientId,
+              connected_platforms: connectedPlatforms,
+            });
+            if (claimed?.found && claimed.claim) {
+              handled += 1;
+              progressed = true;
+              await this.executeUploadClaim(claimed.claim, 0);
+            } else {
+              forwinOpen = false;
+            }
+          } catch (error) {
+            forwinOpen = false;
+            fail(error);
+          }
+        }
+        if (!progressed) {
+          break;
+        }
+      }
+    }
+    if (firstError) {
+      throw firstError;
+    }
+    if (!connectedPlatforms.length) {
+      return { skipped: true };
+    }
+    if (!handled) {
+      return { found: false };
+    }
+    return truncated ? { found: true, handled, truncated: true } : { found: true, handled };
   }
 
   async _dispatchPendingCommentSyncJobs() {

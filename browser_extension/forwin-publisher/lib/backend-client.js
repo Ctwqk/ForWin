@@ -5,7 +5,9 @@ async function parseJson(response) {
   if (!response.ok) {
     const detail = payload?.detail;
     const detailMessage = typeof detail === 'string' ? detail : detail?.message;
-    const error = new Error(detailMessage || payload?.message || `HTTP ${response.status}`);
+    const error = new Error(
+      detailMessage || payload?.message || payload?.error?.message || `HTTP ${response.status}`,
+    );
     error.status = response.status;
     error.code = payload?.error?.code ?? payload?.code ?? detail?.code;
     error.payload = payload;
@@ -134,6 +136,62 @@ export function createBackendClient(fetchImpl, rawSettings) {
         body: JSON.stringify(payload),
       });
       return parseJson(response);
+    },
+  };
+}
+
+const HUB_REQUEST_TIMEOUT_MS = 30000;
+
+// publish-hub's executor API (spec 7.2). Authenticated with the hub's own key as a
+// bearer token; the ForWin key is never sent here and the hub key never to ForWin.
+// Errors carry `status` and the envelope's `code` ({"error": {"code", "message"}}).
+export function createHubClient(fetchImpl, rawSettings, options = {}) {
+  const settings = normalizeSettings(rawSettings);
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : HUB_REQUEST_TIMEOUT_MS;
+
+  async function post(path, payload) {
+    const abort = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = abort ? globalThis.setTimeout(() => abort.abort(), timeoutMs) : null;
+    timer?.unref?.();
+    try {
+      const response = await fetchImpl(`${settings.hubBaseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${settings.hubApiKey}`,
+        },
+        body: JSON.stringify(payload),
+        ...(abort ? { signal: abort.signal } : {}),
+      });
+      if (response.status === 204) {
+        return null;
+      }
+      return await parseJson(response);
+    } finally {
+      if (timer) {
+        globalThis.clearTimeout(timer);
+      }
+    }
+  }
+
+  return {
+    async heartbeat(payload) {
+      return post('/v1/executor/heartbeat', payload);
+    },
+
+    // null when there is nothing to claim (204).
+    async claim(payload) {
+      return post('/v1/executor/upload-jobs/claim', payload);
+    },
+
+    // action: heartbeat | phase | receipt | result | pause | reconcile
+    async attempt(jobId, attemptId, action, payload) {
+      const encodedJobId = encodeURIComponent(jobId);
+      const encodedAttemptId = encodeURIComponent(attemptId);
+      return post(
+        `/v1/executor/upload-jobs/${encodedJobId}/attempts/${encodedAttemptId}/${action}`,
+        payload,
+      );
     },
   };
 }

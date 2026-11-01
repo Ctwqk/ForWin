@@ -1,7 +1,14 @@
 import { extensionApi, wrapCall } from './lib/extension-runtime.js';
-import { DEFAULT_SETTINGS, getBackendOrigin, getOriginMatchPattern, normalizeSettings } from './lib/settings.js';
+import {
+  DEFAULT_SETTINGS,
+  getBackendOrigin,
+  getOriginMatchPattern,
+  isHubConfigured,
+  normalizeSettings,
+} from './lib/settings.js';
 
 const SETTINGS_KEY = 'forwinPublisherSettings';
+const HUB_CLIENT_ID_KEY = 'forwinPublisherHubClientId';
 
 function expectElement(id) {
   const element = document.getElementById(id);
@@ -30,14 +37,25 @@ function renderPattern(settings) {
     : '保存后这里会显示扩展注入 ForWin 页面时使用的匹配规则。';
 }
 
+async function renderHubClientId() {
+  const result = await wrapCall(extensionApi.storage.local, 'get', HUB_CLIENT_ID_KEY);
+  const clientId = String(result?.[HUB_CLIENT_ID_KEY] || '');
+  expectElement('hub_client_id').textContent = clientId
+    ? `publish-hub client_id：${clientId}（账号的 preferred_client_id 填这个值）`
+    : 'publish-hub client_id 会在第一次连接 publish-hub 时生成。';
+}
+
 async function boot() {
   const settings = await readSettings();
   expectElement('backend_base_url').value = settings.backendBaseUrl;
   expectElement('api_key').value = settings.apiKey;
+  expectElement('hub_base_url').value = settings.hubBaseUrl;
+  expectElement('hub_api_key').value = settings.hubApiKey;
   expectElement('sync_session_to_backend').checked = settings.syncSessionToBackend;
   expectElement('login_qr_notifications_enabled').checked = settings.loginQrNotificationsEnabled;
   expectElement('status').textContent = '已读取当前扩展设置。';
   renderPattern(settings);
+  await renderHubClientId();
 }
 
 expectElement('save_button').addEventListener('click', async () => {
@@ -46,9 +64,15 @@ expectElement('save_button').addEventListener('click', async () => {
     apiKey: expectElement('api_key').value,
     syncSessionToBackend: expectElement('sync_session_to_backend').checked,
     loginQrNotificationsEnabled: expectElement('login_qr_notifications_enabled').checked,
+    hubBaseUrl: expectElement('hub_base_url').value,
+    hubApiKey: expectElement('hub_api_key').value,
   });
   if (!getBackendOrigin(nextSettings)) {
     expectElement('status').textContent = 'ForWin Backend URL 无效，请填写 http(s)://主机:端口。';
+    return;
+  }
+  if ((nextSettings.hubBaseUrl || nextSettings.hubApiKey) && !isHubConfigured(nextSettings)) {
+    expectElement('status').textContent = 'publish-hub 需要同时填写有效的 http(s) URL 和 API Key，或者两项都留空。';
     return;
   }
   await writeSettings(nextSettings);

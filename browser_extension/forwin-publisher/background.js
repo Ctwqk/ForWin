@@ -1,14 +1,14 @@
-import { createBackendClient } from './lib/backend-client.js';
+import { createBackendClient, createHubClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.63';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.64';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
-import { getPlatformAdapter } from './lib/platforms.js?v=0.1.63';
-import { guardRiskInspection } from './lib/risk-inspection.js?v=0.1.63';
-import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
+import { getPlatformAdapter } from './lib/platforms.js?v=0.1.64';
+import { guardRiskInspection } from './lib/risk-inspection.js?v=0.1.64';
+import { DEFAULT_SETTINGS, createHubClientIdStore, getBackendOrigin, normalizeSettings } from './lib/settings.js';
 import { READY_CHANNELS, TabReadyRegistry } from './lib/tab-ready-registry.js';
 import { uploadMessageTimeoutMs } from './lib/upload-timeouts.js?v=0.1.23';
-import { createUploadJournal } from './lib/upload-journal.js?v=0.1.63';
+import { createUploadJournal } from './lib/upload-journal.js?v=0.1.64';
 import {
   assertDebuggerCapability,
   extensionCapabilities,
@@ -19,6 +19,7 @@ import {
 
 const SETTINGS_KEY = 'forwinPublisherSettings';
 const CLIENT_ID_KEY = 'forwinPublisherClientId';
+const HUB_CLIENT_ID_KEY = 'forwinPublisherHubClientId';
 const PLATFORM_STATE_KEY = 'forwinPublisherPlatformStates';
 const BACKGROUND_STATUS_KEY = 'forwinPublisherBackgroundStatus';
 const BACKGROUND_ERRORS_KEY = 'forwinPublisherBackgroundErrors';
@@ -32,6 +33,9 @@ const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
 const LOGIN_QR_PLATFORM_THROTTLE_URL = '__platform__';
 const LOGIN_QR_DIRECT_EXTRACTION_TIMEOUT_MS = 15000;
 const TOP_FRAME_MESSAGE_OPTIONS = { frameId: 0 };
+// run-create-book fills the form, picks tags and waits for the book page; well
+// over the 45 s a read-only command gets.
+const CREATE_BOOK_MESSAGE_TIMEOUT_MS = 180000;
 const tabReadyRegistry = new TabReadyRegistry();
 
 function randomId() {
@@ -270,6 +274,17 @@ async function ensureClientId() {
     await setStorageValue(CLIENT_ID_KEY, clientId);
   }
   return clientId;
+}
+
+// publish-hub's executor client_id (magi3-ext-<8 chars>), separate from the ForWin
+// client id above so the legacy path is unchanged.
+const hubClientIdStore = createHubClientIdStore({
+  read: () => getStorageValue(HUB_CLIENT_ID_KEY, ''),
+  write: (value) => setStorageValue(HUB_CLIENT_ID_KEY, value),
+});
+
+async function ensureHubClientId() {
+  return hubClientIdStore.ensure();
 }
 
 async function getSettings() {
@@ -573,6 +588,12 @@ async function getBrowserInfo() {
 async function withBackendClient(callback) {
   const settings = await getSettings();
   const client = createBackendClient(globalThis.fetch.bind(globalThis), settings);
+  return callback(client);
+}
+
+async function withHubClient(callback) {
+  const settings = await getSettings();
+  const client = createHubClient(globalThis.fetch.bind(globalThis), settings);
   return callback(client);
 }
 
@@ -1412,6 +1433,49 @@ async function runReconciliationCommand(tabId, payload) {
   return sendPlatformAgentMessage(
     tabId,
     'reconcile-upload',
+    payload,
+    45000,
+    TOP_FRAME_MESSAGE_OPTIONS,
+  );
+}
+
+// The caller opened the tab on the create page, waited for the content script and
+// reported mutation_started; this only sends the one irreversible action.
+async function runCreateBookCommand(tabId, payload) {
+  if (!tabId) {
+    return {
+      ok: false,
+      error: '未能打开创建书本页面。',
+      errorCode: 'create-book-page-not-ready',
+      resultPayload: { task_kind: 'create_book', submitted: false },
+    };
+  }
+  return sendMutatingPlatformAgentMessage(
+    tabId,
+    'run-create-book',
+    payload,
+    CREATE_BOOK_MESSAGE_TIMEOUT_MS,
+    TOP_FRAME_MESSAGE_OPTIONS,
+  );
+}
+
+async function runReconcileCreateCommand(tabId, payload) {
+  if (!tabId) {
+    return { finding: 'unknown', currentUrl: '', candidates: [], reason: 'no-tab' };
+  }
+  const readyState = await waitForRunnablePlatformTab(payload.platform, tabId, 12000);
+  if (!readyState?.ready) {
+    const tab = await getTab(tabId);
+    return {
+      finding: 'unknown',
+      currentUrl: String(tab?.url || ''),
+      candidates: [],
+      reason: 'works-list-page-not-ready',
+    };
+  }
+  return sendPlatformAgentMessage(
+    tabId,
+    'reconcile-create',
     payload,
     45000,
     TOP_FRAME_MESSAGE_OPTIONS,
@@ -2311,6 +2375,18 @@ const controller = new PublisherExtensionController({
       };
     },
   },
+  hubBackend: {
+    async heartbeat(payload) {
+      return withHubClient((client) => client.heartbeat(payload));
+    },
+    async claim(payload) {
+      return withHubClient((client) => client.claim(payload));
+    },
+    async attempt(jobId, attemptId, action, payload) {
+      return withHubClient((client) => client.attempt(jobId, attemptId, action, payload));
+    },
+  },
+  getHubClientId: ensureHubClientId,
   uploadJournal,
   ensureClientId,
   getClientId: ensureClientId,
@@ -2335,6 +2411,9 @@ const controller = new PublisherExtensionController({
   runCoverUploadCommand,
   runAuditSyncCommand,
   runReconciliationCommand,
+  runCreateBookCommand,
+  runReconcileCreateCommand,
+  waitForRunnableTab: waitForRunnablePlatformTab,
   inspectPlatformRiskCommand,
   runCommentSyncCommand,
   inspectLoginState,
@@ -2412,8 +2491,7 @@ extensionApi.alarms.onAlarm.addListener((alarm) => {
       lastHeartbeatAttemptAt: new Date().toISOString(),
       lastHeartbeatAttemptSource: 'alarm',
     }).catch(() => {});
-    controller.sendHeartbeat()
-      .then(() => controller.dispatchPendingUploadJobs())
+    controller.heartbeatAndDispatchUploadJobs()
       .then(() => controller.dispatchPendingCommentSyncJobs())
       .then(() => updateBackgroundStatus({
         lastHeartbeatSuccessAt: new Date().toISOString(),

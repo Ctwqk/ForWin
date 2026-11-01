@@ -601,3 +601,98 @@ test('compact persists a stricter acknowledged-record limit after restart', asyn
   });
   assert.deepEqual(await afterAnotherRestart.load(), compacted);
 });
+
+test('records carry their backend and records without one load as forwin', async () => {
+  const legacyRecord = {
+    client_id: 'extension-1',
+    execution_mode: 'execute',
+    job: uploadClaim().job,
+    attempt: uploadClaim().attempt,
+    local_phase: 'claimed',
+    receipt: null,
+    result: null,
+    pause: null,
+    created_at: '2026-07-21T12:00:00Z',
+    updated_at: '2026-07-21T12:00:00Z',
+    acked_at: null,
+  };
+  const store = memoryStore({ version: 1, records: [legacyRecord] });
+  const journal = createUploadJournal({ read: store.read, write: store.write });
+
+  const [loaded] = await journal.pending();
+  assert.equal(loaded.backend, 'forwin');
+  assert.equal((await journal.get('attempt-1')).backend, 'forwin');
+  assert.equal((await journal.get('attempt-1', 'forwin')).backend, 'forwin');
+  await assert.rejects(journal.get('attempt-1', 'hub'), /unknown upload attempt.*attempt-1/);
+  assert.equal(await journal.find('attempt-1', 'hub'), null);
+
+  const hubRecord = await journal.recordClaim({ clientId: 'magi3-ext-abcd1234', claim: uploadClaim(), backend: 'hub' });
+  assert.equal(hubRecord.backend, 'hub');
+  const forwinRecord = await journal.recordClaim({ clientId: 'extension-2', claim: uploadClaim({ attempt: { attempt_id: 'attempt-2' } }) });
+  assert.equal(forwinRecord.backend, 'forwin');
+  assert.deepEqual(store.value.records.map((record) => record.backend), ['forwin', 'hub', 'forwin']);
+});
+
+test('the same attempt id from both backends stays two separate records', async () => {
+  const store = memoryStore();
+  const journal = createUploadJournal({ read: store.read, write: store.write });
+  await journal.recordClaim({ clientId: 'extension-1', claim: uploadClaim() });
+  await journal.recordClaim({
+    clientId: 'magi3-ext-abcd1234',
+    claim: uploadClaim({ job: { job_id: 'hub-job' }, attempt: { lease_epoch: 2 } }),
+    backend: 'hub',
+  });
+
+  await journal.markMutationStarted('attempt-1', 'hub');
+  assert.equal((await journal.get('attempt-1', 'hub')).local_phase, 'mutation_started');
+  assert.equal((await journal.get('attempt-1')).local_phase, 'claimed');
+  assert.equal((await journal.get('attempt-1', 'hub')).job.job_id, 'hub-job');
+
+  await journal.remove('attempt-1', 'hub');
+  assert.equal(await journal.find('attempt-1', 'hub'), null);
+  assert.equal((await journal.find('attempt-1', 'forwin')).client_id, 'extension-1');
+  assert.deepEqual(store.value.records.map((record) => record.backend), ['forwin']);
+  assert.equal(await journal.remove('attempt-1', 'hub'), null);
+});
+
+test('hub records accept hub outcomes without a receipt, a reconcile receipt and a pause after a receipt', async () => {
+  const store = memoryStore();
+  const journal = createUploadJournal({ read: store.read, write: store.write });
+  for (const [index, outcome] of ['retryable_error', 'permanent_error', 'defer'].entries()) {
+    const attemptId = `hub-${index}`;
+    await journal.recordClaim({ clientId: 'hub-client', claim: uploadClaim({ attempt: { attempt_id: attemptId } }), backend: 'hub' });
+    const saved = await journal.saveResult(attemptId, { report: 'result', outcome, body: { outcome } }, 'hub');
+    assert.equal(saved.local_phase, 'ack_pending');
+  }
+  await journal.recordClaim({ clientId: 'hub-client', claim: uploadClaim({ attempt: { attempt_id: 'hub-ok' } }), backend: 'hub' });
+  await assert.rejects(
+    journal.saveResult('hub-ok', { report: 'result', outcome: 'succeeded', body: {} }, 'hub'),
+    /receipt is required/,
+  );
+
+  await journal.recordClaim({
+    clientId: 'hub-client',
+    claim: uploadClaim({ execution_mode: 'reconcile', attempt: { attempt_id: 'hub-reconcile' } }),
+    backend: 'hub',
+  });
+  const reconciled = await journal.saveReceipt('hub-reconcile', { body: { remote_id: '9' } }, 'hub');
+  assert.equal(reconciled.local_phase, 'receipt_observed');
+
+  await journal.recordClaim({ clientId: 'hub-client', claim: uploadClaim({ attempt: { attempt_id: 'hub-conflict' } }), backend: 'hub' });
+  await journal.markMutationStarted('hub-conflict', 'hub');
+  await journal.saveReceipt('hub-conflict', { body: { remote_id: '9' } }, 'hub');
+  const paused = await journal.savePause('hub-conflict', { body: { reason: 'needs_human' } }, 'hub');
+  assert.equal(paused.local_phase, 'paused');
+
+  await journal.recordClaim({ clientId: 'extension-1', claim: uploadClaim({ execution_mode: 'reconcile', attempt: { attempt_id: 'forwin-reconcile' } }) });
+  await assert.rejects(journal.saveReceipt('forwin-reconcile', uploadReceipt()), /cannot save receipt from claimed/);
+  await journal.recordClaim({ clientId: 'extension-1', claim: uploadClaim({ attempt: { attempt_id: 'forwin-conflict' } }) });
+  await journal.markMutationStarted('forwin-conflict');
+  await journal.saveReceipt('forwin-conflict', uploadReceipt());
+  await assert.rejects(journal.savePause('forwin-conflict', riskPause()), /cannot save pause from receipt_observed/);
+  await journal.recordClaim({ clientId: 'extension-1', claim: uploadClaim({ attempt: { attempt_id: 'forwin-defer' } }) });
+  await assert.rejects(
+    journal.saveResult('forwin-defer', uploadResult({ outcome: 'defer' })),
+    /receipt is required/,
+  );
+});

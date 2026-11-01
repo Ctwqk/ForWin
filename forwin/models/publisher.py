@@ -244,8 +244,10 @@ class PublisherUploadJob(Base):
     )
 
 
-# Task kinds that only publish-hub runs (Task 5 mirrors its create_destination job this way).
-HUB_ONLY_TASK_KINDS = frozenset({"create_book"})
+# The local mirror of a publish-hub create_destination job (one per binding and destination).
+CREATE_BOOK_TASK_KIND = "create_book"
+# Task kinds that only publish-hub runs.
+HUB_ONLY_TASK_KINDS = frozenset({CREATE_BOOK_TASK_KIND})
 
 
 def upload_job_is_hub_owned(job: PublisherUploadJob) -> bool:

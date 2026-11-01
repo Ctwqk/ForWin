@@ -29,6 +29,7 @@ from forwin.models.publisher import (
 )
 from forwin.publish_hub.client import PublishHubClient
 from forwin.publish_hub.payloads import chapter_body, cover_body
+from forwin.publish_hub.state import write_destinations
 from forwin.publish_hub.submit import (
     UNRESOLVED_CONFLICT_ERROR,
     SubmitOutcome,
@@ -157,10 +158,26 @@ def _set_routes(fixture, routes: dict[str, tuple[str, str | None]]) -> None:
         project.automation_json = json.dumps({"publish_bindings": bindings})
 
 
+def _seed_destinations(fixture) -> None:
+    """Both destinations in the sync cache with their book: Task 5's release gate lets chapters by."""
+    with fixture.runtime.session_factory.begin() as session:
+        write_destinations(
+            session,
+            [
+                {"id": QIDIAN_DESTINATION, "platform": "qidian", "remote_id": "qidian-book",
+                 "account_status": "active"},
+                {"id": FANQIE_DESTINATION, "platform": "fanqie", "remote_id": "fanqie-book",
+                 "account_status": "active"},
+            ],
+            now=NOW,
+        )
+
+
 def _hub_fixture(name: str, *, platforms=("qidian",), routes=None):
     fixture = _fixture(name)
     hub = FakeHub()
     client = _attach_hub(fixture.runtime, hub)
+    _seed_destinations(fixture)
     _set_routes(
         fixture,
         routes
@@ -384,7 +401,7 @@ def test_idempotency_conflict_without_a_job_for_the_key_fails_the_row_for_a_pers
         released = _release(fixture, [job_id])
 
         stored = _job(fixture, job_id)
-        assert [item["job_id"] for item in released] == [job_id]
+        assert released == []  # nothing to upload: not counted as released (R36)
         assert stored.status == "failed"
         assert stored.error_message == UNRESOLVED_CONFLICT_ERROR
         assert stored.hub_submit_body_json is not None  # still hub-owned
@@ -416,7 +433,7 @@ def test_unresolved_conflict_in_a_release_batch_leaves_the_siblings_submitted(co
 
         failed_id, sibling_id = job_ids[conflicted], job_ids[1 - conflicted]
         failed, sibling = _job(fixture, failed_id), _job(fixture, sibling_id)
-        assert {item["job_id"] for item in released} == set(job_ids)
+        assert [item["job_id"] for item in released] == [sibling_id]
         assert (failed.status, failed.error_message) == ("failed", UNRESOLVED_CONFLICT_ERROR)
         assert failed.hub_submit_body_json is not None
         assert sibling.status == "pending"
@@ -521,7 +538,7 @@ def test_regenerated_chapter_already_published_is_superseded_not_retried() -> No
         assert stored.hub_job_id is None
         assert stored.hub_submit_body_json is not None
         assert stored.finished_at is not None
-        assert released[0]["status"] == "superseded"
+        assert released == []  # nothing was uploaded: not counted as released (R36)
         assert _recover(fixture, client) == {}
         assert hub.post_count() == 1
     finally:
@@ -803,6 +820,7 @@ def test_route_flip_after_scheduling_uses_current_settings_and_keeps_the_snapsho
     hub = FakeHub()
     try:
         _attach_hub(fixture.runtime, hub)
+        _seed_destinations(fixture)
         _set_routes(fixture, {"qidian": ("legacy", None)})
         created = _materialize(fixture, bindings=[{**QIDIAN, "route": "legacy"}])
         _set_routes(fixture, {"qidian": ("hub", QIDIAN_DESTINATION)})

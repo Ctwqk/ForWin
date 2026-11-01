@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from forwin.generation.continue_workset import build_continue_generation_workset
 from forwin.models.project import ChapterPlan
-from forwin.models.publisher import PublisherUploadJob
+from forwin.models.publisher import CREATE_BOOK_TASK_KIND, PublisherUploadJob
 from forwin.models.task import GenerationTask
 from .backlog import ProductionBacklog, ProductionPublishJob
 
@@ -200,6 +200,8 @@ class ProductionRepository:
                     PublisherUploadJob.project_id.in_(project_ids),
                     PublisherUploadJob.status.notin_(tuple(terminal_statuses)),
                     PublisherUploadJob.status != "scheduled",
+                    # A book being created on one platform must not stop the other's releases.
+                    PublisherUploadJob.task_kind != CREATE_BOOK_TASK_KIND,
                 )
                 .distinct()
             )

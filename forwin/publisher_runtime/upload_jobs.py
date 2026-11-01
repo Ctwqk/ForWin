@@ -634,7 +634,13 @@ class UploadJobService:
             raise ValueError(f"publisher jobs not found: {', '.join(missing)}")
 
         # publish_hub.payloads imports this module, so the submit module is imported here.
-        from forwin.publish_hub.submit import SubmitOutcome, client_from, hub_binding_for
+        from forwin.publish_hub.submit import (
+            NOT_RELEASED_OUTCOMES,
+            SubmitOutcome,
+            client_from,
+            hub_binding_for,
+            submit_released_job,
+        )
 
         released: list[PublisherUploadJob] = []
         hub_client: Any = _CLIENT_NOT_FETCHED
@@ -696,24 +702,26 @@ class UploadJobService:
                 )
                 continue
 
-            hub_binding = hub_binding_for(session, job.project_id, job.platform_id)
-            if hub_binding is not None:
+            if hub_binding_for(session, job.project_id, job.platform_id) is not None:
                 if hub_client is _CLIENT_NOT_FETCHED:
                     hub_client = client_from(self.publish_hub_client_provider)
-                outcome = self._release_to_hub(
+                # The release gate runs inside: a held chapter stays scheduled (R36).
+                outcome = submit_released_job(
                     session,
                     job,
-                    destination_id=hub_binding.hub_destination_id,
-                    client=hub_client,
-                    actor_type=actor_type,
+                    hub_client,
+                    now=utc_now(),
+                    audit=self.audit,
+                    actor_type=str(actor_type or "system"),
+                    transition="scheduled_to_hub",
                 )
-                if outcome is None or outcome == SubmitOutcome.HELD:
-                    continue
                 if outcome == SubmitOutcome.DEFERRED_UNAVAILABLE:
                     # R32: the rest of this batch is stored and deferred without a request,
                     # instead of one timeout per row while the rows stay locked.
                     hub_client = None
-                released.append(job)
+                # Held, superseded and refused rows upload nothing: they do not use the day.
+                if outcome not in NOT_RELEASED_OUTCOMES:
+                    released.append(job)
                 continue
 
             job.status = "pending"
@@ -729,44 +737,6 @@ class UploadJobService:
             )
             released.append(job)
         return released
-
-    def _release_to_hub(
-        self,
-        session,
-        job: PublisherUploadJob,
-        *,
-        destination_id: str | None,
-        client,
-        actor_type: str,
-    ):
-        """Release a job whose binding routes to publish-hub: its SubmitOutcome, or None while
-        the binding has no destination yet (the job stays scheduled)."""
-        from forwin.publish_hub.submit import submit_released_job
-
-        if not destination_id:
-            logger.warning(
-                "publish binding of upload job %s routes to publish-hub without a destination",
-                job.id,
-            )
-            job.result_message = "绑定已切换到 publish-hub，但还没有发布目标，任务继续保持排程状态。"
-            self.audit.record_upload_job_event(
-                session,
-                job=job,
-                event_type=DecisionEventType.UPLOAD_JOB_PROGRESS,
-                summary="Canon 发布上传任务等待 publish-hub 发布目标。",
-                actor_type=str(actor_type or "system"),
-                extra_payload={"transition": "release_waiting_for_hub_destination"},
-            )
-            return None
-        return submit_released_job(
-            session,
-            job,
-            client,
-            now=utc_now(),
-            audit=self.audit,
-            actor_type=str(actor_type or "system"),
-            transition="scheduled_to_hub",
-        )
 
     def _canon_release_preflight(
         self,

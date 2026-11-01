@@ -21,6 +21,7 @@ from forwin.models.publisher import (
     PublisherUploadJob,
     PublisherWorkBinding,
 )
+from forwin.publish_hub.gate import selected_cover
 from forwin.publish_hub.submit import (
     client_from,
     hub_binding_for,
@@ -600,18 +601,10 @@ class PublisherCoverService:
         project_id: str,
         work_binding_id: str = "",
     ) -> PublisherCoverAsset | None:
-        stmt = select(PublisherCoverAsset).where(
-            PublisherCoverAsset.selection_state.in_(["selected", "approved"])
+        # One definition, shared with the create_destination request publish-hub gets.
+        return selected_cover(
+            session, project_id=project_id, work_binding_id=work_binding_id
         )
-        if work_binding_id:
-            stmt = stmt.where(
-                PublisherCoverAsset.work_binding_id.in_([work_binding_id, ""])
-            )
-        if project_id:
-            stmt = stmt.where(PublisherCoverAsset.project_id == project_id)
-        return session.execute(
-            stmt.order_by(PublisherCoverAsset.updated_at.desc()).limit(1)
-        ).scalar_one_or_none()
 
     def enqueue_cover_upload(self, cover_asset_id: str) -> PublisherUploadJob:
         with self.session_factory() as session:

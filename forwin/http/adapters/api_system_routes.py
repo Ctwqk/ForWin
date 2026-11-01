@@ -62,10 +62,16 @@ def build_handlers(
             if publisher_manager is not None
             else {"extension_api_key_configured": False}
         )
+        # Only the browser-reachable /ops address goes to the page: never the key, and not the
+        # address this process reaches publish-hub at.
+        config = get_config()
         return HTMLResponse(
             render_publishers_page(
                 backend_ready=backend_ready,
                 extension_install_path="browser_extension/forwin-publisher",
+                publish_hub_ops_url=str(
+                    getattr(config, "publish_hub_ops_url", "") or ""
+                ),
             )
         )
 

@@ -1,6 +1,8 @@
     const EXTENSION_BRIDGE_CHANNEL = 'forwin-publisher-extension';
     const BACKEND_EXTENSION_KEY_READY = @@BACKEND_EXTENSION_KEY_READY@@;
     const EXTENSION_INSTALL_PATH = @@EXTENSION_INSTALL_PATH_JSON@@;
+    // Where the operator's browser opens publish-hub's /ops page; "" draws no link.
+    const PUBLISH_HUB_OPS_URL = @@PUBLISH_HUB_OPS_URL_JSON@@;
     const pendingBridgeRequests = new Map();
     let uploadPollTimer = null;
     let uploadJobsPollTimer = null;

@@ -48,6 +48,7 @@ CONFIG_ENV_KEYS = {
     "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED",
     "FORWIN_PUBLISHER_SESSION_SECRET",
     "FORWIN_PUBLISH_HUB_API_KEY",
+    "FORWIN_PUBLISH_HUB_OPS_URL",
     "FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS",
     "FORWIN_PUBLISH_HUB_URL",
     "FORWIN_QDRANT_COLLECTION",
@@ -214,6 +215,7 @@ def test_publish_hub_settings_default_to_disabled(
 
     assert config.publish_hub_url == ""
     assert config.publish_hub_api_key == ""
+    assert config.publish_hub_ops_url == ""
     assert config.publish_hub_timeout_seconds == 20
 
 
@@ -226,6 +228,7 @@ def test_publish_hub_settings_come_from_the_environment(
         [
             "FORWIN_PUBLISH_HUB_URL=http://host.docker.internal:18930",
             "FORWIN_PUBLISH_HUB_API_KEY=file-hub-key",
+            "FORWIN_PUBLISH_HUB_OPS_URL=https://hub.example.com/ops",
             "FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS=35",
         ],
     )
@@ -235,6 +238,7 @@ def test_publish_hub_settings_come_from_the_environment(
 
     assert config.publish_hub_url == "http://host.docker.internal:18930"
     assert config.publish_hub_api_key == "real-hub-key"
+    assert config.publish_hub_ops_url == "https://hub.example.com/ops"
     assert config.publish_hub_timeout_seconds == 35
 
 

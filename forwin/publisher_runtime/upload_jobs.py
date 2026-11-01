@@ -1724,6 +1724,10 @@ class UploadJobService:
                 and not job.abort_requested
             ),
             "deletable": bool(job.deleted_at is None and terminal),
+            "hub_owned": not extension_queue_job,
+            "hub_job_id": str(job.hub_job_id or ""),
+            "hub_status": str(job.hub_status or ""),
+            "hub_superseded_reason": str(job.hub_superseded_reason or ""),
         }
 
     def new_upload_job(

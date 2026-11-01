@@ -105,6 +105,13 @@ class PublisherUploadJobResponse(BaseModel):
     resumable: bool = False
     terminable: bool = False
     deletable: bool = False
+    # publish-hub mirror. hub_owned: publish-hub runs this row (its request is stored, or it is
+    # a create_book row), so none of the extension-queue actions apply; hub_job_id / hub_status are
+    # empty until the request has been posted and mirrored.
+    hub_owned: bool = False
+    hub_job_id: str = ""
+    hub_status: str = ""
+    hub_superseded_reason: str = ""
 
 
 class PublisherUploadResumeRequest(BaseModel):

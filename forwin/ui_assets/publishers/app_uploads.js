@@ -28,6 +28,50 @@
       return lines;
     }
 
+    // The link to publish-hub's /ops page, or '' when none is configured (or it is not http(s)).
+    function publishHubOpsHref() {
+      const raw = typeof PUBLISH_HUB_OPS_URL === 'string' ? PUBLISH_HUB_OPS_URL.trim() : '';
+      if (!raw) return '';
+      try {
+        const url = new URL(raw);
+        return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
+      } catch (_error) {
+        return '';
+      }
+    }
+
+    // A row publish-hub runs, or will: it owns the row once its request is stored, and a chapter
+    // the release gate holds back is only "scheduled" here but is waiting on publish-hub too
+    // (the reason it waits is in its message).
+    function isHubRow(item) {
+      const payload = item && item.result_payload && typeof item.result_payload === 'object'
+        ? item.result_payload
+        : {};
+      const heldByGate = Boolean(payload.hub_hold) && typeof payload.hub_hold === 'object';
+      return Boolean(item && item.hub_owned) || heldByGate;
+    }
+
+    // A hub row publish-hub has not been given yet.
+    function isWaitingToReachHub(item) {
+      return !item.hub_job_id && isHubRow(item);
+    }
+
+    // publish-hub's side of a row, as lines of its own: the lines above it are unchanged.
+    function hubJobLines(item) {
+      const lines = [];
+      if (item.hub_job_id) {
+        lines.push(`publish-hub 状态：${item.hub_status || '尚未同步'}`);
+        lines.push(`publish-hub 任务：${item.hub_job_id}`);
+      } else if (isWaitingToReachHub(item)) {
+        lines.push('publish-hub：尚未提交');
+        if (item.message) lines.push(`等待原因：${item.message}`);
+      }
+      if (item.status === 'superseded') {
+        lines.push(`被取代原因：${item.hub_superseded_reason || '未记录'}`);
+      }
+      return lines;
+    }
+
     function renderUploadJob(data) {
       const lines = [
         `任务状态：${data.status}`,
@@ -78,18 +122,36 @@
         const node = document.createElement('div');
         node.className = 'task-item';
         node.appendChild(createNode('strong', `${item.display_name} | ${item.status} | ${item.book_name} / ${item.chapter_title}`));
+        // publish-hub assigns the executor of its rows, and a waiting reason is shown once, below.
         const lines = [
-          item.extension_client_id ? `执行端：${item.extension_client_id}` : '执行端：等待分配',
+          item.extension_client_id ? `执行端：${item.extension_client_id}` : (isHubRow(item) ? '' : '执行端：等待分配'),
           item.created_at ? `创建时间：${item.created_at}` : '',
           item.started_at ? `开始时间：${item.started_at}` : '',
           item.paused_at ? `暂停时间：${item.paused_at}` : '',
           item.pause_reason ? `暂停类型：${PAUSE_REASON_LABELS[item.pause_reason] || item.pause_reason}` : '',
           item.finished_at ? `结束时间：${item.finished_at}` : '',
-          item.message ? `说明：${item.message}` : '',
+          item.message && !isWaitingToReachHub(item) ? `说明：${item.message}` : '',
           item.error ? `错误：${item.error}` : '',
           ...uploadJobPayloadLines(item),
         ].filter(Boolean);
         node.appendChild(createNode('div', lines.join('\\n'), 'status'));
+        const hubLines = hubJobLines(item);
+        if (hubLines.length) {
+          node.appendChild(createNode('div', hubLines.join('\n'), 'status'));
+        }
+        const opsHref = item.hub_job_id ? publishHubOpsHref() : '';
+        if (opsHref) {
+          const opsWrap = document.createElement('p');
+          opsWrap.className = 'muted';
+          opsWrap.appendChild(document.createTextNode('publish-hub 运维页：'));
+          const opsLink = document.createElement('a');
+          opsLink.href = opsHref;
+          opsLink.target = '_blank';
+          opsLink.rel = 'noreferrer';
+          opsLink.textContent = 'publish-hub /ops';
+          opsWrap.appendChild(opsLink);
+          node.appendChild(opsWrap);
+        }
         if (item.current_url) {
           const linkWrap = document.createElement('p');
           linkWrap.className = 'muted';
@@ -102,7 +164,8 @@
           linkWrap.appendChild(link);
           node.appendChild(linkWrap);
         }
-        if (item.resumable) {
+        // A row publish-hub owns is resumed there: resuming it here would only be refused.
+        if (item.resumable && !item.hub_owned) {
           const actions = createNode('div', '', 'task-actions');
           actions.appendChild(createButton('恢复任务', () => openUploadResumeDialog(item)));
           node.appendChild(actions);
@@ -148,7 +211,7 @@
     }
 
     function openUploadResumeDialog(job) {
-      if (!job || !job.resumable || !job.pause_token || !job.pause_reason) return;
+      if (!job || !job.resumable || job.hub_owned || !job.pause_token || !job.pause_reason) return;
       pendingResumeJob = job;
       document.getElementById('upload_resume_summary').textContent = [
         `${job.display_name} | ${job.book_name} / ${job.chapter_title}`,

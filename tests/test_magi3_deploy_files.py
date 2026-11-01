@@ -269,6 +269,7 @@ def test_env_example_has_provider_key_names_only() -> None:
         "FORWIN_PUBLISHER_SESSION_SECRET",
         "FORWIN_PUBLISH_HUB_URL",
         "FORWIN_PUBLISH_HUB_API_KEY",
+        "FORWIN_PUBLISH_HUB_OPS_URL",
         "FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS",
     } <= names
     assert "codex" not in env_text.lower()

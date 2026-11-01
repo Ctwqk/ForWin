@@ -245,6 +245,7 @@ def _infrastructure_env_values() -> dict[str, object]:
         ),
         "publish_hub_url": _env_str(env, "FORWIN_PUBLISH_HUB_URL"),
         "publish_hub_api_key": _env_str(env, "FORWIN_PUBLISH_HUB_API_KEY"),
+        "publish_hub_ops_url": _env_str(env, "FORWIN_PUBLISH_HUB_OPS_URL"),
         "publish_hub_timeout_seconds": _env_int(
             env, "FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS", 20
         ),
@@ -363,6 +364,10 @@ class _InfrastructureFields:
     publisher_session_encryption_required: bool = False
     publish_hub_url: str = ""
     publish_hub_api_key: str = ""
+    # Where a browser opens publish-hub's /ops page; the /publishers page links to it. Not
+    # publish_hub_url: that is the address this process reaches the hub at (the VPS tunnel on
+    # magi3), which the operator's browser cannot open. Empty draws no link.
+    publish_hub_ops_url: str = ""
     publish_hub_timeout_seconds: int = 20
     publisher_login_discord_webhook_enabled: bool = False
     publisher_login_discord_webhook_url: str = ""

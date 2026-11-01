@@ -139,21 +139,6 @@ CREATE_FAILED = "create_failed"
 CREATE_UNBUILDABLE = "create_unbuildable"
 # result_payload_json key of a held chapter: its last gate verdict, to audit only changes.
 _HOLD_KEY = "hub_hold"
-_HOLD_MESSAGES = {
-    NO_DESTINATION: (
-        "绑定已切换到 publish-hub，但还没有发布目标（hub_destination_id），任务继续保持排程状态；"
-        "新书的发布目标由运维用 publish-hub 的 CLI 创建。"
-    ),
-    DESTINATION_NOT_SYNCED: (
-        "publish-hub 发布目标不在同步缓存里（账号已停用，或同步进程还没刷新），任务继续保持排程状态。"
-    ),
-    DESTINATION_ON_OTHER_PLATFORM: (
-        "绑定的 publish-hub 发布目标属于另一个平台，任务继续保持排程状态；请修正 hub_destination_id。"
-    ),
-    ACCOUNT_PAUSED: (
-        "publish-hub 账号因风控暂停（paused_risk），任务继续保持排程状态，不占用当天的发布配额。"
-    ),
-}
 _STOPPED_STATUSES = frozenset({"failed", "cancelled"})
 
 _DEFAULT_AUDIT = PublisherAuditService(session_factory=None)
@@ -266,7 +251,7 @@ def release_gate(
     """
     check = check_destination(session, binding, project_id=project_id)
     if check.cause != BOOK_MISSING:
-        return GateDecision(check.result, check.cause, _HOLD_MESSAGES.get(check.cause, ""))
+        return GateDecision(check.result, check.cause, _hold_message(check.cause))
     try:
         create = _ensure_create_job(
             session,
@@ -474,6 +459,31 @@ def _hold(
         },
     )
     return SubmitOutcome.HELD
+
+
+def _hold_message(cause: str) -> str:
+    """What a chapter held for `cause` shows (the book-creation causes: `_waiting_for_book`)."""
+    if cause == NO_DESTINATION:
+        return (
+            "绑定已切换到 publish-hub，但还没有发布目标（hub_destination_id），任务继续保持排程状态；"
+            "新书的发布目标由运维用 publish-hub 的 CLI 创建。"
+        )
+    if cause == DESTINATION_NOT_SYNCED:
+        return (
+            "publish-hub 发布目标不在同步缓存里（账号已停用，或同步进程还没刷新），"
+            "任务继续保持排程状态。"
+        )
+    if cause == DESTINATION_ON_OTHER_PLATFORM:
+        return (
+            "绑定的 publish-hub 发布目标属于另一个平台，任务继续保持排程状态；"
+            "请修正 hub_destination_id。"
+        )
+    if cause == ACCOUNT_PAUSED:
+        return (
+            "publish-hub 账号因风控暂停（paused_risk），任务继续保持排程状态，"
+            "不占用当天的发布配额。"
+        )
+    return ""
 
 
 def _clear_hold(job: PublisherUploadJob) -> None:

@@ -73,6 +73,7 @@ class SyncHub(FakeHub):
         ]
         self.get_job_calls: list[str] = []
         self.on_get_job = None
+        self.get_job_refusal: tuple[int, str] | None = None
         self.destinations_calls = 0
 
     # --- the hub's side of a job's life -------------------------------------------------
@@ -87,6 +88,9 @@ class SyncHub(FakeHub):
             if self.down:
                 raise httpx.ConnectError("hub is down", request=request)
             self.get_job_calls.append(job_id)
+            if self.get_job_refusal is not None:
+                status, code = self.get_job_refusal
+                return httpx.Response(status, json={"error": {"code": code, "message": code}})
             job = self.job(job_id)
             if job is None:
                 return httpx.Response(
@@ -592,6 +596,42 @@ def test_publish_hub_down_in_the_middle_of_a_round_leaves_the_cursor() -> None:
         _round(fixture, client)
         assert _cursor(fixture) == hub.last_seq()
         assert {_job(fixture, job_id).status for job_id in created.values()} == {"succeeded"}
+    finally:
+        fixture.engine.dispose()
+
+
+def test_a_job_publish_hub_does_not_know_is_skipped_and_a_refused_key_ends_the_round() -> None:
+    fixture, hub, client, created = _sync_fixture("hub-sync-refusals")
+    job_id = created["fanqie"]
+    try:
+        _round(fixture, client)
+        hub_job_id = _job(fixture, job_id).hub_job_id
+        _succeed_chapter(hub, hub_job_id)
+        before = _row_state(_job(fixture, job_id))
+
+        hub.get_job_refusal = (401, "unauthorized")
+        with pytest.raises(sync_module.HubRequestError):
+            _round(fixture, client)
+        assert _cursor(fixture) < hub.last_seq()  # the round ended, nothing moved
+        assert _row_state(_job(fixture, job_id)) == before
+
+        hub.get_job_refusal = (404, "not_found")
+        report = _round(fixture, client)
+        assert _cursor(fixture) == hub.last_seq()  # skipped, the feed goes on
+        assert report.failed == [] and report.skipped >= 1
+        assert _job(fixture, job_id).status == "pending"
+
+        _age(fixture, job_id)
+        report = _round(fixture, client)  # the catch-up pass asks again, then waits
+        assert report.caught_up == [job_id]
+        hub.get_job_calls.clear()
+        _round(fixture, client)
+        assert hub.get_job_calls == []
+
+        hub.get_job_refusal = None
+        _age(fixture, job_id)
+        _round(fixture, client)
+        assert _job(fixture, job_id).status == "succeeded"
     finally:
         fixture.engine.dispose()
 

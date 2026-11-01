@@ -1,0 +1,775 @@
+"""The publish-hub sync process: mirrors publish-hub's results into ForWin.
+
+It is the only writer of terminal state for hub-owned upload rows (D1). Each round
+(`sync_once`):
+
+1. resends the stored requests publish-hub has not answered yet, in chapter order
+   (`recover_unsubmitted`, its own transaction);
+2. reads the change feed after the stored cursor, a page at a time. A page is one transaction:
+   each item is applied in a savepoint and the new cursor is written with them, so the cursor
+   moves exactly when the changes it covers commit. A crash replays the page; applying an item
+   again changes nothing the second time (a row already in the hub's state is left as it is, and
+   events are written only when the local status changes). An item that cannot be applied is
+   rolled back on its own and logged, and its row stays in flight for step 3. An item naming no
+   local row is skipped without asking publish-hub;
+3. catches up (R30): hub-owned rows still `pending` or `paused` locally whose recorded hub status
+   is already terminal (adopted that way at submit) or that the sync has not looked at for ten
+   minutes are read back with `get_job`, oldest first, at most 50 a round. The feed cursor may
+   already be past their changes;
+4. refreshes the destinations snapshot the release gate reads, when asked (`run_forever` asks on
+   its first round and every tenth).
+
+publish-hub being unreachable (or refusing the key) anywhere in a round ends it: the open
+transaction is rolled back and the error reaches `run_forever`, which waits and tries again.
+
+How a job is mirrored (the state map): scheduled/pending/reconciling -> `pending`, paused ->
+`paused` with one DecisionEvent, failed/cancelled -> the same with the hub's `last_error` in
+`error_message`, succeeded -> `succeeded` with the result written into the bindings. `hub_status`
+always records the raw hub status. A receipt an operator confirmed (`operator_confirmed`) is a
+success like any other. The bindings are written by the same functions the extension-queue
+success path uses, fed the same receipt-shaped payload:
+
+* chapter_upload: work binding and chapter binding upserts, plus the chapter's
+  `hub_publication_id`; the book id comes from the destinations snapshot;
+* create_book: the work binding's `remote_book_id`, `remote_url` and `hub_destination_id`;
+* cover_upload: the work binding's cover state.
+
+A `publication` change updates the publish state of the chapter binding that names it.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Any
+
+from sqlalchemy import func, or_, select
+
+from forwin.audit.events import DecisionEventType
+from forwin.models.publisher import (
+    CREATE_BOOK_TASK_KIND,
+    PublisherChapterBinding,
+    PublisherUploadJob,
+    PublishHubSyncState,
+    upload_job_is_hub_owned,
+)
+from forwin.publisher_runtime.audit import (
+    PublisherAuditService,
+    terminal_upload_event_type,
+)
+from forwin.publisher_runtime.bindings import (
+    PublisherBindingService,
+    _normalize_publish_state,
+)
+from forwin.publisher_runtime.browser_sessions import utc_now
+from forwin.publisher_runtime.upload_jobs import _receipt_projection_payload
+
+from .client import HubRequestError, HubUnavailable, PublishHubClient
+from .state import cached_destination, write_destinations
+from .submit import (
+    LOCAL_STATUS_FOR_HUB_STATUS,
+    TERMINAL_HUB_STATUSES,
+    SubmitOutcome,
+    client_from,
+    recover_unsubmitted,
+)
+
+logger = logging.getLogger(__name__)
+
+CHANGES_KEY = "changes"
+PAGE_SIZE = 200
+# A backlog (the first start, or a long outage) is read over several rounds, not all at once.
+MAX_PAGES_PER_ROUND = 10
+CATCH_UP_LIMIT = 50
+CATCH_UP_AFTER = timedelta(minutes=10)
+ROUND_INTERVAL_SECONDS = 15.0
+MAX_BACKOFF_SECONDS = 300.0
+DESTINATIONS_EVERY_ROUNDS = 10
+
+MIRRORED_TASK_KINDS = frozenset({"chapter_upload", "cover_upload", CREATE_BOOK_TASK_KIND})
+_IN_FLIGHT_STATUSES = ("pending", "paused")
+_KEY_REFUSED = frozenset({401, 403})
+_ERROR_LIMIT = 500
+# What publish-hub's own operator confirmation of a receipt is called (ruling R33 of its spec).
+OPERATOR_CONFIRMED = "operator_confirmed"
+SYNC_ACTOR_ID = "publish-hub-sync"
+
+
+@dataclass
+class SyncReport:
+    """What a round did. Ids are local PublisherUploadJob ids."""
+
+    resubmitted: dict[str, SubmitOutcome] = field(default_factory=dict)
+    cursor: int = 0
+    changes: int = 0
+    mirrored: list[str] = field(default_factory=list)  # rows whose local status changed
+    skipped: int = 0  # items naming no local row, or nothing to apply
+    failed: list[str] = field(default_factory=list)  # rows whose item was rolled back
+    failed_publications: list[str] = field(default_factory=list)
+    caught_up: list[str] = field(default_factory=list)  # rows read back by the catch-up pass
+    destinations_refreshed: bool = False
+
+
+def sync_once(
+    session,
+    client: PublishHubClient,
+    now: datetime,
+    *,
+    refresh_destinations: bool = False,
+    audit: PublisherAuditService | None = None,
+) -> SyncReport:
+    """One round, committed step by step on `session` (see the module docstring).
+
+    Raises HubUnavailable, or HubRequestError when publish-hub refuses the key or the feed
+    request, after rolling back what the open step had done; earlier steps stay committed.
+    """
+    mirror = _Mirror(audit or PublisherAuditService(session_factory=None))
+    report = SyncReport()
+    try:
+        report.resubmitted = recover_unsubmitted(session, client, now, audit=mirror.audit)
+        session.commit()
+        _read_feed(session, client, now, mirror, report)
+        _catch_up(session, client, now, mirror, report)
+        session.commit()
+        if refresh_destinations:
+            report.destinations_refreshed = _refresh_destinations(session, client, now)
+    except BaseException:
+        session.rollback()
+        raise
+    logger.info(
+        "publish-hub sync round: cursor %s, %d changes, %d mirrored, %d failed, %d caught up",
+        report.cursor,
+        report.changes,
+        len(report.mirrored),
+        len(report.failed),
+        len(report.caught_up),
+    )
+    return report
+
+
+def run_forever(
+    session_factory,
+    client_provider: Callable[[], PublishHubClient | None],
+    *,
+    interval: float = ROUND_INTERVAL_SECONDS,
+    max_backoff: float = MAX_BACKOFF_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], datetime] = utc_now,
+    max_rounds: int | None = None,
+    audit: PublisherAuditService | None = None,
+) -> None:
+    """Run a round every `interval` seconds; never exits on its own (`max_rounds` is for tests).
+
+    While publish-hub is unreachable, refuses the key, or a round fails for any other reason,
+    the wait doubles from `interval` up to `max_backoff`, with one log line per wait. Without a
+    publish-hub URL or key it only waits, logging once per wait: nothing to sync yet. The
+    destinations snapshot is refreshed on the first round that gets that far, and every tenth
+    round after that.
+    """
+    passes = 0
+    rounds = 0
+    failures = 0
+    refreshed = False
+    while max_rounds is None or passes < max_rounds:
+        passes += 1
+        client = client_from(client_provider)
+        if client is None:
+            failures += 1
+            delay = _backoff(failures, interval, max_backoff)
+            logger.warning(
+                "publish-hub is not configured (FORWIN_PUBLISH_HUB_URL or "
+                "FORWIN_PUBLISH_HUB_API_KEY not set, or a setting is invalid); nothing is "
+                "synced, checking again in %.0f s",
+                delay,
+            )
+            sleep(delay)
+            continue
+        rounds += 1
+        refresh = not refreshed or rounds % DESTINATIONS_EVERY_ROUNDS == 0
+        try:
+            with session_factory() as session:
+                report = sync_once(
+                    session, client, clock(), refresh_destinations=refresh, audit=audit
+                )
+        except (HubUnavailable, HubRequestError) as exc:
+            failures += 1
+            delay = _backoff(failures, interval, max_backoff)
+            logger.warning("publish-hub unavailable (%s); next sync round in %.0f s", exc, delay)
+            sleep(delay)
+            continue
+        except Exception:
+            failures += 1
+            delay = _backoff(failures, interval, max_backoff)
+            logger.exception("publish-hub sync round failed; next round in %.0f s", delay)
+            sleep(delay)
+            continue
+        failures = 0
+        refreshed = refreshed or report.destinations_refreshed
+        sleep(interval)
+
+
+def client_provider(
+    url: str, key: str, timeout: float
+) -> Callable[[], PublishHubClient | None]:
+    """A provider of one client for the process, or of None while the URL or key is unset.
+
+    An invalid setting (a timeout that is not positive) is logged by `client_from` and also
+    reads as not configured.
+    """
+    clients: list[PublishHubClient] = []
+
+    def provide() -> PublishHubClient | None:
+        if not str(url or "").strip() or not str(key or "").strip():
+            return None
+        if not clients:
+            clients.append(PublishHubClient(url, key, timeout))
+        return clients[0]
+
+    return lambda: client_from(provide)
+
+
+def _backoff(failures: int, interval: float, max_backoff: float) -> float:
+    return min(float(interval) * 2 ** max(failures - 1, 0), float(max_backoff))
+
+
+# --- feed ---------------------------------------------------------------------------------
+
+
+def _read_feed(session, client, now: datetime, mirror: _Mirror, report: SyncReport) -> None:
+    for _page in range(MAX_PAGES_PER_ROUND):
+        state = _cursor_row(session)
+        after = int(state.cursor or 0)
+        items, next_after = client.changes(after=after, limit=PAGE_SIZE)
+        report.changes += len(items)
+        _apply_page(session, client, items, now, mirror, report)
+        if next_after > after:
+            state.cursor = next_after
+            state.updated_at = now
+        session.commit()
+        report.cursor = int(state.cursor)
+        if len(items) < PAGE_SIZE or next_after <= after:
+            return
+
+
+def _cursor_row(session) -> PublishHubSyncState:
+    """The feed cursor, locked for this page's transaction (created at 0 on the first round)."""
+    row = session.get(PublishHubSyncState, CHANGES_KEY, with_for_update=True)
+    if row is None:
+        row = PublishHubSyncState(key=CHANGES_KEY, cursor=0)
+        session.add(row)
+        session.flush()
+    return row
+
+
+def _apply_page(session, client, items, now: datetime, mirror: _Mirror, report) -> None:
+    """Jobs first, each once (its current view is read anyway), then each publication's last
+    state in the page, so a publication whose binding the job item creates is found."""
+    job_ids: dict[str, None] = {}
+    publications: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            report.skipped += 1
+            continue
+        entity = str(item.get("entity") or "")
+        entity_id = str(item.get("entity_id") or "").strip()
+        if not entity_id:
+            report.skipped += 1
+        elif entity == "job":
+            job_ids.setdefault(entity_id, None)
+        elif entity == "publication":
+            publications.pop(entity_id, None)
+            publications[entity_id] = str(item.get("status") or "").strip()
+        else:
+            report.skipped += 1
+    for hub_job_id in job_ids:
+        row = session.execute(
+            select(PublisherUploadJob)
+            .where(PublisherUploadJob.hub_job_id == hub_job_id)
+            .with_for_update()
+        ).scalar_one_or_none()
+        if row is None or not _mirrored(row):
+            report.skipped += 1
+            continue
+        _mirror_from_hub(session, client, row, now, mirror, report)
+    for publication_id, official_state in publications.items():
+        _apply_publication(session, publication_id, official_state, now, report)
+
+
+def _mirrored(row: PublisherUploadJob) -> bool:
+    """Only rows publish-hub runs, of the kinds it reports results for, are ever written."""
+    return (
+        upload_job_is_hub_owned(row)
+        and bool(row.hub_job_id)
+        and row.task_kind in MIRRORED_TASK_KINDS
+    )
+
+
+def _mirror_from_hub(
+    session, client, row: PublisherUploadJob, now: datetime, mirror: _Mirror, report
+) -> bool:
+    """Read the row's job and mirror it, in a savepoint; False when the item was not applied.
+
+    publish-hub unreachable, or refusing the key, ends the round (re-raised). A job publish-hub
+    does not know (404) or another refusal is logged and skipped. Anything else that goes
+    wrong rolls back this row only: it stays in flight and the catch-up pass retries it.
+    """
+    row_id, hub_job_id = row.id, str(row.hub_job_id)
+    try:
+        with session.begin_nested():
+            view = client.get_job(hub_job_id)
+            changed = mirror.apply(session, row, view, now=now)
+    except HubUnavailable:
+        raise
+    except HubRequestError as exc:
+        if exc.status in _KEY_REFUSED:
+            raise
+        logger.warning(
+            "publish-hub refused reading job %s of upload job %s: %s %s",
+            hub_job_id,
+            row_id,
+            exc.status,
+            exc.code,
+        )
+        report.skipped += 1
+        return False
+    except Exception:
+        logger.exception(
+            "could not mirror publish-hub job %s into upload job %s; it is retried later",
+            hub_job_id,
+            row_id,
+        )
+        report.failed.append(row_id)
+        return False
+    if changed:
+        report.mirrored.append(row_id)
+    return True
+
+
+def _apply_publication(session, publication_id: str, official_state: str, now, report) -> None:
+    """A publication's platform state changed: the chapter binding that names it follows.
+
+    In a savepoint of its own, like a job item: a failure is logged and skipped.
+    """
+    if not official_state or official_state == "created":
+        report.skipped += 1  # "created": publish-hub opened the record, nothing on the platform
+        return
+    try:
+        with session.begin_nested():
+            applied = _publication_state(session, publication_id, official_state, now)
+    except Exception:
+        logger.exception("could not apply the state of publication %s", publication_id)
+        report.failed_publications.append(publication_id)
+        return
+    if not applied:
+        report.skipped += 1
+
+
+def _publication_state(session, publication_id: str, official_state: str, now) -> bool:
+    chapter = session.execute(
+        select(PublisherChapterBinding)
+        .where(PublisherChapterBinding.hub_publication_id == publication_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if chapter is None:
+        return False
+    job = session.execute(
+        select(PublisherUploadJob)
+        .where(
+            PublisherUploadJob.project_id == chapter.project_id,
+            PublisherUploadJob.platform_id == chapter.platform_id,
+            PublisherUploadJob.task_kind == "chapter_upload",
+            PublisherUploadJob.chapter_number == chapter.chapter_number,
+            PublisherUploadJob.hub_job_id.is_not(None),
+        )
+        .order_by(PublisherUploadJob.created_at.desc(), PublisherUploadJob.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if job is None:
+        logger.warning(
+            "publication %s names chapter binding %s but no publish-hub upload job; skipped",
+            publication_id,
+            chapter.id,
+        )
+        return False
+    # Same reading of the platform state as the receipt projection (it needs the job's mode).
+    chapter.publish_state = _normalize_publish_state(job, {"official_state": official_state})
+    chapter.last_synced_at = now
+    session.flush()
+    return True
+
+
+# --- catch-up (R30) -------------------------------------------------------------------------
+
+
+def _catch_up(session, client, now: datetime, mirror: _Mirror, report: SyncReport) -> None:
+    rows = (
+        session.execute(
+            select(PublisherUploadJob)
+            .where(
+                PublisherUploadJob.hub_job_id.is_not(None),
+                PublisherUploadJob.status.in_(_IN_FLIGHT_STATUSES),
+                PublisherUploadJob.task_kind.in_(sorted(MIRRORED_TASK_KINDS)),
+                PublisherUploadJob.deleted_at.is_(None),
+                or_(
+                    PublisherUploadJob.hub_status.in_(sorted(TERMINAL_HUB_STATUSES)),
+                    # The database clock, the one that wrote updated_at.
+                    PublisherUploadJob.updated_at < func.now() - CATCH_UP_AFTER,
+                ),
+            )
+            .order_by(PublisherUploadJob.updated_at.asc(), PublisherUploadJob.id.asc())
+            .limit(CATCH_UP_LIMIT)
+            .with_for_update(skip_locked=True)
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        if not _mirrored(row):
+            continue
+        report.caught_up.append(row.id)
+        if not _mirror_from_hub(session, client, row, now, mirror, report):
+            _touch(row)  # checked: wait the full period before asking again
+    session.flush()
+
+
+def _touch(row: PublisherUploadJob) -> None:
+    """Mark the row as looked at by the sync now (the catch-up pass reads updated_at)."""
+    row.updated_at = func.now()
+
+
+# --- destinations ---------------------------------------------------------------------------
+
+
+def _refresh_destinations(session, client, now: datetime) -> bool:
+    items = client.destinations()
+    try:
+        write_destinations(session, items, now=now)
+    except (ValueError, AttributeError) as exc:
+        session.rollback()
+        logger.error("publish-hub answered /v1/destinations with an unusable item: %s", exc)
+        return False
+    session.commit()
+    return True
+
+
+# --- mirroring one job ----------------------------------------------------------------------
+
+
+class _Mirror:
+    """Writes one publish-hub job view onto its local row, by the state map."""
+
+    def __init__(self, audit: PublisherAuditService) -> None:
+        self.audit = audit
+        self.bindings = PublisherBindingService(session_factory=None)
+
+    def apply(
+        self, session, row: PublisherUploadJob, view: Any, *, now: datetime
+    ) -> bool:
+        """True when the local status changed. Applying the same view again changes nothing."""
+        fields = view if isinstance(view, Mapping) else {}
+        if str(fields.get("id") or "").strip() != str(row.hub_job_id):
+            raise ValueError(f"publish-hub answered another job than {row.hub_job_id}")
+        hub_status = str(fields.get("status") or "").strip()
+        _touch(row)
+        target = LOCAL_STATUS_FOR_HUB_STATUS.get(hub_status)
+        if hub_status:
+            row.hub_status = hub_status
+        if target is None:
+            logger.warning(
+                "publish-hub job %s of upload job %s has an unknown status %r; left as it is",
+                row.hub_job_id,
+                row.id,
+                hub_status,
+            )
+            return False
+        if row.status == target:
+            return False
+        if row.status == "succeeded":
+            # publish-hub never takes a success back; the bindings stay as they were written.
+            logger.warning(
+                "publish-hub job %s reads %s but upload job %s has succeeded; left as it is",
+                row.hub_job_id,
+                hub_status,
+                row.id,
+            )
+            return False
+        previous = row.status
+        if target == "succeeded":
+            self._succeed(session, row, fields, now=now)
+        elif target == "paused":
+            self._pause(session, row, fields, now=now)
+        elif target in ("failed", "cancelled"):
+            self._stop(session, row, fields, target, now=now)
+        else:
+            self._resume(session, row, fields, previous)
+        session.flush()
+        return True
+
+    # Each state ------------------------------------------------------------------------
+
+    def _succeed(self, session, row: PublisherUploadJob, view: Mapping, *, now: datetime) -> None:
+        result = _hub_result(view)
+        payload = _load_object(row.result_payload_json)
+        if row.task_kind == "chapter_upload":
+            self._project_chapter(session, row, view, result, payload)
+        elif row.task_kind == CREATE_BOOK_TASK_KIND:
+            self._project_book(session, row, view, result, payload)
+        else:
+            self._project_cover(session, row, result, payload)
+        payload["hub_result"] = result
+        row.result_payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        row.status = "succeeded"
+        row.finished_at = now
+        row.paused_at = None
+        row.pause_reason = ""
+        row.error_message = ""
+        if result["remote_url"]:
+            row.current_url = result["remote_url"]
+        row.result_message = (
+            f"publish-hub 任务已完成（任务 {row.hub_job_id}，平台状态 "
+            f"{result['official_state'] or '-'}）。"
+        )
+        self._record(
+            session,
+            row,
+            DecisionEventType.UPLOAD_JOB_SUCCEEDED,
+            f"publish-hub 发布任务已完成（{result['official_state'] or '-'}）。",
+            extra={
+                "remote_id": result["remote_id"],
+                "official_state": result["official_state"],
+                "hub_publication_id": result["publication_id"],
+            },
+        )
+
+    def _pause(self, session, row: PublisherUploadJob, view: Mapping, *, now: datetime) -> None:
+        reason = _error_reason(view.get("last_error")) or "paused"
+        row.status = "paused"
+        row.paused_at = now
+        row.pause_reason = reason
+        row.finished_at = None
+        row.error_message = _error_text(view.get("last_error"))
+        row.result_message = (
+            f"publish-hub 暂停了这个任务（{reason}），请在 publish-hub /ops 处理"
+            f"（任务 {row.hub_job_id}）。"
+        )
+        self._record(
+            session,
+            row,
+            DecisionEventType.UPLOAD_JOB_PAUSED,
+            f"publish-hub 暂停了发布任务（{reason}）。",
+            extra={"pause_reason": reason, "error_message": row.error_message},
+        )
+
+    def _stop(
+        self, session, row: PublisherUploadJob, view: Mapping, target: str, *, now: datetime
+    ) -> None:
+        row.status = target
+        row.finished_at = now
+        row.paused_at = None
+        row.pause_reason = ""
+        row.error_message = _error_text(view.get("last_error"))
+        detail = f"：{row.error_message}" if row.error_message else ""
+        row.result_message = f"publish-hub 任务结束（{target}）{detail}（任务 {row.hub_job_id}）。"
+        self._record(
+            session,
+            row,
+            terminal_upload_event_type(target),
+            f"publish-hub 发布任务结束（{target}）。",
+            extra={"error_message": row.error_message},
+        )
+
+    def _resume(self, session, row: PublisherUploadJob, view: Mapping, previous: str) -> None:
+        """Back in flight on publish-hub: resumed or retried by an operator in /ops."""
+        row.status = "pending"
+        row.finished_at = None
+        row.paused_at = None
+        row.pause_reason = ""
+        row.error_message = ""
+        row.result_message = (
+            f"publish-hub 任务继续执行（任务 {row.hub_job_id}，状态 {row.hub_status}）。"
+        )
+        self._record(
+            session,
+            row,
+            DecisionEventType.UPLOAD_JOB_PROGRESS,
+            f"publish-hub 发布任务从 {previous} 恢复执行。",
+            extra={"previous_status": previous},
+        )
+
+    # Projections, through the functions the extension-queue success path uses -------------
+
+    def _project_chapter(
+        self, session, row: PublisherUploadJob, view: Mapping, result: dict, payload: dict
+    ) -> None:
+        destination = cached_destination(session, _destination_id(row, view))
+        projected = _receipt_projection_payload(
+            payload,
+            {
+                "remote_book_id": destination.remote_id if destination is not None else "",
+                "remote_chapter_id": result["remote_id"],
+                "remote_url": result["remote_url"],
+                "official_state": result["official_state"],
+                "content_sha256": row.body_sha256,
+            },
+        )
+        work = self.bindings.upsert_work_binding_from_upload_job(
+            session, job=row, result_payload=projected, current_url=result["remote_url"]
+        )
+        chapter = self.bindings.upsert_chapter_binding_from_upload_job(
+            session,
+            job=row,
+            work_binding=work,
+            result_payload=projected,
+            current_url=result["remote_url"],
+        )
+        if result["publication_id"]:
+            chapter.hub_publication_id = result["publication_id"]
+        session.flush()
+        payload["work_binding"] = self.bindings.serialize_work_binding(work)
+        payload["chapter_binding"] = self.bindings.serialize_chapter_binding(chapter)
+
+    def _project_book(
+        self, session, row: PublisherUploadJob, view: Mapping, result: dict, payload: dict
+    ) -> None:
+        destination_id = _destination_id(row, view)
+        book_id = result["remote_id"]
+        if not book_id:
+            cached = cached_destination(session, destination_id)
+            book_id = (cached.remote_id if cached is not None else None) or ""
+        if not book_id:
+            logger.warning(
+                "book creation %s succeeded on publish-hub without a book id; chapters wait for "
+                "the next destinations refresh",
+                row.hub_job_id,
+            )
+        projected = _receipt_projection_payload(
+            payload,
+            {
+                "remote_book_id": book_id,
+                "remote_chapter_id": "",
+                "remote_url": result["remote_url"],
+                "official_state": result["official_state"],
+                "content_sha256": "",
+            },
+        )
+        projected["remote_book_url"] = result["remote_url"]
+        work = self.bindings.upsert_work_binding_from_upload_job(
+            session, job=row, result_payload=projected, current_url=result["remote_url"]
+        )
+        if destination_id:
+            work.hub_destination_id = destination_id
+        session.flush()
+        payload["work_binding"] = self.bindings.serialize_work_binding(work)
+
+    def _project_cover(
+        self, session, row: PublisherUploadJob, result: dict, payload: dict
+    ) -> None:
+        official_state = result["official_state"]
+        if official_state == OPERATOR_CONFIRMED:
+            # The extension-queue cover receipt confirms "cover_uploaded"; an operator's
+            # confirmation of the cover means the same.
+            official_state = "cover_uploaded"
+        projected = _receipt_projection_payload(
+            payload,
+            {
+                "remote_book_id": str(payload.get("remote_book_id") or ""),
+                "remote_chapter_id": "",
+                "remote_url": result["remote_url"],
+                "official_state": official_state,
+                "content_sha256": row.body_sha256,
+            },
+        )
+        work = self.bindings.update_from_cover_upload_result(
+            session, job=row, result_payload=projected, current_url=result["remote_url"]
+        )
+        if work is None:
+            raise ValueError(f"cover upload job {row.id} names no work binding")
+        payload["work_binding"] = self.bindings.serialize_work_binding(work)
+
+    def _record(
+        self, session, row: PublisherUploadJob, event_type: str, summary: str, *, extra: dict
+    ) -> None:
+        self.audit.record_upload_job_event(
+            session,
+            job=row,
+            event_type=event_type,
+            summary=summary,
+            actor_type="worker",
+            actor_id=SYNC_ACTOR_ID,
+            extra_payload={
+                "transition": "hub_mirrored",
+                "hub_job_id": str(row.hub_job_id or ""),
+                "hub_status": str(row.hub_status or ""),
+                **extra,
+            },
+        )
+
+
+def _hub_result(view: Mapping) -> dict[str, str]:
+    """remote id, url and platform state of a finished job: its latest receipt, then its
+    publication for any field the receipt leaves empty."""
+    receipt = view.get("latest_receipt") if isinstance(view.get("latest_receipt"), Mapping) else {}
+    publication = view.get("publication") if isinstance(view.get("publication"), Mapping) else {}
+    return {
+        "status": _text(view.get("status")),
+        "publication_id": _text(publication.get("id")),
+        "remote_id": _text(receipt.get("remote_id")) or _text(publication.get("remote_id")),
+        "remote_url": _text(receipt.get("remote_url")) or _text(publication.get("remote_url")),
+        "official_state": _text(receipt.get("official_state"))
+        or _text(publication.get("official_state")),
+        "executor_ref": _text(receipt.get("executor_ref")),
+    }
+
+
+def _destination_id(row: PublisherUploadJob, view: Mapping) -> str:
+    body = row.hub_submit_body_json if isinstance(row.hub_submit_body_json, Mapping) else {}
+    return _text(view.get("destination_id")) or _text(body.get("destination_id"))
+
+
+def _error_reason(last_error: Any) -> str:
+    if isinstance(last_error, Mapping):
+        return (_text(last_error.get("reason")) or _text(last_error.get("code")))[:64]
+    return ""
+
+
+def _error_text(last_error: Any) -> str:
+    """publish-hub's last_error as one line: "reason: detail" ({reason, detail} or
+    {code, message}), else its JSON."""
+    if last_error is None or last_error == {}:
+        return ""
+    if isinstance(last_error, Mapping):
+        reason = _error_reason(last_error)
+        detail = _text(last_error.get("detail")) or _text(last_error.get("message"))
+        if reason or detail:
+            text = f"{reason}: {detail}" if reason and detail else reason or detail
+        else:
+            text = json.dumps(last_error, ensure_ascii=False, sort_keys=True, default=str)
+    else:
+        text = str(last_error)
+    return text[:_ERROR_LIMIT]
+
+
+def _text(value: Any) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def _load_object(raw: str | None) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+__all__ = [
+    "CHANGES_KEY",
+    "HubUnavailable",
+    "SyncReport",
+    "client_provider",
+    "run_forever",
+    "sync_once",
+]

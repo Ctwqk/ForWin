@@ -52,6 +52,7 @@ def test_compose_has_the_expected_services_and_volumes() -> None:
         "generation-worker",
         "outbox-worker",
         "publisher-worker",
+        "publish-hub-sync",
         "publisher-browser",
         "migrate",
     }
@@ -79,6 +80,7 @@ def test_compose_has_the_expected_services_and_volumes() -> None:
         "generation-worker",
         "outbox-worker",
         "publisher-worker",
+        "publish-hub-sync",
         "publisher-browser",
         "migrate",
     ):
@@ -128,6 +130,46 @@ def test_compose_has_the_expected_services_and_volumes() -> None:
     ]
 
 
+PUBLISH_HUB_ENVIRONMENT = {
+    "FORWIN_PUBLISH_HUB_URL": "${FORWIN_PUBLISH_HUB_URL:-}",
+    "FORWIN_PUBLISH_HUB_API_KEY": "${FORWIN_PUBLISH_HUB_API_KEY:-}",
+    "FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS": "${FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS:-20}",
+}
+# The processes whose code calls publish-hub: the app (the production scheduler's release
+# point, manual release, cover enqueue), the publisher worker (a generated cover is enqueued
+# there) and the sync process. The extension in publisher-browser calls it with its own key.
+PUBLISH_HUB_CALLERS = {"app", "publisher-worker", "publish-hub-sync"}
+
+
+def test_publish_hub_sync_service_runs_the_app_image_with_a_small_footprint() -> None:
+    services = load_compose()["services"]
+    sync = services["publish-hub-sync"]
+
+    assert sync["image"] == services["app"]["image"]
+    assert sync["command"] == ["python", "-m", "forwin.cli", "publish-hub-sync"]
+    assert sync["restart"] == "unless-stopped"
+    assert sync["mem_limit"] == "128m"
+    assert sync["extra_hosts"] == ["host.docker.internal:host-gateway"]
+    assert sync["env_file"] == [".env"]
+    assert sync["depends_on"] == {"postgres": {"condition": "service_healthy"}}
+    common = services["outbox-worker"]["environment"]
+    assert {key: sync["environment"][key] for key in common} == common
+
+
+def test_only_publish_hub_callers_get_its_address_and_settings() -> None:
+    services = load_compose()["services"]
+
+    with_host = {name for name, service in services.items() if "extra_hosts" in service}
+    assert with_host == PUBLISH_HUB_CALLERS | {"publisher-browser"}
+    for name in with_host:
+        assert services[name]["extra_hosts"] == ["host.docker.internal:host-gateway"]
+    for name, service in services.items():
+        environment = service.get("environment") or {}
+        hub_settings = {key: value for key, value in environment.items() if "PUBLISH_HUB" in key}
+        expected = PUBLISH_HUB_ENVIRONMENT if name in PUBLISH_HUB_CALLERS else {}
+        assert hub_settings == expected, name
+
+
 def test_compose_sets_no_codex_variables() -> None:
     assert "codex" not in COMPOSE_PATH.read_text(encoding="utf-8").lower()
 
@@ -142,7 +184,9 @@ def test_worker_subcommands_exist_in_cli() -> None:
         text=True,
     )
 
-    for command in ("generation-worker", "outbox-worker", "publisher-worker"):
+    for command in (
+        "generation-worker", "outbox-worker", "publisher-worker", "publish-hub-sync"
+    ):
         assert f'"{command}"' in cli_source
         assert command in help_result.stdout
 
@@ -199,7 +243,7 @@ def test_runtime_volumes_and_mcp_healthcheck() -> None:
         "test": ["CMD-SHELL", "python -c \"import httpx; r=httpx.get('http://localhost:8896/health', timeout=3); raise SystemExit(0 if r.status_code == 200 else 1)\""],
         "interval": "10s", "timeout": "5s", "retries": 3, "start_period": "5s",
     }
-    for name in ("generation-worker", "outbox-worker", "publisher-worker"):
+    for name in ("generation-worker", "outbox-worker", "publisher-worker", "publish-hub-sync"):
         assert services[name]["healthcheck"] == {"disable": True}
 
 
@@ -223,6 +267,9 @@ def test_env_example_has_provider_key_names_only() -> None:
         "MINIMAX_BASE_URL",
         "MINIMAX_MODEL",
         "FORWIN_PUBLISHER_SESSION_SECRET",
+        "FORWIN_PUBLISH_HUB_URL",
+        "FORWIN_PUBLISH_HUB_API_KEY",
+        "FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS",
     } <= names
     assert "codex" not in env_text.lower()
     assert all(

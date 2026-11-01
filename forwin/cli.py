@@ -277,6 +277,31 @@ def cmd_outbox_worker(args: argparse.Namespace) -> None:
         sys.exit(exit_code)
 
 
+def cmd_publish_hub_sync(args: argparse.Namespace) -> None:
+    """Mirror publish-hub's job results into ForWin, one round every --interval seconds."""
+    from forwin.models.base import get_engine, get_session_factory, require_v5_schema
+    from forwin.publish_hub.sync import client_provider, run_forever
+
+    config = _get_config(args)
+    engine = get_engine(config.database_url)
+    try:
+        require_v5_schema(engine)
+        run_forever(
+            get_session_factory(engine),
+            client_provider(
+                config.publish_hub_url,
+                config.publish_hub_api_key,
+                config.publish_hub_timeout_seconds,
+            ),
+            interval=args.interval,
+            max_rounds=1 if args.once else None,
+            # --once is one round and an exit, not one round and a wait.
+            sleep=(lambda _seconds: None) if args.once else time.sleep,
+        )
+    finally:
+        engine.dispose()
+
+
 # ------------------------------------------------------------------
 # Argument parser
 # ------------------------------------------------------------------
@@ -445,6 +470,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="失败重试最大退避秒数",
     )
 
+    publish_hub_sync = sub.add_parser(
+        "publish-hub-sync", help="把 publish-hub 的任务结果同步回 ForWin"
+    )
+    publish_hub_sync.add_argument(
+        "--interval", type=float, default=15.0, help="两轮同步之间的秒数"
+    )
+    publish_hub_sync.add_argument(
+        "--once", action="store_true", help="只同步一轮后退出"
+    )
+
     return parser
 
 
@@ -477,6 +512,8 @@ def main() -> None:
         cmd_publisher_worker(args)
     elif args.command == "outbox-worker":
         cmd_outbox_worker(args)
+    elif args.command == "publish-hub-sync":
+        cmd_publish_hub_sync(args)
     else:
         parser.print_help()
 

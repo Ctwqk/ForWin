@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import case, exists, func, select
 
-from forwin.application.read_models import normalize_project_automation
 from forwin.models.project import Project
 from forwin.models.publisher import (
     PublisherChapterBinding,
@@ -71,6 +70,10 @@ def hub_binding_for(
     Read from the project's settings as they are now, never from a job's frozen binding
     snapshot (R21): jobs scheduled before a cutover go where the binding points at release.
     """
+    # Imported here, not at the top: the settings model loads the whole API schema, which the
+    # publish-hub-sync process (128 MiB; it only reaches `earlier_chapter_not_done`) never needs.
+    from forwin.application.read_models import normalize_project_automation
+
     normalized_project_id = str(project_id or "").strip()
     if not normalized_project_id:
         return None

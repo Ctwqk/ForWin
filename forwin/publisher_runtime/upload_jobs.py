@@ -306,6 +306,16 @@ class UploadJobService:
                 explicit_project_id=project_id,
                 work_name=book_name,
             )
+            # publish_hub.payloads imports this module, so the submit module is imported here.
+            from forwin.publish_hub.submit import hub_binding_for
+
+            if hub_binding_for(session, resolved_project_id, platform) is not None:
+                # A direct job would go out on the extension queue, past publish-hub's dedupe
+                # (and with create_if_missing it could create a second book).
+                raise ValueError(
+                    "该项目的这个平台已切换到 publish-hub，不能创建直接上传任务；"
+                    "请走 Canon 发布流程。"
+                )
             if (
                 create_if_missing
                 and cover_generation_enabled
@@ -624,7 +634,7 @@ class UploadJobService:
             raise ValueError(f"publisher jobs not found: {', '.join(missing)}")
 
         # publish_hub.payloads imports this module, so the submit module is imported here.
-        from forwin.publish_hub.submit import client_from, hub_binding_for
+        from forwin.publish_hub.submit import SubmitOutcome, client_from, hub_binding_for
 
         released: list[PublisherUploadJob] = []
         hub_client: Any = _CLIENT_NOT_FETCHED
@@ -690,14 +700,20 @@ class UploadJobService:
             if hub_binding is not None:
                 if hub_client is _CLIENT_NOT_FETCHED:
                     hub_client = client_from(self.publish_hub_client_provider)
-                if self._release_to_hub(
+                outcome = self._release_to_hub(
                     session,
                     job,
                     destination_id=hub_binding.hub_destination_id,
                     client=hub_client,
                     actor_type=actor_type,
-                ):
-                    released.append(job)
+                )
+                if outcome is None or outcome == SubmitOutcome.HELD:
+                    continue
+                if outcome == SubmitOutcome.DEFERRED_UNAVAILABLE:
+                    # R32: the rest of this batch is stored and deferred without a request,
+                    # instead of one timeout per row while the rows stay locked.
+                    hub_client = None
+                released.append(job)
                 continue
 
             job.status = "pending"
@@ -722,13 +738,10 @@ class UploadJobService:
         destination_id: str | None,
         client,
         actor_type: str,
-    ) -> bool:
-        """Release a job whose binding routes to publish-hub; False when it stays scheduled."""
-        from forwin.publish_hub.submit import (
-            SubmitOutcome,
-            hub_event_payload,
-            submit_released_job,
-        )
+    ):
+        """Release a job whose binding routes to publish-hub: its SubmitOutcome, or None while
+        the binding has no destination yet (the job stays scheduled)."""
+        from forwin.publish_hub.submit import submit_released_job
 
         if not destination_id:
             logger.warning(
@@ -744,19 +757,16 @@ class UploadJobService:
                 actor_type=str(actor_type or "system"),
                 extra_payload={"transition": "release_waiting_for_hub_destination"},
             )
-            return False
-        outcome = submit_released_job(session, job, client, now=utc_now())
-        if outcome == SubmitOutcome.HELD:
-            return False
-        self.audit.record_upload_job_event(
+            return None
+        return submit_released_job(
             session,
-            job=job,
-            event_type=terminal_upload_event_type(job.status),
-            summary="Canon 发布上传任务已释放并交给 publish-hub。",
+            job,
+            client,
+            now=utc_now(),
+            audit=self.audit,
             actor_type=str(actor_type or "system"),
-            extra_payload=hub_event_payload(job, outcome, transition="scheduled_to_hub"),
+            transition="scheduled_to_hub",
         )
-        return True
 
     def _canon_release_preflight(
         self,

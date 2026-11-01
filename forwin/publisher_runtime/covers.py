@@ -22,7 +22,6 @@ from forwin.models.publisher import (
     PublisherWorkBinding,
 )
 from forwin.publish_hub.submit import (
-    HubSubmitConflict,
     client_from,
     hub_binding_for,
     submit_released_job,
@@ -655,7 +654,6 @@ class PublisherCoverService:
                 auto_upload=False,
             )
             if created and hub_binding is not None:
-                # A HubSubmitConflict reaches the operator and nothing is committed.
                 self._submit_to_hub(session, upload_job)
             session.commit()
             session.refresh(upload_job)
@@ -726,12 +724,7 @@ class PublisherCoverService:
             auto_upload=True,
         )
         if created and hub_binding is not None:
-            try:
-                self._submit_to_hub(session, upload_job)
-            except HubSubmitConflict:
-                # This runs inside another job's result; that result must still be recorded.
-                # The row keeps its stored request and stays off the extension queue.
-                logger.exception("publish-hub refused cover upload job %s", upload_job.id)
+            self._submit_to_hub(session, upload_job)
         return upload_job if created else None
 
     def _submit_to_hub(self, session, upload_job: PublisherUploadJob) -> None:
@@ -744,6 +737,7 @@ class PublisherCoverService:
             upload_job,
             client_from(self.publish_hub_client_provider),
             now=utc_now(),
+            transition="cover_to_hub",
         )
 
     def _ensure_cover_upload_job(

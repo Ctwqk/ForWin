@@ -11,7 +11,12 @@ A job whose project binding routes its platform to publish-hub is sent there whe
   request went out and before the commit, the row is still `scheduled` and the next release
   rebuilds the body: publish-hub answers the same job (200), or idempotency_conflict when the
   body differs (the mode was changed in between), and then the job found by key is adopted.
-* One answer handler serves both the first send and `recover_unsubmitted`.
+* One answer handler serves both the first send and `recover_unsubmitted`. No answer raises:
+  every outcome is written on its own row, so one job never rolls back its siblings (R29).
+* Once publish-hub cannot be used in a pass (unreachable, key refused, not configured), the rest
+  of that pass is deferred without sending (R32): an outage costs one timeout, not one per row.
+* Adoption records the hub job and its status but never a terminal local status (R30): the
+  sync process mirrors terminal results, with their binding projection, in one place.
 
 Nothing here calls a platform or writes Canon data.
 """
@@ -28,7 +33,7 @@ from sqlalchemy import select
 
 from forwin.application.read_models import normalize_project_automation
 from forwin.models.project import Project
-from forwin.models.publisher import UPLOAD_JOB_TERMINAL_STATUSES, PublisherUploadJob
+from forwin.models.publisher import PublisherUploadJob
 from forwin.publisher_runtime.audit import (
     PublisherAuditService,
     terminal_upload_event_type,
@@ -44,7 +49,8 @@ logger = logging.getLogger(__name__)
 
 HUB_ROUTE = "hub"
 
-# The state map: publish-hub job status -> local PublisherUploadJob.status.
+# The state map: publish-hub job status -> local PublisherUploadJob.status. The sync process
+# applies it; at submit time a terminal hub status is not applied (R30, see _adopt).
 LOCAL_STATUS_FOR_HUB_STATUS = {
     "scheduled": "pending",
     "pending": "pending",
@@ -54,8 +60,11 @@ LOCAL_STATUS_FOR_HUB_STATUS = {
     "failed": "failed",
     "cancelled": "cancelled",
 }
+TERMINAL_HUB_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 # Another job of the same publication (or the destination's create job) is still active.
 ACTIVE_JOB_CODES = frozenset({"publication_has_active_job", "destination_has_active_job"})
+# publish-hub holds the key for another request and shows no job for it: a person decides.
+UNRESOLVED_CONFLICT_ERROR = "idempotency_conflict_unresolved"
 # A wrong or rotated key is a configuration problem, not a verdict on the job (R25).
 _KEY_REFUSED = frozenset({401, 403})
 
@@ -64,9 +73,12 @@ class SubmitOutcome(StrEnum):
     SUBMITTED = "submitted"  # publish-hub has the job; hub_job_id and hub_status are stored
     HELD = "held"  # Task 5's release gate held the job back: nothing stored, nothing sent
     SUPERSEDED = "superseded"  # publication_already_published: the chapter is out already
-    DEFERRED_UNAVAILABLE = "deferred_unavailable"  # hub unreachable, unconfigured or key refused
+    # publish-hub cannot be used in this pass (unreachable, unconfigured, key refused); the
+    # rest of the pass is not sent either.
+    DEFERRED_UNAVAILABLE = "deferred_unavailable"
     DEFERRED_ACTIVE_JOB = "deferred_active_job"  # wait for the publication's active job
-    FAILED = "failed"  # refused for good, or the cover file no longer matches its job
+    # Refused for good, the key conflict could not be resolved, or the cover file changed.
+    FAILED = "failed"
 
 
 # Outcomes that leave the row pending with its body and no hub job: recovery sends it again.
@@ -74,12 +86,7 @@ DEFERRED_OUTCOMES = frozenset(
     {SubmitOutcome.DEFERRED_UNAVAILABLE, SubmitOutcome.DEFERRED_ACTIVE_JOB}
 )
 
-
-class HubSubmitConflict(RuntimeError):
-    """publish-hub holds the job's idempotency key for another request and shows no job for it.
-
-    Nothing ForWin can resend fixes that; a person has to look at the key in publish-hub.
-    """
+_DEFAULT_AUDIT = PublisherAuditService(session_factory=None)
 
 
 def hub_binding_for(
@@ -122,15 +129,98 @@ def submit_released_job(
     client: PublishHubClient | None,
     *,
     now: datetime,
+    audit: PublisherAuditService | None = None,
+    actor_type: str = "system",
+    transition: str = "submitted_to_hub",
 ) -> SubmitOutcome:
-    """Send a released chapter job, or a new cover job, to publish-hub.
+    """Send a released chapter job, or a new cover job, to publish-hub, and audit the outcome.
 
     The caller has found that the job's binding routes to publish-hub with a destination set,
-    holds the row in its transaction and commits afterwards. `client` None means publish-hub is
-    not configured: the body is stored and the row waits for `recover_unsubmitted`, it never
-    goes back to the extension queue. Raises HubSubmitConflict when publish-hub refuses the key
-    and shows no job for it.
+    holds the row in its transaction and commits afterwards. `client` None means publish-hub
+    cannot be used now (not configured, or an earlier row of the same pass found it down): the
+    body is stored and the row waits for `recover_unsubmitted`; it never goes back to the
+    extension queue. A caller sending several jobs passes None for the rest of the pass once
+    one comes back DEFERRED_UNAVAILABLE (R32).
     """
+    outcome = _submit(session, job, client, now=now)
+    if outcome != SubmitOutcome.HELD:
+        _record(audit, session, job, outcome, actor_type=actor_type, transition=transition)
+    return outcome
+
+
+def recover_unsubmitted(
+    session,
+    client: PublishHubClient | None,
+    now: datetime,
+    *,
+    audit: PublisherAuditService | None = None,
+) -> dict[str, SubmitOutcome]:
+    """Resend, unchanged, every stored request that has no publish-hub job yet.
+
+    The sync process calls this once per round inside its transaction and commits afterwards.
+    Only rows still `pending` locally are resent; a failed or superseded row keeps its body for
+    audit. Returns each row's outcome. The first DEFERRED_UNAVAILABLE ends the round: the rows
+    after it are reported deferred and left untouched, without a request (R32). Deferrals are
+    not audited (they repeat every round).
+    """
+    if client is None:
+        logger.warning("publish-hub is not configured; stored job requests wait until it is")
+        return {}
+    jobs = (
+        session.execute(
+            select(PublisherUploadJob)
+            .where(
+                PublisherUploadJob.hub_submit_body_json.is_not(None),
+                PublisherUploadJob.hub_job_id.is_(None),
+                PublisherUploadJob.status == "pending",
+                PublisherUploadJob.deleted_at.is_(None),
+            )
+            .order_by(
+                PublisherUploadJob.created_at.asc(),
+                PublisherUploadJob.chapter_number.asc(),
+                PublisherUploadJob.id.asc(),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        .scalars()
+        .all()
+    )
+    outcomes: dict[str, SubmitOutcome] = {}
+    for index, job in enumerate(jobs):
+        outcome = _send(job, client, now=now)
+        outcomes[job.id] = outcome
+        if outcome not in DEFERRED_OUTCOMES:
+            _record(audit, session, job, outcome, actor_type="system", transition="hub_resubmitted")
+        if outcome == SubmitOutcome.DEFERRED_UNAVAILABLE:
+            waiting = jobs[index + 1 :]
+            if waiting:
+                logger.warning(
+                    "publish-hub unavailable; %d more stored requests wait for the next round",
+                    len(waiting),
+                )
+            outcomes.update((later.id, SubmitOutcome.DEFERRED_UNAVAILABLE) for later in waiting)
+            break
+    session.flush()
+    return outcomes
+
+
+def hub_event_payload(
+    job: PublisherUploadJob, outcome: SubmitOutcome, *, transition: str
+) -> dict[str, Any]:
+    """What an audit event records about a submit, without the request body."""
+    return {
+        "transition": transition,
+        "hub_outcome": str(outcome),
+        "hub_job_id": str(job.hub_job_id or ""),
+        "hub_status": str(job.hub_status or ""),
+        "hub_superseded_reason": str(job.hub_superseded_reason or ""),
+        "error_message": str(job.error_message or ""),
+    }
+
+
+def _submit(
+    session, job: PublisherUploadJob, client: PublishHubClient | None, *, now: datetime
+) -> SubmitOutcome:
     if job.hub_job_id is not None:
         return SubmitOutcome.SUBMITTED
     if job.hub_submit_body_json is None:
@@ -162,71 +252,23 @@ def submit_released_job(
     return _send(job, client, now=now)
 
 
-def recover_unsubmitted(
+def _record(
+    audit: PublisherAuditService | None,
     session,
-    client: PublishHubClient | None,
-    now: datetime,
+    job: PublisherUploadJob,
+    outcome: SubmitOutcome,
     *,
-    audit: PublisherAuditService | None = None,
-) -> dict[str, SubmitOutcome]:
-    """Resend, unchanged, every stored request that has no publish-hub job yet.
-
-    The sync process calls this once per round inside its transaction and commits afterwards.
-    Only rows still `pending` locally are resent; a failed or superseded row keeps its body for
-    audit. Returns each resent job's outcome. A HubSubmitConflict propagates, so the round is
-    rolled back and the next round runs into it again until a person resolves it.
-    """
-    if client is None:
-        logger.warning("publish-hub is not configured; stored job requests wait until it is")
-        return {}
-    jobs = (
-        session.execute(
-            select(PublisherUploadJob)
-            .where(
-                PublisherUploadJob.hub_submit_body_json.is_not(None),
-                PublisherUploadJob.hub_job_id.is_(None),
-                PublisherUploadJob.status == "pending",
-                PublisherUploadJob.deleted_at.is_(None),
-            )
-            .order_by(
-                PublisherUploadJob.created_at.asc(),
-                PublisherUploadJob.chapter_number.asc(),
-                PublisherUploadJob.id.asc(),
-            )
-            .with_for_update(skip_locked=True)
-        )
-        .scalars()
-        .all()
+    actor_type: str,
+    transition: str,
+) -> None:
+    (audit or _DEFAULT_AUDIT).record_upload_job_event(
+        session,
+        job=job,
+        event_type=terminal_upload_event_type(job.status),
+        summary=f"publish-hub 提交结果：{outcome}。",
+        actor_type=str(actor_type or "system"),
+        extra_payload=hub_event_payload(job, outcome, transition=transition),
     )
-    recorder = audit or PublisherAuditService(session_factory=None)
-    outcomes: dict[str, SubmitOutcome] = {}
-    for job in jobs:
-        outcome = _send(job, client, now=now)
-        outcomes[job.id] = outcome
-        if outcome not in DEFERRED_OUTCOMES:
-            recorder.record_upload_job_event(
-                session,
-                job=job,
-                event_type=terminal_upload_event_type(job.status),
-                summary="保存的 publish-hub 提交请求已原样重发。",
-                actor_type="system",
-                extra_payload=hub_event_payload(job, outcome, transition="hub_resubmitted"),
-            )
-    session.flush()
-    return outcomes
-
-
-def hub_event_payload(
-    job: PublisherUploadJob, outcome: SubmitOutcome, *, transition: str
-) -> dict[str, Any]:
-    """What an audit event records about a submit, without the request body."""
-    return {
-        "transition": transition,
-        "hub_outcome": str(outcome),
-        "hub_job_id": str(job.hub_job_id or ""),
-        "hub_status": str(job.hub_status or ""),
-        "hub_superseded_reason": str(job.hub_superseded_reason or ""),
-    }
 
 
 def _body_for(job: PublisherUploadJob, destination_id: str) -> dict[str, Any]:
@@ -243,9 +285,9 @@ def _send(
     """POST the stored body and record publish-hub's answer on the row."""
     if client is None:
         logger.warning(
-            "publish-hub is not configured; upload job %s waits with its stored request", job.id
+            "publish-hub cannot be used now; upload job %s waits with its stored request", job.id
         )
-        return _defer(job, "publish-hub 未配置（地址或 API key 为空），请求已保存，配置后由同步进程发送。")
+        return _defer(job, "publish-hub 当前不可用或未配置，请求已保存，由同步进程原样发送。")
     try:
         hub_job, _status = client.submit(job.hub_submit_body_json)
     except HubUnavailable as exc:
@@ -253,7 +295,7 @@ def _send(
         return _defer(job, "publish-hub 暂不可用，请求已保存，由同步进程原样重发。")
     except HubRequestError as exc:
         return _answer_refusal(job, client, exc, now=now)
-    return _adopt(job, hub_job, now=now)
+    return _adopt(job, hub_job)
 
 
 def _answer_refusal(
@@ -264,13 +306,7 @@ def _answer_refusal(
     now: datetime,
 ) -> SubmitOutcome:
     if exc.status in _KEY_REFUSED:
-        logger.error(
-            "publish-hub refused ForWin's API key (%s %s) for upload job %s",
-            exc.status,
-            exc.code,
-            job.id,
-        )
-        return _defer(job, f"publish-hub 拒绝了 API key（{exc.status}），请求已保存，修正配置后重发。")
+        return _key_refused(job, exc)
     if exc.code == "publication_already_published":
         return _supersede(job, exc.code, now=now)
     if exc.code == "idempotency_conflict":
@@ -290,7 +326,12 @@ def _answer_refusal(
 def _adopt_job_found_by_key(
     job: PublisherUploadJob, client: PublishHubClient, *, now: datetime
 ) -> SubmitOutcome:
-    """idempotency_conflict: the key was used before, so that job is this job's (ruling R7)."""
+    """idempotency_conflict: the key was used before, so that job is this job's (ruling R7).
+
+    When publish-hub shows no job for the key (or the lookup itself is refused), the row fails
+    with UNRESOLVED_CONFLICT_ERROR and keeps its body (R29): resending cannot fix it, and a
+    raise would roll back the jobs submitted alongside it.
+    """
     key = str(job.hub_submit_body_json.get("idempotency_key") or "")
     try:
         found = client.find_by_key(key)
@@ -299,28 +340,35 @@ def _adopt_job_found_by_key(
         return _defer(job, "publish-hub 暂不可用，请求已保存，由同步进程原样重发。")
     except HubRequestError as exc:
         if exc.status in _KEY_REFUSED:
-            logger.error("publish-hub refused ForWin's API key (%s) for a key lookup", exc.status)
-            return _defer(job, f"publish-hub 拒绝了 API key（{exc.status}），请求已保存，修正配置后重发。")
-        raise HubSubmitConflict(
-            f"publish-hub answered idempotency_conflict for upload job {job.id} "
-            f"and the lookup by key failed: {exc}"
-        ) from exc
-    if found is None:
-        raise HubSubmitConflict(
-            f"publish-hub holds the idempotency key of upload job {job.id} for another request "
-            "and shows no job for it"
+            return _key_refused(job, exc)
+        logger.error(
+            "publish-hub answered idempotency_conflict for upload job %s and the key lookup "
+            "was refused: %s %s",
+            job.id,
+            exc.status,
+            exc.code,
         )
-    return _adopt(job, found, now=now, found_by_key=True)
+        return _unresolved_conflict(job, now=now)
+    if found is None:
+        logger.error(
+            "publish-hub holds the idempotency key of upload job %s for another request and "
+            "shows no job for it",
+            job.id,
+        )
+        return _unresolved_conflict(job, now=now)
+    return _adopt(job, found, found_by_key=True)
 
 
 def _adopt(
-    job: PublisherUploadJob,
-    hub_job: Any,
-    *,
-    now: datetime,
-    found_by_key: bool = False,
+    job: PublisherUploadJob, hub_job: Any, *, found_by_key: bool = False
 ) -> SubmitOutcome:
-    """Record publish-hub's job on the row and map its status (the state map)."""
+    """Record publish-hub's job on the row.
+
+    The local status follows the state map for scheduled/pending/reconciling (pending) and
+    paused (paused). A terminal hub status is recorded in hub_status only and the row stays
+    pending (R30): the sync process's catch-up over pending rows with a hub_job_id mirrors it
+    and applies the binding projection in one place.
+    """
     fields = hub_job if isinstance(hub_job, Mapping) else {}
     hub_job_id = str(fields.get("id") or "").strip()
     hub_status = str(fields.get("status") or "").strip()
@@ -335,12 +383,21 @@ def _adopt(
         return _defer(job, "publish-hub 的应答无法识别，请求已保存，由同步进程原样重发。")
     job.hub_job_id = hub_job_id
     job.hub_status = hub_status
-    job.status = local_status
+    job.status = "pending" if hub_status in TERMINAL_HUB_STATUSES else local_status
     job.error_message = ""
-    job.finished_at = now if local_status in UPLOAD_JOB_TERMINAL_STATUSES else None
     how = "按幂等键找回了已有任务" if found_by_key else "已提交"
     job.result_message = f"publish-hub {how}（任务 {hub_job_id}，状态 {hub_status}）。"
     return SubmitOutcome.SUBMITTED
+
+
+def _key_refused(job: PublisherUploadJob, exc: HubRequestError) -> SubmitOutcome:
+    logger.error(
+        "publish-hub refused ForWin's API key (%s %s) for upload job %s",
+        exc.status,
+        exc.code,
+        job.id,
+    )
+    return _defer(job, f"publish-hub 拒绝了 API key（{exc.status}），请求已保存，修正配置后重发。")
 
 
 def _defer(
@@ -364,6 +421,15 @@ def _supersede(job: PublisherUploadJob, code: str, *, now: datetime) -> SubmitOu
     return SubmitOutcome.SUPERSEDED
 
 
+def _unresolved_conflict(job: PublisherUploadJob, *, now: datetime) -> SubmitOutcome:
+    return _fail(
+        job,
+        error=UNRESOLVED_CONFLICT_ERROR,
+        message="publish-hub 的幂等键已被另一个请求使用且查不到对应任务，需要人工处理；请求已保存。",
+        now=now,
+    )
+
+
 def _fail(
     job: PublisherUploadJob, *, error: str, message: str, now: datetime
 ) -> SubmitOutcome:
@@ -378,8 +444,9 @@ __all__ = [
     "ACTIVE_JOB_CODES",
     "DEFERRED_OUTCOMES",
     "HUB_ROUTE",
-    "HubSubmitConflict",
     "LOCAL_STATUS_FOR_HUB_STATUS",
+    "TERMINAL_HUB_STATUSES",
+    "UNRESOLVED_CONFLICT_ERROR",
     "SubmitOutcome",
     "client_from",
     "hub_binding_for",

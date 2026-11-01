@@ -17,6 +17,7 @@ import httpx
 import pytest
 from sqlalchemy import func, select
 
+from forwin.models.audit import DecisionEvent
 from forwin.models.base import new_id
 from forwin.models.project import Project
 from forwin.models.publisher import (
@@ -29,7 +30,7 @@ from forwin.models.publisher import (
 from forwin.publish_hub.client import PublishHubClient
 from forwin.publish_hub.payloads import chapter_body, cover_body
 from forwin.publish_hub.submit import (
-    HubSubmitConflict,
+    UNRESOLVED_CONFLICT_ERROR,
     SubmitOutcome,
     recover_unsubmitted,
     submit_released_job,
@@ -53,7 +54,8 @@ class FakeHub:
         self.requests: list[httpx.Request] = []
         self.posts: list[bytes] = []
         self.published_refs: set[str] = set()
-        self.refusals: list[tuple[int, str]] = []
+        # One entry per POST, in order: (status, code) refuses it, None lets it through.
+        self.refusals: list[tuple[int, str] | None] = []
         self.new_job_status = "pending"
         self.down = False
         self.lose_next_response = False
@@ -75,9 +77,9 @@ class FakeHub:
         self.posts.append(content)
         if self.on_post is not None:
             self.on_post(request)
-        if self.refusals:
-            status, code = self.refusals.pop(0)
-            return _envelope(status, code)
+        refusal = self.refusals.pop(0) if self.refusals else None
+        if refusal is not None:
+            return _envelope(*refusal)
         body = json.loads(content)
         key = body["idempotency_key"]
         if key in self.jobs_by_key:
@@ -198,6 +200,29 @@ def _recover(fixture, client):
         outcomes = recover_unsubmitted(session, client, NOW)
         session.commit()
     return outcomes
+
+
+def _hub_events(fixture, job_id) -> list[dict]:
+    """The audit events that record a publish-hub submit outcome for a job."""
+    with fixture.runtime.session_factory() as session:
+        events = (
+            session.execute(
+                select(DecisionEvent)
+                .where(DecisionEvent.related_object_id == job_id)
+                .order_by(DecisionEvent.created_at.asc())
+            )
+            .scalars()
+            .all()
+        )
+    payloads = [json.loads(event.payload_json or "{}") for event in events]
+    return [payload for payload in payloads if "hub_outcome" in payload]
+
+
+def _seed_hub_job(hub: FakeHub, key: str, *, status: str = "pending") -> dict:
+    """A job publish-hub already holds for a key, from a request with other bytes."""
+    job = {"id": str(uuid4()), "status": status, "publication": None, "latest_receipt": None}
+    hub.jobs_by_key[key] = (b"an earlier request with other bytes", job)
+    return job
 
 
 # --- release point: 201 path ---------------------------------------------------------------
@@ -350,16 +375,110 @@ def test_process_death_then_a_mode_change_adopts_the_job_found_by_key() -> None:
         fixture.engine.dispose()
 
 
-def test_idempotency_conflict_without_a_job_for_the_key_is_handed_to_a_person() -> None:
+def test_idempotency_conflict_without_a_job_for_the_key_fails_the_row_for_a_person() -> None:
     fixture, hub, client, created = _hub_fixture("hub-submit-conflict-unknown")
     job_id = created[0]["job_id"]
     try:
         hub.refusals.append((409, "idempotency_conflict"))
-        with pytest.raises(HubSubmitConflict):
-            _release(fixture, [job_id])
 
-        assert _job(fixture, job_id).status == "scheduled"
+        released = _release(fixture, [job_id])
+
+        stored = _job(fixture, job_id)
+        assert [item["job_id"] for item in released] == [job_id]
+        assert stored.status == "failed"
+        assert stored.error_message == UNRESOLVED_CONFLICT_ERROR
+        assert stored.hub_submit_body_json is not None  # still hub-owned
+        assert stored.hub_job_id is None
         assert [request.method for request in hub.requests] == ["POST", "GET"]
+        assert [event["hub_outcome"] for event in _hub_events(fixture, job_id)] == ["failed"]
+        assert _recover(fixture, client) == {}
+        assert (
+            fixture.runtime.attempts.claim(
+                client_id="extension-conflict", connected_platforms=["qidian"], now=NOW
+            )
+            is None
+        )
+    finally:
+        fixture.engine.dispose()
+
+
+@pytest.mark.parametrize("conflicted", [0, 1])
+def test_unresolved_conflict_in_a_release_batch_leaves_the_siblings_submitted(conflicted) -> None:
+    fixture, hub, _client_, created = _hub_fixture(
+        f"hub-submit-conflict-batch-{conflicted}", platforms=("qidian", "fanqie")
+    )
+    job_ids = [item["job_id"] for item in created]
+    try:
+        hub.refusals = [None, None]
+        hub.refusals[conflicted] = (409, "idempotency_conflict")
+
+        released = _release(fixture, job_ids)
+
+        failed_id, sibling_id = job_ids[conflicted], job_ids[1 - conflicted]
+        failed, sibling = _job(fixture, failed_id), _job(fixture, sibling_id)
+        assert {item["job_id"] for item in released} == set(job_ids)
+        assert (failed.status, failed.error_message) == ("failed", UNRESOLVED_CONFLICT_ERROR)
+        assert failed.hub_submit_body_json is not None
+        assert sibling.status == "pending"
+        assert sibling.hub_job_id is not None  # committed together with the failed row
+        assert [event["hub_outcome"] for event in _hub_events(fixture, failed_id)] == ["failed"]
+        assert [event["hub_outcome"] for event in _hub_events(fixture, sibling_id)] == [
+            "submitted"
+        ]
+    finally:
+        fixture.engine.dispose()
+
+
+def test_unresolved_conflict_during_recovery_fails_that_row_and_recovers_the_rest() -> None:
+    fixture, hub, client, created = _hub_fixture(
+        "hub-submit-conflict-recovery", platforms=("qidian", "fanqie")
+    )
+    job_ids = [item["job_id"] for item in created]
+    try:
+        hub.down = True
+        _release(fixture, job_ids)
+        hub.down = False
+        hub.refusals = [(409, "idempotency_conflict"), None]
+
+        outcomes = _recover(fixture, client)
+
+        assert sorted(outcomes.values()) == sorted(
+            [SubmitOutcome.FAILED, SubmitOutcome.SUBMITTED]
+        )
+        (failed_id,) = [job_id for job_id, outcome in outcomes.items() if outcome == "failed"]
+        (submitted_id,) = [job_id for job_id in job_ids if job_id != failed_id]
+        failed, submitted = _job(fixture, failed_id), _job(fixture, submitted_id)
+        assert (failed.status, failed.error_message) == ("failed", UNRESOLVED_CONFLICT_ERROR)
+        assert failed.hub_submit_body_json is not None
+        assert submitted.hub_job_id is not None
+        resubmitted = [
+            event for event in _hub_events(fixture, failed_id)
+            if event["transition"] == "hub_resubmitted"
+        ]
+        assert [event["hub_outcome"] for event in resubmitted] == ["failed"]
+        assert _recover(fixture, client) == {}
+    finally:
+        fixture.engine.dispose()
+
+
+def test_recovery_adopts_the_job_found_by_key_after_an_idempotency_conflict() -> None:
+    fixture, hub, client, created = _hub_fixture("hub-submit-conflict-adopt-recovery")
+    job_id = created[0]["job_id"]
+    try:
+        hub.down = True
+        _release(fixture, [job_id])
+        hub.down = False
+        key = _job(fixture, job_id).hub_submit_body_json["idempotency_key"]
+        earlier = _seed_hub_job(hub, key, status="succeeded")
+
+        assert _recover(fixture, client) == {job_id: SubmitOutcome.SUBMITTED}
+
+        stored = _job(fixture, job_id)
+        assert stored.hub_job_id == earlier["id"]
+        # R30: a terminal hub status is recorded, the local row waits for the sync to mirror it.
+        assert (stored.hub_status, stored.status) == ("succeeded", "pending")
+        assert stored.finished_at is None
+        assert [request.method for request in hub.requests] == ["POST", "POST", "GET"]
     finally:
         fixture.engine.dispose()
 
@@ -519,9 +638,10 @@ def test_unconfigured_hub_holds_the_row_and_never_uses_the_extension_queue() -> 
         ("pending", "pending"),
         ("reconciling", "pending"),
         ("paused", "paused"),
-        ("succeeded", "succeeded"),
-        ("failed", "failed"),
-        ("cancelled", "cancelled"),
+        # R30: a terminal status is the sync process's to mirror, with its binding projection.
+        ("succeeded", "pending"),
+        ("failed", "pending"),
+        ("cancelled", "pending"),
     ],
 )
 def test_hub_status_maps_to_the_local_status(hub_status, local_status) -> None:
@@ -533,7 +653,58 @@ def test_hub_status_maps_to_the_local_status(hub_status, local_status) -> None:
         _release(fixture, [job_id])
 
         stored = _job(fixture, job_id)
+        assert stored.hub_job_id is not None
         assert (stored.hub_status, stored.status) == (hub_status, local_status)
+        assert stored.finished_at is None
+    finally:
+        fixture.engine.dispose()
+
+
+# --- an unusable hub ends the pass (R32) ----------------------------------------------------
+
+
+@pytest.mark.parametrize("failure", ["down", 401, 403])
+def test_release_batch_stops_sending_once_the_hub_cannot_be_used(failure) -> None:
+    fixture, hub, _client_, created = _hub_fixture(
+        f"hub-submit-stop-release-{failure}", platforms=("qidian", "fanqie")
+    )
+    job_ids = [item["job_id"] for item in created]
+    try:
+        if failure == "down":
+            hub.down = True
+        else:
+            hub.refusals.append((failure, "unauthorized" if failure == 401 else "forbidden"))
+
+        released = _release(fixture, job_ids)
+
+        assert len(hub.requests) == 1  # the second row was not sent
+        assert {item["job_id"] for item in released} == set(job_ids)
+        for job_id in job_ids:
+            stored = _job(fixture, job_id)
+            assert (stored.status, stored.hub_job_id) == ("pending", None)
+            assert stored.hub_submit_body_json is not None
+    finally:
+        fixture.engine.dispose()
+
+
+def test_recovery_round_stops_sending_once_the_hub_is_down() -> None:
+    fixture, hub, client, created = _hub_fixture(
+        "hub-submit-stop-recovery", platforms=("qidian", "fanqie")
+    )
+    job_ids = [item["job_id"] for item in created]
+    try:
+        hub.down = True
+        _release(fixture, job_ids)
+        hub.requests.clear()
+
+        outcomes = _recover(fixture, client)
+
+        assert outcomes == {job_id: SubmitOutcome.DEFERRED_UNAVAILABLE for job_id in job_ids}
+        assert len(hub.requests) == 1
+        hub.down = False
+        assert _recover(fixture, client) == {
+            job_id: SubmitOutcome.SUBMITTED for job_id in job_ids
+        }
     finally:
         fixture.engine.dispose()
 
@@ -823,6 +994,84 @@ def test_cover_whose_file_changed_since_the_job_was_made_fails_the_row(tmp_path)
         assert "sha256" in stored.error_message
         assert stored.hub_submit_body_json is None
         assert hub.requests == []
+    finally:
+        fixture.engine.dispose()
+
+
+def test_unresolved_conflict_on_a_cover_fails_the_row_and_commits_it(tmp_path) -> None:
+    fixture = _fixture("hub-submit-cover-conflict")
+    hub = FakeHub()
+    try:
+        client = _attach_hub(fixture.runtime, hub)
+        _set_routes(fixture, {"qidian": ("hub", QIDIAN_DESTINATION)})
+        _work_id, cover_id, _file = _cover_setup(fixture, tmp_path)
+        hub.refusals.append((409, "idempotency_conflict"))
+
+        job = fixture.runtime.cover_service.enqueue_cover_upload(cover_id)
+
+        stored = _job(fixture, job.id)
+        assert (stored.status, stored.error_message) == ("failed", UNRESOLVED_CONFLICT_ERROR)
+        assert stored.hub_submit_body_json is not None
+        assert [request.method for request in hub.requests] == ["POST", "GET"]
+        assert [event["hub_outcome"] for event in _hub_events(fixture, job.id)] == ["failed"]
+        assert _recover(fixture, client) == {}
+    finally:
+        fixture.engine.dispose()
+
+
+# --- direct upload jobs -----------------------------------------------------------------------
+
+
+def _direct_upload(fixture, **overrides):
+    request = {
+        "project_id": fixture.project_id,
+        "platform": "qidian",
+        "book_name": "事件时书名",
+        "chapter_title": "第八章 直接上传",
+        "body": "直接上传的正文。",
+        "upload_url": None,
+        "publish": True,
+        "book_meta": {"audience": "male"},
+    }
+    request.update(overrides)
+    return fixture.runtime.upload_jobs.create_upload_job(**request)
+
+
+def test_direct_upload_is_refused_on_a_hub_routed_binding() -> None:
+    fixture = _fixture("hub-submit-direct-refused")
+    hub = FakeHub()
+    try:
+        _attach_hub(fixture.runtime, hub)
+        _set_routes(fixture, {"qidian": ("hub", QIDIAN_DESTINATION)})
+        fixture.runtime.upload_jobs.preflight = None
+
+        with pytest.raises(ValueError, match="publish-hub"):
+            _direct_upload(fixture, create_if_missing=True)
+
+        with fixture.runtime.session_factory() as session:
+            assert session.scalar(select(func.count(PublisherUploadJob.id))) == 0
+        assert hub.requests == []
+    finally:
+        fixture.engine.dispose()
+
+
+def test_direct_upload_on_an_extension_queue_binding_is_unchanged() -> None:
+    fixture = _fixture("hub-submit-direct-extension")
+    hub = FakeHub()
+    try:
+        _attach_hub(fixture.runtime, hub)
+        _set_routes(fixture, {"qidian": ("legacy", None), "fanqie": ("hub", FANQIE_DESTINATION)})
+
+        created = _direct_upload(fixture)
+
+        stored = _job(fixture, created["job_id"])
+        assert (stored.status, stored.task_kind) == ("pending", "chapter_upload")
+        assert stored.hub_submit_body_json is None
+        assert hub.requests == []
+        claimed = fixture.runtime.attempts.claim(
+            client_id="extension-direct", connected_platforms=["qidian"], now=NOW
+        )
+        assert claimed is not None and claimed["job_id"] == stored.id
     finally:
         fixture.engine.dispose()
 

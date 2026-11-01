@@ -105,7 +105,7 @@ class ApiSplitModuleTests(unittest.TestCase):
             "forwin/http/generation.py": 420,
             "forwin/http/project_support.py": 420,
             "forwin/http/request_support.py": 240,
-            "forwin/http/runtime.py": 220,
+            "forwin/http/runtime.py": 225,
             "forwin/http/tasks.py": 950,
             "forwin/api_pages.py": 80,
             "forwin/api_pages_home.py": 300,

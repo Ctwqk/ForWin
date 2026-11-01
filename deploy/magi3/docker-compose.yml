@@ -220,7 +220,9 @@ services:
     <<: *runtime-service
     command: ["python", "-m", "forwin.cli", "publish-hub-sync"]
     restart: unless-stopped
-    mem_limit: 128m
+    # Peak about 110 MiB (more once a cover is queued and the settings models load); an OOM
+    # restart loop would stall every send silently, so keep room.
+    mem_limit: 256m
     environment:
       <<: *common-environment
       # publish-hub URL and key from deploy/magi3/.env; empty leaves publish-hub off.

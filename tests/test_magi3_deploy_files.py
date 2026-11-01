@@ -148,7 +148,9 @@ def test_publish_hub_sync_service_runs_the_app_image_with_a_small_footprint() ->
     assert sync["image"] == services["app"]["image"]
     assert sync["command"] == ["python", "-m", "forwin.cli", "publish-hub-sync"]
     assert sync["restart"] == "unless-stopped"
-    assert sync["mem_limit"] == "128m"
+    # Peak was about 110 MiB, and queueing a cover loads the settings models (about 13 MiB more):
+    # at 128m an OOM restart loop would stall every send without a word.
+    assert sync["mem_limit"] == "256m"
     assert sync["extra_hosts"] == ["host.docker.internal:host-gateway"]
     assert sync["env_file"] == [".env"]
     assert sync["depends_on"] == {"postgres": {"condition": "service_healthy"}}

@@ -31,13 +31,18 @@ Exit codes (R51):
 
 * 0  the file is written and nothing is left out;
 * 2  nothing is written: a platform book bound by two projects, a platform chapter id or a source_ref
-     named twice in a book, a chapter filed under another project, a value publish-hub would refuse, or a
-     file that cannot be written;
+     named twice in a book, a chapter filed under another project, a chapter whose work binding the read
+     did not see, a value publish-hub would refuse, or a file that cannot be written;
 * 3  the file is written, and stderr lists the chapters that were uploaded (drafted, published or
      submitted) but that it cannot carry: they have no platform chapter id, or their binding has no
-     platform book id. These could be uploaded again after the switch, so the operator has to resolve
-     each (run the audit sync for the binding, or publish the draft by hand during the drain) and
-     export again.
+     platform book id. These could be uploaded again after the switch, so the operator checks each
+     against the platform by hand: fill in its `remote_chapter_id` (and the binding's `remote_book_id`
+     when that is what is missing), or publish it by hand during the drain (D10); then export again.
+     The audit sync does not resolve them: it refreshes only book-level state and reads back no chapter
+     ids, and only an upload receipt writes `remote_chapter_id`.
+
+Both reads run in one REPEATABLE READ, READ ONLY transaction, so the chapters are those of the work
+bindings read: a book committed while the export runs is either wholly in the file or wholly out of it.
 """
 
 from __future__ import annotations
@@ -195,8 +200,9 @@ def build_export(
         client_id = None if preferred_client_id is None else normalize_client_id(preferred_client_id)
     except ValueError as exc:
         raise ExportRefused([str(exc)]) from None
-    # The database itself refuses a write from here on, so nothing in the export can change a row.
-    session.execute(text("SET TRANSACTION READ ONLY"))
+    # One snapshot for both reads (the chapters belong to the work bindings read), and the database
+    # itself refuses a write from here on, so nothing in the export can change a row.
+    session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
     works, chapters = _read_bindings(session, platform)
     return _plan(platform, client_id, works, chapters)
 
@@ -245,10 +251,17 @@ def _plan(
     left_out: list[LeftOut] = []
     chapter_ids: dict[tuple[str, str], list[_Chapter]] = defaultdict(list)
     source_refs: dict[tuple[str, str], list[_Chapter]] = defaultdict(list)
+    all_work_ids = {work.id for work in all_works}
     for chapter in chapters:
         work = works_by_id.get(chapter.work_id)
         if work is None:
-            continue  # a binding of no project
+            if chapter.work_id not in all_work_ids:
+                # One snapshot cannot give this; never drop an uploaded chapter without a word.
+                problems.append(
+                    f"{platform} chapter {chapter.number} {chapter.title!r} (project {chapter.project_id or '-'}): "
+                    f"its work binding {chapter.work_id} was not read; export again"
+                )
+            continue  # otherwise a binding of no project, ignored with its chapters
         if not work.remote_id:
             reason = "its binding has no platform book id"
         elif not chapter.remote_id:
@@ -375,6 +388,13 @@ def export_to_file(
     )
     for left in export.left_out:
         print(f"  {left.line()}", file=stderr)
+    print(
+        "publish-hub-export: check each on the platform by hand: fill in its remote_chapter_id (and the "
+        "binding's remote_book_id when that is missing), or publish it by hand during the drain (D10), then "
+        "export again. The audit sync refreshes only book-level state and reads back no chapter ids, so it "
+        "does not resolve these.",
+        file=stderr,
+    )
     return EXIT_LISTED
 
 

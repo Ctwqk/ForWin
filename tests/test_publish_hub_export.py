@@ -449,6 +449,22 @@ def test_a_binding_of_no_project_is_ignored_with_its_chapters_and_counted(db, tm
     assert "ignored 1 binding of no project" in stdout
 
 
+def test_the_listing_says_a_left_out_chapter_is_checked_on_the_platform_by_hand(db, tmp_path) -> None:
+    """Only an upload receipt writes a chapter's platform id: the audit sync refreshes the book and
+    reads back no chapter ids, so running it cannot resolve a left-out chapter (final review, item 3)."""
+    add_book(db, project="p1", book_id="B1", chapters=((1, "", "drafted", "一"),))
+
+    code, _, stderr = run(db, tmp_path / "out.json")
+
+    assert code == 3
+    guidance = stderr.split("it has no platform chapter id", 1)[1]
+    assert "by hand" in guidance and "remote_chapter_id" in guidance and "D10" in guidance
+    assert "The audit sync refreshes only book-level state" in guidance
+    doc = " ".join((export_module.__doc__ or "").split())
+    assert "run the audit sync for the binding" not in doc
+    assert "checks each against the platform by hand" in doc
+
+
 def test_the_listing_is_in_a_fixed_order(db, tmp_path) -> None:
     add_book(db, project="pb", book_id="B2", chapters=((2, "", "drafted", "b2"), (1, "", "drafted", "b1")))
     add_book(db, project="pa", book_id="B1", chapters=((10, "", "drafted", "a10"), (2, "", "drafted", "a2")))
@@ -703,6 +719,75 @@ def test_the_database_refuses_a_write_during_the_export(db, tmp_path, monkeypatc
     with db.session_factory() as session:
         assert session.scalar(select(func.count()).select_from(PublisherWorkBinding).where(
             PublisherWorkBinding.book_name == "changed")) == 0
+
+
+# --- one snapshot (final review, item 5) -----------------------------------------------------------
+
+
+def test_both_reads_run_in_one_read_only_repeatable_read_transaction(db, tmp_path, monkeypatch) -> None:
+    add_book(db, project="p1", book_id="B1", chapters=((1, "C1", "published"),))
+    reader = export_module._read_bindings  # noqa: SLF001
+    seen: list[tuple[str, str]] = []
+
+    def observed(session, platform):
+        seen.append(
+            (
+                session.execute(text("SHOW transaction_isolation")).scalar_one(),
+                session.execute(text("SHOW transaction_read_only")).scalar_one(),
+            )
+        )
+        return reader(session, platform)
+
+    monkeypatch.setattr(export_module, "_read_bindings", observed)
+
+    assert run(db, tmp_path / "out.json")[0] == 0
+    assert seen == [("repeatable read", "on")]
+
+
+def test_a_book_committed_between_the_two_reads_is_wholly_left_out(db, tmp_path) -> None:
+    """Under READ COMMITTED the chapter read could see a chapter whose work binding the first read
+    had not seen, and it was dropped without a word. One snapshot sees neither."""
+    add_book(db, project="p1", book_id="B1", chapters=((1, "C1", "published"),))
+    fired: list[str] = []
+
+    def commit_a_book_after_the_first_read(conn, cursor, statement, parameters, context, executemany):
+        if fired or "FROM publisher_work_bindings" not in statement or "JOIN" in statement:
+            return
+        fired.append(statement)
+        add_book(db, project="p2", book_id="B2", chapters=((1, "C9", "published"),))
+
+    event.listen(db.engine, "after_cursor_execute", commit_a_book_after_the_first_read)
+    try:
+        code, _, stderr = run(db, tmp_path / "out.json")
+    finally:
+        event.remove(db.engine, "after_cursor_execute", commit_a_book_after_the_first_read)
+
+    assert fired, "the book was committed during the export"
+    assert (code, stderr) == (0, "")
+    document = exported(tmp_path / "out.json")
+    assert [d["remote_id"] for d in document["destinations"]] == ["B1"]
+    assert [p["remote_id"] for p in document["publications"]] == ["C1"]
+    assert run(db, tmp_path / "again.json")[0] == 0  # the next export carries it
+    assert [p["remote_id"] for p in exported(tmp_path / "again.json")["publications"]] == ["C1", "C9"]
+
+
+def test_a_chapter_whose_work_binding_was_not_read_is_refused_not_dropped() -> None:
+    work = export_module._Work(  # noqa: SLF001
+        id="w1", project_id="p1", remote_id="B1", remote_url="", name="书"
+    )
+    chapters = [
+        export_module._Chapter(  # noqa: SLF001
+            work_id=work_id, project_id="p1", number=number, remote_id=remote_id, remote_url="",
+            title=title, state="published",
+        )
+        for work_id, number, remote_id, title in (("w1", 1, "C1", "一"), ("w-unseen", 2, "C2", "二"))
+    ]
+
+    with pytest.raises(export_module.ExportRefused) as refused:
+        export_module._plan("fanqie", None, [work], chapters)  # noqa: SLF001
+
+    [problem] = refused.value.problems
+    assert "w-unseen" in problem and "chapter 2" in problem and "export again" in problem
 
 
 # --- the command -----------------------------------------------------------------------------------

@@ -148,8 +148,8 @@ services:
       - "127.0.0.1:8899:8899"
     networks:
       default:
-        # The publisher extension in the migrated Chrome profile still calls the Swarm-era name.
-        aliases: ["forwin-app-swarm"]
+        # The publisher extension's backend name (FORWIN_BACKEND_URL of publisher-browser).
+        aliases: ["forwin-app"]
     volumes:
       - forwin-data:/app/data
     depends_on:
@@ -273,7 +273,9 @@ services:
     # The extension calls publish-hub at http://publish-hub-tunnel:18930 (URL and key in its own settings).
     environment:
       <<: *common-environment
-      FORWIN_BACKEND_URL: "http://app:8899"
+      # Not http://app:8899: Chromium applies the HSTS preload of the .app top-level domain to the
+      # bare host name "app", upgrades the extension's requests to https and they fail.
+      FORWIN_BACKEND_URL: "http://forwin-app:8899"
       FORWIN_EXTENSION_DISPLAY_MODE: "${FORWIN_EXTENSION_DISPLAY_MODE:-xvfb}"
       FORWIN_EXTENSION_DISPLAY: "${FORWIN_EXTENSION_DISPLAY:-:100}"
       FORWIN_EXTENSION_XVFB_SERVER_NUM: "${FORWIN_EXTENSION_XVFB_SERVER_NUM:-100}"

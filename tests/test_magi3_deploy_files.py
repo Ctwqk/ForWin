@@ -72,7 +72,8 @@ def test_compose_has_the_expected_services_and_volumes() -> None:
     assert services["app"]["environment"]["FORWIN_EMBEDDING_BASE_URL"] == "http://embedding:8080"
     assert services["embedding"]["build"]["context"] == "./embedding-gateway"
     assert "ports" not in services["embedding"]
-    assert services["app"]["networks"]["default"]["aliases"] == ["forwin-app-swarm"]
+    assert services["app"]["networks"]["default"]["aliases"] == ["forwin-app"]
+    assert services["publisher-browser"]["environment"]["FORWIN_BACKEND_URL"] == "http://forwin-app:8899"
     assert services["migrate"]["profiles"] == ["tools"]
     assert services["migrate"]["command"] == ["alembic", "upgrade", "head"]
 

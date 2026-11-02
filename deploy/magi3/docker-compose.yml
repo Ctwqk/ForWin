@@ -101,6 +101,7 @@ services:
       context: ./embedding-gateway
       args:
         PIP_INDEX_URL: *pip-index-url
+        TORCH_INDEX_URL: "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}"
         HF_ENDPOINT: "${HF_ENDPOINT:-https://hf-mirror.com}"
     environment:
       EMBED_MODEL: "all-MiniLM-L6-v2"

@@ -171,6 +171,8 @@ ports. All published ports on magi3 bind its loopback interface.
 
 The `embedding` service (deploy/magi3/embedding-gateway, copied from Constructure) serves all-MiniLM-L6-v2 at 384 dimensions on CPU, the same model infra-150 served on GPU. The model is baked into the image at build time through `HF_ENDPOINT` (default https://hf-mirror.com), so the service starts without network access.
 
+The image installs torch from PyTorch's CPU index (`TORCH_INDEX_URL`, default https://download.pytorch.org/whl/cpu) and every other package from `PIP_INDEX_URL`. PyPI's Linux torch wheels, arm64 included, are CUDA builds that add about 4 GB of `nvidia-*` and triton packages the service never uses: with them the image took 10 GB of Docker disk on magi3, with the CPU build 2.1 GB (measured 2026-11-02, torch 2.15.0). The build fails if a CUDA torch is installed anyway, for example when a package requires a torch newer than the CPU index has.
+
 ## publish-hub tunnel
 
 ForWin's containers reach publish-hub (magi2:18930) through the `publish-hub-tunnel` service, an ssh client that logs in to the VPS as a forwarding-only user and listens on :18930 inside the compose network. Callers use `http://publish-hub-tunnel:18930`: `FORWIN_PUBLISH_HUB_URL` in `.env` and the extension's hub address. On the VPS that port is magi2's reverse tunnel, which ends at `127.0.0.1:18930` (publish-hub repo, `docs/ops/2026-11-publish-hub-fanqie-cutover.md`). The forward runs in a container because the colima VM cannot reach any port on the magi3 host, so `host.docker.internal` (colima's `192.168.5.2`) does not work here.
@@ -201,6 +203,7 @@ From magi3, `registry-1.docker.io` times out, and pypi.org (about 0.3 MB/s), deb
 | npm packages (World Studio) | `https://registry.npmmirror.com` | `NPM_REGISTRY` |
 | Playwright browsers | `https://registry.npmmirror.com/-/binary/playwright` | `PLAYWRIGHT_DOWNLOAD_HOST` |
 | Alpine packages (publish-hub-tunnel) | `mirrors.aliyun.com` | `ALPINE_MIRROR` |
+| torch, CPU build (embedding) | `https://download.pytorch.org/whl/cpu` (upstream, about 17 MB/s) | `TORCH_INDEX_URL` |
 | Hugging Face model (embedding) | `https://hf-mirror.com` | `HF_ENDPOINT` |
 
 The defaults live in `docker-compose.yml`, so `.env` needs none of them; set one there only to use another mirror (or the upstream address to bypass it). The root `Dockerfile` keeps upstream when these build arguments are empty, so other hosts build as before.

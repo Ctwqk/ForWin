@@ -22,6 +22,8 @@ class ProductionPlan(BaseModel):
     generation_mode: str = ""
     requested_chapters: int = 0
     publish_jobs: list[dict[str, Any]] = Field(default_factory=list)
+    # Held by publish-hub's release gate: the gate runs on them, they are not released (R38).
+    hold_jobs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ProductionPlanner:
@@ -93,10 +95,11 @@ class ProductionPlanner:
             if backlog.has_active_upload_task and policy.max_active_upload_tasks <= 1:
                 plan.notes.append("active_upload_task")
             else:
+                # A chapter whose jobs are all held takes no slot of the quota (R38).
                 eligible_chapters = {
                     item.chapter_number
                     for item in backlog.scheduled_publish_jobs
-                    if item.platform in publish_platforms
+                    if item.platform in publish_platforms and not item.hold_reason
                 }
                 plan.publish_chapters.extend(
                     chapter_number
@@ -109,6 +112,9 @@ class ProductionPlanner:
                         plan.publish_chapters,
                         platforms=publish_platforms,
                     )
+                )
+                plan.hold_jobs.extend(
+                    backlog.held_publish_jobs(platforms=publish_platforms)
                 )
 
         return plan

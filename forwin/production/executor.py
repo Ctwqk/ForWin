@@ -176,7 +176,7 @@ class ProductionExecutor:
         policy: ProductionPolicy,
     ) -> int:
         if (
-            not plan.publish_jobs
+            not (plan.publish_jobs or plan.hold_jobs)
             or not policy.auto_publish
             or not policy.publish_bindings
         ):
@@ -190,6 +190,10 @@ class ProductionExecutor:
             "publish": True,
             "actor_type": "scheduler",
         }
+        if plan.hold_jobs:
+            release_request["hold_job_ids"] = [
+                str(item.get("job_id") or "") for item in plan.hold_jobs
+            ]
         if self.session is not None:
             release_request["session"] = self.session
         released = manager.release_canon_jobs(
@@ -223,5 +227,12 @@ class ProductionExecutor:
             ),
             publisher_login_discord_webhook_url=str(
                 getattr(self.config, "publisher_login_discord_webhook_url", "") or ""
+            ),
+            publish_hub_url=str(getattr(self.config, "publish_hub_url", "") or ""),
+            publish_hub_api_key=str(
+                getattr(self.config, "publish_hub_api_key", "") or ""
+            ),
+            publish_hub_timeout_seconds=int(
+                getattr(self.config, "publish_hub_timeout_seconds", 20) or 20
             ),
         )

@@ -32,6 +32,7 @@ from .progression import ProjectProgressionRule
 from .publisher import (
     CommentSignalCandidate,
     FeedbackActionRecord,
+    PublisherAuditRequest,
     PublisherBrowserSession,
     PublisherBrowserSessionEntry,
     PublisherChapterBinding,
@@ -47,6 +48,7 @@ from .publisher import (
     PublisherUploadJob,
     PublisherUploadReceipt,
     PublisherWorkBinding,
+    PublishHubSyncState,
     ReaderScaleSnapshot,
     SignalWindowAggregate,
 )
@@ -141,7 +143,9 @@ __all__ = [
     "PublisherCoverAsset",
     "PublisherMilestone",
     "PublisherCommentSyncJob",
+    "PublisherAuditRequest",
     "PublisherRawComment",
+    "PublishHubSyncState",
     "ReaderScaleSnapshot",
     "SignalWindowAggregate",
     # final book state

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlsplit
 
 from forwin.api_pages_shared import PAGE_DOM_HELPERS_JS, render_page_document
 
@@ -17,10 +18,33 @@ _PUBLISHERS_SCRIPT_PATHS = (
 )
 
 
+def _publish_hub_ops_url(value: object) -> str:
+    """The configured /ops address if it is an absolute http(s) URL, else "" (no link)."""
+    text = str(value or "").strip()
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return ""
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return ""
+    return text
+
+
+def _js_string(value: str) -> str:
+    """A JSON string literal that is also safe inside an inline <script> element."""
+    return (
+        json.dumps(value)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+
 def render_publishers_page(
     *,
     backend_ready: dict[str, object],
     extension_install_path: str,
+    publish_hub_ops_url: str = "",
 ) -> str:
     return render_page_document(
         title="ForWin 发布",
@@ -37,5 +61,8 @@ def render_publishers_page(
             ),
             "@@EXTENSION_INSTALL_PATH@@": extension_install_path,
             "{PAGE_DOM_HELPERS_JS}": PAGE_DOM_HELPERS_JS,
+            # Last: the substitution is a value from the config, and no later replacement
+            # may read a placeholder out of it.
+            "@@PUBLISH_HUB_OPS_URL_JSON@@": _js_string(_publish_hub_ops_url(publish_hub_ops_url)),
         },
     )

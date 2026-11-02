@@ -1,20 +1,13 @@
 from __future__ import annotations
 
-import json
 import hashlib
 import logging
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from forwin.models.base import new_id
-from forwin.models.publisher import (
-    PublisherUploadJob,
-    PublisherWorkBinding,
-)
 from forwin.publisher_runtime.browser_sessions import (
     isoformat as _isoformat,
     utc_now as _utc_now,
@@ -65,6 +58,9 @@ class PublisherManager:
         publisher_session_secret: str = "",
         publisher_session_encryption_required: bool = False,
         publisher_login_discord_webhook_url: str = "",
+        publish_hub_url: str = "",
+        publish_hub_api_key: str = "",
+        publish_hub_timeout_seconds: int = 20,
     ) -> None:
         self.session_factory = session_factory
         self.extension_api_key = str(extension_api_key or "").strip()
@@ -91,6 +87,9 @@ class PublisherManager:
             publisher_session_secret=self.publisher_session_secret,
             publisher_session_encryption_required=self.publisher_session_encryption_required,
             strict_preferred_client=self.strict_preferred_client,
+            publish_hub_url=publish_hub_url,
+            publish_hub_api_key=publish_hub_api_key,
+            publish_hub_timeout_seconds=publish_hub_timeout_seconds,
         )
         self._plaintext_cookie_storage_warned = (
             self.runtime.browser_cookie_codec._plaintext_cookie_storage_warned
@@ -388,6 +387,7 @@ class PublisherManager:
         publish: bool,
         actor_type: str,
         session=None,
+        hold_job_ids: list[str] | tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         return self.runtime.canon_jobs.release(
             project_id=project_id,
@@ -395,6 +395,7 @@ class PublisherManager:
             publish=publish,
             actor_type=actor_type,
             session=session,
+            hold_job_ids=hold_job_ids,
         )
 
     def list_work_bindings(
@@ -465,77 +466,76 @@ class PublisherManager:
         work_binding_id: str = "",
         book_name: str = "",
     ) -> dict[str, Any]:
-        with self.session_factory() as session:
-            work = (
-                session.get(PublisherWorkBinding, work_binding_id)
-                if work_binding_id
-                else None
-            )
-            if work is None and project_id:
-                work = session.execute(
-                    select(PublisherWorkBinding)
-                    .where(
-                        PublisherWorkBinding.project_id == project_id,
-                        PublisherWorkBinding.platform_id == platform,
-                    )
-                    .limit(1)
-                ).scalar_one_or_none()
-            if work is None or not str(work.remote_book_id or "").strip():
-                raise ValueError("审核同步需要已绑定的平台作品 ID。")
-            requested_project_id = str(project_id or "").strip()
-            requested_platform = str(platform or "").strip()
-            requested_book_name = str(book_name or "").strip()
-            if (
-                requested_project_id
-                and requested_project_id != str(work.project_id or "").strip()
-            ):
-                raise ValueError("审核同步项目与作品绑定不一致。")
-            if requested_platform != str(work.platform_id or "").strip():
-                raise ValueError("审核同步平台与作品绑定不一致。")
-            if (
-                requested_book_name
-                and requested_book_name != str(work.book_name or "").strip()
-            ):
-                raise ValueError("审核同步书名与作品绑定不一致。")
-            payload = {
-                "project_id": work.project_id,
-                "work_binding_id": work.id,
-                "remote_book_id": work.remote_book_id,
-                "remote_url": work.remote_url,
-            }
-            job_id = new_id()
-            content_sha256 = hashlib.sha256(
-                json.dumps(
-                    {
-                        "platform": work.platform_id,
-                        "work_binding_id": work.id,
-                        "remote_book_id": work.remote_book_id,
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
-            job = PublisherUploadJob(
-                id=job_id,
-                project_id=payload["project_id"],
-                idempotency_key=f"publisher-job:v1:{job_id}",
-                platform_id=work.platform_id,
-                task_kind="audit_sync",
-                status="pending",
-                book_name=work.book_name,
-                chapter_title="",
-                body_text="",
-                body_sha256=content_sha256,
-                upload_url=payload["remote_url"],
-                publish=False,
-                result_message="审核同步任务已创建，等待浏览器扩展执行。",
-                result_payload_json=json.dumps(payload, ensure_ascii=False),
-            )
-            session.add(job)
-            session.commit()
-            session.refresh(job)
-            return self.runtime.upload_jobs.serialize_upload_job(job)
+        """Ask the browser extension to read a book's audit state from the platform.
+
+        This is a direct audit request (D8), not an upload job. An open request for the same
+        book is returned instead of a second one.
+        """
+        return self.runtime.audit_requests.enqueue(
+            project_id=project_id,
+            platform=platform,
+            work_binding_id=work_binding_id,
+            book_name=book_name,
+        )
+
+    def claim_next_audit_request(
+        self,
+        *,
+        client_id: str,
+        connected_platforms: list[str],
+        now: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        return self.runtime.audit_requests.claim_next(
+            client_id=client_id,
+            connected_platforms=connected_platforms,
+            now=now,
+        )
+
+    def submit_audit_request_result(
+        self,
+        *,
+        request_id: str,
+        client_id: str,
+        work: dict[str, Any],
+        chapters: list[dict[str, Any]],
+        cover: dict[str, Any],
+        milestones: list[dict[str, Any]],
+        current_url: str = "",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        return self.runtime.audit_requests.submit_result(
+            request_id=request_id,
+            client_id=client_id,
+            work=work,
+            chapters=chapters,
+            cover=cover,
+            milestones=milestones,
+            current_url=current_url,
+            now=now,
+        )
+
+    def fail_audit_request(
+        self,
+        *,
+        request_id: str,
+        client_id: str,
+        reason: str,
+        risk_reason: str = "",
+        current_url: str = "",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        return self.runtime.audit_requests.report_failure(
+            request_id=request_id,
+            client_id=client_id,
+            reason=reason,
+            risk_reason=risk_reason,
+            current_url=current_url,
+            now=now,
+        )
+
+    def latest_audit_request(self, *, work_binding_id: str) -> dict[str, Any] | None:
+        """A work binding's most recent audit request (status, reason, finished_at...), or None."""
+        return self.runtime.audit_requests.latest_for_work_binding(work_binding_id)
 
     def get_preflight(
         self,

@@ -288,6 +288,11 @@ export function buildAttemptResult({ job, result }) {
   };
 }
 
+// True for the risk reasons ForWin accepts on a risk pause or an audit failure report.
+export function isRiskReason(value) {
+  return RISK_REASONS.has(text(value));
+}
+
 export function buildRiskPauseRequest({ signal, observedAt }) {
   const source = signal && typeof signal === 'object' ? signal : {};
   const evidenceSource = source.riskEvidence && typeof source.riskEvidence === 'object'

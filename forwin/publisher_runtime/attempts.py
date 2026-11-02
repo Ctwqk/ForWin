@@ -14,6 +14,8 @@ from forwin.models.publisher import (
     PublisherOperatorAction,
     PublisherUploadAttempt,
     PublisherUploadJob,
+    upload_job_is_hub_owned,
+    upload_job_not_hub_owned,
 )
 
 from .audit import PublisherAuditService
@@ -139,6 +141,7 @@ class PublisherAttemptService:
                 .where(
                     PublisherUploadJob.deleted_at.is_(None),
                     PublisherUploadJob.task_kind.in_(CLAIMABLE_TASK_KINDS),
+                    upload_job_not_hub_owned(),
                     PublisherUploadAttempt.status == "running",
                     PublisherUploadAttempt.worker_id == worker_id,
                 )
@@ -164,6 +167,7 @@ class PublisherAttemptService:
                     job is not None
                     and attempt is not None
                     and job.deleted_at is None
+                    and not upload_job_is_hub_owned(job)
                     and job.current_attempt_id == attempt.id
                     and attempt.worker_id == worker_id
                     and attempt.status == "running"
@@ -196,6 +200,8 @@ class PublisherAttemptService:
                     PublisherUploadJob.body_sha256 != "",
                     PublisherUploadJob.platform_id.in_(claimable_platforms),
                     PublisherUploadJob.task_kind.in_(CLAIMABLE_TASK_KINDS),
+                    # publish-hub runs these rows; handing one out would upload it twice.
+                    upload_job_not_hub_owned(),
                     or_(
                         (
                             (PublisherUploadJob.status == "pending")
@@ -421,6 +427,7 @@ class PublisherAttemptService:
             ).scalar_one_or_none()
             if job is None:
                 raise PublisherResourceNotFoundError("job", normalized_job_id)
+            self._refuse_hub_owned(job)
             attempt = session.execute(
                 select(PublisherUploadAttempt)
                 .where(
@@ -606,6 +613,11 @@ class PublisherAttemptService:
             ).scalar_one_or_none()
             if job is None:
                 raise PublisherResourceNotFoundError("job", normalized_job_id)
+            if upload_job_is_hub_owned(job):
+                raise PublisherInvalidTransitionError(
+                    "publisher job is owned by publish-hub; resume it there",
+                    job_status=job.status,
+                )
             prior_action = session.execute(
                 select(PublisherOperatorAction).where(
                     PublisherOperatorAction.upload_job_id == normalized_job_id,
@@ -769,6 +781,7 @@ class PublisherAttemptService:
                         PublisherUploadJob.status.in_(["running", "terminating"]),
                         PublisherUploadJob.current_attempt_id == "",
                         PublisherUploadJob.task_kind != "cover_generate",
+                        upload_job_not_hub_owned(),
                     )
                     .with_for_update(skip_locked=True)
                 )
@@ -805,6 +818,7 @@ class PublisherAttemptService:
         ).scalar_one_or_none()
         if job is None:
             raise PublisherResourceNotFoundError("job", normalized_job_id)
+        self._refuse_hub_owned(job)
         attempt = session.execute(
             select(PublisherUploadAttempt)
             .where(
@@ -1111,7 +1125,11 @@ class PublisherAttemptService:
                 PublisherUploadAttempt.id,
                 PublisherUploadAttempt.upload_job_id,
             )
-            .where(predicate)
+            .join(
+                PublisherUploadJob,
+                PublisherUploadJob.id == PublisherUploadAttempt.upload_job_id,
+            )
+            .where(predicate, upload_job_not_hub_owned())
             .order_by(PublisherUploadAttempt.created_at.asc())
         ).all()
         job_ids: list[str] = []
@@ -1121,7 +1139,7 @@ class PublisherAttemptService:
                 .where(PublisherUploadJob.id == upload_job_id)
                 .with_for_update(skip_locked=True)
             ).scalar_one_or_none()
-            if job is None:
+            if job is None or upload_job_is_hub_owned(job):
                 continue
             attempt = session.execute(
                 select(PublisherUploadAttempt)
@@ -1175,6 +1193,16 @@ class PublisherAttemptService:
             )
             job_ids.append(job.id)
         return sorted(set(job_ids))
+
+    @staticmethod
+    def _refuse_hub_owned(job: PublisherUploadJob) -> None:
+        """An extension attempt cannot act on a row publish-hub runs (none is ever claimed)."""
+        if upload_job_is_hub_owned(job):
+            raise PublisherAttemptFenceError(
+                "publisher job is owned by publish-hub",
+                job_status=job.status,
+                current_attempt_id=job.current_attempt_id,
+            )
 
     @staticmethod
     def _attempt_is_uncertain(attempt: PublisherUploadAttempt) -> bool:

@@ -142,6 +142,20 @@ ports. All published ports on magi3 bind its loopback interface.
 
 The `embedding` service (deploy/magi3/embedding-gateway, copied from Constructure) serves all-MiniLM-L6-v2 at 384 dimensions on CPU, the same model infra-150 served on GPU. The model is baked into the image at build time through `HF_ENDPOINT` (default https://hf-mirror.com), so the service starts without network access.
 
+## publish-hub tunnel
+
+ForWin's containers reach publish-hub (magi2:18930) through the `publish-hub-tunnel` service, an ssh client that logs in to the VPS as a forwarding-only user and listens on :18930 inside the compose network. Callers use `http://publish-hub-tunnel:18930`: `FORWIN_PUBLISH_HUB_URL` in `.env` and the extension's hub address. On the VPS that port is magi2's reverse tunnel, which ends at `127.0.0.1:18930` (publish-hub repo, `docs/ops/2026-11-publish-hub-fanqie-cutover.md`). The forward runs in a container because the colima VM cannot reach any port on the magi3 host, so `host.docker.internal` (colima's `192.168.5.2`) does not work here.
+
+One-time set-up on magi3:
+
+```sh
+mkdir -m 700 ~/forwin/publish-hub-tunnel
+ssh-keygen -t ed25519 -N '' -C magi3-forwin-publish-hub-tunnel -f ~/forwin/publish-hub-tunnel/id_ed25519
+ssh-keygen -F <vps-address> -f ~/.ssh/cnrelay_known_hosts | grep ' ssh-ed25519 ' > ~/forwin/publish-hub-tunnel/known_hosts
+```
+
+On the VPS, the public key goes into the forwarding-only user's `authorized_keys` as `restrict,port-forwarding,permitopen="127.0.0.1:18930" ssh-ed25519 …`, and that user's `Match User` block in `sshd_config.d` allows local forwarding to `127.0.0.1:18930` only. Then set `FORWIN_PUBLISH_HUB_TUNNEL_TARGET=<user>@<vps-address>` in `deploy/magi3/.env` and run `dc up -d publish-hub-tunnel` (`dc` as defined above). The service is healthy once publish-hub's `/health` answers through it. Without the target or the key it idles, so restart it after setting them up.
+
 ## colima DNS on magi3
 
 The colima VM image has no systemd-resolved, so its /etc/resolv.conf symlink dangles and containers cannot resolve external names. `~/.colima/default/colima.yaml` on magi3 carries a `provision` script that writes `nameserver 192.168.10.1` and `nameserver 223.5.5.5` on every boot; keep it when recreating the VM.

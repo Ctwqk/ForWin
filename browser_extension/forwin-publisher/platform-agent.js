@@ -1648,7 +1648,12 @@
     return meta.primaryCategory ? selectedText.includes(meta.primaryCategory) : true;
   }
 
-  async function createFanqieBook(bookName, rawMeta) {
+  // options (all optional, legacy callers pass none):
+  //   stayOnBookPage - keep the book-info page after creating instead of going
+  //     back to the works page, so the caller can read the new book's id;
+  //   onSubmitted - called right after the create button was clicked, so the
+  //     caller can tell failures before the click from failures after it.
+  async function createFanqieBook(bookName, rawMeta, options = {}) {
     const ready = await ensureFanqieCreateBookPage();
     if (!ready) {
       return false;
@@ -1682,6 +1687,7 @@
     if (!submitted) {
       throw makeUploadError('番茄创建书本时未找到立即创建按钮。', 'create-book-validation-failed');
     }
+    options.onSubmitted?.();
     await sleep(2000);
     const currentText = pageText();
     if (includesAny(currentText, ['已到达当日创建作品上限', '当日创建作品上限'])) {
@@ -1713,9 +1719,12 @@
       throw makeUploadError(
         '番茄创建书本未完成，页面没有进入书本详情或写作页。',
         'create-book-validation-failed',
+        { platform_reason: 'book-page-not-reached' },
       );
     }
-    window.location.href = 'https://fanqienovel.com/main/writer/';
+    if (!options.stayOnBookPage) {
+      window.location.href = 'https://fanqienovel.com/main/writer/';
+    }
     return true;
   }
 
@@ -1969,7 +1978,13 @@
     return true;
   }
 
-  async function createQidianBook(bookName, rawMeta) {
+  // options (all optional, legacy callers pass none):
+  //   stayOnBookPage - do not click the start-writing entry and do not leave
+  //     for the dashboard, so the caller can read the new book's id first;
+  //   onBeforeSubmit - called right before the create button is clicked;
+  //   onSubmitted - called right after the create button was clicked;
+  //   onStartWritingReady - called with the start-writing element once it shows.
+  async function createQidianBook(bookName, rawMeta, options = {}) {
     const meta = normalizeQidianBookMeta(rawMeta, bookName);
     const titleInput = await waitForSelector(['input[name="title"]', 'input[placeholder*="作品"]'], 8000);
     if (!(titleInput instanceof HTMLInputElement)) {
@@ -2014,7 +2029,9 @@
     if (!(submit instanceof HTMLElement)) {
       throw makeUploadError('起点创建书本时未找到创建按钮。', 'create-book-validation-failed');
     }
+    options.onBeforeSubmit?.();
     submit.click();
+    options.onSubmitted?.();
     await sleep(1500);
     const text = pageText();
     if (includesAny(text, ['创建过于频繁', '今日创建次数过多', '达到创建上限'])) {
@@ -2035,12 +2052,17 @@
     if (!(startWriting instanceof HTMLElement)) {
       const createdText = pageText();
       if (includesAny(createdText, ['创建成功', '新书创建成功', '作品创建成功'])) {
-        window.location.href = 'https://write.qq.com/portal/dashboard';
+        if (!options.stayOnBookPage) {
+          window.location.href = 'https://write.qq.com/portal/dashboard';
+        }
         return false;
       }
       throw makeUploadError('起点创建书本后未出现开始写作入口。', 'chapter-editor-navigation-failed');
     }
-    startWriting.click();
+    options.onStartWritingReady?.(startWriting);
+    if (!options.stayOnBookPage) {
+      startWriting.click();
+    }
     return false;
   }
 
@@ -4431,6 +4453,478 @@
     };
   }
 
+  // One create per page load. `running` blocks a re-delivered run-create-book
+  // message while the first is still filling the form; `submitted` stays set
+  // after the create button was clicked, because a re-delivered message must
+  // never refill the form and click create again (Qidian stays on the form).
+  const createBookRun = { running: false, submitted: false };
+
+  function canonicalPublisherUrl(rawUrl) {
+    try {
+      const parsed = new URL(String(rawUrl || ''), window.location.href);
+      return `${parsed.origin}${parsed.pathname.replace(/\/+$/, '') || '/'}`;
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  function isCreateBookPage(platform) {
+    const href = String(window.location.href || '');
+    if (platform === 'fanqie') {
+      return href.includes('fanqienovel.com') && href.includes('/main/writer/create');
+    }
+    if (platform === 'qidian') {
+      return href.includes('write.qq.com') && href.includes('/create-novel');
+    }
+    return false;
+  }
+
+  function isPublisherHost(platform, rawUrl) {
+    const root = platform === 'fanqie' ? 'fanqienovel.com' : platform === 'qidian' ? 'write.qq.com' : '';
+    try {
+      const host = new URL(String(rawUrl || '')).hostname.toLowerCase();
+      return Boolean(root) && (host === root || host.endsWith(`.${root}`));
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  // Every element the legacy flow would treat as the start-writing entry.
+  function startWritingEntries() {
+    return Array.from(document.querySelectorAll('a, button, [role="button"]'))
+      .filter((node) => String(node?.innerText || node?.textContent || '').trim() === '开始写作');
+  }
+
+  function startWritingEntryUrl(node) {
+    const href = String(
+      node?.getAttribute?.('href') || node?.closest?.('a[href]')?.getAttribute?.('href') || '',
+    ).trim();
+    try {
+      return href ? new URL(href, window.location.href).toString() : '';
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  // Text of the nearest wrapper that holds more than the entry itself, or ''
+  // when there is none to read (then the entry cannot be tied to a book name).
+  function startWritingContainerText(node) {
+    const textOf = (element) => String(element?.innerText || element?.textContent || '').trim();
+    const own = textOf(node);
+    let current = node?.parentElement || null;
+    for (let depth = 0; current && depth < 5; depth += 1) {
+      const text = textOf(current);
+      if (text.length > own.length) {
+        return text;
+      }
+      current = current.parentElement;
+    }
+    return '';
+  }
+
+  // Signs on the page that a book was created, whatever else the page says.
+  function visibleCreationEvidence() {
+    const evidence = [];
+    if (/\/book-info\/\d+/.test(String(window.location.href || ''))) {
+      evidence.push('book-info-url');
+    }
+    if (startWritingEntries().some((node) => isVisibleElement(node))) {
+      evidence.push('start-writing-entry');
+    }
+    if (pageText().includes('创建成功')) {
+      evidence.push('success-text');
+    }
+    return evidence;
+  }
+
+  // Failures before the create button was clicked, and refusals the platform
+  // printed afterwards, are definitive: nothing was created. A refusal phrase is
+  // a loose substring of the whole page, so it only counts while no creation
+  // evidence is visible. Any other failure after the click leaves the outcome
+  // open (the book may exist), so it is reported as create-book-outcome-unknown
+  // and must be reconciled, never retried blindly.
+  function createBookFailureResult(error, observed) {
+    const code = error instanceof Error ? String(error.code || '') : '';
+    const message = error instanceof Error ? error.message : String(error);
+    const errorPayload = error instanceof Error && error.resultPayload
+      && typeof error.resultPayload === 'object'
+      ? error.resultPayload
+      : {};
+    const explicitRefusal = code === 'create-book-rate-limited'
+      || (
+        code === 'create-book-validation-failed'
+        && errorPayload.platform_reason !== 'book-page-not-reached'
+      );
+    const creationEvidence = observed.submitted ? visibleCreationEvidence() : [];
+    if (!observed.submitted || (explicitRefusal && creationEvidence.length === 0)) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: message,
+        errorCode: code || 'create-book-failed',
+        resultPayload: {
+          ...errorPayload,
+          task_kind: 'create_book',
+          submitted: observed.submitted,
+        },
+      };
+    }
+    const riskAfterSubmit = buildRiskPauseResult('post-action');
+    return {
+      ok: false,
+      currentUrl: window.location.href,
+      error: `创建书本已提交，但结果无法确认：${message}`,
+      errorCode: 'create-book-outcome-unknown',
+      resultPayload: {
+        ...errorPayload,
+        task_kind: 'create_book',
+        submitted: true,
+        cause_code: code,
+        cause_message: message,
+        creation_evidence: creationEvidence,
+        ...(observed.startWritingRejected
+          ? { start_writing_rejected: observed.startWritingRejected }
+          : {}),
+        platform_message: pageText().slice(0, 500),
+        ...(riskAfterSubmit.riskPause ? { risk_reason: riskAfterSubmit.riskReason } : {}),
+      },
+    };
+  }
+
+  // Last-resort reply for run-create-book when its own handling threw. After the
+  // create click an uncoded failure must read as "unknown", never as a plain
+  // failure the caller may retry.
+  function createBookFallbackReply(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (createBookRun.submitted) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: `创建书本已提交，但结果无法确认：${message}`,
+        errorCode: 'create-book-outcome-unknown',
+        resultPayload: { task_kind: 'create_book', submitted: true, cause_message: message },
+      };
+    }
+    return {
+      ok: false,
+      currentUrl: window.location.href,
+      error: message,
+      errorCode: 'create-book-failed',
+      resultPayload: { task_kind: 'create_book', submitted: false },
+    };
+  }
+
+  async function createBookOnCurrentPage(payload, observed) {
+    const platform = String(payload?.platform || '').trim();
+    const bookName = String(payload?.book_name || '').trim();
+    setDebugStep('run-create-book-start', { platform, bookName });
+    if (platform !== 'fanqie' && platform !== 'qidian') {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: `不支持在 ${platform || '未知平台'} 创建书本。`,
+        errorCode: 'create-book-platform-unsupported',
+      };
+    }
+    if (!bookName) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: '创建书本缺少书名。',
+        errorCode: 'create-book-validation-failed',
+      };
+    }
+    // The legacy create functions fill in a category and intro when the meta is
+    // missing; a book created on the platform cannot be undone, so no defaults.
+    const bookMeta = payload?.book_meta;
+    if (!bookMeta || typeof bookMeta !== 'object' || Array.isArray(bookMeta)) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: '创建书本缺少作品设置（book_meta），不会用默认值创建。',
+        errorCode: 'create-book-validation-failed',
+        resultPayload: { task_kind: 'create_book', submitted: false },
+      };
+    }
+    const risk = buildRiskPauseResult('pre-mutation');
+    if (risk.riskPause) {
+      return risk;
+    }
+    if (!isCreateBookPage(platform)) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: '当前页面不是平台的创建书本页。',
+        errorCode: 'create-book-page-not-ready',
+        resultPayload: { task_kind: 'create_book', submitted: false },
+      };
+    }
+    const options = {
+      stayOnBookPage: true,
+      onSubmitted: () => {
+        observed.submitted = true;
+        createBookRun.submitted = true;
+      },
+    };
+    if (platform === 'fanqie') {
+      await createFanqieBook(bookName, bookMeta, options);
+    } else {
+      await createQidianBook(bookName, bookMeta, {
+        ...options,
+        onBeforeSubmit: () => {
+          const urls = startWritingEntries().map(startWritingEntryUrl).filter(Boolean);
+          observed.startWritingBefore = {
+            urls,
+            ids: urls.map((url) => remoteBookIdFromPublisherUrl('qidian', url)).filter(Boolean),
+          };
+        },
+        onStartWritingReady: (node) => { observed.startWriting = node; },
+      });
+    }
+    if (!observed.submitted) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: '创建书本页没有准备好，未提交创建。',
+        errorCode: 'create-book-page-not-ready',
+        resultPayload: { task_kind: 'create_book', submitted: false },
+      };
+    }
+
+    // The book's own page is the only place its id can be read from: Fanqie
+    // shows it in the page URL, Qidian in the start-writing link.
+    let bookUrl;
+    let verifiedVia;
+    if (platform === 'fanqie') {
+      bookUrl = String(window.location.href || '');
+      verifiedVia = 'book-info-url';
+    } else {
+      const entry = observed.startWriting;
+      bookUrl = startWritingEntryUrl(entry);
+      verifiedVia = 'start-writing-link';
+      // The entry must belong to the book just created: not a link that was on
+      // the page before the click, and (when the page shows text around it) not
+      // a card for another book.
+      const before = observed.startWritingBefore || { urls: [], ids: [] };
+      const entryId = bookUrl && isPublisherHost(platform, bookUrl)
+        ? remoteBookIdFromPublisherUrl(platform, bookUrl)
+        : '';
+      if (bookUrl && (before.urls.includes(bookUrl) || (entryId && before.ids.includes(entryId)))) {
+        observed.startWritingRejected = 'present-before-submit';
+        throw new Error('页面上的开始写作入口在点击创建前就已存在，不能当作新书的入口。');
+      }
+      const container = entry ? startWritingContainerText(entry) : '';
+      if (container && !container.includes(bookName)) {
+        observed.startWritingRejected = 'book-name-not-in-container';
+        throw new Error('开始写作入口所在区域没有出现这本书的书名，不能当作新书的入口。');
+      }
+    }
+    const remoteBookId = bookUrl && isPublisherHost(platform, bookUrl)
+      ? remoteBookIdFromPublisherUrl(platform, bookUrl)
+      : '';
+    if (!remoteBookId) {
+      throw new Error('创建书本已提交，但页面没有给出可读取的书本 ID。');
+    }
+    const remoteUrl = canonicalPublisherUrl(bookUrl);
+    return {
+      ok: true,
+      currentUrl: window.location.href,
+      message: '书本已创建。',
+      remote_book_id: remoteBookId,
+      remote_url: remoteUrl,
+      resultPayload: {
+        task_kind: 'create_book',
+        verified_via: verifiedVia,
+        remote_book_id: remoteBookId,
+        remote_url: remoteUrl,
+        cover_deferred: Boolean(String(payload?.cover_path || '').trim()),
+      },
+    };
+  }
+
+  // Creates a book on the create page the tab is already on: the caller opens
+  // the tab on the create URL first. The action never navigates before the
+  // click and never leaves the book page after it, so its reply cannot be lost
+  // to a page change. The cover is not part of book creation: cover_path is
+  // accepted and left to the separate cover_upload task.
+  async function runCreateBook(payload) {
+    if (createBookRun.running || createBookRun.submitted) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: '创建书本已在执行或已提交，不会重复执行。',
+        errorCode: 'create-book-already-running',
+        resultPayload: {
+          task_kind: 'create_book',
+          in_flight: createBookRun.running,
+          submitted: createBookRun.submitted,
+        },
+      };
+    }
+    createBookRun.running = true;
+    const observed = { submitted: false, startWriting: null };
+    try {
+      return await createBookOnCurrentPage(payload, observed);
+    } catch (error) {
+      try {
+        return createBookFailureResult(error, observed);
+      } catch (handlingError) {
+        return createBookFallbackReply(handlingError);
+      }
+    } finally {
+      createBookRun.running = false;
+    }
+  }
+
+  function isWorksListPage(platform) {
+    const href = String(window.location.href || '');
+    if (platform === 'fanqie') {
+      return href.includes('fanqienovel.com')
+        && href.includes('/main/writer/')
+        && !href.includes('/main/writer/create')
+        && !href.includes('/main/writer/login');
+    }
+    if (platform === 'qidian') {
+      return href.includes('write.qq.com')
+        && href.includes('/portal/dashboard')
+        && !href.includes('/create-novel');
+    }
+    return false;
+  }
+
+  // SEAM for exact title matching. Returns the title of one works-list card, or
+  // null when it cannot be read exactly. Today it always returns null: the
+  // automation only knows how to find a book by substring of the card text, and
+  // no title-only element has been captured for either platform. A later DOM
+  // capture fills this in (and a positive "list fully loaded" signal), which is
+  // what it takes to let reconcile-create answer found or absent.
+  function exactTitleOfWorkCard(_platform, _card) {
+    return null;
+  }
+
+  // Same selectors and name test as findFanqieBookEntry, but collects every
+  // match instead of the first.
+  function listFanqieBookCandidates(bookName) {
+    const textOf = (node) => String(node?.innerText || node?.textContent || '').trim();
+    const decode = (value) => {
+      try {
+        return decodeURIComponent(String(value || '').trim());
+      } catch (_error) {
+        return String(value || '').trim();
+      }
+    };
+    const candidates = [];
+    const seen = new Set();
+    for (const anchor of Array.from(document.querySelectorAll('a[href*="/chapter-manage/"]'))) {
+      const rawHref = String(anchor.getAttribute('href') || '');
+      const text = `${textOf(anchor)} ${(anchor.parentElement && textOf(anchor.parentElement)) || ''}`.trim();
+      if (!decode(rawHref).includes(bookName) && !text.includes(bookName)) {
+        continue;
+      }
+      let absoluteHref = '';
+      try {
+        absoluteHref = new URL(rawHref, window.location.href).toString();
+      } catch (_error) {
+        absoluteHref = '';
+      }
+      const remoteBookId = remoteBookIdFromPublisherUrl('fanqie', absoluteHref);
+      const remoteUrl = remoteBookId
+        ? `${new URL(absoluteHref).origin}/main/writer/chapter-manage/${remoteBookId}`
+        : canonicalPublisherUrl(absoluteHref);
+      const key = remoteBookId || remoteUrl || text;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      candidates.push({
+        text: text.slice(0, 300),
+        remote_book_id: remoteBookId,
+        remote_url: remoteUrl,
+        exact_title: exactTitleOfWorkCard('fanqie', anchor.parentElement || anchor),
+      });
+    }
+    return candidates;
+  }
+
+  // Same selectors and name test as findQidianDashboardBookEntry, but collects
+  // every matching card.
+  function listQidianBookCandidates(bookName) {
+    const textOf = (node) => String(node?.innerText || node?.textContent || '').trim();
+    const candidates = [];
+    for (const card of Array.from(document.querySelectorAll('.g-prodution-item'))) {
+      const text = textOf(card);
+      if (!text.includes(bookName)) {
+        continue;
+      }
+      const link = Array.from(card.querySelectorAll('a[href]')).find((node) => {
+        const href = String(node.getAttribute('href') || '');
+        return textOf(node).includes('去写作')
+          || href.includes('/addType/')
+          || href.includes('/chaptertmp/');
+      });
+      let absoluteHref = '';
+      try {
+        absoluteHref = link
+          ? new URL(String(link.getAttribute('href') || ''), window.location.href).toString()
+          : '';
+      } catch (_error) {
+        absoluteHref = '';
+      }
+      candidates.push({
+        text: text.slice(0, 300),
+        remote_book_id: absoluteHref ? remoteBookIdFromPublisherUrl('qidian', absoluteHref) : '',
+        remote_url: absoluteHref ? canonicalPublisherUrl(absoluteHref) : '',
+        exact_title: exactTitleOfWorkCard('qidian', card),
+      });
+    }
+    return candidates;
+  }
+
+  // Read-only look at the author's works list after a create whose outcome is
+  // unclear. It never answers found or absent: the list pages have no positive
+  // "fully loaded" signal and matching is by substring, so the answer is always
+  // "unknown" plus the cards whose text contains the name, as evidence for an
+  // operator.
+  async function reconcileCreateReadOnly(payload) {
+    const platform = String(payload?.platform || '').trim();
+    const bookName = String(payload?.book_name || '').trim();
+    const currentUrl = String(window.location.href || '');
+    const risk = buildRiskPauseResult('read-only-reconciliation');
+    if (risk.riskPause) {
+      return {
+        finding: 'unknown',
+        outcome: 'risk_pause',
+        riskReason: risk.riskReason,
+        currentUrl,
+        selector: risk.riskEvidence.selector,
+        platformMessage: risk.riskEvidence.matchedText,
+        reason: risk.error,
+      };
+    }
+    const unreadable = (reason) => ({
+      finding: 'unknown',
+      currentUrl,
+      candidates: [],
+      works_list_complete: false,
+      reason,
+    });
+    if (!bookName) {
+      return unreadable('book-name-missing');
+    }
+    if (!isWorksListPage(platform)) {
+      return unreadable('works-list-page-not-open');
+    }
+    return {
+      finding: 'unknown',
+      currentUrl,
+      candidates: platform === 'fanqie'
+        ? listFanqieBookCandidates(bookName)
+        : listQidianBookCandidates(bookName),
+      works_list_complete: false,
+      reason: 'exact-title-matching-and-list-completeness-unavailable',
+    };
+  }
+
   runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || message.channel !== CHANNEL) {
       return;
@@ -4563,6 +5057,28 @@
           sendResponse({
             outcome: 'indeterminate',
             currentUrl: window.location.href,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        });
+      return true;
+    }
+    if (message.action === 'run-create-book') {
+      runCreateBook(message.payload || {})
+        .then(sendResponse)
+        .catch((error) => {
+          sendResponse(createBookFallbackReply(error));
+        });
+      return true;
+    }
+    if (message.action === 'reconcile-create') {
+      reconcileCreateReadOnly(message.payload || {})
+        .then(sendResponse)
+        .catch((error) => {
+          sendResponse({
+            finding: 'unknown',
+            currentUrl: window.location.href,
+            candidates: [],
+            works_list_complete: false,
             reason: error instanceof Error ? error.message : String(error),
           });
         });

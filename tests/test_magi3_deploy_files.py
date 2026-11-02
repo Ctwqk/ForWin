@@ -21,6 +21,7 @@ ENV_EXAMPLE_PATH = REPO_ROOT / "deploy" / "magi3" / "env.example"
 DEPLOY_SCRIPT = REPO_ROOT / "scripts" / "deploy_magi3.sh"
 BACKUP_SCRIPT = REPO_ROOT / "scripts" / "backup_magi3.sh"
 TUNNEL_PLIST = REPO_ROOT / "deploy" / "magi3" / "com.forwin.magi3-tunnel.plist"
+PUBLISH_HUB_TUNNEL_DIR = REPO_ROOT / "deploy" / "magi3" / "publish-hub-tunnel"
 BACKUP_PLIST = REPO_ROOT / "deploy" / "magi3" / "com.forwin.magi3-backup.plist"
 
 
@@ -52,6 +53,8 @@ def test_compose_has_the_expected_services_and_volumes() -> None:
         "generation-worker",
         "outbox-worker",
         "publisher-worker",
+        "publish-hub-sync",
+        "publish-hub-tunnel",
         "publisher-browser",
         "migrate",
     }
@@ -79,6 +82,7 @@ def test_compose_has_the_expected_services_and_volumes() -> None:
         "generation-worker",
         "outbox-worker",
         "publisher-worker",
+        "publish-hub-sync",
         "publisher-browser",
         "migrate",
     ):
@@ -128,6 +132,100 @@ def test_compose_has_the_expected_services_and_volumes() -> None:
     ]
 
 
+PUBLISH_HUB_ENVIRONMENT = {
+    "FORWIN_PUBLISH_HUB_URL": "${FORWIN_PUBLISH_HUB_URL:-}",
+    "FORWIN_PUBLISH_HUB_API_KEY": "${FORWIN_PUBLISH_HUB_API_KEY:-}",
+    "FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS": "${FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS:-20}",
+}
+# The processes whose code calls publish-hub: the app (the production scheduler's release
+# point, manual release, cover enqueue), the publisher worker (a generated cover is enqueued
+# there) and the sync process. The extension in publisher-browser calls it with its own key.
+PUBLISH_HUB_CALLERS = {"app", "publisher-worker", "publish-hub-sync"}
+
+
+def test_publish_hub_sync_service_runs_the_app_image_with_a_small_footprint() -> None:
+    services = load_compose()["services"]
+    sync = services["publish-hub-sync"]
+
+    assert sync["image"] == services["app"]["image"]
+    assert sync["command"] == ["python", "-m", "forwin.cli", "publish-hub-sync"]
+    assert sync["restart"] == "unless-stopped"
+    # Peak was about 110 MiB, and queueing a cover loads the settings models (about 13 MiB more):
+    # at 128m an OOM restart loop would stall every send without a word.
+    assert sync["mem_limit"] == "256m"
+    assert sync["env_file"] == [".env"]
+    assert sync["depends_on"] == {"postgres": {"condition": "service_healthy"}}
+    common = services["outbox-worker"]["environment"]
+    assert {key: sync["environment"][key] for key in common} == common
+
+
+def test_only_publish_hub_callers_get_its_address_and_settings() -> None:
+    services = load_compose()["services"]
+
+    # host-gateway does not reach the magi3 host under colima; callers use publish-hub-tunnel.
+    assert [name for name, service in services.items() if "extra_hosts" in service] == []
+    for name, service in services.items():
+        environment = service.get("environment") or {}
+        hub_settings = {key: value for key, value in environment.items() if "PUBLISH_HUB" in key}
+        expected = PUBLISH_HUB_ENVIRONMENT if name in PUBLISH_HUB_CALLERS else {}
+        if name == "publish-hub-tunnel":
+            expected = {"PUBLISH_HUB_TUNNEL_TARGET": "${FORWIN_PUBLISH_HUB_TUNNEL_TARGET:-}"}
+        assert hub_settings == expected, name
+
+
+def test_publish_hub_tunnel_is_reachable_only_inside_the_network() -> None:
+    tunnel = load_compose()["services"]["publish-hub-tunnel"]
+
+    assert tunnel["build"] == {
+        "context": "./publish-hub-tunnel",
+        "args": {"ALPINE_MIRROR": "${ALPINE_MIRROR:-mirrors.aliyun.com}"},
+    }
+    assert "ports" not in tunnel
+    assert tunnel["volumes"] == ["${HOME}/forwin/publish-hub-tunnel:/run/publish-hub-tunnel:ro"]
+    assert (tunnel["read_only"], tunnel["cap_drop"], tunnel["init"]) == (True, ["ALL"], True)
+    assert tunnel["restart"] == "unless-stopped"
+    assert "http://127.0.0.1:18930/health" in tunnel["healthcheck"]["test"]
+    assert os.access(PUBLISH_HUB_TUNNEL_DIR / "run.sh", os.X_OK)
+    dockerfile = (PUBLISH_HUB_TUNNEL_DIR / "Dockerfile").read_text(encoding="utf-8")
+    # Docker Hub is unreachable from magi3: the base is the image already there, by digest.
+    assert re.search(r"^FROM alpine:[0-9.]+@sha256:[0-9a-f]{64}$", dockerfile, re.MULTILINE)
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_publish_hub_tunnel_script_idles_until_configured(tmp_path: Path, configured: bool) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("ssh", "sleep"):
+        stub = bin_dir / tool
+        stub.write_text(f'#!/bin/sh\necho "{tool} $*"\n', encoding="utf-8")
+        stub.chmod(0o755)
+    key_dir = tmp_path / "keys"
+    key_dir.mkdir()
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "PUBLISH_HUB_TUNNEL_DIR": str(key_dir)}
+    if configured:
+        (key_dir / "id_ed25519").write_text("key", encoding="utf-8")
+        (key_dir / "known_hosts").write_text("host key", encoding="utf-8")
+        env["PUBLISH_HUB_TUNNEL_TARGET"] = "tunnel@vps.example"
+
+    result = subprocess.run(
+        ["sh", str(PUBLISH_HUB_TUNNEL_DIR / "run.sh")],
+        env=env, capture_output=True, text=True, check=True,
+    )
+
+    if not configured:
+        assert result.stdout == "sleep 2147483647\n"
+        assert "idle" in result.stderr
+        return
+    args = shlex.split(result.stdout)
+    assert args[:6] == ["ssh", "-NT", "-F", "/dev/null", "-i", f"{key_dir}/id_ed25519"]
+    for option in (
+        "IdentitiesOnly=yes", "BatchMode=yes", "StrictHostKeyChecking=yes",
+        f"UserKnownHostsFile={key_dir}/known_hosts", "ExitOnForwardFailure=yes",
+    ):
+        assert option in args
+    assert args[-3:] == ["-L", "0.0.0.0:18930:127.0.0.1:18930", "tunnel@vps.example"]
+
+
 def test_compose_sets_no_codex_variables() -> None:
     assert "codex" not in COMPOSE_PATH.read_text(encoding="utf-8").lower()
 
@@ -142,7 +240,9 @@ def test_worker_subcommands_exist_in_cli() -> None:
         text=True,
     )
 
-    for command in ("generation-worker", "outbox-worker", "publisher-worker"):
+    for command in (
+        "generation-worker", "outbox-worker", "publisher-worker", "publish-hub-sync"
+    ):
         assert f'"{command}"' in cli_source
         assert command in help_result.stdout
 
@@ -185,7 +285,7 @@ def test_publisher_browser_has_swarm_tmpfs_and_healthcheck() -> None:
 def test_runtime_volumes_and_mcp_healthcheck() -> None:
     services = load_compose()["services"]
     for name, service in services.items():
-        if name not in {"postgres", "qdrant", "embedding", "migrate"}:
+        if name not in {"postgres", "qdrant", "embedding", "migrate", "publish-hub-tunnel"}:
             assert "forwin-data:/app/data" in service["volumes"]
     for name, target in {
         "postgres": "/var/lib/postgresql/data", "qdrant": "/qdrant/storage",
@@ -199,7 +299,7 @@ def test_runtime_volumes_and_mcp_healthcheck() -> None:
         "test": ["CMD-SHELL", "python -c \"import httpx; r=httpx.get('http://localhost:8896/health', timeout=3); raise SystemExit(0 if r.status_code == 200 else 1)\""],
         "interval": "10s", "timeout": "5s", "retries": 3, "start_period": "5s",
     }
-    for name in ("generation-worker", "outbox-worker", "publisher-worker"):
+    for name in ("generation-worker", "outbox-worker", "publisher-worker", "publish-hub-sync"):
         assert services[name]["healthcheck"] == {"disable": True}
 
 
@@ -223,6 +323,11 @@ def test_env_example_has_provider_key_names_only() -> None:
         "MINIMAX_BASE_URL",
         "MINIMAX_MODEL",
         "FORWIN_PUBLISHER_SESSION_SECRET",
+        "FORWIN_PUBLISH_HUB_URL",
+        "FORWIN_PUBLISH_HUB_API_KEY",
+        "FORWIN_PUBLISH_HUB_OPS_URL",
+        "FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS",
+        "FORWIN_PUBLISH_HUB_TUNNEL_TARGET",
     } <= names
     assert "codex" not in env_text.lower()
     assert all(

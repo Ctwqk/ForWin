@@ -18,6 +18,13 @@
       <label for="api_key">Extension API Key</label>
       <input id="api_key" placeholder="填写 FORWIN_PUBLISHER_EXTENSION_API_KEY">
 
+      <label for="hub_base_url">publish-hub URL（可选）</label>
+      <input id="hub_base_url" placeholder="例如：http://publish-hub-tunnel:18930">
+
+      <label for="hub_api_key">publish-hub API Key（forwin-extension）</label>
+      <input id="hub_api_key" placeholder="URL 和 Key 都填写后，扩展同时向 publish-hub 领取起点、番茄任务">
+      <div id="hub_client_id" class="status muted"></div>
+
       <label style="display:flex; gap:10px; align-items:flex-start; margin-top:14px;">
         <input id="sync_session_to_backend" type="checkbox" style="width:auto; margin-top:4px;">
         <span>同步平台登录会话到后端。开启后，扩展会把当前平台 cookie 发给 ForWin，用于后端继续执行上传。</span>

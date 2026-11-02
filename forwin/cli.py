@@ -16,6 +16,7 @@ import sys
 import time
 
 from forwin.config import InfrastructureConfig
+from forwin.publishers.platforms import SUPPORTED_PLATFORM_IDS
 
 
 def _get_config(args: argparse.Namespace) -> InfrastructureConfig:
@@ -277,6 +278,61 @@ def cmd_outbox_worker(args: argparse.Namespace) -> None:
         sys.exit(exit_code)
 
 
+def cmd_publish_hub_sync(args: argparse.Namespace) -> None:
+    """Mirror publish-hub's job results into ForWin, one round every --interval seconds."""
+    from forwin.models.base import get_engine, get_session_factory, require_v5_schema
+    from forwin.publish_hub.sync import client_provider, run_forever
+
+    config = _get_config(args)
+    engine = get_engine(config.database_url)
+    try:
+        require_v5_schema(engine)
+        run_forever(
+            get_session_factory(engine),
+            client_provider(
+                config.publish_hub_url,
+                config.publish_hub_api_key,
+                config.publish_hub_timeout_seconds,
+            ),
+            interval=args.interval,
+            max_rounds=1 if args.once else None,
+            # --once is one round and an exit, not one round and a wait.
+            sleep=(lambda _seconds: None) if args.once else time.sleep,
+        )
+    finally:
+        engine.dispose()
+
+
+def cmd_publish_hub_export(args: argparse.Namespace) -> None:
+    """Write the books and uploaded chapters of one platform for publish-hub's import-forwin."""
+    from forwin.models.base import get_engine, get_session_factory, require_v5_schema
+    from forwin.publish_hub.importer import export_to_file
+
+    config = _get_config(args)
+    engine = get_engine(config.database_url)
+    try:
+        require_v5_schema(engine)
+        exit_code = export_to_file(
+            get_session_factory(engine),
+            platform=args.platform,
+            out=args.out,
+            preferred_client_id=args.preferred_client_id,
+        )
+    finally:
+        engine.dispose()
+    if exit_code:
+        sys.exit(exit_code)
+
+
+def _preferred_client_id(value: str) -> str:
+    from forwin.publish_hub.importer import normalize_client_id
+
+    try:
+        return normalize_client_id(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 # ------------------------------------------------------------------
 # Argument parser
 # ------------------------------------------------------------------
@@ -445,6 +501,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="失败重试最大退避秒数",
     )
 
+    publish_hub_sync = sub.add_parser(
+        "publish-hub-sync", help="把 publish-hub 的任务结果同步回 ForWin"
+    )
+    publish_hub_sync.add_argument(
+        "--interval", type=float, default=15.0, help="两轮同步之间的秒数"
+    )
+    publish_hub_sync.add_argument(
+        "--once", action="store_true", help="只同步一轮后退出"
+    )
+
+    publish_hub_export = sub.add_parser(
+        "publish-hub-export",
+        help="导出已上传的书和章节，供 publish-hub import-forwin 导入（退出码 3：有已上传的章节无法导出）",
+    )
+    publish_hub_export.add_argument(
+        "--platform",
+        required=True,
+        choices=sorted(SUPPORTED_PLATFORM_IDS),
+        help="导出哪个平台的全部绑定（不论 route）",
+    )
+    publish_hub_export.add_argument("--out", required=True, help="导出文件路径")
+    publish_hub_export.add_argument(
+        "--preferred-client-id",
+        type=_preferred_client_id,
+        default=None,
+        help="写入账号的 preferred_client_id（不给则为 null，publish-hub 保持原值）",
+    )
+
     return parser
 
 
@@ -477,6 +561,10 @@ def main() -> None:
         cmd_publisher_worker(args)
     elif args.command == "outbox-worker":
         cmd_outbox_worker(args)
+    elif args.command == "publish-hub-sync":
+        cmd_publish_hub_sync(args)
+    elif args.command == "publish-hub-export":
+        cmd_publish_hub_export(args)
     else:
         parser.print_help()
 

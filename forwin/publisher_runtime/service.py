@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import threading
+
+from forwin.audit_direct.service import AuditRequestService
+from forwin.publish_hub.client import PublishHubClient
+
 from .audit import PublisherAuditService
 from .auth import ExtensionAuthService
 from .attempts import PublisherAttemptService
@@ -33,9 +38,17 @@ class PublisherRuntimeService:
         minimax_base_url: str = "",
         publisher_cover_dir: str = "",
         minimax_image_client=None,
+        publish_hub_url: str = "",
+        publish_hub_api_key: str = "",
+        publish_hub_timeout_seconds: int = 20,
     ) -> None:
         self.session_factory = session_factory
         self.observability = observability
+        self.publish_hub_url = str(publish_hub_url or "").strip()
+        self.publish_hub_api_key = str(publish_hub_api_key or "").strip()
+        self.publish_hub_timeout_seconds = publish_hub_timeout_seconds
+        self._publish_hub_client: PublishHubClient | None = None
+        self._publish_hub_client_lock = threading.Lock()
         self.platform_catalog = PlatformCatalog()
         self.platform_metadata_catalog = PlatformMetadataCatalog()
         self.preflight = PublisherPreflightService(
@@ -95,6 +108,10 @@ class PublisherRuntimeService:
         )
         self.upload_jobs.attempts = self.attempts
         self.upload_jobs.receipts = self.receipts
+        self.upload_jobs.publish_hub_client_provider = lambda: self.publish_hub_client
+        self.cover_service.publish_hub_client_provider = (
+            self.upload_jobs.publish_hub_client_provider
+        )
         self.canon_jobs = CanonPublisherJobService(
             session_factory=session_factory,
             upload_jobs=self.upload_jobs,
@@ -105,3 +122,24 @@ class PublisherRuntimeService:
             connection_state=self.connection_state,
             audit=self.audit,
         )
+        self.audit_requests = AuditRequestService(
+            session_factory=session_factory,
+            platform_catalog=self.platform_catalog,
+            connection_state=self.connection_state,
+            bindings=self.bindings,
+            audit=self.audit,
+        )
+
+    @property
+    def publish_hub_client(self) -> PublishHubClient | None:
+        """The publish-hub client, built on first use; None unless both URL and key are set."""
+        if not self.publish_hub_url or not self.publish_hub_api_key:
+            return None
+        with self._publish_hub_client_lock:
+            if self._publish_hub_client is None:
+                self._publish_hub_client = PublishHubClient(
+                    self.publish_hub_url,
+                    self.publish_hub_api_key,
+                    self.publish_hub_timeout_seconds,
+                )
+            return self._publish_hub_client

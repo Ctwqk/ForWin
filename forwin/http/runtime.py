@@ -17,6 +17,7 @@ from forwin.generation.task_repository import (
     TERMINAL_GENERATION_STATUSES as GENERATION_TERMINAL_STATUSES,
 )
 from forwin.http.project_pipelines import ProjectPipelineCache
+from forwin.models.publisher import UPLOAD_JOB_TERMINAL_STATUSES
 from forwin.publishers.manager import PublisherManager
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
@@ -38,7 +39,7 @@ GENERATION_TERMINAL_STAGE_BY_STATUS = {
     "cancelled": "cancelled",
     "paused": "paused",
 }
-UPLOAD_TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
+UPLOAD_TERMINAL_STATUSES = UPLOAD_JOB_TERMINAL_STATUSES
 GENERATION_STAGE_ORDER = (
     "queued",
     "planning_arc",
@@ -154,6 +155,9 @@ class HttpRuntime:
                 publisher_login_discord_webhook_url=(
                     self.config.publisher_login_discord_webhook_url
                 ),
+                publish_hub_url=self.config.publish_hub_url,
+                publish_hub_api_key=self.config.publish_hub_api_key,
+                publish_hub_timeout_seconds=self.config.publish_hub_timeout_seconds,
             )
             candidate.recover_interrupted_upload_attempts()
             self.publisher_manager = candidate

@@ -561,11 +561,15 @@ def test_audit_sync_uses_exact_work_binding_identity() -> None:
             book_name="绑定作品",
         )
 
+        # audit sync is a direct request now, not an upload job (D8)
         assert created["project_id"] == "project-bound"
         assert created["platform"] == "qidian"
         assert created["book_name"] == "绑定作品"
-        assert created["result_payload"]["work_binding_id"] == work_binding_id
-        assert created["result_payload"]["remote_book_id"] == "book-bound"
+        assert created["work_binding_id"] == work_binding_id
+        assert created["remote_book_id"] == "book-bound"
+        assert created["status"] == "pending"
+        with runtime.session_factory() as session:
+            assert session.execute(select(PublisherUploadJob)).first() is None
     finally:
         engine.dispose()
 

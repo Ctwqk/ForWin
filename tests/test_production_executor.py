@@ -197,3 +197,51 @@ def test_executor_consumes_review_quota_jobs_before_reporting_idle() -> None:
     assert result.review_job_count == 2
     assert approve_calls == [(project.id, 2)]
     assert review_calls == [(project.id, 3)]
+
+
+def test_executor_hands_held_jobs_to_the_release_point_without_counting_them() -> None:
+    publish_calls: list[dict] = []
+    project = Project(id="project-1", title="测试书", premise="前提", genre="玄幻")
+    plan = ProductionPlan(
+        project_id=project.id,
+        date="2026-05-05",
+        hold_jobs=[
+            {
+                "job_id": "job-fanqie-1",
+                "idempotency_key": "publisher-key-1",
+                "canon_commit_id": "canon-1",
+                "candidate_id": "candidate-1",
+                "chapter_number": 1,
+                "platform": "fanqie",
+                "hold_reason": "book_missing",
+            }
+        ],
+    )
+    policy = policy_from_automation(
+        normalize_project_automation(
+            {
+                "auto_publish": True,
+                "daily_publish_quota": 1,
+                "publish": {"platform": "fanqie", "book_name": "番茄版"},
+            }
+        )
+    )
+
+    result = ProductionExecutor(
+        generation_application=RecordingApplicationService(),
+        publisher_manager_factory=lambda: SimpleNamespace(
+            release_canon_jobs=lambda **kwargs: publish_calls.append(kwargs) or []
+        ),
+    ).execute(plan=plan, project=project, policy=policy)
+
+    assert publish_calls == [
+        {
+            "project_id": project.id,
+            "job_ids": [],
+            "publish": True,
+            "actor_type": "scheduler",
+            "hold_job_ids": ["job-fanqie-1"],
+        }
+    ]
+    assert result.publish_job_count == 0
+    assert result.action == "idle"

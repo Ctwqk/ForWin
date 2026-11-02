@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -40,6 +40,10 @@ class ProjectArcSnapshotFields(BaseModel):
     active_band_template_ids: list[str] = Field(default_factory=list)
 
 
+PublishRoute = Literal["legacy", "hub"]
+DEFAULT_PUBLISH_ROUTE: PublishRoute = "legacy"
+
+
 class ProjectAutomationPublishSettings(BaseModel):
     platform: str = ""
     book_name: str = ""
@@ -54,11 +58,20 @@ class ProjectAutomationPublishSettings(BaseModel):
     book_meta: "PublisherBookMetaRequest" = Field(
         default_factory=lambda: PublisherBookMetaRequest()
     )
+    # "hub" sends this platform's uploads through publish-hub; hub_destination_id is the
+    # publish-hub destination (one book on one account) they go to.
+    route: PublishRoute = DEFAULT_PUBLISH_ROUTE
+    hub_destination_id: str | None = None
 
     @field_validator("platform")
     @classmethod
     def _supported_platform(cls, value: str) -> str:
         return normalize_supported_platform(value, allow_empty=True)
+
+    @field_validator("hub_destination_id")
+    @classmethod
+    def _blank_destination_is_none(cls, value: str | None) -> str | None:
+        return str(value or "").strip() or None
 
 
 class ProjectAutomationSettings(BaseModel):

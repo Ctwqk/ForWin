@@ -30,6 +30,7 @@ from forwin.api_schema import (
     PublisherCommentSyncJobRequest,
     PublisherCommentSyncJobResponse,
     PublisherBrowserSessionSummaryResponse,
+    PublisherAuditRequestResponse,
     PublisherAuditSyncRequest,
     PublisherChapterBindingResponse,
     PublisherCoverAssetResponse,
@@ -156,6 +157,10 @@ def _require_extension_auth(
                 "message": str(exc),
             },
         ) from exc
+
+
+# The extension-key check every extension-facing route runs first (X-Forwin-Extension-Key).
+require_extension_auth = _require_extension_auth
 
 
 def _raise_protocol_http_error(exc: ValueError) -> None:
@@ -453,9 +458,10 @@ def enqueue_publisher_audit_sync(
     req: PublisherAuditSyncRequest,
     *,
     publisher_manager,
-) -> PublisherUploadJobResponse:
+) -> PublisherAuditRequestResponse:
+    # An audit is a direct request to the extension now, not an upload job (D8).
     try:
-        return PublisherUploadJobResponse(
+        return PublisherAuditRequestResponse(
             **publisher_manager.enqueue_audit_sync(
                 project_id=req.project_id,
                 platform=req.platform,

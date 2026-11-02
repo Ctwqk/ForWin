@@ -100,11 +100,19 @@ class PublisherUploadJobResponse(BaseModel):
     started_at: str = ""
     finished_at: str = ""
     paused_at: str = ""
-    pause_reason: Literal["", "captcha", "mfa", "account_risk"] = ""
+    # needs_human: publish-hub paused the job for a person (a hub-owned row only; never resumable here).
+    pause_reason: Literal["", "captcha", "mfa", "account_risk", "needs_human"] = ""
     pause_token: str = ""
     resumable: bool = False
     terminable: bool = False
     deletable: bool = False
+    # publish-hub mirror. hub_owned: publish-hub runs this row (its request is stored, or it is
+    # a create_book row), so none of the extension-queue actions apply; hub_job_id / hub_status are
+    # empty until the request has been posted and mirrored.
+    hub_owned: bool = False
+    hub_job_id: str = ""
+    hub_status: str = ""
+    hub_superseded_reason: str = ""
 
 
 class PublisherUploadResumeRequest(BaseModel):
@@ -730,6 +738,78 @@ class PublisherAuditSyncRequest(BaseModel):
     book_name: str = ""
 
 
+class PublisherAuditRequestResponse(BaseModel):
+    """An audit request: the manual audit API's answer. `created` is False when an open
+    request for the same book already existed and is returned instead of a new one."""
+
+    request_id: str
+    project_id: str = ""
+    platform: str
+    work_binding_id: str
+    book_name: str = ""
+    remote_book_id: str
+    upload_url: str = ""
+    remote_url: str = ""
+    status: str
+    created: bool = True
+    extension_client_id: str = ""
+    attempt_count: int = 0
+    reason: str = ""
+    risk_reason: str = ""
+    created_at: str = ""
+    claimed_at: str = ""
+    lease_expires_at: str = ""
+    finished_at: str = ""
+
+
+class ExtensionClaimAuditRequestRequest(BaseModel):
+    client_id: str = Field(min_length=1, max_length=200)
+    connected_platforms: list[str] = Field(default_factory=list)
+
+
+class ExtensionAuditRequestClaimResponse(BaseModel):
+    request_id: str
+    platform: str
+    remote_book_id: str
+    upload_url: str | None = None
+    remote_url: str | None = None
+
+
+class ExtensionAuditRequestResultRequest(BaseModel):
+    """The observation read off the platform: the complete {work, chapters, cover, milestones}
+    set the audit page action produces, plus who sends it and the page it was read from."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str = Field(min_length=1, max_length=200)
+    work: dict[str, Any]
+    chapters: list[dict[str, Any]]
+    cover: dict[str, Any]
+    milestones: list[dict[str, Any]]
+    current_url: str = ""
+
+
+class ExtensionAuditRequestFailureRequest(BaseModel):
+    """The extension could not read the book's page (or hit a platform risk page).
+
+    `risk_reason` is set only for a risk page and is one of the risk pause reasons the upload
+    attempts use (captcha, mfa, account_risk)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=2000)
+    risk_reason: str = Field(default="", max_length=40)
+    current_url: str = Field(default="", max_length=2000)
+
+
+class ExtensionAuditRequestResultResponse(BaseModel):
+    ok: bool = True
+    request_id: str
+    status: str
+    work_binding_id: str
+
+
 class PublisherPreflightRequest(BaseModel):
     platform: str
     book_name: str
@@ -847,6 +927,12 @@ __all__ = [
     "PublisherCoverSelectRequest",
     "PublisherCoverUploadRequest",
     "PublisherAuditSyncRequest",
+    "PublisherAuditRequestResponse",
+    "ExtensionClaimAuditRequestRequest",
+    "ExtensionAuditRequestClaimResponse",
+    "ExtensionAuditRequestFailureRequest",
+    "ExtensionAuditRequestResultRequest",
+    "ExtensionAuditRequestResultResponse",
     "PublisherPreflightRequest",
     "PublisherPreflightResponse",
     "PublisherLoginQrOneShotRequest",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any, Callable, get_args
 
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from forwin.api_schema import (
     ProjectAutomationSettings,
 )
+from forwin.api_schema.project import DEFAULT_PUBLISH_ROUTE, PublishRoute
 from forwin.long_run_policy import normalize_long_run_policy
 from forwin.models.phase import (
     BandExperiencePlan,
@@ -88,6 +89,7 @@ def normalize_project_automation(
         except (TypeError, ValueError):
             cover_candidate_count = 4
         cover_candidate_count = max(1, min(cover_candidate_count, 8))
+        route = str(publish_raw.get("route") or "").strip().lower()
         return {
             "platform": str(publish_raw.get("platform", "")).strip(),
             "book_name": str(publish_raw.get("book_name", "")).strip(),
@@ -107,6 +109,9 @@ def normalize_project_automation(
             "publisher_compliance_required": bool(
                 publish_raw.get("publisher_compliance_required", True)
             ),
+            "route": route if route in get_args(PublishRoute) else DEFAULT_PUBLISH_ROUTE,
+            "hub_destination_id": str(publish_raw.get("hub_destination_id") or "").strip()
+            or None,
             "book_meta": {
                 "audience": str(book_meta_raw.get("audience", "")).strip(),
                 "primary_category": str(

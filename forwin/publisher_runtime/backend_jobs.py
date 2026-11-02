@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import select, text
 
 from forwin.models.base import new_id
-from forwin.models.publisher import PublisherUploadJob
+from forwin.models.publisher import PublisherUploadJob, upload_job_not_hub_owned
 
 from .browser_sessions import utc_now
 from .covers import PublisherCoverService
@@ -100,6 +100,7 @@ class PublisherBackendJobRunner:
                     PublisherUploadJob.task_kind == "cover_generate",
                     PublisherUploadJob.status == "pending",
                     PublisherUploadJob.deleted_at.is_(None),
+                    upload_job_not_hub_owned(),
                 )
                 .order_by(PublisherUploadJob.created_at.asc())
                 .with_for_update(skip_locked=True)
@@ -135,6 +136,7 @@ class PublisherBackendJobRunner:
                         ),
                         PublisherUploadJob.current_attempt_id == "",
                         PublisherUploadJob.deleted_at.is_(None),
+                        upload_job_not_hub_owned(),
                     )
                     .order_by(PublisherUploadJob.created_at.asc())
                     .with_for_update()

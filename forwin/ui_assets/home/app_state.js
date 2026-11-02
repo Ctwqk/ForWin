@@ -795,7 +795,7 @@
         },
       ],
     };
-    const TERMINAL_TASK_STATUSES = new Set(['completed', 'partial_failed', 'failed', 'needs_review', 'cancelled', 'paused', 'succeeded']);
+    const TERMINAL_TASK_STATUSES = new Set(['completed', 'partial_failed', 'failed', 'needs_review', 'cancelled', 'paused', 'succeeded', 'superseded']);
     const ACTIVE_TASK_STATUSES = new Set(['starting', 'running', 'pending', 'terminating']);
     const pendingBridgeRequests = new Map();
     let runtimeCatalogState = null;
@@ -1089,7 +1089,7 @@
     }
 
     function badgeKindByStatus(status) {
-      if (['completed', 'succeeded', 'cancelled', 'accepted'].includes(status)) return 'ok';
+      if (['completed', 'succeeded', 'cancelled', 'superseded', 'accepted'].includes(status)) return 'ok';
       if (['failed', 'partial_failed'].includes(status)) return 'danger';
       if (['needs_review', 'terminating', 'pending', 'running', 'drafted', 'paused'].includes(status)) return 'warn';
       return '';

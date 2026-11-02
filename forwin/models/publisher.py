@@ -1,12 +1,44 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    and_,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
+from sqlalchemy.sql.elements import ColumnElement
 
 from .base import Base, new_id
+
+# PublisherUploadJob.status is a plain string (no database CHECK). "superseded" marks a chapter job
+# that publish-hub refused with publication_already_published: the chapter is already published
+# from another candidate, so nothing is left to run for this row.
+UPLOAD_JOB_TERMINAL_STATUSES = frozenset(
+    {"succeeded", "failed", "cancelled", "superseded"}
+)
+
+
+def _json_object_column_type() -> JSON:
+    """jsonb on Postgres (the migration creates jsonb); plain JSON where tests use SQLite.
+
+    none_as_null stores None as SQL NULL, not as the JSON value null, so "IS NULL" means unset.
+    """
+    return JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
 
 
 class PublisherExtensionClient(Base):
@@ -129,6 +161,7 @@ class PublisherUploadJob(Base):
             unique=True,
             postgresql_where=text("idempotency_key <> ''"),
         ),
+        Index("ux_publisher_upload_jobs_hub_job_id", "hub_job_id", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
@@ -197,9 +230,45 @@ class PublisherUploadJob(Base):
     result_message: Mapped[str] = mapped_column(Text, default="")
     error_message: Mapped[str] = mapped_column(Text, default="")
     result_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    # publish-hub mirror. A row is hub-owned once hub_submit_body_json is set; the extension-queue
+    # runtime must leave such rows alone. none_as_null keeps "not submitted" a real SQL NULL.
+    hub_job_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hub_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hub_submit_body_json: Mapped[dict[str, Any] | None] = mapped_column(
+        _json_object_column_type(), nullable=True
+    )
+    hub_superseded_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+# The local mirror of a publish-hub create_destination job (one per binding and destination).
+CREATE_BOOK_TASK_KIND = "create_book"
+# Task kinds that only publish-hub runs.
+HUB_ONLY_TASK_KINDS = frozenset({CREATE_BOOK_TASK_KIND})
+
+
+def upload_job_is_hub_owned(job: PublisherUploadJob) -> bool:
+    """True for a row publish-hub runs: ForWin's extension queue must never touch it.
+
+    A row becomes hub-owned when its request body is stored, before the request goes out, so a
+    row whose submit is still in doubt is already off the extension queue.
+    """
+    return (
+        job.hub_submit_body_json is not None
+        or job.hub_job_id is not None
+        or str(job.task_kind or "") in HUB_ONLY_TASK_KINDS
+    )
+
+
+def upload_job_not_hub_owned() -> ColumnElement[bool]:
+    """SQL form of `not upload_job_is_hub_owned(job)`, for every extension-queue query."""
+    return and_(
+        PublisherUploadJob.hub_submit_body_json.is_(None),
+        PublisherUploadJob.hub_job_id.is_(None),
+        PublisherUploadJob.task_kind.notin_(sorted(HUB_ONLY_TASK_KINDS)),
     )
 
 
@@ -472,6 +541,7 @@ class PublisherWorkBinding(Base):
     cover_state: Mapped[str] = mapped_column(String, default="none")
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     raw_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    hub_destination_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
@@ -518,6 +588,7 @@ class PublisherChapterBinding(Base):
     word_count: Mapped[int] = mapped_column(Integer, default=0)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     raw_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    hub_publication_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
@@ -586,6 +657,27 @@ class PublisherMilestone(Base):
     )
 
 
+class PublishHubSyncState(Base):
+    """What the publish-hub sync process remembers between rounds.
+
+    key "changes": cursor is the last /v1/changes seq applied. key "destinations": value_json is
+    the last /v1/destinations snapshot the release gate reads.
+    """
+
+    __tablename__ = "publish_hub_sync_state"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    cursor: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    value_json: Mapped[dict[str, Any] | None] = mapped_column(
+        _json_object_column_type(), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=func.now(), onupdate=func.now()
+    )
+
+
 class PublisherCommentSyncJob(Base):
     __tablename__ = "publisher_comment_sync_jobs"
 
@@ -607,6 +699,59 @@ class PublisherCommentSyncJob(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+# A request to read a book's audit state from the platform, claimed by the browser extension and
+# answered with the observation (D8: audit sync is a direct ForWin <-> extension channel, not an
+# upload job). "pending" and "claimed" are the open states; a claimed request nobody answers
+# becomes claimable again once lease_expires_at has passed, until attempt_count reaches the cap.
+# "succeeded" and "failed" are final (error_message says why a request failed; risk_reason is set
+# when the platform showed a risk page) and leave the open set, so the book can be asked about
+# again. All timestamps are naive UTC.
+AUDIT_REQUEST_OPEN_STATUSES = ("pending", "claimed")
+
+
+class PublisherAuditRequest(Base):
+    __tablename__ = "publisher_audit_requests"
+    __table_args__ = (
+        Index(
+            "ux_publisher_audit_requests_open_work",
+            "work_binding_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'claimed')"),
+        ),
+        Index(
+            "ix_publisher_audit_requests_status",
+            "status",
+            "platform_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(String, default="")
+    platform_id: Mapped[str] = mapped_column(String, nullable=False)
+    work_binding_id: Mapped[str] = mapped_column(String, nullable=False)
+    book_name: Mapped[str] = mapped_column(String, default="")
+    remote_book_id: Mapped[str] = mapped_column(String, default="")
+    remote_url: Mapped[str] = mapped_column(String, default="")
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default="pending", server_default="pending"
+    )
+    extension_client_id: Mapped[str] = mapped_column(String, default="")
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    risk_reason: Mapped[str] = mapped_column(String, default="")
+    result_summary_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
 
 
 class PublisherRawComment(Base):

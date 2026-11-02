@@ -16,7 +16,7 @@
     "http://127.0.0.1/*",
     "http://localhost/*",
     "http://10.0.0.150/*",
-    "http://host.docker.internal:18930/*",
+    "http://publish-hub-tunnel:18930/*",
     "https://*.qq.com/*",
     "https://*.write.qq.com/*",
     "https://*.yuewen.com/*",

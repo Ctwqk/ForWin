@@ -18,7 +18,7 @@ import { HUB_CLIENT_ID_STORAGE_KEY, createHubClientIdStore } from '../lib/settin
 import { createUploadJournal } from '../lib/upload-journal.js';
 
 const NOW_MS = Date.parse('2026-11-01T00:00:00Z');
-const HUB_URL = 'http://host.docker.internal:18930';
+const HUB_URL = 'http://publish-hub-tunnel:18930';
 const HUB_KEY = 'hub-secret-key-123';
 const HUB_CLIENT_ID = 'magi3-ext-abcd1234';
 const FORWIN_URL = 'http://forwin.local:8899';
@@ -1696,7 +1696,7 @@ test('manifest allows the publish-hub tunnel and the version is bumped everywher
     readFile(new URL('../package.json', import.meta.url), 'utf8'),
   ]);
   const manifest = JSON.parse(manifestText);
-  assert.ok(manifest.host_permissions.includes('http://host.docker.internal:18930/*'));
+  assert.ok(manifest.host_permissions.includes('http://publish-hub-tunnel:18930/*'));
   assert.equal(manifest.version, '0.1.64');
   for (const path of ['controller', 'platforms', 'risk-inspection', 'upload-journal']) {
     assert.match(backgroundSource, new RegExp(`\\./lib/${path}\\.js\\?v=0\\.1\\.64'`));

@@ -107,18 +107,43 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  publish-hub-tunnel:
+    # ssh forward to publish-hub (magi2:18930, through the VPS). The colima VM cannot reach
+    # ports on the magi3 host, so the forward runs in this network and callers use
+    # http://publish-hub-tunnel:18930. Idles until FORWIN_PUBLISH_HUB_TUNNEL_TARGET and the
+    # key in ~/forwin/publish-hub-tunnel are set up (README, "publish-hub tunnel").
+    image: forwin-publish-hub-tunnel:magi3
+    build:
+      context: ./publish-hub-tunnel
+      args:
+        ALPINE_MIRROR: "${ALPINE_MIRROR:-mirrors.aliyun.com}"
+    environment:
+      PUBLISH_HUB_TUNNEL_TARGET: "${FORWIN_PUBLISH_HUB_TUNNEL_TARGET:-}"
+    volumes:
+      - "${HOME}/forwin/publish-hub-tunnel:/run/publish-hub-tunnel:ro"
+    init: true
+    read_only: true
+    cap_drop: ["ALL"]
+    mem_limit: 32m
+    healthcheck:
+      # Through the tunnel to publish-hub itself, so a down magi2 shows here too.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "-T", "5", "http://127.0.0.1:18930/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
   app:
     <<: *runtime-service
     command: ["uvicorn", "forwin.api:app", "--host", "0.0.0.0", "--port", "8899"]
     environment:
       <<: *common-environment
       FORWIN_PUBLISHER_COVER_DIR: "/app/data/publisher_covers"
-      # publish-hub URL and key from deploy/magi3/.env; empty leaves publish-hub off.
+      # publish-hub URL (http://publish-hub-tunnel:18930) and key from deploy/magi3/.env; empty leaves publish-hub off.
       FORWIN_PUBLISH_HUB_URL: "${FORWIN_PUBLISH_HUB_URL:-}"
       FORWIN_PUBLISH_HUB_API_KEY: "${FORWIN_PUBLISH_HUB_API_KEY:-}"
       FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS: "${FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS:-20}"
-    # host.docker.internal: magi3 itself, where the VPS tunnel to publish-hub listens (:18930).
-    extra_hosts: ["host.docker.internal:host-gateway"]
     ports:
       - "127.0.0.1:8899:8899"
     networks:
@@ -200,12 +225,10 @@ services:
     environment:
       <<: *common-environment
       FORWIN_PUBLISHER_COVER_DIR: "/app/data/publisher_covers"
-      # publish-hub URL and key from deploy/magi3/.env; empty leaves publish-hub off.
+      # publish-hub URL (http://publish-hub-tunnel:18930) and key from deploy/magi3/.env; empty leaves publish-hub off.
       FORWIN_PUBLISH_HUB_URL: "${FORWIN_PUBLISH_HUB_URL:-}"
       FORWIN_PUBLISH_HUB_API_KEY: "${FORWIN_PUBLISH_HUB_API_KEY:-}"
       FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS: "${FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS:-20}"
-    # host.docker.internal: magi3 itself, where the VPS tunnel to publish-hub listens (:18930).
-    extra_hosts: ["host.docker.internal:host-gateway"]
     volumes:
       - forwin-data:/app/data
     depends_on:
@@ -225,12 +248,10 @@ services:
     mem_limit: 256m
     environment:
       <<: *common-environment
-      # publish-hub URL and key from deploy/magi3/.env; empty leaves publish-hub off.
+      # publish-hub URL (http://publish-hub-tunnel:18930) and key from deploy/magi3/.env; empty leaves publish-hub off.
       FORWIN_PUBLISH_HUB_URL: "${FORWIN_PUBLISH_HUB_URL:-}"
       FORWIN_PUBLISH_HUB_API_KEY: "${FORWIN_PUBLISH_HUB_API_KEY:-}"
       FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS: "${FORWIN_PUBLISH_HUB_TIMEOUT_SECONDS:-20}"
-    # host.docker.internal: magi3 itself, where the VPS tunnel to publish-hub listens (:18930).
-    extra_hosts: ["host.docker.internal:host-gateway"]
     volumes:
       - forwin-data:/app/data
     depends_on:
@@ -249,8 +270,7 @@ services:
     env_file:
       - .env
     command: ["bash", "-lc", "exec scripts/launch_linux_extension_browser.sh"]
-    # The extension calls publish-hub at host.docker.internal:18930 (key in its own settings).
-    extra_hosts: ["host.docker.internal:host-gateway"]
+    # The extension calls publish-hub at http://publish-hub-tunnel:18930 (URL and key in its own settings).
     environment:
       <<: *common-environment
       FORWIN_BACKEND_URL: "http://app:8899"

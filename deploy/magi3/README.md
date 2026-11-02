@@ -3,6 +3,8 @@
 Run the deploy and backup scripts from magi1's clean checkout at
 `/Users/magi1/ForWin-source-github`. Configure the `magi3` SSH alias and key
 authentication on magi1; connect once interactively to verify the host key.
+The deploy script also runs from any other clean clone whose `origin` is GitHub,
+on a machine with the same `magi3` alias (the operator Mac, when magi1 is away).
 
 ## First-time setup
 
@@ -29,6 +31,20 @@ This is the plugin discovery setting documented by Homebrew for
 [Buildx](https://formulae.brew.sh/formula/docker-buildx).
 Verify `docker compose version` and `docker buildx version`. Start Colima again
 after a host reboot before deploying.
+
+Docker Hub is unreachable from magi3, so give the Docker daemon registry mirrors
+before the first build (section "Builds from China"): replace `docker: {}` in
+`~/.colima/default/colima.yaml` with
+
+```yaml
+docker:
+  registry-mirrors:
+    - https://docker.m.daocloud.io
+    - https://docker.1ms.run
+```
+
+and restart Colima (`brew services restart colima` when it runs as a Homebrew
+service). `docker info` lists them under `Registry Mirrors`.
 
 On magi1, run `./scripts/deploy_magi3.sh` once. It seeds `~/forwin/repo.git` and
 `~/forwin/src` on magi3, then stops because the host-only `.env` is missing.
@@ -158,4 +174,34 @@ On the VPS, the public key goes into the forwarding-only user's `authorized_keys
 
 ## colima DNS on magi3
 
-The colima VM image has no systemd-resolved, so its /etc/resolv.conf symlink dangles and containers cannot resolve external names. `~/.colima/default/colima.yaml` on magi3 carries a `provision` script that writes `nameserver 192.168.10.1` and `nameserver 223.5.5.5` on every boot; keep it when recreating the VM.
+The colima VM image has no systemd-resolved, so its /etc/resolv.conf symlink dangles and containers cannot resolve external names. `~/.colima/default/colima.yaml` on magi3 carries a `provision` script that writes `nameserver 192.168.10.1` and `nameserver 223.5.5.5` on every boot; keep it, and the `docker:` registry mirrors below, when recreating the VM.
+
+## Builds from China
+
+From magi3, `registry-1.docker.io` times out, and pypi.org (about 0.3 MB/s), deb.debian.org, registry.npmjs.org and Playwright's CDN (`cdn.playwright.dev`) crawl or drop connections. Builds therefore fetch through mirrors (measured from magi3 on 2026-11-02):
+
+| What | Mirror | Set in |
+| --- | --- | --- |
+| Docker Hub base images (`python`, `node`, `postgres`, `qdrant`, `alpine`) | `docker.m.daocloud.io`, then `docker.1ms.run` | `docker: registry-mirrors` in `~/.colima/default/colima.yaml` |
+| Python packages | `https://pypi.tuna.tsinghua.edu.cn/simple` | `PIP_INDEX_URL` |
+| Debian packages | `mirrors.tuna.tsinghua.edu.cn` | `DEBIAN_MIRROR` |
+| npm packages (World Studio) | `https://registry.npmmirror.com` | `NPM_REGISTRY` |
+| Playwright browsers | `https://registry.npmmirror.com/-/binary/playwright` | `PLAYWRIGHT_DOWNLOAD_HOST` |
+| Alpine packages (publish-hub-tunnel) | `mirrors.aliyun.com` | `ALPINE_MIRROR` |
+| Hugging Face model (embedding) | `https://hf-mirror.com` | `HF_ENDPOINT` |
+
+The defaults live in `docker-compose.yml`, so `.env` needs none of them; set one there only to use another mirror (or the upstream address to bypass it). The root `Dockerfile` keeps upstream when these build arguments are empty, so other hosts build as before.
+
+The Docker daemon takes its mirrors only for Docker Hub images, and only when an image is missing locally: the build uses the local `python:3.13-slim`, `python:3.12-slim` and `node:22-slim` as long as they exist, so keep them (no `docker image prune -a` / `docker system prune -a`). If they are gone, the next build pulls them through the mirrors. To check the mirrors, run `docker info | grep -A2 'Registry Mirrors'` and `docker pull python:3.13-slim`.
+
+The mirrors are public services and drop a download now and then (for example a DaoCloud redirect to Cloudflare timing out). A failed pull or package download fails `compose build` before anything is restarted; run the deploy again, finished layers are reused. If one mirror stays broken, swap it: for Docker Hub edit `colima.yaml`, for packages set the variable in `.env`.
+
+After editing `colima.yaml`, restart Colima for the setting to take effect. That stops every container; `restart: unless-stopped` brings them back, or stop them cleanly first and start them afterwards:
+
+```sh
+dc stop                      # dc as defined above
+brew services restart colima
+dc up -d
+```
+
+If `colima ssh` hangs, or a container with a bind mount from the magi3 home directory (publish-hub-tunnel) cannot start, the VM's virtiofs mount of `/Users/taiwei` may be stuck (processes wait in `fuse_simple_request`); restarting Colima as above clears it.

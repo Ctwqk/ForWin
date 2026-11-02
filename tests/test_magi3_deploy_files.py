@@ -227,6 +227,35 @@ def test_publish_hub_tunnel_script_idles_until_configured(tmp_path: Path, config
     assert args[-3:] == ["-L", "0.0.0.0:18930:127.0.0.1:18930", "tunnel@vps.example"]
 
 
+BUILD_MIRRORS = {
+    "PIP_INDEX_URL": "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}",
+    "DEBIAN_MIRROR": "${DEBIAN_MIRROR:-mirrors.tuna.tsinghua.edu.cn}",
+    "NPM_REGISTRY": "${NPM_REGISTRY:-https://registry.npmmirror.com}",
+}
+PLAYWRIGHT_MIRROR = {
+    "PLAYWRIGHT_DOWNLOAD_HOST": "${PLAYWRIGHT_DOWNLOAD_HOST:-https://registry.npmmirror.com/-/binary/playwright}",
+}
+
+
+def test_magi3_builds_fetch_packages_from_mirrors_reachable_in_china() -> None:
+    services = load_compose()["services"]
+
+    # pypi.org, deb.debian.org, registry.npmjs.org and Playwright's CDN crawl or time out from
+    # magi3. The root Dockerfile keeps upstream by default; magi3's compose file names the mirrors.
+    for name in (
+        "app", "mcp", "generation-worker", "outbox-worker", "publisher-worker",
+        "publish-hub-sync", "migrate",
+    ):
+        assert services[name]["build"]["args"] == BUILD_MIRRORS, name
+    assert services["publisher-browser"]["build"]["args"] == BUILD_MIRRORS | PLAYWRIGHT_MIRROR
+    assert services["embedding"]["build"]["args"]["PIP_INDEX_URL"] == BUILD_MIRRORS["PIP_INDEX_URL"]
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    env_text = ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
+    for arg in BUILD_MIRRORS | PLAYWRIGHT_MIRROR:
+        assert f'ARG {arg}=""' in dockerfile, arg
+        assert re.search(rf"^{arg}=$", env_text, re.MULTILINE), arg
+
+
 def test_compose_sets_no_codex_variables() -> None:
     assert "codex" not in COMPOSE_PATH.read_text(encoding="utf-8").lower()
 

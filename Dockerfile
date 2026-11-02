@@ -1,9 +1,13 @@
 FROM node:22-slim AS world-studio-builder
 
+# Optional npm registry (magi3 builds use registry.npmmirror.com); empty keeps registry.npmjs.org.
+ARG NPM_REGISTRY=""
+
 WORKDIR /app/frontend/world-studio
 
 COPY frontend/world-studio/package.json frontend/world-studio/package-lock.json ./
-RUN npm ci
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+    && npm ci
 COPY frontend/world-studio/index.html frontend/world-studio/tsconfig.json frontend/world-studio/vite.config.ts ./
 COPY frontend/world-studio/src/ src/
 RUN npm run build
@@ -11,6 +15,13 @@ RUN npm run build
 FROM python:3.13-slim AS python-base
 
 ARG PIP_INDEX_URL=""
+# Optional Debian mirror host for apt in the runtime stages (magi3 builds use
+# mirrors.tuna.tsinghua.edu.cn); empty keeps deb.debian.org.
+ARG DEBIAN_MIRROR=""
+
+RUN if [ -n "$DEBIAN_MIRROR" ]; then \
+        sed -i "s#deb.debian.org#${DEBIAN_MIRROR}#" /etc/apt/sources.list.d/debian.sources; \
+    fi
 
 WORKDIR /app
 
@@ -36,6 +47,10 @@ ENV MINIMAX_MODEL="MiniMax-M2.7"
 ENV FORWIN_DATABASE_URL="postgresql+psycopg://forwin:forwin@postgres:5432/forwin"
 
 FROM python-base AS publisher-browser-runtime
+
+# Optional Playwright browser download host, read from the environment by the install below
+# (magi3 builds use https://registry.npmmirror.com/-/binary/playwright); empty keeps Playwright's CDN.
+ARG PLAYWRIGHT_DOWNLOAD_HOST=""
 
 # Upload commands can occupy the extension beyond the default 90-second heartbeat window.
 ENV FORWIN_PUBLISHER_HEARTBEAT_STALE_SECONDS=300

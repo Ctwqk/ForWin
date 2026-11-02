@@ -1,10 +1,17 @@
 name: forwin
 
+# Package mirrors for image builds: pypi.org, deb.debian.org, registry.npmjs.org and
+# Playwright's CDN crawl or time out from magi3. Override any of them in .env (README,
+# "Builds from China").
+x-build-mirrors: &build-mirrors
+  PIP_INDEX_URL: &pip-index-url "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+  DEBIAN_MIRROR: "${DEBIAN_MIRROR:-mirrors.tuna.tsinghua.edu.cn}"
+  NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmmirror.com}"
+
 x-runtime-build: &runtime-build
   context: ../..
   target: forwin-runtime
-  args:
-    PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+  args: *build-mirrors
 
 x-runtime-service: &runtime-service
   image: forwin-forwin:magi3
@@ -93,7 +100,7 @@ services:
     build:
       context: ./embedding-gateway
       args:
-        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+        PIP_INDEX_URL: *pip-index-url
         HF_ENDPOINT: "${HF_ENDPOINT:-https://hf-mirror.com}"
     environment:
       EMBED_MODEL: "all-MiniLM-L6-v2"
@@ -266,7 +273,8 @@ services:
       context: ../..
       target: publisher-browser-runtime
       args:
-        PIP_INDEX_URL: "${PIP_INDEX_URL:-}"
+        <<: *build-mirrors
+        PLAYWRIGHT_DOWNLOAD_HOST: "${PLAYWRIGHT_DOWNLOAD_HOST:-https://registry.npmmirror.com/-/binary/playwright}"
     env_file:
       - .env
     command: ["bash", "-lc", "exec scripts/launch_linux_extension_browser.sh"]

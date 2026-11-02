@@ -33,7 +33,6 @@ from forwin.publish_hub.payloads import cover_body
 from forwin.publish_hub.state import DESTINATIONS_KEY, cached_destination
 from forwin.publish_hub.submit import SubmitOutcome
 from forwin.publish_hub.sync import CHANGES_KEY, run_forever, sync_once
-from forwin.publisher_runtime.audit import PublisherAuditService
 from forwin.publisher_runtime.bindings import PublisherBindingService
 from tests.test_canon_publisher_jobs import _fixture, _materialize
 from tests.test_publish_hub_submit import (
@@ -47,6 +46,7 @@ from tests.test_publish_hub_submit import (
     _attach_hub,
     _canonical,
     _cover_setup,
+    _envelope,
     _job,
     _release,
     _set_routes,
@@ -120,6 +120,10 @@ class SyncHub(FakeHub):
         return super().__call__(request)
 
     def _post(self, request: httpx.Request) -> httpx.Response:
+        refusal = self._cover_guard(json.loads(request.content))
+        if refusal is not None:
+            self.posts.append(request.content)
+            return _envelope(409, refusal)
         known = set(self.jobs_by_key)
         response = super()._post(request)
         for key, (_content, job) in self.jobs_by_key.items():
@@ -134,6 +138,22 @@ class SyncHub(FakeHub):
             job.setdefault("last_error", None)
             self.change("job", job["id"], job["status"])
         return response
+
+    def _cover_guard(self, body: dict) -> str | None:
+        """publish-hub's duplicate guard for upload_cover (its migration 0002): a new key on a
+        publication with a succeeded or an active upload_cover is refused."""
+        if body.get("action") != "upload_cover" or body["idempotency_key"] in self.jobs_by_key:
+            return None
+        same = [
+            job for job in self.jobs("upload_cover")
+            if (job["destination_id"], job["source_ref"])
+            == (body["destination_id"], body.get("source_ref"))
+        ]
+        if any(job["status"] == "succeeded" for job in same):
+            return "publication_already_published"
+        if any(job["status"] in {"scheduled", "pending", "reconciling", "paused"} for job in same):
+            return "publication_has_active_job"
+        return None
 
     def change(self, entity: str, entity_id: str, status: str) -> None:
         self.feed.append(
@@ -1200,11 +1220,8 @@ def test_a_crash_after_the_cover_was_sent_replays_to_the_same_hub_job(tmp_path) 
         fixture.engine.dispose()
 
 
-def test_a_work_binding_made_by_the_chapter_itself_gets_its_cover_with_the_next_success(
-    tmp_path,
-) -> None:
-    """A replay would make that binding again under another id, so the cover's key would differ
-    and publish-hub would take the cover twice: it waits until the binding is committed."""
+def test_a_work_binding_made_by_the_chapter_itself_gets_its_cover_at_once(tmp_path) -> None:
+    """The book's first chapter makes its work binding: the cover goes out in the same item."""
     fixture, hub, client, created = _sync_fixture("hub-sync-cover-new-work")
     job_id = created["fanqie"]
     try:
@@ -1217,49 +1234,65 @@ def test_a_work_binding_made_by_the_chapter_itself_gets_its_cover_with_the_next_
         assert _job(fixture, job_id).status == "succeeded"
         work = _work_binding(fixture, "fanqie")
         assert work is not None and work.remote_book_id == FANQIE_BOOK
-        assert _cover_jobs(fixture) == [] and _cover_posts(hub) == []
-
-        # The next chapter's success (here the same one, applied again) finds it committed.
-        with fixture.runtime.session_factory.begin() as session:
-            session.get(PublisherUploadJob, job_id).status = "pending"
-            session.get(PublishHubSyncState, CHANGES_KEY).cursor = 0
-        _round(fixture, client)
-
         (cover_job,) = _cover_jobs(fixture)
         payload = json.loads(cover_job.result_payload_json)
         assert (payload["cover_asset_id"], payload["work_binding_id"]) == (cover_id, work.id)
-        assert len(_cover_posts(hub)) == 1 and cover_job.hub_job_id is not None
+        assert _cover_posts(hub) == [_canonical(cover_job.hub_submit_body_json)]
+        assert cover_job.hub_job_id is not None and cover_job.status == "pending"
     finally:
         fixture.engine.dispose()
 
 
-def test_a_work_binding_made_earlier_in_the_same_open_page_still_waits_for_its_commit(
-    tmp_path,
-) -> None:
-    """Two items of one page: the second sees the binding the first made, but it is not committed
-    yet, so a replay could still remake it under another id."""
-    fixture, hub, client, created = _sync_fixture("hub-sync-cover-same-page")
-    job_id = created["fanqie"]
+def _fanqie_cover_jobs_on_hub(hub: SyncHub) -> list[dict]:
+    return [
+        job for job in hub.jobs("upload_cover") if job["destination_id"] == FANQIE_DESTINATION
+    ]
+
+
+def test_a_replay_that_remakes_the_work_binding_still_uploads_the_cover_once(tmp_path) -> None:
+    """The page dies after the cover of a work binding the chapter itself made went out. The
+    replay makes the binding again under another id, so the cover goes out under another key.
+    publish-hub refuses a second upload_cover of the cover's publication: the row waits while the
+    first job is active and is superseded once that job has succeeded."""
+    fixture, hub, client, created = _sync_fixture(
+        "hub-sync-cover-crash-new-work", platforms=("qidian", "fanqie")
+    )
     try:
         _select_cover(fixture, tmp_path)
-        view = _succeed_chapter(hub, _job(fixture, job_id).hub_job_id)
-        mirror = sync_module._Mirror(  # noqa: SLF001
-            PublisherAuditService(session_factory=None),
-            covers=sync_module._cover_queue(client),  # noqa: SLF001
-        )
-        with fixture.runtime.session_factory() as session:
-            row = session.get(PublisherUploadJob, job_id)
-            assert mirror.apply(session, row, view, now=NOW)  # makes the work binding
-            row.status = "pending"  # the next item of the same page, before the commit
-            assert mirror.apply(session, row, view, now=NOW)
-            assert _cover_posts(hub) == []
-            session.commit()
-            mirror.committed()
-            row.status = "pending"  # a later page
-            assert mirror.apply(session, row, view, now=NOW)
-            session.commit()
+        _round(fixture, client)
+        fanqie_hub = _job(fixture, created["fanqie"]).hub_job_id
+        qidian_hub = _job(fixture, created["qidian"]).hub_job_id
+        _succeed_chapter(hub, fanqie_hub, chapter_id="f-7")
+        _succeed_chapter(hub, qidian_hub, chapter_id="q-7")
 
-        assert len(_cover_jobs(fixture)) == 1 and len(_cover_posts(hub)) == 1
+        def die(job_id: str) -> None:
+            if job_id == qidian_hub:  # the fanqie item, with its binding and cover, is applied
+                raise ProcessDied()
+
+        hub.on_get_job = die
+        with pytest.raises(ProcessDied):
+            _round(fixture, client)
+        (first,) = _fanqie_cover_jobs_on_hub(hub)
+        assert _cover_jobs(fixture) == [] and _work_binding(fixture, "fanqie") is None
+
+        hub.on_get_job = None
+        _round(fixture, client)
+
+        (waiting,) = [row for row in _cover_jobs(fixture) if row.platform_id == "fanqie"]
+        assert (waiting.status, waiting.hub_job_id) == ("pending", None)
+        assert "publication_has_active_job" in waiting.result_message
+        assert _fanqie_cover_jobs_on_hub(hub) == [first]
+
+        hub.finish(first["id"], "succeeded", official_state="cover_uploaded")
+        _round(fixture, client)
+
+        (superseded,) = [row for row in _cover_jobs(fixture) if row.platform_id == "fanqie"]
+        assert superseded.id == waiting.id and superseded.status == "superseded"
+        assert superseded.hub_superseded_reason == "publication_already_published"
+        assert "封面" in superseded.result_message
+        assert _fanqie_cover_jobs_on_hub(hub) == [first]
+        assert _job(fixture, created["fanqie"]).status == "succeeded"
+        assert _job(fixture, created["qidian"]).status == "succeeded"
     finally:
         fixture.engine.dispose()
 

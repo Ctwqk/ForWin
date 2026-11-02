@@ -853,12 +853,17 @@ def _defer(
 
 
 def _supersede(job: PublisherUploadJob, code: str, *, now: datetime) -> SubmitOutcome:
-    """Review Focus 2: a regenerated chapter whose publication is out already. Not retried."""
+    """Review Focus 2: a regenerated chapter whose publication is out already. Not retried.
+
+    A cover gets the same answer once its asset is on the book (a replay that remade the work
+    binding sends it under another key, see sync's `_Mirror._queue_cover`).
+    """
+    what = "这张封面已经上传过" if job.task_kind == "cover_upload" else "这一章已经发布过"
     job.status = "superseded"
     job.hub_superseded_reason = code
     job.finished_at = now
     job.error_message = ""
-    job.result_message = "publish-hub 报告这一章已经发布过（publication_already_published），本任务不再执行。"
+    job.result_message = f"publish-hub 报告{what}（publication_already_published），本任务不再执行。"
     return SubmitOutcome.SUPERSEDED
 
 

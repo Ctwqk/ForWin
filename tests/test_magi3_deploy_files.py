@@ -256,6 +256,20 @@ def test_magi3_builds_fetch_packages_from_mirrors_reachable_in_china() -> None:
         assert re.search(rf"^{arg}=$", env_text, re.MULTILINE), arg
 
 
+def test_embedding_image_installs_cpu_only_torch() -> None:
+    embedding = load_compose()["services"]["embedding"]
+
+    # PyPI's Linux torch wheels, arm64 included, are CUDA builds with several GB of nvidia-*
+    # packages. The gateway runs on CPU, so torch comes from PyTorch's CPU index.
+    cpu_index = "https://download.pytorch.org/whl/cpu"
+    assert embedding["build"]["args"]["TORCH_INDEX_URL"] == f"${{TORCH_INDEX_URL:-{cpu_index}}}"
+    dockerfile = (REPO_ROOT / "deploy" / "magi3" / "embedding-gateway" / "Dockerfile").read_text(encoding="utf-8")
+    assert f'ARG TORCH_INDEX_URL="{cpu_index}"' in dockerfile
+    assert '--no-deps --index-url "$TORCH_INDEX_URL"' in dockerfile
+    assert "torch.version.cuda is None" in dockerfile
+    assert re.search(r"^TORCH_INDEX_URL=$", ENV_EXAMPLE_PATH.read_text(encoding="utf-8"), re.MULTILINE)
+
+
 def test_publisher_browser_fails_google_lookups_at_once() -> None:
     browser = load_compose()["services"]["publisher-browser"]
 

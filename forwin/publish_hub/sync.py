@@ -46,9 +46,9 @@ same receipt-shaped payload:
   item, the book's selected cover is queued the way the receipt path queues it
   (`enqueue_cover_upload_if_ready`), which on a hub-routed binding submits it to publish-hub
   (R26). Once per cover: its job's key is the cover's, and a chapter already mirrored as
-  succeeded is not projected again. A work binding not committed before the item (the chapter's
-  own success made it) gets its cover with the next chapter (see `_Mirror._queue_cover`). A cover that cannot be queued is logged in
-  a savepoint of its own and the chapter's success stands; the next chapter's success tries
+  succeeded is not projected again; publish-hub refuses a second upload of the cover's
+  publication (see `_Mirror._queue_cover`). A cover that cannot be queued is logged in a
+  savepoint of its own and the chapter's success stands; the next chapter's success tries
   again;
 * create_book: the work binding's `remote_book_id`, `remote_url` and `hub_destination_id`;
 * cover_upload: the work binding's cover state.
@@ -171,7 +171,6 @@ def sync_once(
         _read_feed(session, client, now, mirror, report)
         _catch_up(session, client, now, mirror, report)
         session.commit()
-        mirror.committed()
         if refresh_destinations:
             report.destinations_refreshed = _refresh_destinations(session, client, now)
     except BaseException:
@@ -295,7 +294,6 @@ def _read_feed(session, client, now: datetime, mirror: _Mirror, report: SyncRepo
             state.cursor = next_after
             state.updated_at = now
         session.commit()
-        mirror.committed()
         report.cursor = int(state.cursor)
         if len(items) < PAGE_SIZE or next_after <= after:
             return
@@ -530,12 +528,6 @@ class _Mirror:
         self.audit = audit
         self.bindings = PublisherBindingService(session_factory=None)
         self.covers = covers
-        # Work bindings made by items whose transaction has not committed yet (_queue_cover).
-        self.uncommitted_work_ids: set[str] = set()
-
-    def committed(self) -> None:
-        """The open transaction committed: the work bindings it made are durable now."""
-        self.uncommitted_work_ids.clear()
 
     def apply(
         self, session, row: PublisherUploadJob, view: Any, *, now: datetime
@@ -589,7 +581,6 @@ class _Mirror:
         payload = _load_object(row.result_payload_json)
         work = None
         if row.task_kind == "chapter_upload":
-            known = _work_binding_ids(session, row)
             work = self._project_chapter(session, row, view, result, payload)
         elif row.task_kind == CREATE_BOOK_TASK_KIND:
             self._project_book(session, row, view, result, payload)
@@ -620,12 +611,9 @@ class _Mirror:
             },
         )
         if work is not None:
-            new_work = work.id not in known or work.id in self.uncommitted_work_ids
-            if work.id not in known:
-                self.uncommitted_work_ids.add(work.id)
             # Last in the item, so that once the cover's request is out only the flush and the
             # page's commit are left to fail.
-            self._queue_cover(session, row, work, payload, new_work=new_work)
+            self._queue_cover(session, row, work, payload)
 
     def _pause(
         self,
@@ -751,8 +739,6 @@ class _Mirror:
         row: PublisherUploadJob,
         work: PublisherWorkBinding,
         payload: dict,
-        *,
-        new_work: bool,
     ) -> None:
         """After a chapter lands, queue the book's cover as the receipt path does.
 
@@ -763,25 +749,18 @@ class _Mirror:
         that request and before its commit, the replay stores the cover again and sends the
         same bytes, and publish-hub answers with the job it already has.
 
-        That holds only for a work binding that was committed before: one made by this chapter's
-        success (or by another item of the same uncommitted page) would get another id on a
-        replay, hence another key, and publish-hub would take the cover a second time. Its cover
-        waits for the next chapter's success, when the binding is committed (books created
-        through publish-hub, and books uploaded before the switch, have theirs already).
+        A work binding made by this chapter's success (or by another item of the same
+        uncommitted page) gets another id on such a replay, hence another key. publish-hub
+        refuses that second upload_cover of the cover's publication (one per cover asset, R19)
+        since its migration 0002 (R53 follow-up): publication_has_active_job while the first is
+        active, so the row waits and is sent again, then publication_already_published, so the
+        row is superseded. The cover is uploaded once either way.
 
         In a savepoint of its own: a cover that cannot be queued (its file unreadable, say) is
         logged and the chapter's success stands; the next chapter's success tries again.
         """
         if self.covers is None or not str(work.remote_book_id or "").strip():
             return  # a cover job needs the platform book id
-        if new_work:
-            logger.info(
-                "work binding %s was made by upload job %s; its cover is queued with the next "
-                "chapter",
-                work.id,
-                row.id,
-            )
-            return
         try:
             with session.begin_nested():
                 cover_job = self.covers.enqueue_cover_upload_if_ready(
@@ -895,18 +874,6 @@ class _Mirror:
                 **extra,
             },
         )
-
-
-def _work_binding_ids(session, row: PublisherUploadJob) -> set[str]:
-    """The work bindings of the row's project and platform, as they are before it is projected."""
-    return set(
-        session.execute(
-            select(PublisherWorkBinding.id).where(
-                PublisherWorkBinding.project_id == row.project_id,
-                PublisherWorkBinding.platform_id == row.platform_id,
-            )
-        ).scalars()
-    )
 
 
 def _hub_result(view: Mapping) -> dict[str, str]:

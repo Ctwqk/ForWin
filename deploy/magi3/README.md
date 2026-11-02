@@ -43,8 +43,21 @@ docker:
     - https://docker.1ms.run
 ```
 
-and restart Colima (`brew services restart colima` when it runs as a Homebrew
-service). `docker info` lists them under `Registry Mirrors`.
+and `env: {}` with
+
+```yaml
+env:
+  http_proxy: ""
+  https_proxy: ""
+```
+
+then restart Colima (`brew services restart colima` when it runs as a Homebrew
+service). `docker info` lists the mirrors under `Registry Mirrors` and shows no
+`HTTP Proxy`. The empty proxy entries matter on magi3: launchd hands Colima the
+host proxy that cnproxy sets for GUI sessions (`127.0.0.1:17891`), Colima copies
+it into the VM's `daemon.json` as `192.168.5.2:17891`, the VM cannot reach host
+ports, and every pull fails with `proxyconnect tcp: ... i/o timeout`. Keys set in
+`env:` take precedence over the host environment.
 
 On magi1, run `./scripts/deploy_magi3.sh` once. It seeds `~/forwin/repo.git` and
 `~/forwin/src` on magi3, then stops because the host-only `.env` is missing.
@@ -203,5 +216,7 @@ dc stop                      # dc as defined above
 brew services restart colima
 dc up -d
 ```
+
+The VM's outbound connections go through lima's user-mode network, whose forwarder on the host admits only 10 connects in progress. From China, connects to blocked hosts (Google, Docker Hub) hang until they time out, so a few such callers stall every new outbound connection of the VM, builds included: `lsof -nP -a -p $(pgrep -f 'limactl usernet') -iTCP -sTCP:SYN_SENT` then shows 10 entries to the blocked addresses. Chromium in publisher-browser did that with its background calls to Google, so the compose file sets `FORWIN_EXTENSION_HOST_RESOLVER_RULES` to fail Google's domain names at once. If a build stalls again, check that count and find the caller (`/proc/net/tcp` state `02` inside each container).
 
 If `colima ssh` hangs, or a container with a bind mount from the magi3 home directory (publish-hub-tunnel) cannot start, the VM's virtiofs mount of `/Users/taiwei` may be stuck (processes wait in `fuse_simple_request`); restarting Colima as above clears it.

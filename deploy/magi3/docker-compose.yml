@@ -290,6 +290,10 @@ services:
       FORWIN_EXTENSION_NO_SANDBOX: "${FORWIN_EXTENSION_NO_SANDBOX:-auto}"
       FORWIN_EXTENSION_TEST_REMOTE_DEBUGGING_ADDRESS: "0.0.0.0"
       FORWIN_EXTENSION_TEST_REMOTE_DEBUGGING_PORT: "9222"
+      # From China, connects to Google hang until they time out, and the colima VM's network
+      # forwarder admits only 10 pending connects: Chromium's background calls to Google stalled
+      # every outbound connection of the VM (builds, LLM calls, uploads). Fail those names at once.
+      FORWIN_EXTENSION_HOST_RESOLVER_RULES: "${FORWIN_EXTENSION_HOST_RESOLVER_RULES:-MAP *.google.com ~NOTFOUND, MAP *.googleapis.com ~NOTFOUND, MAP *.gstatic.com ~NOTFOUND, MAP *.gvt1.com ~NOTFOUND, MAP *.gvt2.com ~NOTFOUND, MAP *.googleusercontent.com ~NOTFOUND, MAP *.google-analytics.com ~NOTFOUND, MAP *.googletagmanager.com ~NOTFOUND, MAP *.doubleclick.net ~NOTFOUND}"
     tmpfs:
       - "/dev/shm:size=1073741824,mode=1777"
     ports:

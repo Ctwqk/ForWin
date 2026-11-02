@@ -256,6 +256,21 @@ def test_magi3_builds_fetch_packages_from_mirrors_reachable_in_china() -> None:
         assert re.search(rf"^{arg}=$", env_text, re.MULTILINE), arg
 
 
+def test_publisher_browser_fails_google_lookups_at_once() -> None:
+    browser = load_compose()["services"]["publisher-browser"]
+
+    # From China, connects to Google hang until they time out, and the colima VM's network
+    # forwarder admits only 10 pending connects: Chromium's background calls to Google stalled
+    # every outbound connection of the VM (builds, LLM calls, uploads).
+    rules = browser["environment"]["FORWIN_EXTENSION_HOST_RESOLVER_RULES"]
+    assert rules.startswith("${FORWIN_EXTENSION_HOST_RESOLVER_RULES:-MAP ")
+    for domain in ("google.com", "googleapis.com", "gstatic.com", "gvt1.com"):
+        assert f"MAP *.{domain} ~NOTFOUND" in rules, domain
+    launcher = (REPO_ROOT / "scripts" / "launch_linux_extension_browser.sh").read_text(encoding="utf-8")
+    assert 'HOST_RESOLVER_RULES="${FORWIN_EXTENSION_HOST_RESOLVER_RULES:-}"' in launcher
+    assert '--host-resolver-rules="$HOST_RESOLVER_RULES"' in launcher
+
+
 def test_compose_sets_no_codex_variables() -> None:
     assert "codex" not in COMPOSE_PATH.read_text(encoding="utf-8").lower()
 

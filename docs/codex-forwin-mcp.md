@@ -2,6 +2,12 @@
 
 Codex should operate a running ForWin backend through the `forwin` MCP server. For project, Genesis, task, chapter, and WorldModel workflows, MCP is the authoritative interface. Do not inspect PostgreSQL directly or send ad hoc HTTP requests when an equivalent MCP tool exists.
 
+ForWin itself no longer calls Codex: migration `0007_drop_codex` removed the Codex router, the Codex gate and world-conflict deciders, and their policy values. Codex works only as an operator from outside, through MCP.
+
+Production runs on magi3 under Docker Compose ([deploy/magi3/README.md](../deploy/magi3/README.md)). The API and MCP there are `http://127.0.0.1:8899` and `http://127.0.0.1:8896/mcp` on magi3 itself, and `http://127.0.0.1:28899` and `http://127.0.0.1:28896/mcp` on magi1 through its tunnel. The plugin definition and `scripts/check_codex_operator_ready.py` below still default to the retired Swarm endpoints at `ccttww-lap.local`: pass `--api-health-url`, `--mcp-health-url` and `--mcp-url` with the addresses above.
+
+On magi3 an hourly Codex job clears the review gates that would otherwise wait for a person. It is described in [Unattended review gates on magi3](../deploy/magi3/README.md#unattended-review-gates-on-magi3).
+
 ## Operator Preflight
 
 Install or enable the repo-local plugin from `.agents/plugins/marketplace.json`, then invoke it from Codex as:
@@ -84,7 +90,12 @@ Historical rewrite replays world_engine deltas (ticks and direct conflict resolu
 
 An open conflict requiring a human blocks generation from `blocks_from_chapter`. The task reports `needs_review` via `paused_for_review`, and the project exposes `blocking_reason.code="world_conflict_pending"`. Continue and review-approve with `continue_generation=true` return 409 while this block applies; approving a chapter review does not resolve a world conflict. The console task drawer exposes the same conflict decisions.
 
-For world-tick conflicts, routing is automatic veto for minor conflicts, human for historical rewrites or critical conflicts, and Codex for moderate/major when `world.conflict_delegate="codex"` (otherwise human). `WorldConflictDelegate` uses `models.role_preferences["review.world_conflict"]`, default `gpt-6-luna`, through the same `run_codex_structured_call` as the Spark gate; audit records use independent transactions. `FORWIN_CODEX_MODELS` declares Codex models. Any delegate failure or an `amend_plan` choice escalates to a human.
+For world-tick conflicts, routing works like this:
+- minor conflicts are vetoed automatically;
+- historical rewrites and critical conflicts go to a human;
+- moderate and major conflicts go to the LLM delegate when `world.conflict_delegate="llm"` (the default), and to a human when it is `"human"`.
+
+`WorldConflictDelegate` makes one structured LLM call (`run_structured_llm_call`, stage `review.world_conflict`) through the project's LLM chain; audit records use independent transactions. Any delegate failure or an `amend_plan` choice escalates to a human.
 
 Use only the options returned by the existing inspection tools:
 
@@ -94,7 +105,7 @@ Use only the options returned by the existing inspection tools:
 | `accept_with_obligation` | Commits the change and a `world_change_response` obligation due by `min(latest+6, target)` (`latest` is the latest canon chapter; `target` is `project.target_total_chapters`), bound when a next unaccepted plan exists; otherwise retained as an open obligation. Available only at minor/moderate and outside narrative-boundary conflicts. |
 | `plot_responds` | Holds the intent without committing its world change, events or news; binds a reachable response chapter, or records a pending response for the next band. |
 | `amend_plan` | Human only: plan conflicts invoke PlanAmender; world changes commit and release broken protections before replanning the remaining band. Milestone/exit-state problems revise the beat sheet first; other plan problems force replanning with the user rationale. On a `chapter_extraction` conflict it accepts the chapter's text: a broken protection is released through a `plan_constraint` delta idempotent by `conflict:<id>`, and a broken milestone has PlanAmender revise the arc's beat sheet. |
-| `rewrite_chapter` | Offered only on `chapter_extraction` conflicts (human, or Codex once per boundary): the paused chapter's saved draft goes back to repair with the broken boundary as must_fix, in the `world_conflict_repair` phase with its own attempt budget. No canon is written. |
+| `rewrite_chapter` | Offered only on `chapter_extraction` conflicts (human, or the LLM delegate once per boundary): the paused chapter's saved draft goes back to repair with the broken boundary as must_fix, in the `world_conflict_repair` phase with its own attempt budget. No canon is written. |
 
 For `plot_responds` and `accept_with_obligation`, writer-facing response goals, markers, obligation summaries/payoff tests and plan-patch injections use only the held change's public event summaries. Changes with no public event use `PLOT_RESPONSE_GENERIC_GOAL`; onstage_slip uses `ONSTAGE_SLIP_RESPONSE_GOAL`. The conflict summary is not copied into those writer texts.
 
@@ -104,7 +115,7 @@ World-tick protection, milestone and reveal-schedule boundary conflicts offer on
 
 ### Chapter Text Conflicts
 
-Source `chapter_extraction` comes from the chapter's own text. A draft that breaks an active protection, or ends a ref a later hard milestone needs, first goes through the draft repair loop with the boundary as must_fix; only a violation that loop leaves, or one canon preparation's review gate finds, becomes a conflict. It offers `rewrite_chapter` and `amend_plan`, is never decided automatically, goes to a human when critical (milestone refs) and otherwise to Codex under `world.conflict_delegate="codex"`. Its `proposed_change` holds `boundary` (kind, ref, until_chapter, evidence quote), `names` (display names; concealed entities get a neutral label) and `detected_by` (`draft_review` or `canon_gate`); summaries and repair text name entities and fact topics, never a fact's proposition.
+Source `chapter_extraction` comes from the chapter's own text. A draft that breaks an active protection, or ends a ref a later hard milestone needs, first goes through the draft repair loop with the boundary as must_fix; only a violation that loop leaves, or one canon preparation's review gate finds, becomes a conflict. It offers `rewrite_chapter` and `amend_plan`, is never decided automatically, goes to a human when critical (milestone refs) and otherwise to the LLM delegate under `world.conflict_delegate="llm"`. Its `proposed_change` holds `boundary` (kind, ref, until_chapter, evidence quote), `names` (display names; concealed entities get a neutral label) and `detected_by` (`draft_review` or `canon_gate`); summaries and repair text name entities and fact topics, never a fact's proposition.
 
 The chapter pauses mid-way in `needs_review` with `paused_for_review` reason `world_conflict`, and its draft is kept. `blocking_reason` carries `conflict_id` and `conflict_source`. Approving that chapter's review returns 409 while the conflict is open. `world_conflict_resolve` returns 409 while a generation task is active or once the chapter left `needs_review`; a decision sets the chapter back to `planned` and the next `project_continue_generation` resumes it from the saved draft without writing it again (`rewrite_chapter` repairs it; `amend_plan` reviews the same text again). Follow the order resolve, reread `project_get` / `task_active_generation_check`, then continue. Rewriting the latest chapter while the next one is drafted or in `needs_review` expires that next chapter's open chapter conflicts (`expired`, reason naming the rewrite); retry that chapter's review afterwards.
 
@@ -162,14 +173,13 @@ candidate's committed status and commit identity.
 
 ## Verification
 
-Run the focused operator and Codex integration tests from the repository virtualenv:
+Run the focused operator tests from the repository virtualenv:
 
 ```bash
 .venv/bin/python -m pytest \
   tests/test_mcp_server.py \
-  tests/test_codex_bridge.py \
-  tests/test_llm_router.py \
   tests/test_codex_operator_ready.py \
+  tests/test_magi3_deploy_files.py \
   -q
 ```
 

@@ -167,6 +167,63 @@ Access the app at `http://127.0.0.1:28899` and MCP at
 `http://127.0.0.1:28896/mcp` on magi1. Health endpoints are `/health` on both
 ports. All published ports on magi3 bind its loopback interface.
 
+## Unattended review gates on magi3
+
+Generation pauses at review gates, and `stop_when_review_pending` then holds a
+project's daily writing and publishing until the gate clears. A project whose
+runtime policy has `gate_delegate="llm"` gets most gates answered by its LLM
+chain. Three kinds still wait for a person:
+- a chapter whose review verdict is not `pass`/`warn` (see
+  `candidate_ineligibility_reason`);
+- a band checkpoint with warnings;
+- a world conflict the LLM escalates.
+
+The LaunchAgent `com.forwin.codex-review` takes the person's place. Every hour
+it runs `deploy/magi3/codex-review/run-review.sh` from the deploy checkout, so a
+deploy updates it.
+- **Whether anything waits.** The script asks the API at
+  `http://127.0.0.1:8899` whether any project waits. A project waits when it has
+  `needs_review` chapters, a `blocking_reason`, or a `chapter_N_review` gate.
+  `next_gate` is set in normal states too (`chapter_N_write`), so it alone does
+  not count.
+- **Starting Codex.** Only then does it run `codex exec` with
+  `codex-review/review-prompt.md`:
+  - The ForWin MCP (`http://127.0.0.1:8896/mcp`) is given with `-c` for that
+    run only.
+  - The sandbox is read-only, approvals are off, and the run is limited to 30
+    minutes.
+- **What Codex does.** The prompt keeps Codex to the review tools.
+  - It rewrites a chapter once when the text would visibly break the story;
+    otherwise it approves it.
+  - It overrides warning-only band checkpoints.
+  - It takes `rewrite_chapter` on world conflicts that offer it.
+  - Everything else is left for a person. Every decision's reason starts with
+    `codex-review:`.
+- **Retries write ahead.** `chapter_review_retry` with
+  `continue_generation=true` writes on to the end of the band, past the daily
+  write quota.
+- **State and logs.** State lives in `~/forwin/codex-review`. `logs/idle.log`
+  records runs that started no Codex, and `logs/skipped.log` records a held lock
+  or an unreachable API. Each Codex run writes `logs/review-<time>.log` with a
+  `.summary.md`; both are kept 14 days.
+
+Install on magi3. Codex must be at `~/.local/bin/codex` and logged in.
+Do not use `codex mcp add` for this: it rewrites the whole `~/.codex/config.toml`,
+which the ChatGPT app on magi3 also reads.
+
+```sh
+mkdir -p ~/forwin/codex-review ~/Library/LaunchAgents
+cp ~/forwin/src/deploy/magi3/com.forwin.codex-review.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.forwin.codex-review.plist
+# Run once now; read the newest logs/review-*.summary.md afterwards.
+launchctl kickstart gui/$(id -u)/com.forwin.codex-review
+# Stop it:
+launchctl bootout gui/$(id -u)/com.forwin.codex-review
+```
+
+Set a project's delegate with the MCP tool `project_set_gate_delegate`
+(`delegate="llm"`), or with `PUT /api/projects/{id}/policy`.
+
 ## Embeddings
 
 The `embedding` service (deploy/magi3/embedding-gateway, copied from Constructure) serves all-MiniLM-L6-v2 at 384 dimensions on CPU, the same model infra-150 served on GPU. The model is baked into the image at build time through `HF_ENDPOINT` (default https://hf-mirror.com), so the service starts without network access.

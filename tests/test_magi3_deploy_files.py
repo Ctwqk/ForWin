@@ -23,6 +23,8 @@ BACKUP_SCRIPT = REPO_ROOT / "scripts" / "backup_magi3.sh"
 TUNNEL_PLIST = REPO_ROOT / "deploy" / "magi3" / "com.forwin.magi3-tunnel.plist"
 PUBLISH_HUB_TUNNEL_DIR = REPO_ROOT / "deploy" / "magi3" / "publish-hub-tunnel"
 BACKUP_PLIST = REPO_ROOT / "deploy" / "magi3" / "com.forwin.magi3-backup.plist"
+CODEX_REVIEW_DIR = REPO_ROOT / "deploy" / "magi3" / "codex-review"
+CODEX_REVIEW_PLIST = REPO_ROOT / "deploy" / "magi3" / "com.forwin.codex-review.plist"
 
 
 def load_compose() -> dict:
@@ -307,7 +309,7 @@ def test_worker_subcommands_exist_in_cli() -> None:
 
 
 def test_scripts_parse() -> None:
-    for script in (DEPLOY_SCRIPT, BACKUP_SCRIPT):
+    for script in (DEPLOY_SCRIPT, BACKUP_SCRIPT, CODEX_REVIEW_DIR / "run-review.sh"):
         subprocess.run(["bash", "-n", str(script)], check=True)
 
 
@@ -447,6 +449,168 @@ def test_launchd_agents_have_required_schedule_and_tunnel() -> None:
     ]
     for key in ("StandardOutPath", "StandardErrorPath"):
         assert backup[key] == "/Users/magi1/Library/Logs/forwin-magi3-backup.log"
+
+
+def test_codex_review_agent_runs_the_deployed_script_hourly() -> None:
+    agent = plistlib.loads(CODEX_REVIEW_PLIST.read_bytes())
+
+    assert agent["Label"] == "com.forwin.codex-review"
+    assert agent["StartInterval"] == 3600
+    assert agent["RunAtLoad"] is False
+    # magi3's deploy checkout, so a deploy updates the job; its state lives outside the checkout.
+    assert agent["ProgramArguments"] == [
+        "/bin/bash", "/Users/taiwei/forwin/src/deploy/magi3/codex-review/run-review.sh",
+    ]
+    for key in ("StandardOutPath", "StandardErrorPath"):
+        assert agent[key] == "/Users/taiwei/forwin/codex-review/launchd.log"
+
+
+def test_codex_review_prompt_keeps_codex_to_review_tools() -> None:
+    prompt = (CODEX_REVIEW_DIR / "review-prompt.md").read_text(encoding="utf-8")
+
+    for tool in ("chapter_review_retry", "chapter_review_approve", "band_checkpoint_approve", "world_conflict_resolve"):
+        assert f"`{tool}`" in prompt
+    for forbidden in (
+        "project_set_gate_delegate", "project_continue_generation", "project_extend_generation",
+        "project_start_writing", "task_pause",
+    ):
+        assert f"`{forbidden}`" in prompt
+    assert "`codex-review:`" in prompt
+    assert "不运行 shell 命令" in prompt
+
+
+class _ForwinApi:
+    """A ForWin API answering /api/projects and /api/projects/<id> from a dict."""
+
+    def __init__(self, projects: dict[str, dict]) -> None:
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 (http.server's name)
+                if self.path == "/api/projects":
+                    body = [{"id": pid} for pid in projects]
+                else:
+                    body = projects[self.path.rsplit("/", 1)[-1]]
+                data = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, format: str, *args) -> None:  # noqa: A002 (http.server's name)
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def codex_review(tmp_path: Path):
+    """Run run-review.sh against a fake ForWin API with a `codex` that only records its calls."""
+    home = tmp_path / "home"
+    fake_bin = home / ".local" / "bin"
+    fake_bin.mkdir(parents=True)
+    record = tmp_path / "codex-calls.jsonl"
+    codex = fake_bin / "codex"
+    codex.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "call = {'args': sys.argv[1:], 'stdin': sys.stdin.read()}\n"
+        "with open(os.environ['FAKE_CODEX_RECORD'], 'a', encoding='utf-8') as f:\n"
+        "    f.write(json.dumps(call, ensure_ascii=False) + '\\n')\n",
+        encoding="utf-8",
+    )
+    codex.chmod(0o755)
+    state = tmp_path / "state"
+    servers: list[_ForwinApi] = []
+
+    def run(projects: dict[str, dict] | None, *, api_url: str | None = None):
+        if projects is not None:
+            servers.append(_ForwinApi(projects))
+            api_url = servers[-1].url
+        env = {
+            "HOME": str(home),
+            "PATH": "/usr/bin:/bin",
+            "FAKE_CODEX_RECORD": str(record),
+            "FORWIN_CODEX_REVIEW_HOME": str(state),
+            "FORWIN_CODEX_REVIEW_API": api_url or "",
+        }
+        result = subprocess.run(
+            ["bash", str(CODEX_REVIEW_DIR / "run-review.sh")],
+            env=env, capture_output=True, text=True, timeout=60,
+        )
+        calls = [json.loads(line) for line in record.read_text().splitlines()] if record.exists() else []
+        return result, calls, state / "logs"
+
+    yield run
+    for server in servers:
+        server.close()
+
+
+def _project(**fields) -> dict:
+    return {"title": "旧城当铺", "needs_review_chapter_count": 0, "next_gate": "chapter_6_write",
+            "blocking_reason": {"code": ""}, **fields}
+
+
+def test_codex_review_does_not_start_codex_when_nothing_waits(codex_review) -> None:
+    result, calls, logs = codex_review({"p1": _project(), "p2": _project(next_gate="completed")})
+
+    assert result.returncode == 0, result.stderr
+    assert calls == []
+    assert "nothing waiting" in (logs / "idle.log").read_text(encoding="utf-8")
+    assert not list(logs.glob("review-*.log"))
+
+
+@pytest.mark.parametrize("waiting", [
+    {"needs_review_chapter_count": 1, "next_gate": "chapter_4_review"},
+    {"next_gate": "world_conflict_pending", "blocking_reason": {"code": "world_conflict_pending"}},
+])
+def test_codex_review_hands_a_waiting_project_to_codex_with_the_mcp_for_that_run_only(
+    codex_review, waiting: dict,
+) -> None:
+    result, calls, logs = codex_review({"p1": _project(), "p2": _project(**waiting)})
+
+    assert result.returncode == 0, result.stderr
+    assert len(calls) == 1
+    args = calls[0]["args"]
+    assert args[:1] == ["exec"]
+    assert ["-c", 'mcp_servers.forwin.url="http://127.0.0.1:8896/mcp"'] == args[1:3]
+    assert ["-c", 'approval_policy="never"'] == args[3:5]
+    assert ["-s", "read-only"] == args[5:7]
+    assert "--skip-git-repo-check" in args
+    assert args[-1] == "-"
+    assert calls[0]["stdin"] == (CODEX_REVIEW_DIR / "review-prompt.md").read_text(encoding="utf-8")
+    [log] = logs.glob("review-*.log")
+    text = log.read_text(encoding="utf-8")
+    assert "waiting: p2:旧城当铺" in text and "p1:" not in text
+    assert "codex exit 0" in text
+
+
+def test_codex_review_reports_an_unreachable_api_without_codex(codex_review) -> None:
+    result, calls, logs = codex_review(None, api_url="http://127.0.0.1:9")
+
+    assert result.returncode == 1
+    assert calls == []
+    assert "not reachable" in (logs / "skipped.log").read_text(encoding="utf-8")
+
+
+def test_codex_review_skips_while_another_run_holds_the_lock(codex_review, tmp_path: Path) -> None:
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / ".lock").mkdir()
+
+    result, calls, logs = codex_review({"p1": _project(needs_review_chapter_count=1)})
+
+    assert result.returncode == 0
+    assert calls == []
+    assert "another run holds" in (logs / "skipped.log").read_text(encoding="utf-8")
+    assert (tmp_path / "state" / ".lock").is_dir()
 
 
 def test_remote_env_is_gitignored() -> None:

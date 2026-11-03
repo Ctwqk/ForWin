@@ -97,6 +97,7 @@ class FakeInput extends FakeElement {
 function fanqiePage({
   steps = ['settings'], opened = true, aiField = true, otherQuestion = false, scheduleRadios = false,
   layout = 'nested', selectable = true, hidden = false, closesOnConfirm = true, pageNote = '',
+  confirmLabel = '确认发布',
 } = {}) {
   const clicks = [];
   const genericClicks = [];
@@ -147,7 +148,7 @@ function fanqiePage({
       new FakeElement('div', { text: '定时发布' }),
       new FakeElement('div', { className: 'arco-modal-footer' }, [
         button('取消'),
-        button('确认发布', () => {
+        button(confirmLabel, () => {
           if (closesOnConfirm) {
             settings.remove();
             status.text = '审核中';
@@ -324,6 +325,24 @@ test('known typo and content-check dialogs advance in order before disclosure', 
   const result = await page.confirm(true);
   assert.equal(result.confirmed, true);
   assert.deepEqual(page.clicks, ['提交', '仅基础检测', '是', '确认发布']);
+});
+
+test('the settings button relabelled 确认提交 still confirms publication', async () => {
+  const page = fanqiePage({ steps: ['typo', 'detection', 'settings'], confirmLabel: '确认提交' });
+  const result = await page.confirm(true);
+  assert.equal(result.confirmed, true);
+  assert.equal(result.phase, 'confirmed');
+  assert.equal(page.radios.ai.yes.checked, true);
+  assert.deepEqual(page.clicks, ['提交', '仅基础检测', '是', '确认提交']);
+});
+
+test('a settings button with any other label is never clicked', async () => {
+  const page = fanqiePage({ confirmLabel: '发布' });
+  const result = await page.confirm(true);
+  assert.equal(result.confirmed, false);
+  assert.equal(result.phase, 'confirm-button-missing');
+  assert.equal(result.publishClicked, false);
+  assert.deepEqual(page.clicks, ['是']);
 });
 
 test('upload stops with publish-not-confirmed when an unknown dialog halts confirmation', async () => {

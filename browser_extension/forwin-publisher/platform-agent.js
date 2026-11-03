@@ -2923,9 +2923,10 @@
     if (!(modal instanceof HTMLElement)) {
       return { clicked: false, closed: false };
     }
+    // Fanqie relabelled this button 确认提交 (seen 2026-11-03); older pages say 确认发布.
     const primary = Array.from(modal.querySelectorAll('button, [role="button"]'))
       .find((node) => isVisibleElement(node)
-        && String(node.innerText || node.textContent || '').trim() === '确认发布')
+        && ['确认发布', '确认提交'].includes(String(node.innerText || node.textContent || '').trim()))
       || null;
     if (!(primary instanceof HTMLElement)) {
       return { clicked: false, closed: false };

@@ -4,16 +4,16 @@ import {
   getPlatformAdapter,
   getProbeUrl,
   shouldProbeLogin,
-} from './platforms.js?v=0.1.64';
+} from './platforms.js?v=0.1.65';
 import {
   buildAttemptResult,
   buildExecutionReceipt,
   buildReconciliationRequest,
   buildRiskPauseRequest,
   isRiskReason,
-} from './reconciliation.js?v=0.1.64';
-import { guardRiskInspection } from './risk-inspection.js?v=0.1.64';
-import { HUB_BACKEND, HubExecutor } from './hub-adapter.js?v=0.1.64';
+} from './reconciliation.js?v=0.1.65';
+import { guardRiskInspection } from './risk-inspection.js?v=0.1.65';
+import { HUB_BACKEND, HubExecutor } from './hub-adapter.js?v=0.1.65';
 
 const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
 const LOGIN_QR_PLATFORM_THROTTLE_URL = '__platform__';

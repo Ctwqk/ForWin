@@ -353,7 +353,7 @@ function makeHubController({
     getHubClientId: async () => HUB_CLIENT_ID,
     ensureHeartbeatAlarm: async () => {},
     getSettings: async () => ({ ...fullSettings }),
-    getExtensionVersion: () => '0.1.65',
+    getExtensionVersion: () => '0.1.66',
     getBrowserInfo: async () => ({ browserName: 'Chrome', browserVersion: '123.0' }),
     getCookies: async () => [],
     getPlatformState: async () => ({}),
@@ -630,7 +630,7 @@ test('hub chapter job: mutation_started is reported before run-upload, then rece
   assert.deepEqual(hub.byAction('executor-heartbeat')[0].body, {
     client_id: HUB_CLIENT_ID,
     platforms: ['qidian', 'fanqie'],
-    version: '0.1.65',
+    version: '0.1.66',
   });
   assert.deepEqual(hub.byAction('claim')[0].body, { client_id: HUB_CLIENT_ID, platforms: ['qidian', 'fanqie'] });
   assert.match(hub.byAction('phase')[0].pathname, /\/upload-jobs\/hub-job-1\/attempts\/hub-attempt-1\/phase$/);
@@ -1697,14 +1697,14 @@ test('manifest allows the publish-hub tunnel and the version is bumped everywher
   ]);
   const manifest = JSON.parse(manifestText);
   assert.ok(manifest.host_permissions.includes('http://publish-hub-tunnel:18930/*'));
-  assert.equal(manifest.version, '0.1.65');
+  assert.equal(manifest.version, '0.1.66');
   for (const path of ['controller', 'platforms', 'risk-inspection', 'upload-journal']) {
-    assert.match(backgroundSource, new RegExp(`\\./lib/${path}\\.js\\?v=0\\.1\\.65'`));
+    assert.match(backgroundSource, new RegExp(`\\./lib/${path}\\.js\\?v=0\\.1\\.66'`));
   }
   for (const path of ['platforms', 'reconciliation', 'risk-inspection', 'hub-adapter']) {
-    assert.match(controllerSource, new RegExp(`\\./${path}\\.js\\?v=0\\.1\\.65'`));
+    assert.match(controllerSource, new RegExp(`\\./${path}\\.js\\?v=0\\.1\\.66'`));
   }
-  assert.doesNotMatch(backgroundSource + controllerSource + hubSource, /\?v=0\.1\.64/);
+  assert.doesNotMatch(backgroundSource + controllerSource + hubSource, /\?v=0\.1\.65/);
   assert.match(JSON.parse(packageText).scripts.test, /node --check lib\/hub-adapter\.js/);
 });
 

@@ -1,14 +1,14 @@
 import { createBackendClient, createHubClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.65';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.66';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
-import { getPlatformAdapter } from './lib/platforms.js?v=0.1.65';
-import { guardRiskInspection } from './lib/risk-inspection.js?v=0.1.65';
+import { getPlatformAdapter } from './lib/platforms.js?v=0.1.66';
+import { guardRiskInspection } from './lib/risk-inspection.js?v=0.1.66';
 import { DEFAULT_SETTINGS, HUB_CLIENT_ID_STORAGE_KEY, createHubClientIdStore, getBackendOrigin, normalizeSettings } from './lib/settings.js';
 import { READY_CHANNELS, TabReadyRegistry } from './lib/tab-ready-registry.js';
 import { uploadMessageTimeoutMs } from './lib/upload-timeouts.js?v=0.1.23';
-import { createUploadJournal } from './lib/upload-journal.js?v=0.1.65';
+import { createUploadJournal } from './lib/upload-journal.js?v=0.1.66';
 import {
   assertDebuggerCapability,
   extensionCapabilities,

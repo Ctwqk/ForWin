@@ -3045,6 +3045,7 @@
                 /\/main\/writer\/(?:chapter-edit|chapter-detail)\/\d+\/(\d+)/,
               )?.[1]
               || parsed.pathname.match(/\/main\/writer\/\d+\/publish\/(\d+)/)?.[1]
+              || parsed.pathname.match(/\/main\/writer\/preview\/\d+&(\d+)/)?.[1]
               || '';
             if (anchorChapterId !== expectedChapterId) {
               continue;
@@ -3068,9 +3069,10 @@
         const fragment = new URLSearchParams(parsed.hash.replace(/^#/, ''));
         remoteChapterId = parsed.searchParams.get('ccid') || fragment.get('ccid') || '';
       } else if (platform === 'fanqie') {
+        // Chapter-manage rows link the title to /main/writer/preview/<book>&<chapter> (seen 2026-11-03).
         const chapterPath = parsed.pathname.match(
           /\/main\/writer\/(?:chapter-edit|chapter-detail)\/(\d+)\/(\d+)/,
-        );
+        ) || parsed.pathname.match(/\/main\/writer\/preview\/(\d+)&(\d+)/);
         remoteBookId = parsed.pathname.match(
           /\/main\/writer\/(?:chapter-manage|book-info)\/(\d+)/,
         )?.[1]

@@ -100,7 +100,7 @@ function makeFixture({
       syncSessionToBackend: false,
       ...settings,
     }),
-    getExtensionVersion: () => '0.1.65',
+    getExtensionVersion: () => '0.1.66',
     getBrowserInfo: async () => ({ browserName: 'Chrome', browserVersion: '123.0' }),
     getCookies: async () => [],
     getPlatformState: async () => ({}),

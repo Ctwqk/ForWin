@@ -12,9 +12,9 @@
 //   at once: no further platform action and no further report for it;
 // - a receipt refused with remote_id_conflict pauses the job with needs_human;
 // - final reports are journaled before they are sent and resent unchanged.
-import { getPlatformAdapter } from './platforms.js?v=0.1.65';
-import { buildExecutionReceipt, buildReconciliationRequest } from './reconciliation.js?v=0.1.65';
-import { guardRiskInspection } from './risk-inspection.js?v=0.1.65';
+import { getPlatformAdapter } from './platforms.js?v=0.1.66';
+import { buildExecutionReceipt, buildReconciliationRequest } from './reconciliation.js?v=0.1.66';
+import { guardRiskInspection } from './risk-inspection.js?v=0.1.66';
 import { isHubConfigured } from './settings.js';
 
 export const HUB_BACKEND = 'hub';
